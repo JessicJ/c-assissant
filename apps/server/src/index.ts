@@ -3,6 +3,7 @@ import Fastify from "fastify";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-adapters";
 import { AmapConnector } from "@c-assistant/connectors";
 import type { CreatePlanInput, ProfileUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
@@ -14,6 +15,8 @@ if (existsSync(envPath)) process.loadEnvFile(envPath);
 const databasePath = process.env.C_ASSISTANT_DATA_PATH || resolve(projectRoot, "data", "c-assistant.sqlite");
 const store = new SqliteWorkspaceStore(databasePath);
 const amap = new AmapConnector({ apiKey: process.env.AMAP_API_KEY });
+const codex = new CodexRuntimeAdapter();
+let generatingPlan = false;
 
 await server.register(cors, { origin: true });
 
@@ -42,6 +45,30 @@ server.post<{ Body: CreatePlanInput }>("/api/plans", async (request, reply) => {
     return reply.code(400).send({
       error: error instanceof Error ? error.message : "The Plan could not be created."
     });
+  }
+});
+
+server.get("/api/runtimes/codex", async () => codex.check());
+
+server.post<{ Body: CreatePlanInput }>("/api/plans/generate", async (request, reply) => {
+  if (generatingPlan) return reply.code(409).send({ error: "Another Plan generation is already running." });
+  generatingPlan = true;
+  try {
+    const workspace = store.getWorkspace();
+    const draft = await codex.generatePlanDraft({
+      request: request.body.request,
+      profile: {
+        preferredLanguage: workspace.profile.preferredLanguage,
+        nationality: workspace.profile.nationality
+      }
+    });
+    return store.createGeneratedPlan(draft);
+  } catch (error) {
+    return reply.code(error instanceof RuntimeAdapterError && (error.code === "not_installed" || error.code === "not_authenticated") ? 503 : 400).send({
+      error: error instanceof Error ? error.message : "Codex could not generate a Plan draft."
+    });
+  } finally {
+    generatingPlan = false;
   }
 });
 

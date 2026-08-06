@@ -17,6 +17,9 @@ importers:
 
   apps/server:
     dependencies:
+      '@c-assistant/agent-adapters':
+        specifier: workspace:*
+        version: link:../../packages/agent-adapters
       '@c-assistant/connectors':
         specifier: workspace:*
         version: link:../../packages/connectors
@@ -42,6 +45,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@c-assistant/agent-adapters':
+        specifier: workspace:*
+        version: link:../../packages/agent-adapters
       '@c-assistant/connectors':
         specifier: workspace:*
         version: link:../../packages/connectors
@@ -69,6 +75,19 @@ importers:
         version: 19.2.4(@types/react@19.2.18)
 
   country-packs/china: {}
+
+  packages/agent-adapters:
+    dependencies:
+      '@c-assistant/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.7
 
   packages/connectors:
     devDependencies:

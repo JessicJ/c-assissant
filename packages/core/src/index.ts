@@ -76,6 +76,24 @@ export interface ProfileUpdate {
   nationality: string;
 }
 
+export interface GeneratedPlanDraft {
+  title: string;
+  location: string;
+  dates: string;
+  knownInformation: string[];
+  assumptions: string[];
+  nextAction: string;
+  stages: Array<{
+    title: string;
+    description: string;
+    tasks: Array<{
+      title: string;
+      owner: Task["owner"];
+      dueLabel: string;
+    }>;
+  }>;
+}
+
 export function createInitialWorkspace(): WorkspaceSnapshot {
   const activePlan = createPlanFromRequest({
     request: "I will attend an exhibition in Shanghai in September 2026."
@@ -196,6 +214,34 @@ export function createPlanFromRequest({ request }: CreatePlanInput): Plan {
         ]
       }
     ],
+    sources: [],
+    createdAt: new Date().toISOString()
+  };
+}
+
+export function createPlanFromDraft(draft: GeneratedPlanDraft): Plan {
+  return {
+    id: `plan-${randomUUID()}`,
+    version: 1,
+    title: draft.title,
+    location: draft.location,
+    dates: draft.dates,
+    status: "draft",
+    knownInformation: draft.knownInformation,
+    assumptions: draft.assumptions,
+    nextAction: draft.nextAction,
+    stages: draft.stages.map((stage) => ({
+      id: `stage-${randomUUID()}`,
+      title: stage.title,
+      description: stage.description,
+      tasks: stage.tasks.map((task) => ({
+        id: `task-${randomUUID()}`,
+        title: task.title,
+        owner: task.owner,
+        status: task.owner === "user" ? "waiting_user" : "scheduled",
+        dueLabel: task.dueLabel
+      }))
+    })),
     sources: [],
     createdAt: new Date().toISOString()
   };

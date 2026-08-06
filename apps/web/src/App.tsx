@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { RuntimeCheck } from "@c-assistant/agent-adapters";
 import type { AmapPlace, ConnectorResult } from "@c-assistant/connectors";
 import type { WorkspaceSnapshot } from "@c-assistant/core";
 
@@ -17,9 +18,12 @@ function App() {
   const [amapQuery, setAmapQuery] = useState("Shanghai Railway Station");
   const [amapResult, setAmapResult] = useState<ConnectorResult<AmapPlace[]> | null>(null);
   const [searchingAmap, setSearchingAmap] = useState(false);
+  const [codexRuntime, setCodexRuntime] = useState<RuntimeCheck | null>(null);
+  const [generating, setGenerating] = useState(false);
 
   useEffect(() => {
     void loadWorkspace();
+    void loadCodexRuntime();
   }, []);
 
   async function loadWorkspace() {
@@ -32,6 +36,15 @@ function App() {
       setError(caught instanceof Error ? caught.message : "Unable to reach the Core service.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadCodexRuntime() {
+    try {
+      const response = await fetch("/api/runtimes/codex");
+      if (response.ok) setCodexRuntime((await response.json()) as RuntimeCheck);
+    } catch {
+      setCodexRuntime(null);
     }
   }
 
@@ -66,6 +79,26 @@ function App() {
       setError(caught instanceof Error ? caught.message : "The Plan could not be saved.");
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function generatePlanWithCodex() {
+    if (!requestText.trim()) return;
+    try {
+      setGenerating(true);
+      const response = await fetch("/api/plans/generate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ request: requestText })
+      });
+      if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "Codex could not generate a Plan.");
+      setWorkspace((await response.json()) as WorkspaceSnapshot);
+      setRequestText("");
+      setView("Plans");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Codex could not generate a Plan.");
+    } finally {
+      setGenerating(false);
     }
   }
 
@@ -180,7 +213,7 @@ function App() {
                 <span className="sr-only">Describe your plan</span>
                 <textarea value={requestText} onChange={(event) => setRequestText(event.target.value)} placeholder="For example: I will study in Hangzhou from September 2026." rows={3} />
               </label>
-              <button className="primary-button" disabled={creating || !requestText.trim()} onClick={() => void createPlan()}>{creating ? "Saving…" : "Create local Plan"}</button>
+              <div className="plan-actions"><button className="secondary-button" disabled={creating || generating || !requestText.trim()} onClick={() => void createPlan()}>{creating ? "Saving…" : "Create local template"}</button><button className="primary-button" disabled={creating || generating || !requestText.trim()} onClick={() => void generatePlanWithCodex()}>{generating ? "Codex is drafting…" : "Draft complete Plan with Codex"}</button></div>
             </section>
 
             <section className="section-heading">
@@ -216,7 +249,7 @@ function App() {
         {view === "Plans" ? <PlanView plan={plan} onActivate={activatePlan} confirming={confirming} /> : null}
         {view === "Inbox" ? <InboxView workspace={workspace} /> : null}
         {view === "Profile" ? <ProfileView workspace={workspace} onSave={saveProfile} /> : null}
-        {view === "Settings" ? <SettingsView workspace={workspace} amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={searchAmap} /> : null}
+        {view === "Settings" ? <SettingsView workspace={workspace} codexRuntime={codexRuntime} amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={searchAmap} /> : null}
       </section>
     </main>
   );
@@ -255,8 +288,8 @@ function ProfileView({ workspace, onSave }: { workspace: WorkspaceSnapshot; onSa
   return <section className="card profile-view"><p className="eyebrow">Long-term information</p><h2>Save only the basics you confirm</h2><form onSubmit={(event) => void submit(event)} className="profile-form"><label>Name<input value={profile.displayName} onChange={(event) => setProfile({ ...profile, displayName: event.target.value })} /></label><label>Preferred language<input value={profile.preferredLanguage} onChange={(event) => setProfile({ ...profile, preferredLanguage: event.target.value })} /></label><label>Nationality<input value={profile.nationality} onChange={(event) => setProfile({ ...profile, nationality: event.target.value })} /></label><p>Travel dates, companions, accommodation, and precise location remain inside a Plan, not this long-term Profile.</p><button className="primary-button" disabled={saving}>{saving ? "Saving…" : "Save confirmed Profile"}</button></form></section>;
 }
 
-function SettingsView({ workspace, amapQuery, setAmapQuery, amapResult, searchingAmap, onSearch }: { workspace: WorkspaceSnapshot; amapQuery: string; setAmapQuery: (value: string) => void; amapResult: ConnectorResult<AmapPlace[]> | null; searchingAmap: boolean; onSearch: () => Promise<void> }) {
-  return <section className="content-stack"><section className="card settings-view"><p className="eyebrow">Connection status</p><h2>Services are separated from the product UI</h2><div className="status-grid">{Object.entries(workspace.system).map(([name, status]) => <div key={name}><span>{name}</span><strong>{status.replaceAll("_", " ")}</strong></div>)}</div><p>Local SQLite storage is connected. Runtime login, Telegram pairing, official sources, and action handoff remain deliberately disconnected.</p></section><section className="card amap-card"><p className="eyebrow">Amap fact check</p><h2>Search a place without exposing the Key.</h2><div className="amap-search"><input value={amapQuery} onChange={(event) => setAmapQuery(event.target.value)} aria-label="Search places with Amap" /><button className="primary-button" disabled={searchingAmap || !amapQuery.trim()} onClick={() => void onSearch()}>{searchingAmap ? "Checking…" : "Search Amap"}</button></div>{amapResult ? <AmapResults result={amapResult} /> : <p>Use this only to validate your Web Service API key and inspect location facts. It does not order, book, or navigate.</p>}</section></section>;
+function SettingsView({ workspace, codexRuntime, amapQuery, setAmapQuery, amapResult, searchingAmap, onSearch }: { workspace: WorkspaceSnapshot; codexRuntime: RuntimeCheck | null; amapQuery: string; setAmapQuery: (value: string) => void; amapResult: ConnectorResult<AmapPlace[]> | null; searchingAmap: boolean; onSearch: () => Promise<void> }) {
+  return <section className="content-stack"><section className="card settings-view"><p className="eyebrow">Connection status</p><h2>Services are separated from the product UI</h2><div className="status-grid">{Object.entries(workspace.system).map(([name, status]) => <div key={name}><span>{name}</span><strong>{status.replaceAll("_", " ")}</strong></div>)}<div><span>Codex</span><strong>{codexRuntime?.installed && codexRuntime.authenticated ? "ready" : codexRuntime?.installed ? "login needed" : "not installed"}</strong></div></div><p>Codex creates a draft only after you press the explicit generation button. Telegram pairing, official sources, and action handoff remain deliberately disconnected.</p></section><section className="card amap-card"><p className="eyebrow">Amap fact check</p><h2>Search a place without exposing the Key.</h2><div className="amap-search"><input value={amapQuery} onChange={(event) => setAmapQuery(event.target.value)} aria-label="Search places with Amap" /><button className="primary-button" disabled={searchingAmap || !amapQuery.trim()} onClick={() => void onSearch()}>{searchingAmap ? "Checking…" : "Search Amap"}</button></div>{amapResult ? <AmapResults result={amapResult} /> : <p>Use this only to validate your Web Service API key and inspect location facts. It does not order, book, or navigate.</p>}</section></section>;
 }
 
 function AmapResults({ result }: { result: ConnectorResult<AmapPlace[]> }) {
