@@ -46,23 +46,24 @@
 - 实现 Codex Runtime Adapter：检查 CLI 与登录状态，在隔离临时目录中运行 `codex exec`，使用 JSON Schema 约束 Plan 草案，并剥离高德/Telegram 等 Connector 密钥。
 - 实现 Web 中的显式 Codex Plan 草案生成按钮；生成后的完整草案会写入 SQLite，仍需用户确认才会激活。
 - 完成一次真实 Codex 端到端验证：结构化草案已通过 Schema、保存为 4 个 Stage 和 16 个 Task；测试数据库随后已删除。
+- 实现 Telegram Connector 的本地配置状态与显式 Bot 身份验证；Token 仅停留在本地 Server 进程，不会传给 Web 或 Agent。
 
 ## 未完成内容
 
-- 尚未实现 Telegram Bot、提醒调度、Claude Code Adapter、官方来源 Connector、地图行动交接或完整的数据库迁移体系。
+- 尚未实现 Telegram 用户配对、消息接收/发送、提醒调度、Claude Code Adapter、官方来源 Connector、地图行动交接或完整的数据库迁移体系。
 - 尚未实现 Claude Code Runtime Adapter；Codex Adapter 已实现，但没有 Run 审计、取消和优先级队列。
 - 尚未实现本地 MCP Tool Gateway。
 - 尚未实现高德周边搜索、天气、地理编码、地图深链接验证和限额/配额可视化。
 - 尚未建立中国官方来源注册表、采集、快照和适用性测试。
 - 尚未实现 Plan 生成、确认、版本管理、调度、提醒和事件执行。
 - 尚未实现 SQLite 的正式迁移、备份、恢复、加密和数据保留策略。
-- 尚未实现 Web 工作台界面与 Telegram 配对。
+- Web 工作台已支持 Telegram 本地配置状态和显式 Bot 验证；尚未实现 Telegram 配对。
 - 尚未确定最终项目名称、开源许可证和贡献治理方式。
 - 尚未确定一键部署与全天在线方案。
 
 ## 运行方法
 
-当前仓库已进入第一段可运行骨架实现：Server 和 Web 使用本地内存中的演示 Workspace 数据，可以完成 Plan 展示与确认演示。SQLite、Telegram、高德、官方来源和真实 Agent Runtime 尚未接入，因此仍不能用于真实用户数据或真实提醒。
+当前仓库已进入第一段可运行实现：Server 和 Web 使用本地 SQLite Workspace 数据，可以完成 Plan 展示与确认演示；高德地点/路线事实和 Codex 结构化草案已做过真实验证；Telegram 可在配置 Token 后做显式 Bot 身份验证。它仍不能用于真实用户提醒或外部行动。
 
 阅读顺序：
 
@@ -98,7 +99,7 @@
 3. 实现一个 Runtime Adapter，先用 Codex 或 Claude Code 其中之一完成结构化输出 PoC。
 4. 实现受限的本地 Tool Gateway。
 5. 实现 Amap 的路线与地图交接最小能力。
-6. 实现 Telegram 文本接收、计划确认和定时交通卡片发送。
+6. 实现 Telegram 用户配对、文本接收、计划确认和定时交通卡片发送。
 7. 实现最小 Web 页面，展示完整 Plan、Timeline、Sources 和确认入口。
 8. 用场景测试验证：用户描述来华事项 → 生成完整 Plan → 用户确认 → 到达时间触发 → 刷新路线事实 → Telegram 发送交通卡片 → 跳转 Amap。
 

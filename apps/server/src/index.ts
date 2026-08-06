@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-adapters";
-import { AmapConnector } from "@c-assistant/connectors";
+import { AmapConnector, TelegramConnector } from "@c-assistant/connectors";
 import type { CreatePlanInput, ProfileUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
 
@@ -15,6 +15,7 @@ if (existsSync(envPath)) process.loadEnvFile(envPath);
 const databasePath = process.env.C_ASSISTANT_DATA_PATH || resolve(projectRoot, "data", "c-assistant.sqlite");
 const store = new SqliteWorkspaceStore(databasePath);
 const amap = new AmapConnector({ apiKey: process.env.AMAP_API_KEY });
+const telegram = new TelegramConnector({ botToken: process.env.TELEGRAM_BOT_TOKEN });
 const codex = new CodexRuntimeAdapter();
 let generatingPlan = false;
 
@@ -84,6 +85,13 @@ server.put<{ Body: ProfileUpdate }>("/api/profile", async (request, reply) => {
 
 server.get("/api/connectors/amap", async () => amap.configurationStatus());
 
+server.get("/api/connectors/telegram", async () => telegram.configurationStatus());
+
+server.post("/api/connectors/telegram/verify", async (_request, reply) => {
+  const result = await telegram.getMe();
+  return reply.code(connectorResponseStatus(result.status)).send(result);
+});
+
 server.get<{ Querystring: { query?: string; region?: string } }>("/api/amap/places", async (request, reply) => {
   const result = await amap.searchPlaces({ query: request.query.query ?? "", region: request.query.region });
   return reply.code(result.status === "available" ? 200 : result.status === "not_configured" ? 503 : 400).send(result);
@@ -98,6 +106,14 @@ server.get<{ Querystring: { origin?: string; destination?: string; originId?: st
   });
   return reply.code(result.status === "available" ? 200 : result.status === "not_configured" ? 503 : 400).send(result);
 });
+
+function connectorResponseStatus(status: "available" | "degraded" | "not_configured" | "unauthorized" | "rate_limited" | "unavailable" | "unsupported"): number {
+  if (status === "available") return 200;
+  if (status === "not_configured" || status === "unavailable") return 503;
+  if (status === "unauthorized") return 401;
+  if (status === "rate_limited") return 429;
+  return 400;
+}
 
 const port = Number(process.env.C_ASSISTANT_PORT ?? 8787);
 const host = process.env.C_ASSISTANT_HOST ?? "127.0.0.1";
