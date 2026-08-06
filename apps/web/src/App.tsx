@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { RuntimeCheck } from "@c-assistant/agent-adapters";
-import type { AmapPlace, ConnectorResult, TelegramBotIdentity, TelegramConfiguration } from "@c-assistant/connectors";
+import { createAmapDrivingHandoff } from "@c-assistant/connectors";
+import type { AmapPlace, AmapRoute, ConnectorResult, TelegramBotIdentity, TelegramConfiguration } from "@c-assistant/connectors";
 import type { WorkspaceSnapshot } from "@c-assistant/core";
 
 type View = "Today" | "Plans" | "Inbox" | "Profile" | "Settings";
@@ -18,6 +19,10 @@ function App() {
   const [amapQuery, setAmapQuery] = useState("Shanghai Railway Station");
   const [amapResult, setAmapResult] = useState<ConnectorResult<AmapPlace[]> | null>(null);
   const [searchingAmap, setSearchingAmap] = useState(false);
+  const [routeOrigin, setRouteOrigin] = useState<AmapPlace | null>(null);
+  const [routeDestination, setRouteDestination] = useState<AmapPlace | null>(null);
+  const [routeResult, setRouteResult] = useState<ConnectorResult<AmapRoute> | null>(null);
+  const [routing, setRouting] = useState(false);
   const [codexRuntime, setCodexRuntime] = useState<RuntimeCheck | null>(null);
   const [telegramStatus, setTelegramStatus] = useState<ConnectorResult<TelegramConfiguration> | null>(null);
   const [telegramVerification, setTelegramVerification] = useState<ConnectorResult<TelegramBotIdentity> | null>(null);
@@ -154,6 +159,25 @@ function App() {
     }
   }
 
+  async function planAmapRoute() {
+    if (!routeOrigin || !routeDestination) return;
+    try {
+      setRouting(true);
+      const query = new URLSearchParams({
+        origin: routeOrigin.location,
+        destination: routeDestination.location,
+        originId: routeOrigin.id,
+        destinationId: routeDestination.id
+      });
+      const response = await fetch(`/api/amap/routes/driving?${query}`);
+      setRouteResult((await response.json()) as ConnectorResult<AmapRoute>);
+    } catch {
+      setRouteResult({ status: "unavailable", provider: "amap", observedAt: new Date().toISOString(), failure: { code: "network_error", message: "Amap could not be reached right now.", retryable: true } });
+    } finally {
+      setRouting(false);
+    }
+  }
+
   const readyTasks = useMemo(
     () => workspace?.activePlan.stages.flatMap((stage) => stage.tasks).filter((task) => task.status !== "completed") ?? [],
     [workspace]
@@ -274,7 +298,7 @@ function App() {
         {view === "Plans" ? <PlanView plan={plan} onActivate={activatePlan} confirming={confirming} /> : null}
         {view === "Inbox" ? <InboxView workspace={workspace} /> : null}
         {view === "Profile" ? <ProfileView workspace={workspace} onSave={saveProfile} /> : null}
-        {view === "Settings" ? <SettingsView workspace={workspace} codexRuntime={codexRuntime} telegramStatus={telegramStatus} telegramVerification={telegramVerification} verifyingTelegram={verifyingTelegram} onVerifyTelegram={verifyTelegram} amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={searchAmap} /> : null}
+        {view === "Settings" ? <SettingsView workspace={workspace} codexRuntime={codexRuntime} telegramStatus={telegramStatus} telegramVerification={telegramVerification} verifyingTelegram={verifyingTelegram} onVerifyTelegram={verifyTelegram} amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={searchAmap} routeOrigin={routeOrigin} routeDestination={routeDestination} routeResult={routeResult} routing={routing} onChooseRouteOrigin={setRouteOrigin} onChooseRouteDestination={setRouteDestination} onPlanRoute={planAmapRoute} /> : null}
       </section>
     </main>
   );
@@ -313,9 +337,9 @@ function ProfileView({ workspace, onSave }: { workspace: WorkspaceSnapshot; onSa
   return <section className="card profile-view"><p className="eyebrow">Long-term information</p><h2>Save only the basics you confirm</h2><form onSubmit={(event) => void submit(event)} className="profile-form"><label>Name<input value={profile.displayName} onChange={(event) => setProfile({ ...profile, displayName: event.target.value })} /></label><label>Preferred language<input value={profile.preferredLanguage} onChange={(event) => setProfile({ ...profile, preferredLanguage: event.target.value })} /></label><label>Nationality<input value={profile.nationality} onChange={(event) => setProfile({ ...profile, nationality: event.target.value })} /></label><p>Travel dates, companions, accommodation, and precise location remain inside a Plan, not this long-term Profile.</p><button className="primary-button" disabled={saving}>{saving ? "Saving…" : "Save confirmed Profile"}</button></form></section>;
 }
 
-function SettingsView({ workspace, codexRuntime, telegramStatus, telegramVerification, verifyingTelegram, onVerifyTelegram, amapQuery, setAmapQuery, amapResult, searchingAmap, onSearch }: { workspace: WorkspaceSnapshot; codexRuntime: RuntimeCheck | null; telegramStatus: ConnectorResult<TelegramConfiguration> | null; telegramVerification: ConnectorResult<TelegramBotIdentity> | null; verifyingTelegram: boolean; onVerifyTelegram: () => Promise<void>; amapQuery: string; setAmapQuery: (value: string) => void; amapResult: ConnectorResult<AmapPlace[]> | null; searchingAmap: boolean; onSearch: () => Promise<void> }) {
+function SettingsView({ workspace, codexRuntime, telegramStatus, telegramVerification, verifyingTelegram, onVerifyTelegram, amapQuery, setAmapQuery, amapResult, searchingAmap, onSearch, routeOrigin, routeDestination, routeResult, routing, onChooseRouteOrigin, onChooseRouteDestination, onPlanRoute }: { workspace: WorkspaceSnapshot; codexRuntime: RuntimeCheck | null; telegramStatus: ConnectorResult<TelegramConfiguration> | null; telegramVerification: ConnectorResult<TelegramBotIdentity> | null; verifyingTelegram: boolean; onVerifyTelegram: () => Promise<void>; amapQuery: string; setAmapQuery: (value: string) => void; amapResult: ConnectorResult<AmapPlace[]> | null; searchingAmap: boolean; onSearch: () => Promise<void>; routeOrigin: AmapPlace | null; routeDestination: AmapPlace | null; routeResult: ConnectorResult<AmapRoute> | null; routing: boolean; onChooseRouteOrigin: (place: AmapPlace) => void; onChooseRouteDestination: (place: AmapPlace) => void; onPlanRoute: () => Promise<void> }) {
   const telegramConfigured = telegramStatus?.status === "available";
-  return <section className="content-stack"><section className="card settings-view"><p className="eyebrow">Connection status</p><h2>Services are separated from the product UI</h2><div className="status-grid">{Object.entries(workspace.system).map(([name, status]) => <div key={name}><span>{name}</span><strong>{status.replaceAll("_", " ")}</strong></div>)}<div><span>Codex</span><strong>{codexRuntime?.installed && codexRuntime.authenticated ? "ready" : codexRuntime?.installed ? "login needed" : "not installed"}</strong></div><div><span>Telegram</span><strong>{telegramConfigured ? "configured" : telegramStatus?.status === "not_configured" ? "token needed" : telegramStatus?.status ?? "checking"}</strong></div></div><p>Codex creates a draft only after you press the explicit generation button. Telegram remains inactive until you configure and explicitly verify your own bot.</p></section><section className="card telegram-card"><p className="eyebrow">Telegram bot</p><h2>Verify the local bot without revealing its token.</h2>{telegramConfigured ? <><p>Verification makes one safe identity request. It does not pair a user, read messages, or send a notification.</p><button className="primary-button" disabled={verifyingTelegram} onClick={() => void onVerifyTelegram()}>{verifyingTelegram ? "Verifying…" : "Verify Telegram bot"}</button></> : <p>Add <code>TELEGRAM_BOT_TOKEN</code> to the local <code>.env</code> file, then restart the local service. The token is not shown in this workspace.</p>}{telegramVerification ? <TelegramVerification result={telegramVerification} /> : null}</section><section className="card amap-card"><p className="eyebrow">Amap fact check</p><h2>Search a place without exposing the Key.</h2><div className="amap-search"><input value={amapQuery} onChange={(event) => setAmapQuery(event.target.value)} aria-label="Search places with Amap" /><button className="primary-button" disabled={searchingAmap || !amapQuery.trim()} onClick={() => void onSearch()}>{searchingAmap ? "Checking…" : "Search Amap"}</button></div>{amapResult ? <AmapResults result={amapResult} /> : <p>Use this only to validate your Web Service API key and inspect location facts. It does not order, book, or navigate.</p>}</section></section>;
+  return <section className="content-stack"><section className="card settings-view"><p className="eyebrow">Connection status</p><h2>Services are separated from the product UI</h2><div className="status-grid">{Object.entries(workspace.system).map(([name, status]) => <div key={name}><span>{name}</span><strong>{status.replaceAll("_", " ")}</strong></div>)}<div><span>Codex</span><strong>{codexRuntime?.installed && codexRuntime.authenticated ? "ready" : codexRuntime?.installed ? "login needed" : "not installed"}</strong></div><div><span>Telegram</span><strong>{telegramConfigured ? "configured" : telegramStatus?.status === "not_configured" ? "token needed" : telegramStatus?.status ?? "checking"}</strong></div></div><p>Codex creates a draft only after you press the explicit generation button. Telegram remains inactive until you configure and explicitly verify your own bot.</p></section><section className="card telegram-card"><p className="eyebrow">Telegram bot</p><h2>Verify the local bot without revealing its token.</h2>{telegramConfigured ? <><p>Verification makes one safe identity request. It does not pair a user, read messages, or send a notification.</p><button className="primary-button" disabled={verifyingTelegram} onClick={() => void onVerifyTelegram()}>{verifyingTelegram ? "Verifying…" : "Verify Telegram bot"}</button></> : <p>Add <code>TELEGRAM_BOT_TOKEN</code> to the local <code>.env</code> file, then restart the local service. The token is not shown in this workspace.</p>}{telegramVerification ? <TelegramVerification result={telegramVerification} /> : null}</section><section className="card amap-card"><p className="eyebrow">Amap route handoff</p><h2>Check a route, then choose whether to open it in Amap.</h2><div className="amap-search"><input value={amapQuery} onChange={(event) => setAmapQuery(event.target.value)} aria-label="Search places with Amap" /><button className="primary-button" disabled={searchingAmap || !amapQuery.trim()} onClick={() => void onSearch()}>{searchingAmap ? "Checking…" : "Search Amap"}</button></div>{amapResult ? <AmapResults result={amapResult} onChooseRouteOrigin={onChooseRouteOrigin} onChooseRouteDestination={onChooseRouteDestination} /> : <p>Search a place, choose an origin and destination, then inspect a driving route. This does not hail a ride, book, or pay.</p>}<RoutePlanner origin={routeOrigin} destination={routeDestination} result={routeResult} routing={routing} onPlanRoute={onPlanRoute} /></section></section>;
 }
 
 function TelegramVerification({ result }: { result: ConnectorResult<TelegramBotIdentity> }) {
@@ -323,10 +347,15 @@ function TelegramVerification({ result }: { result: ConnectorResult<TelegramBotI
   return <p className="success-copy">Verified as {result.data.username ? `@${result.data.username}` : result.data.firstName}. Pairing and reminders are the next step.</p>;
 }
 
-function AmapResults({ result }: { result: ConnectorResult<AmapPlace[]> }) {
+function AmapResults({ result, onChooseRouteOrigin, onChooseRouteDestination }: { result: ConnectorResult<AmapPlace[]>; onChooseRouteOrigin: (place: AmapPlace) => void; onChooseRouteDestination: (place: AmapPlace) => void }) {
   if (result.status !== "available") return <p className="connector-message">{result.failure?.message ?? "Amap is not available."} <code>{result.failure?.code}</code></p>;
   if (!result.data?.length) return <p className="connector-message">Amap is connected but returned no matching places.</p>;
-  return <div className="place-results">{result.data.map((place) => <div key={place.id}><strong>{place.name}</strong><span>{place.address} · {place.location}</span></div>)}</div>;
+  return <div className="place-results">{result.data.map((place) => <div key={place.id}><strong>{place.name}</strong><span>{place.address} · {place.location}</span><div className="place-actions"><button className="text-button" onClick={() => onChooseRouteOrigin(place)}>Set as origin</button><button className="text-button" onClick={() => onChooseRouteDestination(place)}>Set as destination</button></div></div>)}</div>;
+}
+
+function RoutePlanner({ origin, destination, result, routing, onPlanRoute }: { origin: AmapPlace | null; destination: AmapPlace | null; result: ConnectorResult<AmapRoute> | null; routing: boolean; onPlanRoute: () => Promise<void> }) {
+  const handoff = origin && destination ? createAmapDrivingHandoff({ origin, destination }) : null;
+  return <div className="route-planner"><p><strong>Origin:</strong> {origin?.name ?? "Choose a place"}</p><p><strong>Destination:</strong> {destination?.name ?? "Choose a place"}</p><button className="secondary-button" disabled={!handoff || routing} onClick={() => void onPlanRoute()}>{routing ? "Checking route…" : "Check driving route"}</button>{result?.status === "available" && result.data ? <div className="route-result"><p>{(result.data.distanceMeters / 1000).toFixed(1)} km · about {Math.ceil((result.data.durationSeconds ?? 0) / 60)} min{result.data.taxiCostYuan ? ` · estimated taxi ¥${result.data.taxiCostYuan}` : ""}</p><a className="primary-button route-link" href={handoff?.url}>Open route in Amap</a><small>Opening Amap is your choice. No ride is requested here.</small></div> : result ? <p className="connector-message">{result.failure?.message ?? "Amap is not available."}</p> : null}</div>;
 }
 
 export default App;

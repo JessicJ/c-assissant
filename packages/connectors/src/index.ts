@@ -33,6 +33,14 @@ export interface AmapRoute {
   strategy: "amap_recommended";
 }
 
+export interface AmapRouteHandoff {
+  provider: "amap";
+  action: "route_planning";
+  transport: "driving";
+  url: string;
+  requiresUserAction: true;
+}
+
 export interface AmapConnectorOptions {
   apiKey?: string | undefined;
   fetcher?: typeof fetch;
@@ -180,12 +188,49 @@ export class AmapConnector {
   }
 }
 
+/**
+ * Creates a device-level handoff only. Opening it is the user's choice, and
+ * neither C-assistant nor Amap is asked to hail a ride, pay, or book anything.
+ * The source coordinates originate from Amap, so `dev=0` marks them as already
+ * converted for use by the Amap client URI.
+ */
+export function createAmapDrivingHandoff(input: { origin: AmapPlace; destination: AmapPlace }): AmapRouteHandoff {
+  const [originLongitude, originLatitude] = coordinateParts(input.origin.location);
+  const [destinationLongitude, destinationLatitude] = coordinateParts(input.destination.location);
+  const parameters = new URLSearchParams({
+    sourceApplication: "C-assistant",
+    sid: input.origin.id,
+    slat: originLatitude,
+    slon: originLongitude,
+    sname: input.origin.name.slice(0, 80),
+    did: input.destination.id,
+    dlat: destinationLatitude,
+    dlon: destinationLongitude,
+    dname: input.destination.name.slice(0, 80),
+    dev: "0",
+    t: "0"
+  });
+  return {
+    provider: "amap",
+    action: "route_planning",
+    transport: "driving",
+    url: `amapuri://route/plan/?${parameters.toString()}`,
+    requiresUserAction: true
+  };
+}
+
 function isCoordinate(value: string): boolean {
   const [longitude, latitude, extra] = value.split(",");
   if (extra || longitude === undefined || latitude === undefined) return false;
   const lng = Number(longitude);
   const lat = Number(latitude);
   return Number.isFinite(lng) && Number.isFinite(lat) && lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90;
+}
+
+function coordinateParts(value: string): [string, string] {
+  if (!isCoordinate(value)) throw new Error("Amap action handoff needs valid longitude,latitude coordinates.");
+  const [longitude, latitude] = value.split(",");
+  return [longitude!, latitude!];
 }
 
 export interface TelegramConfiguration {
