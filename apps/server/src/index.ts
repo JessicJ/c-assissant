@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-adapters";
-import { AmapConnector, TelegramConnector } from "@c-assistant/connectors";
+import { AmapConnector, QWeatherConnector, TelegramConnector } from "@c-assistant/connectors";
 import type { CreatePlanInput, ProfileUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
 
@@ -15,6 +15,7 @@ if (existsSync(envPath)) process.loadEnvFile(envPath);
 const databasePath = process.env.C_ASSISTANT_DATA_PATH || resolve(projectRoot, "data", "c-assistant.sqlite");
 const store = new SqliteWorkspaceStore(databasePath);
 const amap = new AmapConnector({ apiKey: process.env.AMAP_API_KEY });
+const qweather = new QWeatherConnector({ apiKey: process.env.QWEATHER_API_KEY, apiHost: process.env.QWEATHER_API_HOST });
 const telegram = new TelegramConnector({ botToken: process.env.TELEGRAM_BOT_TOKEN });
 const codex = new CodexRuntimeAdapter();
 let generatingPlan = false;
@@ -84,6 +85,27 @@ server.put<{ Body: ProfileUpdate }>("/api/profile", async (request, reply) => {
 });
 
 server.get("/api/connectors/amap", async () => amap.configurationStatus());
+
+server.get("/api/connectors/qweather", async () => qweather.configurationStatus());
+
+server.get<{ Querystring: { location?: string; language?: string } }>("/api/weather", async (request, reply) => {
+  const configuration = qweather.configurationStatus();
+  if (configuration.status !== "available") return reply.code(connectorResponseStatus(configuration.status)).send(configuration);
+  const requestedLocation = request.query.location?.trim() ?? "";
+  if (!requestedLocation) return reply.code(400).send({ error: "A weather check needs a city or region name." });
+  const placeFacts = await amap.geocodeAddress({ address: requestedLocation });
+  if (placeFacts.status !== "available") return reply.code(connectorResponseStatus(placeFacts.status)).send(placeFacts);
+  if (!placeFacts.data) return reply.code(404).send({ error: "Amap could not resolve that city or region." });
+  const place = placeFacts.data;
+  const result = await qweather.weather({
+    coordinates: place.location,
+    locationName: place.formattedAddress,
+    adminArea: place.district || place.city || place.province,
+    country: "China",
+    language: request.query.language === "zh" ? "zh" : "en"
+  });
+  return reply.code(connectorResponseStatus(result.status)).send(result);
+});
 
 server.get("/api/connectors/telegram", async () => telegram.configurationStatus());
 
