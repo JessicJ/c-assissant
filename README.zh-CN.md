@@ -4,7 +4,7 @@
 
 C-assistant 的目标不是只做旅行问答，而是帮助来到某个国家或地区的人更快适应当地生活。首个 Country Pack 面向中国，V1 聚焦来华准备与吃、住、行，并为以后扩展法律、银行、经商等能力保留模块化结构。
 
-项目已完成架构基线，并有第一段本地可运行演示：Web 工作台、Core HTTP 服务和 Plan 确认流程已经连通。它仍不是可供真实用户使用的助手：SQLite、Telegram、高德、官方来源、调度和真实 Agent Runtime 都尚未接入。
+项目已完成架构基线，并有第一段本地可运行流程：Web 工作台、Core HTTP 服务、本地 SQLite 保存、Profile 编辑、Plan 创建和确认流程已经连通。它仍不是可供真实用户使用的助手：Telegram、高德、官方来源、调度和真实 Agent Runtime 都尚未接入。
 
 ## 已确定的产品形态
 
@@ -43,7 +43,7 @@ C-assistant 的目标不是只做旅行问答，而是帮助来到某个国家�
 
 ## 运行本地演示
 
-需要 Node.js 20 及以上版本与 pnpm：
+需要 Node.js 22 及以上版本与 pnpm：
 
 ```bash
 pnpm install
@@ -60,4 +60,4 @@ pnpm typecheck
 pnpm test
 ```
 
-演示数据只保存在内存中，重启后会恢复初始状态；它不会发送 Telegram 消息，也不会访问高德或任何 Agent Runtime。下一阶段应实现 SQLite 持久化与真实 Plan 生成，然后接入 Telegram 和高德交通卡片闭环。
+首次启动会在 `data/c-assistant.sqlite` 创建本地数据库。它不会发送 Telegram 消息，也不会访问高德或任何 Agent Runtime。下一阶段应让 Runtime 生成真实 Plan，然后接入高德和 Telegram 交通卡片闭环。

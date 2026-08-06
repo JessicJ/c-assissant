@@ -20,6 +20,9 @@ importers:
       '@c-assistant/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@c-assistant/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       '@fastify/cors':
         specifier: ^10.0.1
         version: 10.1.0
@@ -62,6 +65,19 @@ importers:
   country-packs/china: {}
 
   packages/core:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.7
+
+  packages/storage:
+    dependencies:
+      '@c-assistant/core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
       '@types/node':
         specifier: ^22.10.2

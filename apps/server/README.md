@@ -1,11 +1,13 @@
 # Server
 
-The first local Core HTTP service. It exposes a health check, a demo workspace, and a Plan confirmation endpoint.
+The first local Core HTTP service. It initializes local SQLite storage, exposes a Workspace API, accepts a natural-language Plan request, and records a Plan confirmation.
 
 Current endpoints:
 
 - `GET /health`
 - `GET /api/workspace`
 - `POST /api/plans/:planId/confirm`
+- `POST /api/plans`
+- `PUT /api/profile`
 
-The state is in memory and resets on restart. SQLite, scheduling, Telegram, Amap, official sources, and Agent runtimes are deliberately not connected yet.
+Profile and Plan state persist locally. Scheduling, Telegram, Amap, official sources, and Agent runtimes are deliberately not connected yet.

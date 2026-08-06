@@ -11,6 +11,8 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [requestText, setRequestText] = useState("");
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     void loadWorkspace();
@@ -40,6 +42,40 @@ function App() {
       setError(caught instanceof Error ? caught.message : "The Plan could not be activated.");
     } finally {
       setConfirming(false);
+    }
+  }
+
+  async function createPlan() {
+    if (!requestText.trim()) return;
+    try {
+      setCreating(true);
+      const response = await fetch("/api/plans", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ request: requestText })
+      });
+      if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "The Plan could not be saved.");
+      setWorkspace((await response.json()) as WorkspaceSnapshot);
+      setRequestText("");
+      setView("Plans");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The Plan could not be saved.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function saveProfile(profile: WorkspaceSnapshot["profile"]) {
+    try {
+      const response = await fetch("/api/profile", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(profile)
+      });
+      if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "The Profile could not be saved.");
+      setWorkspace((await response.json()) as WorkspaceSnapshot);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The Profile could not be saved.");
     }
   }
 
@@ -117,6 +153,19 @@ function App() {
               </article>
             </section>
 
+            <section className="card create-plan-card">
+              <div>
+                <p className="eyebrow">Create another Plan</p>
+                <h2>Describe what you need in China.</h2>
+                <p>This saves a local draft with transparent assumptions. Agent-generated detail comes in the next phase.</p>
+              </div>
+              <label className="request-field">
+                <span className="sr-only">Describe your plan</span>
+                <textarea value={requestText} onChange={(event) => setRequestText(event.target.value)} placeholder="For example: I will study in Hangzhou from September 2026." rows={3} />
+              </label>
+              <button className="primary-button" disabled={creating || !requestText.trim()} onClick={() => void createPlan()}>{creating ? "Saving…" : "Create local Plan"}</button>
+            </section>
+
             <section className="section-heading">
               <div>
                 <p className="eyebrow">Timeline</p>
@@ -149,7 +198,7 @@ function App() {
 
         {view === "Plans" ? <PlanView plan={plan} onActivate={activatePlan} confirming={confirming} /> : null}
         {view === "Inbox" ? <InboxView workspace={workspace} /> : null}
-        {view === "Profile" ? <ProfileView workspace={workspace} /> : null}
+        {view === "Profile" ? <ProfileView workspace={workspace} onSave={saveProfile} /> : null}
         {view === "Settings" ? <SettingsView workspace={workspace} /> : null}
       </section>
     </main>
@@ -165,7 +214,7 @@ function PlanView({ plan, onActivate, confirming }: { plan: WorkspaceSnapshot["a
       <ul className="compact-list">{plan.assumptions.map((item) => <li key={item}>{item}</li>)}</ul>
       {plan.status === "draft" ? <button className="primary-button" disabled={confirming} onClick={() => void onActivate()}>Confirm complete Plan</button> : null}
     </section>
-    <section className="card"><p className="eyebrow">Sources</p>{plan.sources.map((source) => <a className="source-link" href={source.url} key={source.title} target="_blank" rel="noreferrer"><strong>{source.title}</strong><span>{source.authority} · {source.retrievedAt}</span></a>)}</section>
+    <section className="card"><p className="eyebrow">Sources</p>{plan.sources.length ? plan.sources.map((source) => <a className="source-link" href={source.url} key={source.title} target="_blank" rel="noreferrer"><strong>{source.title}</strong><span>{source.authority} · {source.retrievedAt}</span></a>) : <p>No source snapshots yet. Official sources are added when the policy connector is implemented.</p>}</section>
   </div>;
 }
 
@@ -173,12 +222,24 @@ function InboxView({ workspace }: { workspace: WorkspaceSnapshot }) {
   return <section className="content-stack">{workspace.inbox.map((item) => <article className={`inbox-item ${item.tone}`} key={item.id}><span className="inbox-time">{item.timestamp}</span><h2>{item.title}</h2><p>{item.body}</p></article>)}</section>;
 }
 
-function ProfileView({ workspace }: { workspace: WorkspaceSnapshot }) {
-  return <section className="card profile-view"><p className="eyebrow">Long-term information</p><h2>Profile is intentionally incomplete</h2><dl><div><dt>Preferred language</dt><dd>{workspace.profile.preferredLanguage}</dd></div><div><dt>Nationality</dt><dd>{workspace.profile.nationality}</dd></div><div><dt>Readiness</dt><dd>{workspace.profile.status}</dd></div></dl><p>Only confirmed long-term facts belong here. This demo does not save edits yet.</p></section>;
+function ProfileView({ workspace, onSave }: { workspace: WorkspaceSnapshot; onSave: (profile: WorkspaceSnapshot["profile"]) => Promise<void> }) {
+  const [profile, setProfile] = useState(workspace.profile);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => setProfile(workspace.profile), [workspace.profile]);
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    await onSave(profile);
+    setSaving(false);
+  }
+
+  return <section className="card profile-view"><p className="eyebrow">Long-term information</p><h2>Save only the basics you confirm</h2><form onSubmit={(event) => void submit(event)} className="profile-form"><label>Name<input value={profile.displayName} onChange={(event) => setProfile({ ...profile, displayName: event.target.value })} /></label><label>Preferred language<input value={profile.preferredLanguage} onChange={(event) => setProfile({ ...profile, preferredLanguage: event.target.value })} /></label><label>Nationality<input value={profile.nationality} onChange={(event) => setProfile({ ...profile, nationality: event.target.value })} /></label><p>Travel dates, companions, accommodation, and precise location remain inside a Plan, not this long-term Profile.</p><button className="primary-button" disabled={saving}>{saving ? "Saving…" : "Save confirmed Profile"}</button></form></section>;
 }
 
 function SettingsView({ workspace }: { workspace: WorkspaceSnapshot }) {
-  return <section className="card settings-view"><p className="eyebrow">Connection status</p><h2>Services are separated from the product UI</h2><div className="status-grid">{Object.entries(workspace.system).map(([name, status]) => <div key={name}><span>{name}</span><strong>{status.replaceAll("_", " ")}</strong></div>)}</div><p>Runtime login, Telegram pairing, Amap configuration, and persistent storage are intentionally not connected in this first local demo.</p></section>;
+  return <section className="card settings-view"><p className="eyebrow">Connection status</p><h2>Services are separated from the product UI</h2><div className="status-grid">{Object.entries(workspace.system).map(([name, status]) => <div key={name}><span>{name}</span><strong>{status.replaceAll("_", " ")}</strong></div>)}</div><p>Local SQLite storage is connected. Runtime login, Telegram pairing, Amap configuration, and official sources remain deliberately disconnected.</p></section>;
 }
 
 export default App;

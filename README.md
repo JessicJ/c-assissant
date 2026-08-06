@@ -8,11 +8,11 @@ The project is not limited to tourism. The long-term direction includes daily li
 
 ## Current status
 
-The repository contains the approved V1 architecture baseline plus a first local demo: a Core HTTP service, a Web workspace, and a shared in-memory Plan confirmation flow. It is not yet a personal assistant for real use: persistence, Telegram, Amap, official sources, scheduling, and Agent runtimes have not been implemented.
+The repository contains the approved V1 architecture baseline plus a first local workflow: a Core HTTP service, a Web workspace, local SQLite persistence, Profile editing, Plan creation, and Plan confirmation. It is not yet a personal assistant for real use: Telegram, Amap, official sources, scheduling, and Agent runtimes have not been implemented.
 
 ## Run the local demo
 
-Requirements: Node.js 20+ and pnpm.
+Requirements: Node.js 22+ and pnpm.
 
 ```bash
 pnpm install
@@ -29,7 +29,7 @@ pnpm typecheck
 pnpm test
 ```
 
-The demo starts with local in-memory data and resets on restart. It sends no Telegram messages and does not contact Amap or an Agent runtime.
+The local instance creates `data/c-assistant.sqlite` on first start. It sends no Telegram messages and does not contact Amap or an Agent runtime.
 
 ## Product shape
 
