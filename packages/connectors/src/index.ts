@@ -1,9 +1,10 @@
 export type ConnectorStatus = "available" | "degraded" | "not_configured" | "unauthorized" | "rate_limited" | "unavailable" | "unsupported";
+export type ConnectorProvider = "amap" | "telegram";
 
 export interface ConnectorResult<T> {
   status: ConnectorStatus;
   data?: T;
-  provider: "amap";
+  provider: ConnectorProvider;
   observedAt: string;
   failure?: {
     code: string;
@@ -185,4 +186,146 @@ function isCoordinate(value: string): boolean {
   const lng = Number(longitude);
   const lat = Number(latitude);
   return Number.isFinite(lng) && Number.isFinite(lat) && lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90;
+}
+
+export interface TelegramConfiguration {
+  configured: true;
+}
+
+export interface TelegramBotIdentity {
+  id: number;
+  firstName: string;
+  username?: string | undefined;
+  canJoinGroups: boolean;
+  canReadAllGroupMessages: boolean;
+  supportsInlineQueries: boolean;
+}
+
+export interface TelegramMessageReceipt {
+  chatId: string;
+  messageId: number;
+}
+
+export interface TelegramConnectorOptions {
+  botToken?: string | undefined;
+  fetcher?: typeof fetch;
+}
+
+interface TelegramApiResponse<T> {
+  ok?: boolean;
+  result?: T;
+  error_code?: number;
+}
+
+interface TelegramBotPayload {
+  id?: number;
+  first_name?: string;
+  username?: string;
+  can_join_groups?: boolean;
+  can_read_all_group_messages?: boolean;
+  supports_inline_queries?: boolean;
+}
+
+interface TelegramMessagePayload {
+  message_id?: number;
+  chat?: { id?: number | string };
+}
+
+/**
+ * Telegram is deliberately configured separately from the agent runtime. The
+ * token stays in the local server process and never appears in Connector
+ * results, the browser API response, or an agent prompt.
+ */
+export class TelegramConnector {
+  private readonly botToken: string | undefined;
+  private readonly fetcher: typeof fetch;
+
+  constructor({ botToken, fetcher = fetch }: TelegramConnectorOptions) {
+    this.botToken = botToken?.trim() || undefined;
+    this.fetcher = fetcher;
+  }
+
+  configurationStatus(): ConnectorResult<TelegramConfiguration> {
+    if (!this.botToken) return this.failure("not_configured", "Telegram is not configured on this instance.", "not_configured", false);
+    return {
+      status: "available",
+      provider: "telegram",
+      observedAt: new Date().toISOString(),
+      data: { configured: true }
+    };
+  }
+
+  async getMe(): Promise<ConnectorResult<TelegramBotIdentity>> {
+    if (!this.botToken) return this.failure("not_configured", "Telegram is not configured on this instance.", "not_configured", false);
+    const response = await this.request<TelegramBotPayload>("getMe");
+    if (!response.ok) return response.failure;
+    const bot = response.payload.result;
+    if (!bot || typeof bot.id !== "number" || !bot.first_name) {
+      return this.failure("degraded", "Telegram did not return a usable bot identity.", "invalid_identity", false);
+    }
+    return {
+      status: "available",
+      provider: "telegram",
+      observedAt: new Date().toISOString(),
+      data: {
+        id: bot.id,
+        firstName: bot.first_name,
+        ...(bot.username ? { username: bot.username } : {}),
+        canJoinGroups: Boolean(bot.can_join_groups),
+        canReadAllGroupMessages: Boolean(bot.can_read_all_group_messages),
+        supportsInlineQueries: Boolean(bot.supports_inline_queries)
+      }
+    };
+  }
+
+  async sendMessage(input: { chatId: string; text: string }): Promise<ConnectorResult<TelegramMessageReceipt>> {
+    const chatId = input.chatId.trim();
+    const text = input.text.trim();
+    if (!chatId) return this.failure("unsupported", "A Telegram message needs a paired chat.", "missing_chat", false);
+    if (!text || text.length > 4096) return this.failure("unsupported", "A Telegram message must contain 1 to 4096 characters.", "invalid_message", false);
+    if (!this.botToken) return this.failure("not_configured", "Telegram is not configured on this instance.", "not_configured", false);
+
+    const response = await this.request<TelegramMessagePayload>("sendMessage", { chat_id: chatId, text });
+    if (!response.ok) return response.failure;
+    const message = response.payload.result;
+    if (!message || typeof message.message_id !== "number") {
+      return this.failure("degraded", "Telegram did not return a usable message receipt.", "invalid_receipt", true);
+    }
+    return {
+      status: "available",
+      provider: "telegram",
+      observedAt: new Date().toISOString(),
+      data: { chatId: String(message.chat?.id ?? chatId), messageId: message.message_id }
+    };
+  }
+
+  private async request<T>(method: "getMe" | "sendMessage", body?: Record<string, string>): Promise<{ ok: true; payload: TelegramApiResponse<T> } | { ok: false; failure: ConnectorResult<never> }> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const response = await this.fetcher(`https://api.telegram.org/bot${this.botToken}/${method}`, {
+        method: "POST",
+        ...(body ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}),
+        signal: controller.signal
+      });
+      const payload = await response.json().catch(() => undefined) as TelegramApiResponse<T> | undefined;
+      if (!response.ok) return { ok: false, failure: this.fromTelegramFailure(payload, response.status) };
+      if (!payload || payload.ok !== true) return { ok: false, failure: this.fromTelegramFailure(payload, payload?.error_code) };
+      return { ok: true, payload };
+    } catch (error) {
+      return { ok: false, failure: this.failure("unavailable", "Telegram could not be reached right now.", error instanceof Error && error.name === "AbortError" ? "timeout" : "network_error", true) };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private fromTelegramFailure(payload: TelegramApiResponse<unknown> | undefined, httpStatus: number | undefined): ConnectorResult<never> {
+    const code = payload?.error_code ?? httpStatus;
+    const status = code === 401 || code === 403 ? "unauthorized" : code === 429 ? "rate_limited" : code && code >= 500 ? "unavailable" : "degraded";
+    return this.failure(status, status === "unauthorized" ? "Telegram rejected the configured bot token." : "Telegram did not accept the request.", `telegram_${code ?? "error"}`, status === "rate_limited" || status === "unavailable");
+  }
+
+  private failure(status: Exclude<ConnectorStatus, "available">, message: string, code: string, retryable: boolean): ConnectorResult<never> {
+    return { status, provider: "telegram", observedAt: new Date().toISOString(), failure: { code, message, retryable } };
+  }
 }

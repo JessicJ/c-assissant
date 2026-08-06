@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { AmapConnector } from "./index.js";
+import { AmapConnector, TelegramConnector } from "./index.js";
 
 test("Amap place search normalizes official response fields without exposing the key", async () => {
   const connector = new AmapConnector({
@@ -21,4 +21,39 @@ test("Amap connector reports an unconfigured key without making a request", asyn
   const connector = new AmapConnector({ apiKey: "" });
   const result = await connector.drivingRoute({ origin: "121.4,31.2", destination: "121.5,31.3" });
   assert.equal(result.status, "not_configured");
+});
+
+test("Telegram bot verification normalizes identity and keeps the token out of results", async () => {
+  let requestUrl = "";
+  const connector = new TelegramConnector({
+    botToken: "test-bot-token",
+    fetcher: async (input) => {
+      requestUrl = String(input);
+      return new Response(JSON.stringify({
+        ok: true,
+        result: { id: 321, first_name: "C Assistant", username: "c_assistant_bot", can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: false }
+      }));
+    }
+  });
+
+  const result = await connector.getMe();
+  assert.equal(result.status, "available");
+  assert.equal(result.data?.username, "c_assistant_bot");
+  assert.match(requestUrl, /\/getMe$/);
+  assert.doesNotMatch(JSON.stringify(result), /test-bot-token/);
+});
+
+test("Telegram does not make a request when no bot token is configured", async () => {
+  let requests = 0;
+  const connector = new TelegramConnector({
+    botToken: "",
+    fetcher: async () => {
+      requests += 1;
+      return new Response();
+    }
+  });
+
+  const result = await connector.getMe();
+  assert.equal(result.status, "not_configured");
+  assert.equal(requests, 0);
 });
