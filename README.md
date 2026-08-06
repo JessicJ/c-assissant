@@ -8,7 +8,7 @@ The project is not limited to tourism. The long-term direction includes daily li
 
 ## Current status
 
-The repository contains the approved V1 architecture baseline plus a first local workflow: a Core HTTP service, a Web workspace, local SQLite persistence, Profile editing, Plan creation and confirmation, a restricted Amap place and route-facts Connector, a QWeather current/three-day weather-facts Connector, a Codex-backed structured Plan-draft flow, and safe local Telegram bot configuration/identity verification. It is not yet a personal assistant for real use: Telegram pairing and reminders, official sources, scheduling, Claude Code, and external action handoffs have not been implemented.
+The repository contains the approved V1 architecture baseline plus a first local workflow: a Core HTTP service, a Web workspace, local SQLite persistence, Profile editing, Plan creation and confirmation, a restricted Amap place, nearby-restaurant, and route-facts Connector, a QWeather current/three-day weather-facts Connector, a Codex-backed structured Plan-draft flow, and safe local Telegram bot configuration/identity verification. It is not yet a personal assistant for real use: Telegram pairing and reminders, official sources, scheduling, Claude Code, and external action handoffs beyond Amap routing have not been implemented.
 
 ## Run the local demo
 
@@ -29,7 +29,7 @@ pnpm typecheck
 pnpm test
 ```
 
-The local instance creates `data/c-assistant.sqlite` on first start. If `AMAP_API_KEY` is set in the ignored `.env` file, the Settings screen can validate place-search facts, compare a driving route, and hand that route to the user's Amap app without hailing a ride. If QWeather's ignored `QWEATHER_API_KEY` and `QWEATHER_API_HOST` are configured, it can show current conditions and a three-day forecast without exposing either value. If `TELEGRAM_BOT_TOKEN` is configured there, the Settings screen can explicitly verify the bot identity without exposing the token; it still sends no Telegram messages. If the local Codex CLI is logged in, the Plan composer can generate a schema-validated draft only after the user explicitly presses the Codex button.
+The local instance creates `data/c-assistant.sqlite` on first start. If `AMAP_API_KEY` is set in the ignored `.env` file, the Settings screen can validate place-search facts, show nearby restaurant POI and distance facts around a selected place, compare a driving route, and hand that route to the user's Amap app without hailing a ride. Nearby results are factual candidates, not ranked recommendations, and the app does not order, reserve, or pay. If QWeather's ignored `QWEATHER_API_KEY` and `QWEATHER_API_HOST` are configured, it can show current conditions and a three-day forecast without exposing either value. If `TELEGRAM_BOT_TOKEN` is configured there, the Settings screen can explicitly verify the bot identity without exposing the token; it still sends no Telegram messages. If the local Codex CLI is logged in, the Plan composer can generate a schema-validated draft only after the user explicitly presses the Codex button.
 
 ## Product shape
 

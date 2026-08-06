@@ -36,6 +36,29 @@ test("Amap geocoding resolves a city fact without exposing the key", async () =>
   assert.equal(result.data?.location, "121.4737,31.2304");
 });
 
+test("Amap nearby restaurant discovery keeps distance facts and uses the restaurant category", async () => {
+  let requestUrl = "";
+  const connector = new AmapConnector({
+    apiKey: "test-key",
+    fetcher: async (input) => {
+      requestUrl = String(input);
+      return new Response(JSON.stringify({
+        status: "1",
+        pois: [{ id: "restaurant-1", name: "Noodle House", address: "12 Market Street", location: "121.456,31.250", type: "Food", cityname: "Shanghai", adname: "Jing'an", distance: "284" }]
+      }));
+    }
+  });
+
+  const result = await connector.nearbyRestaurants({ location: "121.455,31.249", radiusMeters: 1_500 });
+  const url = new URL(requestUrl);
+  assert.equal(result.status, "available");
+  assert.equal(result.data?.[0]?.distanceMeters, 284);
+  assert.equal(url.pathname, "/v5/place/around");
+  assert.equal(url.searchParams.get("types"), "050000");
+  assert.equal(url.searchParams.get("sortrule"), "distance");
+  assert.doesNotMatch(JSON.stringify(result), /test-key/);
+});
+
 test("Amap route handoff keeps route planning in the user's map app", () => {
   const handoff = createAmapDrivingHandoff({
     origin: { id: "origin-poi", name: "Shanghai Railway Station", address: "Jing'an", location: "121.455,31.249", type: "Transport", city: "Shanghai", district: "Jing'an" },

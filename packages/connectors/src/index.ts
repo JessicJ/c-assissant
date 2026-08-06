@@ -23,6 +23,11 @@ export interface AmapPlace {
   district: string;
 }
 
+/** A factual POI returned relative to a user-selected centre point. */
+export interface AmapNearbyPlace extends AmapPlace {
+  distanceMeters: number;
+}
+
 export interface AmapRoute {
   mode: "driving";
   origin: string;
@@ -67,6 +72,7 @@ interface AmapResponse {
     type?: string;
     cityname?: string;
     adname?: string;
+    distance?: string;
   }>;
   route?: {
     origin?: string;
@@ -136,6 +142,52 @@ export class AmapConnector {
           type: poi.type ?? "Unspecified",
           city: poi.cityname ?? "",
           district: poi.adname ?? ""
+        }];
+      })
+    };
+  }
+
+  /**
+   * Finds restaurant POIs around a confirmed location. This is discovery
+   * evidence only: it neither ranks places as recommendations nor starts an
+   * order, reservation, or payment.
+   */
+  async nearbyRestaurants(input: { location: string; radiusMeters?: number | undefined; limit?: number | undefined }): Promise<ConnectorResult<AmapNearbyPlace[]>> {
+    if (!isCoordinate(input.location)) {
+      return this.failure("unsupported", "Nearby discovery needs a valid longitude,latitude centre point.", "invalid_coordinates", false);
+    }
+    if (!this.apiKey) return this.failure("not_configured", "Amap is not configured on this instance.", "not_configured", false);
+
+    const radiusMeters = Math.min(Math.max(Math.round(input.radiusMeters ?? 1_500), 100), 5_000);
+    const params = new URLSearchParams({
+      key: this.apiKey,
+      location: input.location,
+      types: "050000",
+      radius: String(radiusMeters),
+      sortrule: "distance",
+      page_size: String(Math.min(Math.max(input.limit ?? 8, 1), 25))
+    });
+    const response = await this.request("/v5/place/around", params);
+    if (!response.ok) return response.failure;
+    const payload = response.payload;
+    if (payload.status !== "1") return this.fromAmapFailure(payload);
+
+    return {
+      status: "available",
+      provider: "amap",
+      observedAt: new Date().toISOString(),
+      data: (payload.pois ?? []).flatMap((poi) => {
+        const distanceMeters = Number(poi.distance);
+        if (!poi.id || !poi.name || !poi.location || !Number.isFinite(distanceMeters) || distanceMeters < 0) return [];
+        return [{
+          id: poi.id,
+          name: poi.name,
+          address: poi.address ?? "Address unavailable",
+          location: poi.location,
+          type: poi.type ?? "Restaurant service",
+          city: poi.cityname ?? "",
+          district: poi.adname ?? "",
+          distanceMeters
         }];
       })
     };
