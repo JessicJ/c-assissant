@@ -152,18 +152,16 @@ export class AmapConnector {
    * evidence only: it neither ranks places as recommendations nor starts an
    * order, reservation, or payment.
    */
-  async nearbyRestaurants(input: { location: string; radiusMeters?: number | undefined; limit?: number | undefined }): Promise<ConnectorResult<AmapNearbyPlace[]>> {
+  async nearbyRestaurants(input: { location: string; limit?: number | undefined }): Promise<ConnectorResult<AmapNearbyPlace[]>> {
     if (!isCoordinate(input.location)) {
       return this.failure("unsupported", "Nearby discovery needs a valid longitude,latitude centre point.", "invalid_coordinates", false);
     }
     if (!this.apiKey) return this.failure("not_configured", "Amap is not configured on this instance.", "not_configured", false);
 
-    const radiusMeters = Math.min(Math.max(Math.round(input.radiusMeters ?? 1_500), 100), 5_000);
     const params = new URLSearchParams({
       key: this.apiKey,
       location: input.location,
       types: "050000",
-      radius: String(radiusMeters),
       sortrule: "distance",
       page_size: String(Math.min(Math.max(input.limit ?? 8, 1), 25))
     });

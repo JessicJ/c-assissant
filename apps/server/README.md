@@ -15,7 +15,7 @@ Current endpoints:
 - `GET /api/connectors/qweather`
 - `GET /api/weather?location=<city-or-region>&language=en|zh`
 - `GET /api/amap/places?query=<place>&region=<optional-region>`
-- `GET /api/amap/nearby/restaurants?location=<longitude,latitude>&radius=<100-5000>`
+- `GET /api/amap/nearby/restaurants?location=<longitude,latitude>`
 - `GET /api/amap/routes/driving?origin=<longitude,latitude>&destination=<longitude,latitude>`
 - `GET /api/connectors/telegram`
 - `POST /api/connectors/telegram/verify`

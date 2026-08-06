@@ -119,12 +119,8 @@ server.get<{ Querystring: { query?: string; region?: string } }>("/api/amap/plac
   return reply.code(result.status === "available" ? 200 : result.status === "not_configured" ? 503 : 400).send(result);
 });
 
-server.get<{ Querystring: { location?: string; radius?: string } }>("/api/amap/nearby/restaurants", async (request, reply) => {
-  const requestedRadius = Number(request.query.radius ?? "1500");
-  const result = await amap.nearbyRestaurants({
-    location: request.query.location ?? "",
-    radiusMeters: Number.isFinite(requestedRadius) ? requestedRadius : 1_500
-  });
+server.get<{ Querystring: { location?: string } }>("/api/amap/nearby/restaurants", async (request, reply) => {
+  const result = await amap.nearbyRestaurants({ location: request.query.location ?? "" });
   return reply.code(connectorResponseStatus(result.status)).send(result);
 });
 
