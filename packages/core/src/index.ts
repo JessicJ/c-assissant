@@ -93,6 +93,7 @@ export interface ProfileUpdate {
 }
 
 export interface PlanAccommodationInput {
+  status: "candidate" | "confirmed";
   id?: string;
   name: string;
   address: string;

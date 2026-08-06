@@ -30,6 +30,7 @@ function App() {
   const [stayResult, setStayResult] = useState<ConnectorResult<AmapNearbyPlace[]> | null>(null);
   const [findingStay, setFindingStay] = useState(false);
   const [savingAccommodation, setSavingAccommodation] = useState(false);
+  const [confirmingAccommodation, setConfirmingAccommodation] = useState(false);
   const [weatherLocation, setWeatherLocation] = useState("Shanghai");
   const [weatherResult, setWeatherResult] = useState<ConnectorResult<QWeatherWeatherSnapshot> | null>(null);
   const [checkingWeather, setCheckingWeather] = useState(false);
@@ -223,7 +224,7 @@ function App() {
       const response = await fetch(`/api/plans/${workspace.activePlan.id}/accommodation`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: place.id, name: place.name, address: place.address, location: place.location, source: "amap" })
+        body: JSON.stringify({ status: "candidate", id: place.id, name: place.name, address: place.address, location: place.location, source: "amap" })
       });
       if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "The accommodation candidate could not be saved.");
       setWorkspace((await response.json()) as WorkspaceSnapshot);
@@ -231,6 +232,26 @@ function App() {
       setError(caught instanceof Error ? caught.message : "The accommodation candidate could not be saved.");
     } finally {
       setSavingAccommodation(false);
+    }
+  }
+
+  async function confirmAccommodationBooking() {
+    if (!workspace) return;
+    const accommodation = workspace.activePlan.configuration.accommodation;
+    if (accommodation.status !== "candidate" || !accommodation.name || !accommodation.address || !accommodation.location) return;
+    try {
+      setConfirmingAccommodation(true);
+      const response = await fetch(`/api/plans/${workspace.activePlan.id}/accommodation`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status: "confirmed", id: accommodation.id, name: accommodation.name, address: accommodation.address, location: accommodation.location, source: accommodation.source ?? "user" })
+      });
+      if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "The accommodation could not be confirmed.");
+      setWorkspace((await response.json()) as WorkspaceSnapshot);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The accommodation could not be confirmed.");
+    } finally {
+      setConfirmingAccommodation(false);
     }
   }
 
@@ -364,7 +385,7 @@ function App() {
           </>
         ) : null}
 
-        {view === "Plans" ? <PlanView plan={plan} onActivate={activatePlan} confirming={confirming} amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={searchAmap} routeOrigin={routeOrigin} routeDestination={routeDestination} routeResult={routeResult} routing={routing} foodCentre={foodCentre} foodResult={foodResult} findingFood={findingFood} stayCentre={stayCentre} stayResult={stayResult} findingStay={findingStay} savingAccommodation={savingAccommodation} onChooseRouteOrigin={setRouteOrigin} onChooseRouteDestination={setRouteDestination} onFindNearbyFood={findNearbyFood} onFindNearbyAccommodation={findNearbyAccommodation} onSaveAccommodationCandidate={saveAccommodationCandidate} onPlanRoute={planAmapRoute} /> : null}
+        {view === "Plans" ? <PlanView plan={plan} onActivate={activatePlan} confirming={confirming} amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={searchAmap} routeOrigin={routeOrigin} routeDestination={routeDestination} routeResult={routeResult} routing={routing} foodCentre={foodCentre} foodResult={foodResult} findingFood={findingFood} stayCentre={stayCentre} stayResult={stayResult} findingStay={findingStay} savingAccommodation={savingAccommodation} confirmingAccommodation={confirmingAccommodation} onChooseRouteOrigin={setRouteOrigin} onChooseRouteDestination={setRouteDestination} onFindNearbyFood={findNearbyFood} onFindNearbyAccommodation={findNearbyAccommodation} onSaveAccommodationCandidate={saveAccommodationCandidate} onConfirmAccommodation={confirmAccommodationBooking} onPlanRoute={planAmapRoute} /> : null}
         {view === "Inbox" ? <InboxView workspace={workspace} /> : null}
         {view === "Profile" ? <ProfileView workspace={workspace} onSave={saveProfile} /> : null}
         {view === "Settings" ? <SettingsView workspace={workspace} codexRuntime={codexRuntime} telegramStatus={telegramStatus} telegramVerification={telegramVerification} verifyingTelegram={verifyingTelegram} onVerifyTelegram={verifyTelegram} weatherLocation={weatherLocation} setWeatherLocation={setWeatherLocation} weatherResult={weatherResult} checkingWeather={checkingWeather} onCheckWeather={checkWeather} /> : null}
@@ -373,12 +394,12 @@ function App() {
   );
 }
 
-function PlanView({ plan, onActivate, confirming, amapQuery, setAmapQuery, amapResult, searchingAmap, onSearch, routeOrigin, routeDestination, routeResult, routing, foodCentre, foodResult, findingFood, stayCentre, stayResult, findingStay, savingAccommodation, onChooseRouteOrigin, onChooseRouteDestination, onFindNearbyFood, onFindNearbyAccommodation, onSaveAccommodationCandidate, onPlanRoute }: { plan: WorkspaceSnapshot["activePlan"]; onActivate: () => Promise<void>; confirming: boolean; amapQuery: string; setAmapQuery: (value: string) => void; amapResult: ConnectorResult<AmapPlace[]> | null; searchingAmap: boolean; onSearch: () => Promise<void>; routeOrigin: AmapPlace | null; routeDestination: AmapPlace | null; routeResult: ConnectorResult<AmapRoute> | null; routing: boolean; foodCentre: AmapPlace | null; foodResult: ConnectorResult<AmapNearbyPlace[]> | null; findingFood: boolean; stayCentre: AmapPlace | null; stayResult: ConnectorResult<AmapNearbyPlace[]> | null; findingStay: boolean; savingAccommodation: boolean; onChooseRouteOrigin: (place: AmapPlace) => void; onChooseRouteDestination: (place: AmapPlace) => void; onFindNearbyFood: (place: AmapPlace) => Promise<void>; onFindNearbyAccommodation: (place: AmapPlace) => Promise<void>; onSaveAccommodationCandidate: (place: AmapNearbyPlace) => Promise<void>; onPlanRoute: () => Promise<void> }) {
+function PlanView({ plan, onActivate, confirming, amapQuery, setAmapQuery, amapResult, searchingAmap, onSearch, routeOrigin, routeDestination, routeResult, routing, foodCentre, foodResult, findingFood, stayCentre, stayResult, findingStay, savingAccommodation, confirmingAccommodation, onChooseRouteOrigin, onChooseRouteDestination, onFindNearbyFood, onFindNearbyAccommodation, onSaveAccommodationCandidate, onConfirmAccommodation, onPlanRoute }: { plan: WorkspaceSnapshot["activePlan"]; onActivate: () => Promise<void>; confirming: boolean; amapQuery: string; setAmapQuery: (value: string) => void; amapResult: ConnectorResult<AmapPlace[]> | null; searchingAmap: boolean; onSearch: () => Promise<void>; routeOrigin: AmapPlace | null; routeDestination: AmapPlace | null; routeResult: ConnectorResult<AmapRoute> | null; routing: boolean; foodCentre: AmapPlace | null; foodResult: ConnectorResult<AmapNearbyPlace[]> | null; findingFood: boolean; stayCentre: AmapPlace | null; stayResult: ConnectorResult<AmapNearbyPlace[]> | null; findingStay: boolean; savingAccommodation: boolean; confirmingAccommodation: boolean; onChooseRouteOrigin: (place: AmapPlace) => void; onChooseRouteDestination: (place: AmapPlace) => void; onFindNearbyFood: (place: AmapPlace) => Promise<void>; onFindNearbyAccommodation: (place: AmapPlace) => Promise<void>; onSaveAccommodationCandidate: (place: AmapNearbyPlace) => Promise<void>; onConfirmAccommodation: () => Promise<void>; onPlanRoute: () => Promise<void> }) {
   return <div className="content-stack">
     <section className="card plan-detail-card">
       <div className="split-heading"><div><p className="eyebrow">Plan v{plan.version}</p><h2>{plan.title}</h2></div><span className="plan-state">{plan.status}</span></div>
       <p className="location-copy">{plan.location} · {plan.dates}</p>
-      <AccommodationSummary accommodation={plan.configuration.accommodation} />
+      <AccommodationSummary accommodation={plan.configuration.accommodation} confirming={confirmingAccommodation} onConfirm={onConfirmAccommodation} />
       <h3>Assumptions to correct if needed</h3>
       <ul className="compact-list">{plan.assumptions.map((item) => <li key={item}>{item}</li>)}</ul>
       {plan.status === "draft" ? <button className="primary-button" disabled={confirming} onClick={() => void onActivate()}>Confirm complete Plan</button> : null}
@@ -426,9 +447,10 @@ function WeatherResults({ result }: { result: ConnectorResult<QWeatherWeatherSna
   return <div className="weather-results"><div className="weather-now"><strong>{location.name}{location.adminArea ? ` · ${location.adminArea}` : ""}</strong><span>{current.condition} · {current.temperatureC}°C, feels like {current.feelsLikeC}°C · humidity {current.humidityPercent}%</span><small>Observed {current.observedAt}</small></div><div className="weather-days">{daily.map((day) => <div key={day.date}><strong>{day.date}</strong><span>{day.conditionDay}</span><span>{day.lowC}–{day.highC}°C</span><small>{day.precipitationMm > 0 ? `${day.precipitationMm} mm precipitation` : `UV ${day.uvIndex}`}</small></div>)}</div>{rainy || hot ? <div className="weather-note"><strong>For your Plan</strong>{rainy ? <span>Rain is reported or forecast. Consider a compact umbrella and allow extra travel time.</span> : null}{hot ? <span>High temperature or UV is forecast. Consider water and sun protection.</span> : null}</div> : <p className="connector-message">No rain or heat-related packing prompt is derived from this short forecast.</p>}{result.data.attributionUrl ? <a className="source-link weather-source" href={result.data.attributionUrl} target="_blank" rel="noreferrer"><strong>Weather source</strong><span>Open QWeather details</span></a> : null}</div>;
 }
 
-function AccommodationSummary({ accommodation }: { accommodation: WorkspaceSnapshot["activePlan"]["configuration"]["accommodation"] }) {
+function AccommodationSummary({ accommodation, confirming, onConfirm }: { accommodation: WorkspaceSnapshot["activePlan"]["configuration"]["accommodation"]; confirming: boolean; onConfirm: () => Promise<void> }) {
   if (accommodation.status === "not_set") return <p className="plan-accommodation"><strong>Accommodation</strong><span>Not saved yet. Compare nearby stays below when you know the area that matters for this Plan.</span></p>;
-  return <p className="plan-accommodation"><strong>Accommodation candidate</strong><span>{accommodation.name} · {accommodation.address}</span><small>Saved for this Plan only. It is not marked as booked.</small></p>;
+  if (accommodation.status === "confirmed") return <p className="plan-accommodation"><strong>Accommodation confirmed</strong><span>{accommodation.name} · {accommodation.address}</span><small>You confirmed that this stay is booked. It remains inside this Plan only.</small></p>;
+  return <div className="plan-accommodation"><strong>Accommodation candidate</strong><span>{accommodation.name} · {accommodation.address}</span><small>Saved for this Plan only. It is not marked as booked.</small><button className="secondary-button" disabled={confirming} onClick={() => void onConfirm()}>{confirming ? "Confirming…" : "I have booked this stay"}</button></div>;
 }
 
 function PlaceDecisionPanel({ amapQuery, setAmapQuery, amapResult, searchingAmap, onSearch, routeOrigin, routeDestination, routeResult, routing, foodCentre, foodResult, findingFood, stayCentre, stayResult, findingStay, savingAccommodation, onChooseRouteOrigin, onChooseRouteDestination, onFindNearbyFood, onFindNearbyAccommodation, onSaveAccommodationCandidate, onPlanRoute }: { amapQuery: string; setAmapQuery: (value: string) => void; amapResult: ConnectorResult<AmapPlace[]> | null; searchingAmap: boolean; onSearch: () => Promise<void>; routeOrigin: AmapPlace | null; routeDestination: AmapPlace | null; routeResult: ConnectorResult<AmapRoute> | null; routing: boolean; foodCentre: AmapPlace | null; foodResult: ConnectorResult<AmapNearbyPlace[]> | null; findingFood: boolean; stayCentre: AmapPlace | null; stayResult: ConnectorResult<AmapNearbyPlace[]> | null; findingStay: boolean; savingAccommodation: boolean; onChooseRouteOrigin: (place: AmapPlace) => void; onChooseRouteDestination: (place: AmapPlace) => void; onFindNearbyFood: (place: AmapPlace) => Promise<void>; onFindNearbyAccommodation: (place: AmapPlace) => Promise<void>; onSaveAccommodationCandidate: (place: AmapNearbyPlace) => Promise<void>; onPlanRoute: () => Promise<void> }) {
