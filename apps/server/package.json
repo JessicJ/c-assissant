@@ -10,6 +10,7 @@
     "start": "node lib/index.js"
   },
   "dependencies": {
+    "@c-assistant/connectors": "workspace:*",
     "@c-assistant/core": "workspace:*",
     "@c-assistant/storage": "workspace:*",
     "@fastify/cors": "^10.0.1",

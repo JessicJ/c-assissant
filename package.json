@@ -13,10 +13,10 @@
     "country-packs/*"
   ],
   "scripts": {
-    "dev": "pnpm --filter @c-assistant/core build && pnpm --filter @c-assistant/storage build && concurrently -n server,web -c cyan,magenta \"pnpm --filter @c-assistant/server dev\" \"pnpm --filter @c-assistant/web dev\"",
-    "build": "pnpm --filter @c-assistant/core build && pnpm --filter @c-assistant/storage build && pnpm --filter @c-assistant/server build && pnpm --filter @c-assistant/web build",
-    "typecheck": "pnpm --filter @c-assistant/core typecheck && pnpm --filter @c-assistant/storage typecheck && pnpm --filter @c-assistant/server typecheck && pnpm --filter @c-assistant/web typecheck",
-    "test": "pnpm --filter @c-assistant/core test && pnpm --filter @c-assistant/storage test"
+    "dev": "pnpm --filter @c-assistant/core build && pnpm --filter @c-assistant/connectors build && pnpm --filter @c-assistant/storage build && concurrently -n server,web -c cyan,magenta \"pnpm --filter @c-assistant/server dev\" \"pnpm --filter @c-assistant/web dev\"",
+    "build": "pnpm --filter @c-assistant/core build && pnpm --filter @c-assistant/connectors build && pnpm --filter @c-assistant/storage build && pnpm --filter @c-assistant/server build && pnpm --filter @c-assistant/web build",
+    "typecheck": "pnpm --filter @c-assistant/core typecheck && pnpm --filter @c-assistant/connectors typecheck && pnpm --filter @c-assistant/storage typecheck && pnpm --filter @c-assistant/server typecheck && pnpm --filter @c-assistant/web typecheck",
+    "test": "pnpm --filter @c-assistant/core test && pnpm --filter @c-assistant/connectors test && pnpm --filter @c-assistant/storage test"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

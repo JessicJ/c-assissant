@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { AmapPlace, ConnectorResult } from "@c-assistant/connectors";
 import type { WorkspaceSnapshot } from "@c-assistant/core";
 
 type View = "Today" | "Plans" | "Inbox" | "Profile" | "Settings";
@@ -13,6 +14,9 @@ function App() {
   const [confirming, setConfirming] = useState(false);
   const [requestText, setRequestText] = useState("");
   const [creating, setCreating] = useState(false);
+  const [amapQuery, setAmapQuery] = useState("Shanghai Railway Station");
+  const [amapResult, setAmapResult] = useState<ConnectorResult<AmapPlace[]> | null>(null);
+  const [searchingAmap, setSearchingAmap] = useState(false);
 
   useEffect(() => {
     void loadWorkspace();
@@ -76,6 +80,19 @@ function App() {
       setWorkspace((await response.json()) as WorkspaceSnapshot);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The Profile could not be saved.");
+    }
+  }
+
+  async function searchAmap() {
+    if (!amapQuery.trim()) return;
+    try {
+      setSearchingAmap(true);
+      const response = await fetch(`/api/amap/places?${new URLSearchParams({ query: amapQuery, region: "上海市" })}`);
+      setAmapResult((await response.json()) as ConnectorResult<AmapPlace[]>);
+    } catch {
+      setAmapResult({ status: "unavailable", provider: "amap", observedAt: new Date().toISOString(), failure: { code: "network_error", message: "Amap could not be reached right now.", retryable: true } });
+    } finally {
+      setSearchingAmap(false);
     }
   }
 
@@ -199,7 +216,7 @@ function App() {
         {view === "Plans" ? <PlanView plan={plan} onActivate={activatePlan} confirming={confirming} /> : null}
         {view === "Inbox" ? <InboxView workspace={workspace} /> : null}
         {view === "Profile" ? <ProfileView workspace={workspace} onSave={saveProfile} /> : null}
-        {view === "Settings" ? <SettingsView workspace={workspace} /> : null}
+        {view === "Settings" ? <SettingsView workspace={workspace} amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={searchAmap} /> : null}
       </section>
     </main>
   );
@@ -238,8 +255,14 @@ function ProfileView({ workspace, onSave }: { workspace: WorkspaceSnapshot; onSa
   return <section className="card profile-view"><p className="eyebrow">Long-term information</p><h2>Save only the basics you confirm</h2><form onSubmit={(event) => void submit(event)} className="profile-form"><label>Name<input value={profile.displayName} onChange={(event) => setProfile({ ...profile, displayName: event.target.value })} /></label><label>Preferred language<input value={profile.preferredLanguage} onChange={(event) => setProfile({ ...profile, preferredLanguage: event.target.value })} /></label><label>Nationality<input value={profile.nationality} onChange={(event) => setProfile({ ...profile, nationality: event.target.value })} /></label><p>Travel dates, companions, accommodation, and precise location remain inside a Plan, not this long-term Profile.</p><button className="primary-button" disabled={saving}>{saving ? "Saving…" : "Save confirmed Profile"}</button></form></section>;
 }
 
-function SettingsView({ workspace }: { workspace: WorkspaceSnapshot }) {
-  return <section className="card settings-view"><p className="eyebrow">Connection status</p><h2>Services are separated from the product UI</h2><div className="status-grid">{Object.entries(workspace.system).map(([name, status]) => <div key={name}><span>{name}</span><strong>{status.replaceAll("_", " ")}</strong></div>)}</div><p>Local SQLite storage is connected. Runtime login, Telegram pairing, Amap configuration, and official sources remain deliberately disconnected.</p></section>;
+function SettingsView({ workspace, amapQuery, setAmapQuery, amapResult, searchingAmap, onSearch }: { workspace: WorkspaceSnapshot; amapQuery: string; setAmapQuery: (value: string) => void; amapResult: ConnectorResult<AmapPlace[]> | null; searchingAmap: boolean; onSearch: () => Promise<void> }) {
+  return <section className="content-stack"><section className="card settings-view"><p className="eyebrow">Connection status</p><h2>Services are separated from the product UI</h2><div className="status-grid">{Object.entries(workspace.system).map(([name, status]) => <div key={name}><span>{name}</span><strong>{status.replaceAll("_", " ")}</strong></div>)}</div><p>Local SQLite storage is connected. Runtime login, Telegram pairing, official sources, and action handoff remain deliberately disconnected.</p></section><section className="card amap-card"><p className="eyebrow">Amap fact check</p><h2>Search a place without exposing the Key.</h2><div className="amap-search"><input value={amapQuery} onChange={(event) => setAmapQuery(event.target.value)} aria-label="Search places with Amap" /><button className="primary-button" disabled={searchingAmap || !amapQuery.trim()} onClick={() => void onSearch()}>{searchingAmap ? "Checking…" : "Search Amap"}</button></div>{amapResult ? <AmapResults result={amapResult} /> : <p>Use this only to validate your Web Service API key and inspect location facts. It does not order, book, or navigate.</p>}</section></section>;
+}
+
+function AmapResults({ result }: { result: ConnectorResult<AmapPlace[]> }) {
+  if (result.status !== "available") return <p className="connector-message">{result.failure?.message ?? "Amap is not available."} <code>{result.failure?.code}</code></p>;
+  if (!result.data?.length) return <p className="connector-message">Amap is connected but returned no matching places.</p>;
+  return <div className="place-results">{result.data.map((place) => <div key={place.id}><strong>{place.name}</strong><span>{place.address} · {place.location}</span></div>)}</div>;
 }
 
 export default App;
