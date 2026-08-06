@@ -1,0 +1,122 @@
+# System architecture
+
+## Product definition
+
+C-assistant is a country-neutral regional assistant runtime. It turns a user's situation into a persistent plan, timed tasks, evidence-backed guidance, and low-friction action handoffs.
+
+The first public extension unit is the complete `china` Country Pack. Individual Skills remain internal modules in V1 and are not installed separately by normal users.
+
+## Runtime topology
+
+```text
+User
+├── Web workspace
+└── Telegram
+        ↓
+Core application services
+├── Profile and Plans
+├── Task and Reminder scheduler
+├── Event processing
+├── Confirmation and risk enforcement
+├── Source evidence and versioning
+└── Inbox and channel delivery
+        ↓
+Skill Runtime
+├── Registry and instruction assembly
+├── Input minimization
+├── Output Schema validation
+└── Country Pack composition
+        ↓
+Agent Runtime Adapter
+├── Codex
+└── Claude Code
+        ↓
+C-assistant Tool Gateway
+├── Place and route capabilities
+├── Official-source capabilities
+├── Skill references
+└── External handoff capabilities
+        ↓
+Provider implementations
+├── Amap
+├── Official websites
+├── Telegram
+└── Ctrip handoff
+```
+
+## Architectural boundaries
+
+### Core
+
+Core owns all durable state and side effects. It decides when a Skill runs, what context it receives, whether its output is valid, and whether a proposed action is inside the user's confirmed Plan scope.
+
+Core is country-neutral. No China-specific policy, provider, language, or workflow may be hard-coded into Core.
+
+### Country Pack
+
+A Country Pack defines local workflows, official-source policy, provider mappings, language presentation, and Skills for one country. It is the public release unit.
+
+### Skill
+
+A Skill is a verifiable business capability. It receives a minimized context and approved tools, then returns a structured proposal or result. It cannot write Core state or send messages directly.
+
+### Connector
+
+A Connector implements a capability against an external provider. It returns normalized facts or performs a narrowly defined channel/handoff operation. It does not make product decisions.
+
+### Agent Runtime Adapter
+
+An Adapter runs the same Skill Contract through Codex or Claude Code. Runtime-specific commands, permissions, and output handling stay inside the Adapter.
+
+## Interaction and scheduled execution
+
+Interactive and scheduled work use the same execution path:
+
+```text
+Web or Telegram request ─┐
+                         ├── Task → Run → Skill → validated result → Core
+Reminder or Event ───────┘
+```
+
+This prevents a split where a capability works in chat but cannot run as a scheduled task.
+
+## Product clients
+
+The Web workspace is the complete desktop-grade product interface. Telegram is the mobile and proactive-service interface. Both use the same Core and state.
+
+Technical diagnostics are not part of the Web product. CLI and local logs contain connector health, raw Agent output, retries, and stack traces. The Web only shows user-understandable status and recovery actions.
+
+## Deployment model
+
+The initial architecture supports a local-first personal instance:
+
+```text
+User computer
+├── Core and scheduler
+├── selected Agent runtime
+├── SQLite
+├── Web server
+└── Telegram Bot process
+```
+
+The runtime host may later move to a personal cloud instance without changing the Web, Telegram, Core, Country Pack, or Skill contracts. The official always-on deployment model remains an open decision.
+
+## Autonomy principle
+
+The system should minimize user effort:
+
+1. Generate the complete Plan immediately.
+2. Explain assumptions, recommendations, tradeoffs, Tasks, Reminders, and sources.
+3. Let the user confirm and activate the complete Plan version once.
+4. Execute approved, reversible work automatically.
+5. Ask only when information is critical, authorization is missing, or an action is irreversible.
+
+Expected Events may trigger read-only preparation, refreshed routes, and action cards. Actual occurrence is required only when the next action depends on the user's real state.
+
+## Storage strategy
+
+- SQLite stores Profile, Plans, Tasks, Reminders, Events, Runs, Confirmations, and indexes for SourceSnapshots.
+- Country Packs, Skills, source policies, and contracts are ordinary version-controlled files.
+- Evidence snapshots store the minimum material required to verify a conclusion or detect a source change.
+- Secrets are isolated from both data and Agent workspaces.
+- Exact task-scoped GPS is not retained as long-term profile history.

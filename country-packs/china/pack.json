@@ -1,0 +1,23 @@
+{
+  "id": "china",
+  "name": "China Country Pack",
+  "version": "0.0.0",
+  "status": "design",
+  "public_installation": "complete_pack_only",
+  "internal_skills": [
+    "china-arrival-plan",
+    "policy-applicability",
+    "arrival-preparation",
+    "digital-life-setup",
+    "housing-area-recommendation",
+    "transport-planner",
+    "local-food-guide",
+    "food-nearby",
+    "weather-and-packing"
+  ],
+  "providers": {
+    "location_base": "amap",
+    "accommodation_handoff": "unconfirmed",
+    "official_sources": "registry_pending"
+  }
+}
