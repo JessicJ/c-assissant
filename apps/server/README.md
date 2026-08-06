@@ -1,5 +1,11 @@
 # Server
 
-Planned Core HTTP/SSE service, scheduler, event processor, Run coordinator, and Web API.
+The first local Core HTTP service. It exposes a health check, a demo workspace, and a Plan confirmation endpoint.
 
-This directory is intentionally a scaffold. Business implementation begins after contracts and the first vertical slice are executable.
+Current endpoints:
+
+- `GET /health`
+- `GET /api/workspace`
+- `POST /api/plans/:planId/confirm`
+
+The state is in memory and resets on restart. SQLite, scheduling, Telegram, Amap, official sources, and Agent runtimes are deliberately not connected yet.

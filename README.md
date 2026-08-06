@@ -8,7 +8,28 @@ The project is not limited to tourism. The long-term direction includes daily li
 
 ## Current status
 
-The repository currently contains the approved V1 architecture baseline and project scaffold. Business code and external integrations have not been implemented yet.
+The repository contains the approved V1 architecture baseline plus a first local demo: a Core HTTP service, a Web workspace, and a shared in-memory Plan confirmation flow. It is not yet a personal assistant for real use: persistence, Telegram, Amap, official sources, scheduling, and Agent runtimes have not been implemented.
+
+## Run the local demo
+
+Requirements: Node.js 20+ and pnpm.
+
+```bash
+pnpm install
+pnpm dev
+```
+
+Open the local URL printed by Vite. The Server health check is available at `http://127.0.0.1:8787/health` by default.
+
+Useful verification commands:
+
+```bash
+pnpm build
+pnpm typecheck
+pnpm test
+```
+
+The demo starts with local in-memory data and resets on restart. It sends no Telegram messages and does not contact Amap or an Agent runtime.
 
 ## Product shape
 

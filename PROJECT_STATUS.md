@@ -55,7 +55,7 @@
 
 ## 运行方法
 
-当前仓库只有设计文档和目录骨架，没有应用源码、依赖或启动脚本，因此目前不能运行产品。
+当前仓库已进入第一段可运行骨架实现：Server 和 Web 使用本地内存中的演示 Workspace 数据，可以完成 Plan 展示与确认演示。SQLite、Telegram、高德、官方来源和真实 Agent Runtime 尚未接入，因此仍不能用于真实用户数据或真实提醒。
 
 阅读顺序：
 
@@ -68,7 +68,7 @@
 7. `docs/china-pack-v1.md`：China Pack V1 范围与第一条演示闭环。
 8. `docs/decisions-and-open-items.md`：已确认决策和待确认问题。
 
-计划使用的基础环境是 Node.js 20 及以上版本和 pnpm，但在真正加入应用代码和脚本之前，不需要安装依赖，也没有有效的 `dev`、`build` 或 `test` 命令。
+基础环境是 Node.js 20 及以上版本和 pnpm。依赖安装完成后，可使用 `pnpm install`、`pnpm dev`、`pnpm build`、`pnpm typecheck` 和 `pnpm test`。`pnpm dev` 会启动本地 Server 与 Web；真实部署和外部服务配置仍不在这一阶段。
 
 ## 已知问题与风险
 
