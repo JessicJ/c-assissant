@@ -29,7 +29,7 @@ pnpm typecheck
 pnpm test
 ```
 
-The local instance creates `data/c-assistant.sqlite` on first start. If `AMAP_API_KEY` is set in the ignored `.env` file, the Settings screen can validate place-search facts. If `TELEGRAM_BOT_TOKEN` is configured there, the Settings screen can explicitly verify the bot identity without exposing the token; it still sends no Telegram messages. If the local Codex CLI is logged in, the Plan composer can generate a schema-validated draft only after the user explicitly presses the Codex button.
+The local instance creates `data/c-assistant.sqlite` on first start. If `AMAP_API_KEY` is set in the ignored `.env` file, the Settings screen can validate place-search facts, compare a driving route, and hand that route to the user's Amap app without hailing a ride. If `TELEGRAM_BOT_TOKEN` is configured there, the Settings screen can explicitly verify the bot identity without exposing the token; it still sends no Telegram messages. If the local Codex CLI is logged in, the Plan composer can generate a schema-validated draft only after the user explicitly presses the Codex button.
 
 ## Product shape
 

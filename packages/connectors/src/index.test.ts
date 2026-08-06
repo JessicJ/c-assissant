@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { AmapConnector, TelegramConnector } from "./index.js";
+import { AmapConnector, createAmapDrivingHandoff, TelegramConnector } from "./index.js";
 
 test("Amap place search normalizes official response fields without exposing the key", async () => {
   const connector = new AmapConnector({
@@ -21,6 +21,20 @@ test("Amap connector reports an unconfigured key without making a request", asyn
   const connector = new AmapConnector({ apiKey: "" });
   const result = await connector.drivingRoute({ origin: "121.4,31.2", destination: "121.5,31.3" });
   assert.equal(result.status, "not_configured");
+});
+
+test("Amap route handoff keeps route planning in the user's map app", () => {
+  const handoff = createAmapDrivingHandoff({
+    origin: { id: "origin-poi", name: "Shanghai Railway Station", address: "Jing'an", location: "121.455,31.249", type: "Transport", city: "Shanghai", district: "Jing'an" },
+    destination: { id: "destination-poi", name: "Shanghai Museum", address: "Huangpu", location: "121.475,31.230", type: "Museum", city: "Shanghai", district: "Huangpu" }
+  });
+
+  const url = new URL(handoff.url);
+  assert.equal(url.protocol, "amapuri:");
+  assert.equal(url.searchParams.get("sid"), "origin-poi");
+  assert.equal(url.searchParams.get("did"), "destination-poi");
+  assert.equal(url.searchParams.get("dev"), "0");
+  assert.equal(handoff.requiresUserAction, true);
 });
 
 test("Telegram bot verification normalizes identity and keeps the token out of results", async () => {
