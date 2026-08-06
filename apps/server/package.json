@@ -1,0 +1,21 @@
+{
+  "name": "@c-assistant/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node lib/index.js"
+  },
+  "dependencies": {
+    "@c-assistant/core": "workspace:*",
+    "@fastify/cors": "^10.0.1",
+    "fastify": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2"
+  }
+}
