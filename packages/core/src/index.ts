@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 
 export type PlanStatus = "draft" | "active" | "completed" | "cancelled";
 export type TaskStatus = "scheduled" | "ready" | "running" | "waiting_user" | "blocked" | "completed" | "skipped" | "failed" | "cancelled";
+export type ProfileGender = "not_specified" | "woman" | "man" | "nonbinary" | "prefer_not_to_say";
+export type ImmigrationStatus = "unknown" | "short_term_visitor" | "tourist_visa" | "student_visa" | "work_visa" | "residence_permit" | "other";
 
 export interface Task {
   id: string;
@@ -64,13 +66,17 @@ export interface InboxItem {
   timestamp: string;
 }
 
+export interface Profile {
+  displayName: string;
+  preferredLanguage: string;
+  nationality: string;
+  gender: ProfileGender;
+  immigrationStatus: ImmigrationStatus;
+  status: "incomplete" | "ready";
+}
+
 export interface WorkspaceSnapshot {
-  profile: {
-    displayName: string;
-    preferredLanguage: string;
-    nationality: string;
-    status: "incomplete" | "ready";
-  };
+  profile: Profile;
   activePlan: Plan;
   inbox: InboxItem[];
   system: {
@@ -90,6 +96,8 @@ export interface ProfileUpdate {
   displayName: string;
   preferredLanguage: string;
   nationality: string;
+  gender: ProfileGender;
+  immigrationStatus: ImmigrationStatus;
 }
 
 export interface PlanAccommodationInput {
@@ -129,6 +137,8 @@ export function createInitialWorkspace(): WorkspaceSnapshot {
       displayName: "New explorer",
       preferredLanguage: "English",
       nationality: "To be confirmed",
+      gender: "not_specified",
+      immigrationStatus: "unknown",
       status: "incomplete"
     },
     activePlan: {

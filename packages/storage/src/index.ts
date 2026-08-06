@@ -10,9 +10,11 @@ import {
   type CreatePlanInput,
   type GeneratedPlanDraft,
   type InboxItem,
+  type ImmigrationStatus,
   type Plan,
   type PlanAccommodationInput,
   type PlanConfiguration,
+  type ProfileGender,
   type ProfileUpdate,
   type SourceReference,
   type Stage,
@@ -24,6 +26,8 @@ interface ProfileRow {
   display_name: string;
   preferred_language: string;
   nationality: string;
+  gender: ProfileGender;
+  immigration_status: ImmigrationStatus;
   status: "incomplete" | "ready";
 }
 
@@ -80,7 +84,7 @@ export class SqliteWorkspaceStore {
   }
 
   getWorkspace(): WorkspaceSnapshot {
-    const profile = this.database.prepare("SELECT display_name, preferred_language, nationality, status FROM profiles WHERE id = 1").get() as ProfileRow | undefined;
+    const profile = this.database.prepare("SELECT display_name, preferred_language, nationality, gender, immigration_status, status FROM profiles WHERE id = 1").get() as ProfileRow | undefined;
     const activePlan = this.getCurrentPlan();
     if (!profile || !activePlan) throw new Error("The local workspace is not initialized.");
 
@@ -89,6 +93,8 @@ export class SqliteWorkspaceStore {
         displayName: profile.display_name,
         preferredLanguage: profile.preferred_language,
         nationality: profile.nationality,
+        gender: profile.gender,
+        immigrationStatus: profile.immigration_status,
         status: profile.status
       },
       activePlan,
@@ -152,11 +158,15 @@ export class SqliteWorkspaceStore {
     const preferredLanguage = input.preferredLanguage.trim();
     const nationality = input.nationality.trim();
     if (!displayName || !preferredLanguage || !nationality) throw new Error("Name, preferred language, and nationality are required.");
+    if (!["not_specified", "woman", "man", "nonbinary", "prefer_not_to_say"].includes(input.gender)) throw new Error("Choose a supported gender setting.");
+    if (!["unknown", "short_term_visitor", "tourist_visa", "student_visa", "work_visa", "residence_permit", "other"].includes(input.immigrationStatus)) throw new Error("Choose a supported immigration status setting.");
 
-    this.database.prepare("UPDATE profiles SET display_name = ?, preferred_language = ?, nationality = ?, status = 'ready', updated_at = ? WHERE id = 1").run(
+    this.database.prepare("UPDATE profiles SET display_name = ?, preferred_language = ?, nationality = ?, gender = ?, immigration_status = ?, status = 'ready', updated_at = ? WHERE id = 1").run(
       displayName,
       preferredLanguage,
       nationality,
+      input.gender,
+      input.immigrationStatus,
       new Date().toISOString()
     );
     this.addInbox({
@@ -207,6 +217,8 @@ export class SqliteWorkspaceStore {
         display_name TEXT NOT NULL,
         preferred_language TEXT NOT NULL,
         nationality TEXT NOT NULL,
+        gender TEXT NOT NULL DEFAULT 'not_specified',
+        immigration_status TEXT NOT NULL DEFAULT 'unknown',
         status TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -259,6 +271,9 @@ export class SqliteWorkspaceStore {
     if (!planColumns.some((column) => column.name === "configuration_json")) {
       this.database.exec("ALTER TABLE plans ADD COLUMN configuration_json TEXT NOT NULL DEFAULT '{\"accommodation\":{\"status\":\"not_set\"}}'");
     }
+    const profileColumns = this.database.prepare("PRAGMA table_info(profiles)").all() as unknown as Array<{ name: string }>;
+    if (!profileColumns.some((column) => column.name === "gender")) this.database.exec("ALTER TABLE profiles ADD COLUMN gender TEXT NOT NULL DEFAULT 'not_specified'");
+    if (!profileColumns.some((column) => column.name === "immigration_status")) this.database.exec("ALTER TABLE profiles ADD COLUMN immigration_status TEXT NOT NULL DEFAULT 'unknown'");
   }
 
   private seedIfEmpty(): void {
@@ -266,10 +281,12 @@ export class SqliteWorkspaceStore {
     if (profile) return;
 
     const workspace = createInitialWorkspace();
-    this.database.prepare("INSERT INTO profiles (id, display_name, preferred_language, nationality, status, updated_at) VALUES (1, ?, ?, ?, ?, ?)").run(
+    this.database.prepare("INSERT INTO profiles (id, display_name, preferred_language, nationality, gender, immigration_status, status, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?)").run(
       workspace.profile.displayName,
       workspace.profile.preferredLanguage,
       workspace.profile.nationality,
+      workspace.profile.gender,
+      workspace.profile.immigrationStatus,
       workspace.profile.status,
       new Date().toISOString()
     );

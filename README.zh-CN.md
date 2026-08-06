@@ -4,7 +4,7 @@
 
 C-assistant 的目标不是只做旅行问答，而是帮助来到某个国家或地区的人更快适应当地生活。首个 Country Pack 面向中国，V1 聚焦来华准备与吃、住、行，并为以后扩展法律、银行、经商等能力保留模块化结构。
 
-项目已完成架构基线，并有第一段本地可运行流程：Web 工作台、Core HTTP 服务、本地 SQLite 保存、Profile 编辑、Plan 创建和确认流程已经连通；高德地点搜索、周边餐饮事实与驾车路线事实 Connector、QWeather 实况与三天预报事实 Connector 已接入，Codex 已能按 Schema 生成完整 Plan 草案；Telegram 已支持安全的本地配置状态和 Bot 身份验证。它仍不是可供真实用户使用的助手：Telegram 配对与提醒、官方来源、调度、Claude Code 和除高德路线以外的外部行动交接都尚未接入。
+项目已完成架构基线，并有第一段本地可运行流程：Web 工作台、Core HTTP 服务、本地 SQLite 保存、Profile（国籍、性别、来华签证或居留状态）编辑、Plan 创建和确认流程已经连通；高德地点搜索、周边餐饮事实与驾车路线事实 Connector、QWeather 实况与三天预报事实 Connector 已接入，Codex 已能按 Schema 生成完整 Plan 草案；Telegram 已支持安全的本地配置状态和 Bot 身份验证。它仍不是可供真实用户使用的助手：Telegram 配对与提醒、官方来源、调度、Claude Code 和除高德路线以外的外部行动交接都尚未接入。
 
 ## 已确定的产品形态
 

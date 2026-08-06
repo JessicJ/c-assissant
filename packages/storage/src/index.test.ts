@@ -10,11 +10,14 @@ test("SQLite persists a created Plan, a confirmation, and confirmed Profile data
   const updated = store.updateProfile({
     displayName: "Avery",
     preferredLanguage: "English",
-    nationality: "Canada"
+    nationality: "Canada",
+    gender: "woman",
+    immigrationStatus: "student_visa"
   });
 
   assert.equal(confirmed.activePlan.status, "active");
   assert.equal(updated.profile.nationality, "Canada");
+  assert.equal(updated.profile.immigrationStatus, "student_visa");
   assert.equal(updated.system.storage, "local");
   store.close();
 });
