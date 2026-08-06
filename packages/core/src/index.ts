@@ -4,6 +4,7 @@ export type PlanStatus = "draft" | "active" | "completed" | "cancelled";
 export type TaskStatus = "scheduled" | "ready" | "running" | "waiting_user" | "blocked" | "completed" | "skipped" | "failed" | "cancelled";
 export type ProfileGender = "not_specified" | "woman" | "man" | "nonbinary" | "prefer_not_to_say";
 export type ImmigrationStatus = "unknown" | "short_term_visitor" | "tourist_visa" | "student_visa" | "work_visa" | "residence_permit" | "other";
+export type TransportPreference = "plan_recommended" | "taxi" | "public_transit" | "walking";
 
 export interface Task {
   id: string;
@@ -40,6 +41,9 @@ export interface PlanAccommodation {
 /** Temporary, Plan-scoped facts. They must not leak into the long-term Profile. */
 export interface PlanConfiguration {
   accommodation: PlanAccommodation;
+  transport: {
+    preference: TransportPreference;
+  };
 }
 
 export interface Plan {
@@ -107,6 +111,10 @@ export interface PlanAccommodationInput {
   address: string;
   location: string;
   source: "amap" | "user";
+}
+
+export interface PlanTransportPreferenceInput {
+  preference: TransportPreference;
 }
 
 export interface GeneratedPlanDraft {
@@ -285,7 +293,7 @@ export function createPlanFromDraft(draft: GeneratedPlanDraft): Plan {
 }
 
 export function createDefaultPlanConfiguration(): PlanConfiguration {
-  return { accommodation: { status: "not_set" } };
+  return { accommodation: { status: "not_set" }, transport: { preference: "plan_recommended" } };
 }
 
 export function confirmPlan(snapshot: WorkspaceSnapshot, planId: string): WorkspaceSnapshot {
