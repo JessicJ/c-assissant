@@ -60,6 +60,27 @@ test("Amap nearby restaurant discovery keeps distance facts and uses the restaur
   assert.doesNotMatch(JSON.stringify(result), /test-key/);
 });
 
+test("Amap nearby accommodation discovery keeps booking outside C-assistant", async () => {
+  let requestUrl = "";
+  const connector = new AmapConnector({
+    apiKey: "test-key",
+    fetcher: async (input) => {
+      requestUrl = String(input);
+      return new Response(JSON.stringify({
+        status: "1",
+        pois: [{ id: "stay-1", name: "Riverside Hotel", address: "1 River Road", location: "121.456,31.250", type: "Accommodation", cityname: "Shanghai", adname: "Jing'an", distance: "480" }]
+      }));
+    }
+  });
+
+  const result = await connector.nearbyAccommodation({ location: "121.455,31.249" });
+  const url = new URL(requestUrl);
+  assert.equal(result.status, "available");
+  assert.equal(result.data?.[0]?.distanceMeters, 480);
+  assert.equal(url.searchParams.get("types"), "100000");
+  assert.doesNotMatch(JSON.stringify(result), /test-key/);
+});
+
 test("Amap route handoff keeps route planning in the user's map app", () => {
   const handoff = createAmapDrivingHandoff({
     origin: { id: "origin-poi", name: "Shanghai Railway Station", address: "Jing'an", location: "121.455,31.249", type: "Transport", city: "Shanghai", district: "Jing'an" },

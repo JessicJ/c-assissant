@@ -153,6 +153,18 @@ export class AmapConnector {
    * order, reservation, or payment.
    */
   async nearbyRestaurants(input: { location: string; limit?: number | undefined }): Promise<ConnectorResult<AmapNearbyPlace[]>> {
+    return this.nearbyPlaces({ ...input, type: "050000", label: "restaurant" });
+  }
+
+  /**
+   * Finds accommodation POIs around a Plan-relevant location. Results are
+   * location facts only; choosing or booking a stay remains with the user.
+   */
+  async nearbyAccommodation(input: { location: string; limit?: number | undefined }): Promise<ConnectorResult<AmapNearbyPlace[]>> {
+    return this.nearbyPlaces({ ...input, type: "100000", label: "accommodation" });
+  }
+
+  private async nearbyPlaces(input: { location: string; limit?: number | undefined; type: string; label: string }): Promise<ConnectorResult<AmapNearbyPlace[]>> {
     if (!isCoordinate(input.location)) {
       return this.failure("unsupported", "Nearby discovery needs a valid longitude,latitude centre point.", "invalid_coordinates", false);
     }
@@ -161,7 +173,7 @@ export class AmapConnector {
     const params = new URLSearchParams({
       key: this.apiKey,
       location: input.location,
-      types: "050000",
+      types: input.type,
       sortrule: "distance",
       page_size: String(Math.min(Math.max(input.limit ?? 8, 1), 25))
     });
@@ -182,7 +194,7 @@ export class AmapConnector {
           name: poi.name,
           address: poi.address ?? "Address unavailable",
           location: poi.location,
-          type: poi.type ?? "Restaurant service",
+          type: poi.type ?? `${input.label} service`,
           city: poi.cityname ?? "",
           district: poi.adname ?? "",
           distanceMeters

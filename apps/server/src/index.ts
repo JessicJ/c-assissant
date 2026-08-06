@@ -124,6 +124,11 @@ server.get<{ Querystring: { location?: string } }>("/api/amap/nearby/restaurants
   return reply.code(connectorResponseStatus(result.status)).send(result);
 });
 
+server.get<{ Querystring: { location?: string } }>("/api/amap/nearby/accommodation", async (request, reply) => {
+  const result = await amap.nearbyAccommodation({ location: request.query.location ?? "" });
+  return reply.code(connectorResponseStatus(result.status)).send(result);
+});
+
 server.get<{ Querystring: { origin?: string; destination?: string; originId?: string; destinationId?: string } }>("/api/amap/routes/driving", async (request, reply) => {
   const result = await amap.drivingRoute({
     origin: request.query.origin ?? "",
