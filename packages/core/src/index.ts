@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
+
 export type PlanStatus = "draft" | "active" | "completed" | "cancelled";
-export type TaskStatus = "scheduled" | "ready" | "waiting_user" | "completed";
+export type TaskStatus = "scheduled" | "ready" | "running" | "waiting_user" | "blocked" | "completed" | "skipped" | "failed" | "cancelled";
 
 export interface Task {
   id: string;
@@ -35,6 +37,7 @@ export interface Plan {
   nextAction: string;
   stages: Stage[];
   sources: SourceReference[];
+  createdAt: string;
 }
 
 export interface InboxItem {
@@ -56,14 +59,28 @@ export interface WorkspaceSnapshot {
   inbox: InboxItem[];
   system: {
     core: "ready";
-    storage: "demo";
+    storage: "local";
     runtime: "not_configured";
     telegram: "not_configured";
     amap: "not_configured";
   };
 }
 
-export function createDemoWorkspace(): WorkspaceSnapshot {
+export interface CreatePlanInput {
+  request: string;
+}
+
+export interface ProfileUpdate {
+  displayName: string;
+  preferredLanguage: string;
+  nationality: string;
+}
+
+export function createInitialWorkspace(): WorkspaceSnapshot {
+  const activePlan = createPlanFromRequest({
+    request: "I will attend an exhibition in Shanghai in September 2026."
+  });
+
   return {
     profile: {
       displayName: "New explorer",
@@ -72,74 +89,24 @@ export function createDemoWorkspace(): WorkspaceSnapshot {
       status: "incomplete"
     },
     activePlan: {
-      id: "plan-shanghai-exhibition",
-      version: 1,
+      ...activePlan,
       title: "Attend an exhibition in Shanghai",
       location: "Shanghai, China",
       dates: "September 2026",
-      status: "draft",
       knownInformation: [
         "Purpose: attend an exhibition",
         "Destination: Shanghai, China",
         "Expected period: September 2026"
       ],
-      assumptions: [
-        "Arrival airport and accommodation are not confirmed yet.",
-        "Transport preferences will be kept inside this Plan."
-      ],
-      nextAction: "Review and confirm this Plan to activate its reminder scope.",
-      stages: [
-        {
-          id: "pre-departure",
-          title: "Before departure",
-          description: "Prepare documents, digital tools, and accommodation decisions.",
-          tasks: [
-            {
-              id: "check-entry-materials",
-              title: "Check entry materials against official sources",
-              owner: "assistant",
-              status: "scheduled",
-              dueLabel: "After profile details are confirmed"
-            },
-            {
-              id: "choose-accommodation-area",
-              title: "Choose an accommodation area near the exhibition",
-              owner: "user",
-              status: "waiting_user",
-              dueLabel: "Before departure"
-            }
-          ]
-        },
-        {
-          id: "arrival",
-          title: "Arrival in Shanghai",
-          description: "Refresh route facts and hand off the selected journey to Amap.",
-          tasks: [
-            {
-              id: "airport-to-stay",
-              title: "Open the planned airport-to-accommodation route",
-              owner: "external",
-              status: "scheduled",
-              dueLabel: "At expected arrival time"
-            }
-          ]
-        }
-      ],
-      sources: [
-        {
-          title: "Source registry is not connected in this demo",
-          authority: "C-assistant demo data",
-          url: "https://github.com/JessicJ/c-assissant",
-          retrievedAt: "Not retrieved"
-        }
-      ]
+      assumptions: ["Arrival airport and accommodation are not confirmed yet.", "Transport preferences will be kept inside this Plan."],
+      nextAction: "Review and confirm this Plan to activate its reminder scope."
     },
     inbox: [
       {
         id: "welcome",
         tone: "notice",
         title: "Your first Plan is ready to review",
-        body: "This is local demonstration data. No messages, reminders, or external actions have been sent.",
+        body: "This initial Plan is stored locally. No messages, reminders, or external actions have been sent.",
         timestamp: "Now"
       },
       {
@@ -152,11 +119,85 @@ export function createDemoWorkspace(): WorkspaceSnapshot {
     ],
     system: {
       core: "ready",
-      storage: "demo",
+      storage: "local",
       runtime: "not_configured",
       telegram: "not_configured",
       amap: "not_configured"
     }
+  };
+}
+
+export function createPlanFromRequest({ request }: CreatePlanInput): Plan {
+  const normalizedRequest = request.trim();
+  if (!normalizedRequest) throw new Error("A request is needed to create a Plan.");
+
+  const title = normalizedRequest.length > 88 ? `${normalizedRequest.slice(0, 85).trimEnd()}…` : normalizedRequest;
+  const location = inferLocation(normalizedRequest);
+  const dates = inferDates(normalizedRequest);
+
+  return {
+    id: `plan-${randomUUID()}`,
+    version: 1,
+    title,
+    location,
+    dates,
+    status: "draft",
+    knownInformation: [
+      `Your request: ${normalizedRequest}`,
+      `Destination: ${location}`,
+      `Time: ${dates}`
+    ],
+    assumptions: [
+      "This initial template does not yet use Codex or Claude Code to interpret the request.",
+      "Confirm the destination, dates, and purpose before automated guidance is enabled."
+    ],
+    nextAction: "Review and confirm this Plan to save its current reminder scope.",
+    stages: [
+      {
+        id: `stage-${randomUUID()}`,
+        title: "Clarify essentials",
+        description: "Confirm the details that make local guidance reliable.",
+        tasks: [
+          {
+            id: `task-${randomUUID()}`,
+            title: "Confirm destination, dates, and purpose",
+            owner: "user",
+            status: "waiting_user",
+            dueLabel: "Before Plan activation"
+          }
+        ]
+      },
+      {
+        id: `stage-${randomUUID()}`,
+        title: "Before departure",
+        description: "Prepare information and local-life decisions for this Plan.",
+        tasks: [
+          {
+            id: `task-${randomUUID()}`,
+            title: "Prepare a source-backed arrival checklist",
+            owner: "assistant",
+            status: "scheduled",
+            dueLabel: "When the Agent Runtime is connected"
+          }
+        ]
+      },
+      {
+        id: `stage-${randomUUID()}`,
+        title: "Arrival",
+        description: "Hand off the planned route when location services are connected.",
+        tasks: [
+          {
+            id: `task-${randomUUID()}`,
+            title: "Open the arrival route in Amap",
+            owner: "external",
+            status: "scheduled",
+            dueLabel: "At expected arrival time"
+          }
+        ]
+      }
+    ],
+    sources: [],
+    createdAt: new Date().toISOString()
   };
 }
 
@@ -177,10 +218,27 @@ export function confirmPlan(snapshot: WorkspaceSnapshot, planId: string): Worksp
         id: `plan-confirmed-${snapshot.activePlan.version}`,
         tone: "ready",
         title: "Plan activated",
-        body: "The Plan is active in this demo. Scheduler, Telegram, and external connectors are not connected yet.",
+        body: "The Plan is active. Scheduler, Telegram, and external connectors are not connected yet.",
         timestamp: "Just now"
       },
       ...snapshot.inbox
     ]
   };
+}
+
+function inferLocation(request: string): string {
+  const knownCities = ["Shanghai", "Beijing", "Guangzhou", "Shenzhen", "Hangzhou", "Chengdu", "上海", "北京", "广州", "深圳", "杭州", "成都"];
+  const matchedCity = knownCities.find((city) => request.toLocaleLowerCase().includes(city.toLocaleLowerCase()));
+  if (matchedCity) return `${matchedCity}, China`;
+
+  const englishLocation = request.match(/\b(?:in|to|at)\s+([A-Z][A-Za-z -]{1,40})(?:[,.]|\s+(?:in|on|for)|$)/);
+  return englishLocation?.[1]?.trim() ?? "Location to be confirmed";
+}
+
+function inferDates(request: string): string {
+  const monthDate = request.match(/\b(?:January|February|March|April|May|June|July|August|September|October|November|December)(?:\s+\d{1,2})?(?:,?\s+20\d{2})?/i);
+  if (monthDate?.[0]) return monthDate[0];
+
+  const year = request.match(/\b20\d{2}\b/);
+  return year?.[0] ?? "Dates to be confirmed";
 }

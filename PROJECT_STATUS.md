@@ -34,21 +34,23 @@
 
 ### 仓库骨架
 
-- 建立 TypeScript / Node.js monorepo 基础配置。
+- 建立 TypeScript / Node.js monorepo 基础配置与本地启动、构建、类型检查和测试命令。
 - 建立 `apps/server`、`apps/telegram-bot`、`apps/web` 目录。
 - 建立 `packages/core`、`packages/skill-runtime`、`packages/agent-adapters`、`packages/connectors`、`packages/storage` 目录。
 - 建立 `country-packs/china` 及内部 Skills 目录约定。
 - 提供中英文 README、环境变量示例和 Git 忽略规则。
+- 实现本地 SQLite 保存：Profile、当前 Plan、Stage、Task 和 Inbox 在重启后保留。
+- 实现 Web 中创建本地 Plan、确认 Plan 和保存 Profile 基础字段的流程。
 
 ## 未完成内容
 
-- 尚未实现任何可运行的服务端、Web、Telegram Bot 或数据库代码。
+- 尚未实现 Telegram Bot、提醒调度、真实 Agent Runtime、高德 Connector、官方来源 Connector 或完整的数据库迁移体系。
 - 尚未实现 Codex 和 Claude Code Runtime Adapter 的真实调用与登录检查。
 - 尚未实现本地 MCP Tool Gateway。
 - 尚未实现 Amap Connector，也未验证实际 API 产品、字段、配额和深链接行为。
 - 尚未建立中国官方来源注册表、采集、快照和适用性测试。
 - 尚未实现 Plan 生成、确认、版本管理、调度、提醒和事件执行。
-- 尚未实现 SQLite Schema、迁移、备份、恢复和数据保留策略。
+- 尚未实现 SQLite 的正式迁移、备份、恢复、加密和数据保留策略。
 - 尚未实现 Web 工作台界面与 Telegram 配对。
 - 尚未确定最终项目名称、开源许可证和贡献治理方式。
 - 尚未确定一键部署与全天在线方案。
@@ -68,11 +70,11 @@
 7. `docs/china-pack-v1.md`：China Pack V1 范围与第一条演示闭环。
 8. `docs/decisions-and-open-items.md`：已确认决策和待确认问题。
 
-基础环境是 Node.js 20 及以上版本和 pnpm。依赖安装完成后，可使用 `pnpm install`、`pnpm dev`、`pnpm build`、`pnpm typecheck` 和 `pnpm test`。`pnpm dev` 会启动本地 Server 与 Web；真实部署和外部服务配置仍不在这一阶段。
+基础环境是 Node.js 22 及以上版本和 pnpm。依赖安装完成后，可使用 `pnpm install`、`pnpm dev`、`pnpm build`、`pnpm typecheck` 和 `pnpm test`。`pnpm dev` 会启动本地 Server 与 Web，并在首次启动时创建 `data/c-assistant.sqlite`；真实部署和外部服务配置仍不在这一阶段。
 
 ## 已知问题与风险
 
-- 仓库骨架不代表功能已经实现，README 中也明确标记为架构基线阶段。
+- 当前可创建和保存本地 Plan，但初始模板仍是确定性生成，不会理解复杂表达；Codex/Claude Code Runtime 尚未接入。
 - 高德是 V1 的位置事实和行动交接底座，但其 API 兼容性仍需要真实验证。
 - Ctrip 目前只是假设中的住宿搜索交接渠道，具体链接能力尚未确认。
 - 政策、入境、法律、银行和医疗结论必须使用最新官方来源；该来源体系尚未实现。
