@@ -16,6 +16,7 @@ test("a natural-language request creates a draft Plan with transparent assumptio
 
   assert.equal(plan.status, "draft");
   assert.equal(plan.location, "Shanghai, China");
+  assert.equal(plan.configuration.accommodation.status, "not_set");
   assert.match(plan.assumptions[0] ?? "", /does not yet use Codex/i);
 });
 

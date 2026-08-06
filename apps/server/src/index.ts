@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-adapters";
 import { AmapConnector, QWeatherConnector, TelegramConnector } from "@c-assistant/connectors";
-import type { CreatePlanInput, ProfileUpdate } from "@c-assistant/core";
+import type { CreatePlanInput, PlanAccommodationInput, ProfileUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
 
 const server = Fastify({ logger: true });
@@ -36,6 +36,16 @@ server.post<{ Params: { planId: string } }>("/api/plans/:planId/confirm", async 
   } catch (error) {
     return reply.code(404).send({
       error: error instanceof Error ? error.message : "Plan was not found."
+    });
+  }
+});
+
+server.put<{ Params: { planId: string }; Body: PlanAccommodationInput }>("/api/plans/:planId/accommodation", async (request, reply) => {
+  try {
+    return store.updatePlanAccommodation(request.params.planId, request.body);
+  } catch (error) {
+    return reply.code(400).send({
+      error: error instanceof Error ? error.message : "The accommodation candidate could not be saved."
     });
   }
 });

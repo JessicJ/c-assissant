@@ -6,10 +6,13 @@ import {
   createInitialWorkspace,
   createPlanFromDraft,
   createPlanFromRequest,
+  createDefaultPlanConfiguration,
   type CreatePlanInput,
   type GeneratedPlanDraft,
   type InboxItem,
   type Plan,
+  type PlanAccommodationInput,
+  type PlanConfiguration,
   type ProfileUpdate,
   type SourceReference,
   type Stage,
@@ -34,6 +37,7 @@ interface PlanRow {
   known_information_json: string;
   assumptions_json: string;
   next_action: string;
+  configuration_json: string;
   sources_json: string;
   created_at: string;
 }
@@ -165,6 +169,37 @@ export class SqliteWorkspaceStore {
     return this.getWorkspace();
   }
 
+  updatePlanAccommodation(planId: string, input: PlanAccommodationInput): WorkspaceSnapshot {
+    const workspace = this.getWorkspace();
+    if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
+    const name = input.name.trim();
+    const address = input.address.trim();
+    const location = input.location.trim();
+    if (!name || !address || !location) throw new Error("A saved accommodation candidate needs a name, address, and location.");
+
+    const configuration: PlanConfiguration = {
+      ...workspace.activePlan.configuration,
+      accommodation: {
+        status: "candidate",
+        ...(input.id?.trim() ? { id: input.id.trim() } : {}),
+        name,
+        address,
+        location,
+        source: input.source,
+        updatedAt: new Date().toISOString()
+      }
+    };
+    this.database.prepare("UPDATE plans SET configuration_json = ?, version = version + 1 WHERE id = ?").run(JSON.stringify(configuration), planId);
+    this.addInbox({
+      id: `accommodation-candidate-${planId}-${Date.now()}`,
+      tone: "notice",
+      title: "Accommodation candidate saved in this Plan",
+      body: `${name} is saved as a candidate. It is not marked as booked.`,
+      timestamp: "Just now"
+    });
+    return this.getWorkspace();
+  }
+
   private migrate(): void {
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS profiles (
@@ -185,6 +220,7 @@ export class SqliteWorkspaceStore {
         known_information_json TEXT NOT NULL,
         assumptions_json TEXT NOT NULL,
         next_action TEXT NOT NULL,
+        configuration_json TEXT NOT NULL,
         sources_json TEXT NOT NULL,
         is_current INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL
@@ -219,6 +255,10 @@ export class SqliteWorkspaceStore {
       CREATE INDEX IF NOT EXISTS idx_inbox_created_at ON inbox_items(created_at DESC);
       PRAGMA optimize;
     `);
+    const planColumns = this.database.prepare("PRAGMA table_info(plans)").all() as unknown as Array<{ name: string }>;
+    if (!planColumns.some((column) => column.name === "configuration_json")) {
+      this.database.exec("ALTER TABLE plans ADD COLUMN configuration_json TEXT NOT NULL DEFAULT '{\"accommodation\":{\"status\":\"not_set\"}}'");
+    }
   }
 
   private seedIfEmpty(): void {
@@ -241,8 +281,8 @@ export class SqliteWorkspaceStore {
     this.database.exec("BEGIN");
     try {
       this.database.prepare("UPDATE plans SET is_current = 0 WHERE is_current = 1").run();
-      this.database.prepare(`INSERT INTO plans (id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, sources_json, is_current, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`).run(
+      this.database.prepare(`INSERT INTO plans (id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, is_current, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`).run(
         plan.id,
         plan.version,
         plan.title,
@@ -252,6 +292,7 @@ export class SqliteWorkspaceStore {
         JSON.stringify(plan.knownInformation),
         JSON.stringify(plan.assumptions),
         plan.nextAction,
+        JSON.stringify(plan.configuration),
         JSON.stringify(plan.sources),
         plan.createdAt
       );
@@ -283,7 +324,7 @@ export class SqliteWorkspaceStore {
   }
 
   private getCurrentPlan(): Plan | undefined {
-    const plan = this.database.prepare(`SELECT id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, sources_json, created_at
+    const plan = this.database.prepare(`SELECT id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, created_at
       FROM plans WHERE is_current = 1 ORDER BY created_at DESC LIMIT 1`).get() as PlanRow | undefined;
     if (!plan) return undefined;
 
@@ -311,6 +352,7 @@ export class SqliteWorkspaceStore {
       knownInformation: JSON.parse(plan.known_information_json) as string[],
       assumptions: JSON.parse(plan.assumptions_json) as string[],
       nextAction: plan.next_action,
+      configuration: parsePlanConfiguration(plan.configuration_json),
       stages,
       sources: JSON.parse(plan.sources_json) as SourceReference[],
       createdAt: plan.created_at
@@ -327,4 +369,16 @@ export class SqliteWorkspaceStore {
       new Date().toISOString()
     );
   }
+}
+
+function parsePlanConfiguration(value: string): PlanConfiguration {
+  try {
+    const parsed = JSON.parse(value) as Partial<PlanConfiguration>;
+    if (parsed.accommodation && ["not_set", "candidate", "confirmed"].includes(parsed.accommodation.status)) {
+      return { accommodation: parsed.accommodation } as PlanConfiguration;
+    }
+  } catch {
+    // Old local data can safely fall back to an empty Plan configuration.
+  }
+  return createDefaultPlanConfiguration();
 }
