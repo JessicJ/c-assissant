@@ -14,6 +14,7 @@ import {
   type Plan,
   type PlanAccommodationInput,
   type PlanConfiguration,
+  type PlanTransportPreferenceInput,
   type ProfileGender,
   type ProfileUpdate,
   type SourceReference,
@@ -210,6 +211,25 @@ export class SqliteWorkspaceStore {
     return this.getWorkspace();
   }
 
+  updatePlanTransportPreference(planId: string, input: PlanTransportPreferenceInput): WorkspaceSnapshot {
+    const workspace = this.getWorkspace();
+    if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
+    if (!["plan_recommended", "taxi", "public_transit", "walking"].includes(input.preference)) throw new Error("Choose a supported transport preference.");
+    const configuration: PlanConfiguration = {
+      ...workspace.activePlan.configuration,
+      transport: { preference: input.preference }
+    };
+    this.database.prepare("UPDATE plans SET configuration_json = ?, version = version + 1 WHERE id = ?").run(JSON.stringify(configuration), planId);
+    this.addInbox({
+      id: `transport-preference-${planId}-${Date.now()}`,
+      tone: "notice",
+      title: "Transport preference saved in this Plan",
+      body: input.preference === "plan_recommended" ? "C-assistant will choose a transport approach from the Plan context when that capability is connected." : `This Plan now prefers ${input.preference.replaceAll("_", " ")}.`,
+      timestamp: "Just now"
+    });
+    return this.getWorkspace();
+  }
+
   private migrate(): void {
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS profiles (
@@ -389,13 +409,14 @@ export class SqliteWorkspaceStore {
 }
 
 function parsePlanConfiguration(value: string): PlanConfiguration {
+  const defaults = createDefaultPlanConfiguration();
   try {
     const parsed = JSON.parse(value) as Partial<PlanConfiguration>;
-    if (parsed.accommodation && ["not_set", "candidate", "confirmed"].includes(parsed.accommodation.status)) {
-      return { accommodation: parsed.accommodation } as PlanConfiguration;
-    }
+    const accommodation = parsed.accommodation && ["not_set", "candidate", "confirmed"].includes(parsed.accommodation.status) ? parsed.accommodation : defaults.accommodation;
+    const preference = parsed.transport && ["plan_recommended", "taxi", "public_transit", "walking"].includes(parsed.transport.preference) ? parsed.transport.preference : defaults.transport.preference;
+    return { accommodation, transport: { preference } };
   } catch {
     // Old local data can safely fall back to an empty Plan configuration.
   }
-  return createDefaultPlanConfiguration();
+  return defaults;
 }
