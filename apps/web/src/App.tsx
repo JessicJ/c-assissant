@@ -188,7 +188,7 @@ function App() {
     try {
       setFoodCentre(place);
       setFindingFood(true);
-      const query = new URLSearchParams({ location: place.location, radius: "1500" });
+      const query = new URLSearchParams({ location: place.location });
       const response = await fetch(`/api/amap/nearby/restaurants?${query}`);
       setFoodResult((await response.json()) as ConnectorResult<AmapNearbyPlace[]>);
     } catch {
@@ -396,7 +396,7 @@ function AmapResults({ result, onChooseRouteOrigin, onChooseRouteDestination, on
 
 function NearbyFood({ centre, result, finding }: { centre: AmapPlace | null; result: ConnectorResult<AmapNearbyPlace[]> | null; finding: boolean }) {
   if (!centre && !result) return null;
-  return <div className="nearby-food"><p><strong>Food near {centre?.name ?? "this place"}</strong><span>Distance facts from Amap, within 1.5 km. These are not ranked recommendations.</span></p>{finding ? <p className="connector-message">Checking nearby food…</p> : null}{result?.status === "available" ? result.data?.length ? <div className="nearby-food-results">{result.data.map((place) => <div key={place.id}><strong>{place.name}</strong><span>{formatDistance(place.distanceMeters)} · {place.address}</span></div>)}</div> : <p className="connector-message">Amap found no restaurant POIs in this radius.</p> : result ? <p className="connector-message">{result.failure?.message ?? "Amap is not available."} <code>{result.failure?.code}</code></p> : null}</div>;
+  return <div className="nearby-food"><p><strong>Food near {centre?.name ?? "this place"}</strong><span>Distance facts from Amap. These are not ranked recommendations.</span></p>{finding ? <p className="connector-message">Checking nearby food…</p> : null}{result?.status === "available" ? result.data?.length ? <div className="nearby-food-results">{result.data.map((place) => <div key={place.id}><strong>{place.name}</strong><span>{formatDistance(place.distanceMeters)} · {place.address}</span></div>)}</div> : <p className="connector-message">Amap found no nearby restaurant POIs.</p> : result ? <p className="connector-message">{result.failure?.message ?? "Amap is not available."} <code>{result.failure?.code}</code></p> : null}</div>;
 }
 
 function formatDistance(distanceMeters: number): string {

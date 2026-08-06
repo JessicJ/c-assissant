@@ -49,13 +49,14 @@ test("Amap nearby restaurant discovery keeps distance facts and uses the restaur
     }
   });
 
-  const result = await connector.nearbyRestaurants({ location: "121.455,31.249", radiusMeters: 1_500 });
+  const result = await connector.nearbyRestaurants({ location: "121.455,31.249" });
   const url = new URL(requestUrl);
   assert.equal(result.status, "available");
   assert.equal(result.data?.[0]?.distanceMeters, 284);
   assert.equal(url.pathname, "/v5/place/around");
   assert.equal(url.searchParams.get("types"), "050000");
   assert.equal(url.searchParams.get("sortrule"), "distance");
+  assert.equal(url.searchParams.has("radius"), false);
   assert.doesNotMatch(JSON.stringify(result), /test-key/);
 });
 
