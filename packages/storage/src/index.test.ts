@@ -44,11 +44,22 @@ test("SQLite keeps an Amap accommodation candidate inside the current Plan", () 
     name: "Riverside Hotel",
     address: "1 River Road",
     location: "121.456,31.250",
-    source: "amap"
+    source: "amap",
+    status: "candidate"
   });
 
   assert.equal(updated.activePlan.configuration.accommodation.status, "candidate");
   assert.equal(updated.activePlan.configuration.accommodation.name, "Riverside Hotel");
   assert.equal(updated.activePlan.version, plan.version + 1);
+  const confirmed = store.updatePlanAccommodation(plan.id, {
+    id: "stay-1",
+    name: "Riverside Hotel",
+    address: "1 River Road",
+    location: "121.456,31.250",
+    source: "amap",
+    status: "confirmed"
+  });
+  assert.equal(confirmed.activePlan.configuration.accommodation.status, "confirmed");
+  assert.equal(confirmed.activePlan.version, plan.version + 2);
   store.close();
 });

@@ -180,7 +180,7 @@ export class SqliteWorkspaceStore {
     const configuration: PlanConfiguration = {
       ...workspace.activePlan.configuration,
       accommodation: {
-        status: "candidate",
+        status: input.status,
         ...(input.id?.trim() ? { id: input.id.trim() } : {}),
         name,
         address,
@@ -193,8 +193,8 @@ export class SqliteWorkspaceStore {
     this.addInbox({
       id: `accommodation-candidate-${planId}-${Date.now()}`,
       tone: "notice",
-      title: "Accommodation candidate saved in this Plan",
-      body: `${name} is saved as a candidate. It is not marked as booked.`,
+      title: input.status === "confirmed" ? "Accommodation confirmed in this Plan" : "Accommodation candidate saved in this Plan",
+      body: input.status === "confirmed" ? `${name} is marked as booked after your confirmation.` : `${name} is saved as a candidate. It is not marked as booked.`,
       timestamp: "Just now"
     });
     return this.getWorkspace();
