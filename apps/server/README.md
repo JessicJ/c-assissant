@@ -8,6 +8,8 @@ Current endpoints:
 - `GET /api/workspace`
 - `POST /api/plans/:planId/confirm`
 - `POST /api/plans`
+- `POST /api/plans/generate`
 - `PUT /api/profile`
+- `GET /api/runtimes/codex`
 
-Profile and Plan state persist locally. Scheduling, Telegram, Amap, official sources, and Agent runtimes are deliberately not connected yet.
+Profile and Plan state persist locally. `POST /api/plans/generate` uses the locally logged-in Codex CLI only after an explicit user request and returns a schema-validated draft. Scheduling, Telegram, official sources, Claude Code, and external action handoffs remain unimplemented.

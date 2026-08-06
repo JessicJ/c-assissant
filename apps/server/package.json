@@ -10,6 +10,7 @@
     "start": "node lib/index.js"
   },
   "dependencies": {
+    "@c-assistant/agent-adapters": "workspace:*",
     "@c-assistant/connectors": "workspace:*",
     "@c-assistant/core": "workspace:*",
     "@c-assistant/storage": "workspace:*",

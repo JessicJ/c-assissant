@@ -4,7 +4,7 @@
 
 C-assistant 的目标不是只做旅行问答，而是帮助来到某个国家或地区的人更快适应当地生活。首个 Country Pack 面向中国，V1 聚焦来华准备与吃、住、行，并为以后扩展法律、银行、经商等能力保留模块化结构。
 
-项目已完成架构基线，并有第一段本地可运行流程：Web 工作台、Core HTTP 服务、本地 SQLite 保存、Profile 编辑、Plan 创建和确认流程已经连通；高德地点搜索与驾车路线事实 Connector 已接入。它仍不是可供真实用户使用的助手：Telegram、官方来源、调度、真实 Agent Runtime 和外部行动交接都尚未接入。
+项目已完成架构基线，并有第一段本地可运行流程：Web 工作台、Core HTTP 服务、本地 SQLite 保存、Profile 编辑、Plan 创建和确认流程已经连通；高德地点搜索与驾车路线事实 Connector 已接入，Codex 已能按 Schema 生成完整 Plan 草案。它仍不是可供真实用户使用的助手：Telegram、官方来源、调度、Claude Code 和外部行动交接都尚未接入。
 
 ## 已确定的产品形态
 
@@ -60,4 +60,4 @@ pnpm typecheck
 pnpm test
 ```
 
-首次启动会在 `data/c-assistant.sqlite` 创建本地数据库。如果 `.env` 中配置了 `AMAP_API_KEY`，可在 Settings 中验证高德地点搜索事实。它不会发送 Telegram 消息，也不会访问任何 Agent Runtime。下一阶段应让 Runtime 生成真实 Plan，然后接入 Telegram 交通卡片闭环。
+首次启动会在 `data/c-assistant.sqlite` 创建本地数据库。如果 `.env` 中配置了 `AMAP_API_KEY`，可在 Settings 中验证高德地点搜索事实；如果本机 Codex CLI 已登录，用户可在计划输入框中主动点击按钮，让 Codex 按 Schema 生成 Plan 草案。它不会发送 Telegram 消息。下一阶段应接入 Telegram 交通卡片闭环。

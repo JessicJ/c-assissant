@@ -43,11 +43,14 @@
 - 实现 Web 中创建本地 Plan、确认 Plan 和保存 Profile 基础字段的流程。
 - 实现高德 Connector：关键词地点搜索与驾车路线的距离、时长、出租车费用事实。
 - 完成一次本地高德真实验证：上海站地点搜索和上海市内驾车路线均成功返回结果。
+- 实现 Codex Runtime Adapter：检查 CLI 与登录状态，在隔离临时目录中运行 `codex exec`，使用 JSON Schema 约束 Plan 草案，并剥离高德/Telegram 等 Connector 密钥。
+- 实现 Web 中的显式 Codex Plan 草案生成按钮；生成后的完整草案会写入 SQLite，仍需用户确认才会激活。
+- 完成一次真实 Codex 端到端验证：结构化草案已通过 Schema、保存为 4 个 Stage 和 16 个 Task；测试数据库随后已删除。
 
 ## 未完成内容
 
-- 尚未实现 Telegram Bot、提醒调度、真实 Agent Runtime、官方来源 Connector、地图行动交接或完整的数据库迁移体系。
-- 尚未实现 Codex 和 Claude Code Runtime Adapter 的真实调用与登录检查。
+- 尚未实现 Telegram Bot、提醒调度、Claude Code Adapter、官方来源 Connector、地图行动交接或完整的数据库迁移体系。
+- 尚未实现 Claude Code Runtime Adapter；Codex Adapter 已实现，但没有 Run 审计、取消和优先级队列。
 - 尚未实现本地 MCP Tool Gateway。
 - 尚未实现高德周边搜索、天气、地理编码、地图深链接验证和限额/配额可视化。
 - 尚未建立中国官方来源注册表、采集、快照和适用性测试。
@@ -76,7 +79,7 @@
 
 ## 已知问题与风险
 
-- 当前可创建和保存本地 Plan，但初始模板仍是确定性生成，不会理解复杂表达；Codex/Claude Code Runtime 尚未接入。
+- 当前可创建并保存本地 Plan；确定性模板和 Codex Schema 草案都可用，但 Codex 不会自行检索官方来源，也不会执行外部动作。
 - 高德关键词地点搜索与驾车路线已使用本地 Key 验证；周边、天气、地理编码与深链接仍需分别验证。
 - Ctrip 目前只是假设中的住宿搜索交接渠道，具体链接能力尚未确认。
 - 政策、入境、法律、银行和医疗结论必须使用最新官方来源；该来源体系尚未实现。

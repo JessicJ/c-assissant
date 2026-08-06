@@ -4,8 +4,10 @@ import { DatabaseSync } from "node:sqlite";
 import {
   confirmPlan,
   createInitialWorkspace,
+  createPlanFromDraft,
   createPlanFromRequest,
   type CreatePlanInput,
+  type GeneratedPlanDraft,
   type InboxItem,
   type Plan,
   type ProfileUpdate,
@@ -86,7 +88,7 @@ export class SqliteWorkspaceStore {
         status: profile.status
       },
       activePlan,
-      inbox: (this.database.prepare("SELECT id, tone, title, body, timestamp FROM inbox_items ORDER BY created_at DESC").all() as unknown as InboxRow[]).map((row) => ({
+      inbox: (this.database.prepare("SELECT id, tone, title, body, timestamp FROM inbox_items ORDER BY created_at DESC, rowid DESC").all() as unknown as InboxRow[]).map((row) => ({
         id: row.id,
         tone: row.tone,
         title: row.title,
@@ -111,6 +113,19 @@ export class SqliteWorkspaceStore {
       tone: "notice",
       title: "New Plan saved locally",
       body: "Review its assumptions, then confirm it when the details are correct.",
+      timestamp: "Just now"
+    });
+    return this.getWorkspace();
+  }
+
+  createGeneratedPlan(draft: GeneratedPlanDraft): WorkspaceSnapshot {
+    const plan = createPlanFromDraft(draft);
+    this.savePlan(plan);
+    this.addInbox({
+      id: `plan-generated-${plan.id}`,
+      tone: "notice",
+      title: "Codex Plan draft saved locally",
+      body: "Review the generated assumptions and the complete Plan before activation.",
       timestamp: "Just now"
     });
     return this.getWorkspace();

@@ -8,7 +8,7 @@ The project is not limited to tourism. The long-term direction includes daily li
 
 ## Current status
 
-The repository contains the approved V1 architecture baseline plus a first local workflow: a Core HTTP service, a Web workspace, local SQLite persistence, Profile editing, Plan creation and confirmation, plus a restricted Amap place and route-facts Connector. It is not yet a personal assistant for real use: Telegram, official sources, scheduling, Agent runtimes, and external action handoffs have not been implemented.
+The repository contains the approved V1 architecture baseline plus a first local workflow: a Core HTTP service, a Web workspace, local SQLite persistence, Profile editing, Plan creation and confirmation, a restricted Amap place and route-facts Connector, and a Codex-backed structured Plan-draft flow. It is not yet a personal assistant for real use: Telegram, official sources, scheduling, Claude Code, and external action handoffs have not been implemented.
 
 ## Run the local demo
 
@@ -29,7 +29,7 @@ pnpm typecheck
 pnpm test
 ```
 
-The local instance creates `data/c-assistant.sqlite` on first start. If `AMAP_API_KEY` is set in the ignored `.env` file, the Settings screen can validate place-search facts. It sends no Telegram messages and does not contact an Agent runtime.
+The local instance creates `data/c-assistant.sqlite` on first start. If `AMAP_API_KEY` is set in the ignored `.env` file, the Settings screen can validate place-search facts. If the local Codex CLI is logged in, the Plan composer can generate a schema-validated draft only after the user explicitly presses the Codex button. It sends no Telegram messages.
 
 ## Product shape
 
