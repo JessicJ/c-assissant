@@ -35,3 +35,20 @@ test("SQLite persists a validated Agent-generated Plan", () => {
   assert.equal(workspace.inbox[0]?.title, "Codex Plan draft saved locally");
   store.close();
 });
+
+test("SQLite keeps an Amap accommodation candidate inside the current Plan", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const plan = store.getWorkspace().activePlan;
+  const updated = store.updatePlanAccommodation(plan.id, {
+    id: "stay-1",
+    name: "Riverside Hotel",
+    address: "1 River Road",
+    location: "121.456,31.250",
+    source: "amap"
+  });
+
+  assert.equal(updated.activePlan.configuration.accommodation.status, "candidate");
+  assert.equal(updated.activePlan.configuration.accommodation.name, "Riverside Hotel");
+  assert.equal(updated.activePlan.version, plan.version + 1);
+  store.close();
+});

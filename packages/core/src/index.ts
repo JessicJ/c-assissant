@@ -25,6 +25,21 @@ export interface SourceReference {
   retrievedAt: string;
 }
 
+export interface PlanAccommodation {
+  status: "not_set" | "candidate" | "confirmed";
+  id?: string;
+  name?: string;
+  address?: string;
+  location?: string;
+  source?: "amap" | "user";
+  updatedAt?: string;
+}
+
+/** Temporary, Plan-scoped facts. They must not leak into the long-term Profile. */
+export interface PlanConfiguration {
+  accommodation: PlanAccommodation;
+}
+
 export interface Plan {
   id: string;
   version: number;
@@ -35,6 +50,7 @@ export interface Plan {
   knownInformation: string[];
   assumptions: string[];
   nextAction: string;
+  configuration: PlanConfiguration;
   stages: Stage[];
   sources: SourceReference[];
   createdAt: string;
@@ -74,6 +90,14 @@ export interface ProfileUpdate {
   displayName: string;
   preferredLanguage: string;
   nationality: string;
+}
+
+export interface PlanAccommodationInput {
+  id?: string;
+  name: string;
+  address: string;
+  location: string;
+  source: "amap" | "user";
 }
 
 export interface GeneratedPlanDraft {
@@ -170,6 +194,7 @@ export function createPlanFromRequest({ request }: CreatePlanInput): Plan {
       "Confirm the destination, dates, and purpose before automated guidance is enabled."
     ],
     nextAction: "Review and confirm this Plan to save its current reminder scope.",
+    configuration: createDefaultPlanConfiguration(),
     stages: [
       {
         id: `stage-${randomUUID()}`,
@@ -230,6 +255,7 @@ export function createPlanFromDraft(draft: GeneratedPlanDraft): Plan {
     knownInformation: draft.knownInformation,
     assumptions: draft.assumptions,
     nextAction: draft.nextAction,
+    configuration: createDefaultPlanConfiguration(),
     stages: draft.stages.map((stage) => ({
       id: `stage-${randomUUID()}`,
       title: stage.title,
@@ -245,6 +271,10 @@ export function createPlanFromDraft(draft: GeneratedPlanDraft): Plan {
     sources: [],
     createdAt: new Date().toISOString()
   };
+}
+
+export function createDefaultPlanConfiguration(): PlanConfiguration {
+  return { accommodation: { status: "not_set" } };
 }
 
 export function confirmPlan(snapshot: WorkspaceSnapshot, planId: string): WorkspaceSnapshot {
