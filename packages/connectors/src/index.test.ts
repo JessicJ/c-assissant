@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { AmapConnector, createAmapDrivingHandoff, TelegramConnector } from "./index.js";
+import { AmapConnector, createAmapDrivingHandoff, QWeatherConnector, TelegramConnector } from "./index.js";
 
 test("Amap place search normalizes official response fields without exposing the key", async () => {
   const connector = new AmapConnector({
@@ -23,6 +23,19 @@ test("Amap connector reports an unconfigured key without making a request", asyn
   assert.equal(result.status, "not_configured");
 });
 
+test("Amap geocoding resolves a city fact without exposing the key", async () => {
+  const connector = new AmapConnector({
+    apiKey: "test-key",
+    fetcher: async (input) => {
+      assert.match(String(input), /\/v3\/geocode\/geo/);
+      return new Response(JSON.stringify({ status: "1", geocodes: [{ formatted_address: "Shanghai City", location: "121.4737,31.2304", province: "Shanghai", city: "Shanghai", district: "Huangpu", level: "city" }] }));
+    }
+  });
+  const result = await connector.geocodeAddress({ address: "Shanghai" });
+  assert.equal(result.status, "available");
+  assert.equal(result.data?.location, "121.4737,31.2304");
+});
+
 test("Amap route handoff keeps route planning in the user's map app", () => {
   const handoff = createAmapDrivingHandoff({
     origin: { id: "origin-poi", name: "Shanghai Railway Station", address: "Jing'an", location: "121.455,31.249", type: "Transport", city: "Shanghai", district: "Jing'an" },
@@ -35,6 +48,44 @@ test("Amap route handoff keeps route planning in the user's map app", () => {
   assert.equal(url.searchParams.get("did"), "destination-poi");
   assert.equal(url.searchParams.get("dev"), "0");
   assert.equal(handoff.requiresUserAction, true);
+});
+
+test("QWeather combines current facts and a daily forecast from country-pack coordinates without exposing its key", async () => {
+  const requests: Array<{ url: string; key: string | null }> = [];
+  const connector = new QWeatherConnector({
+    apiKey: "test-qweather-key",
+    apiHost: "demo.qweatherapi.com",
+    fetcher: async (input, init) => {
+      const url = new URL(String(input));
+      requests.push({ url: `${url.pathname}${url.search}`, key: new Headers(init?.headers).get("X-QW-Api-Key") });
+      if (url.pathname === "/v7/weather/now") return new Response(JSON.stringify({ code: "200", now: { obsTime: "2026-08-06T09:00+08:00", temp: "29", feelsLike: "31", icon: "101", text: "Cloudy", windDir: "East", windScale: "3", humidity: "72", precip: "0" } }));
+      return new Response(JSON.stringify({ code: "200", fxLink: "https://www.qweather.com", daily: [{ fxDate: "2026-08-06", textDay: "Cloudy", textNight: "Clear", tempMax: "31", tempMin: "25", precip: "0", uvIndex: "7" }] }));
+    }
+  });
+
+  const result = await connector.weather({ coordinates: "121.47,31.23", locationName: "Shanghai", adminArea: "Shanghai", country: "China" });
+  assert.equal(result.status, "available");
+  assert.equal(result.data?.location.id, "121.47,31.23");
+  assert.equal(result.data?.current.temperatureC, 29);
+  assert.equal(result.data?.daily[0]?.highC, 31);
+  assert.equal(requests.length, 2);
+  assert.ok(requests.every((request) => request.key === "test-qweather-key"));
+  assert.doesNotMatch(JSON.stringify(result), /test-qweather-key/);
+});
+
+test("QWeather reports missing configuration without making a request", async () => {
+  let requests = 0;
+  const connector = new QWeatherConnector({
+    apiKey: "",
+    apiHost: "demo.qweatherapi.com",
+    fetcher: async () => {
+      requests += 1;
+      return new Response();
+    }
+  });
+  const result = await connector.weather({ coordinates: "121.47,31.23", locationName: "Shanghai" });
+  assert.equal(result.status, "not_configured");
+  assert.equal(requests, 0);
 });
 
 test("Telegram bot verification normalizes identity and keeps the token out of results", async () => {
