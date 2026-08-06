@@ -1,0 +1,14 @@
+{
+  "name": "c-assistant",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Country-neutral regional assistant Core with a China Country Pack.",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "country-packs/*"
+  ]
+}
