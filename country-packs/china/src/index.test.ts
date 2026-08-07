@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { runFoodNearbySkill } from "./index.js";
+import { runFoodNearbySkill, runHousingAreaRecommendationSkill } from "./index.js";
 
 const candidates = [
   { id: "near", name: "Nearby Noodles", address: "1 Example Road", location: "121.47,31.23", type: "Chinese food", distanceMeters: 180 },
@@ -41,4 +41,24 @@ test("food-nearby fails closed on malformed context and omits malformed provider
   assert.equal(result.status, "success");
   assert.equal(result.facts.length, 2);
   assert.match(result.warnings.join(" "), /omitted/);
+});
+
+test("housing-area-recommendation asks for an access anchor before comparing stays", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../skills/housing-area-recommendation/skill.json", import.meta.url), "utf8")) as { id: string; version: string; visibility: string; entrypoint: string };
+  const result = runHousingAreaRecommendationSkill({ candidates, observedAt: "2026-08-07T00:00:00.000Z" });
+  assert.deepEqual(result.skill, { id: manifest.id, version: manifest.version });
+  assert.equal(manifest.visibility, "internal");
+  assert.equal(manifest.entrypoint, "runHousingAreaRecommendationSkill");
+  assert.equal(result.status, "needs_input");
+  assert.equal(result.needsInput?.field, "centreName");
+});
+
+test("housing-area-recommendation explains only Amap access facts and limitations", () => {
+  const result = runHousingAreaRecommendationSkill({ centreName: "Shanghai Exhibition Centre", candidates, observedAt: "2026-08-07T00:00:00.000Z" });
+  assert.equal(result.status, "success");
+  assert.equal(result.recommendations.length, 2);
+  assert.match(result.recommendations[0]?.reason ?? "", /180 m from Shanghai Exhibition Centre by Amap nearby-place distance/);
+  assert.match(result.recommendations[0]?.reason ?? "", /Compare an actual route/);
+  assert.match(result.warnings.join(" "), /foreign-guest eligibility have not been verified/);
+  assert.ok(result.actionCards.every((card) => card.completion === "unknown_until_user_confirms"));
 });

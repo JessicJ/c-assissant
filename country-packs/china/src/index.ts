@@ -81,3 +81,61 @@ function isValidCandidate(candidate: FoodNearbyCandidateInput): boolean {
   return Boolean(candidate.id.trim() && candidate.name.trim() && candidate.address.trim() && candidate.location.trim() && candidate.type.trim())
     && Number.isFinite(candidate.distanceMeters) && candidate.distanceMeters >= 0;
 }
+
+export interface HousingAreaRecommendation {
+  candidateId: string;
+  reason: string;
+  limitations: string[];
+}
+
+export interface HousingAreaSkillResult {
+  skill: { id: "housing-area-recommendation"; version: "0.1.0" };
+  status: "success" | "needs_input" | "degraded" | "failed";
+  summary: string;
+  facts: FoodNearbyFact[];
+  assumptions: string[];
+  recommendations: HousingAreaRecommendation[];
+  actionCards: Array<{ kind: "external_handoff"; provider: "amap"; candidateId: string; completion: "unknown_until_user_confirms" }>;
+  sources: Array<{ provider: "amap"; observedAt: string }>;
+  warnings: string[];
+  needsInput?: { field: "centreName"; reason: string };
+}
+
+/** First access-oriented slice; area-level judgment waits for multi-anchor route facts. */
+export function runHousingAreaRecommendationSkill(input: { centreName?: string; candidates: FoodNearbyCandidateInput[]; observedAt: string }): HousingAreaSkillResult {
+  const identity = { id: "housing-area-recommendation" as const, version: "0.1.0" as const };
+  const centreName = input.centreName?.trim();
+  if (!centreName) {
+    return { skill: identity, status: "needs_input", summary: "Choose the Plan place that accommodation access should be compared with.", facts: [], assumptions: [], recommendations: [], actionCards: [], sources: [], warnings: [], needsInput: { field: "centreName", reason: "A stay location needs a venue, workplace, school, or other Plan anchor for an explainable comparison." } };
+  }
+  if (!Number.isFinite(Date.parse(input.observedAt))) {
+    return { skill: identity, status: "failed", summary: "The accommodation input did not pass the Skill contract.", facts: [], assumptions: [], recommendations: [], actionCards: [], sources: [], warnings: ["No accommodation conclusion was produced from malformed context."] };
+  }
+  const valid = input.candidates.filter(isValidCandidate);
+  const facts = valid.slice(0, 5).map((candidate, index) => ({ ...candidate, position: index + 1 }));
+  const warnings = [
+    "Amap distance is a location fact, not a door-to-door commute or proof that this is the best area.",
+    "Live price, inventory, booking, payment, and foreign-guest eligibility have not been verified."
+  ];
+  if (valid.length !== input.candidates.length) warnings.push("Malformed provider candidates were omitted.");
+  if (facts.length === 0) return { skill: identity, status: "degraded", summary: `Amap returned no usable accommodation candidates near ${centreName}.`, facts, assumptions: [], recommendations: [], actionCards: [], sources: [{ provider: "amap", observedAt: input.observedAt }], warnings };
+  return {
+    skill: identity,
+    status: "success",
+    summary: `Preliminary access comparison for accommodation near ${centreName}.`,
+    facts,
+    assumptions: ["The selected centre is a useful access anchor for this Plan."],
+    recommendations: facts.slice(0, 3).map((fact) => ({
+      candidateId: fact.id,
+      reason: `${formatSkillDistance(fact.distanceMeters)} from ${centreName} by Amap nearby-place distance. Compare an actual route before choosing.`,
+      limitations: [...warnings]
+    })),
+    actionCards: facts.map((fact) => ({ kind: "external_handoff", provider: "amap", candidateId: fact.id, completion: "unknown_until_user_confirms" })),
+    sources: [{ provider: "amap", observedAt: input.observedAt }],
+    warnings
+  };
+}
+
+function formatSkillDistance(distanceMeters: number): string {
+  return distanceMeters < 1_000 ? `${Math.round(distanceMeters)} m` : `${(distanceMeters / 1_000).toFixed(1)} km`;
+}

@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@c-assistant/agent-adapters": "workspace:*",
+    "@c-assistant/china-country-pack": "workspace:*",
     "@c-assistant/connectors": "workspace:*",
     "@c-assistant/core": "workspace:*",
     "@vitejs/plugin-react": "^4.3.4",

@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-adapters";
 import { AmapConnector, OfficialSourceConnector, QWeatherConnector, TelegramConnector, type AmapPlace, type AmapRoute, type TelegramReplyMarkup } from "@c-assistant/connectors";
-import { runFoodNearbySkill } from "@c-assistant/china-country-pack";
+import { runFoodNearbySkill, runHousingAreaRecommendationSkill } from "@c-assistant/china-country-pack";
 import { assessPolicyPreparation, type AgentRuntimeKind, type CreatePlanInput, type GeneratedPlanDraft, type PlanAccommodationInput, type PlanArrivalInput, type PlanTransportPreferenceInput, type PlanTravelContextInput, type ProfileUpdate, type RuntimeSelectionUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue } from "./arrival-reminder.js";
@@ -356,9 +356,11 @@ server.get<{ Querystring: { location?: string } }>("/api/amap/nearby/restaurants
   return reply.code(connectorResponseStatus(result.status)).send(result);
 });
 
-server.get<{ Querystring: { location?: string } }>("/api/amap/nearby/accommodation", async (request, reply) => {
+server.get<{ Querystring: { location?: string; name?: string } }>("/api/amap/nearby/accommodation", async (request, reply) => {
   const result = await amap.nearbyAccommodation({ location: request.query.location ?? "" });
-  return reply.code(connectorResponseStatus(result.status)).send(result);
+  if (result.status !== "available" || !result.data) return reply.code(connectorResponseStatus(result.status)).send(result);
+  const skill = runHousingAreaRecommendationSkill({ ...(request.query.name ? { centreName: request.query.name } : {}), candidates: result.data, observedAt: result.observedAt });
+  return reply.send({ ...result, skill });
 });
 
 server.get<{ Querystring: { origin?: string; destination?: string; originId?: string; destinationId?: string } }>("/api/amap/routes/driving", async (request, reply) => {

@@ -32,6 +32,8 @@ Recommends two or three areas based on event locations, commute, time, transport
 
 If accommodation is already booked, Core asks only for the place needed to integrate it into the Plan.
 
+Implemented slice: `housing-area-recommendation` `0.1.0` compares current Amap accommodation POIs with one user-selected Plan anchor. It gives at most three preliminary access reasons, labels nearby-place distance as distinct from a real commute, and refuses to infer live price, inventory, booking, payment, quality, or foreign-guest eligibility. Multi-anchor area choice and route-based reasons remain later work.
+
 ### `transport-planner`
 
 Recommends transport using party size, luggage, time, weather, route facts, accessibility needs, and this Plan's preference. After Plan confirmation, execution uses the selected option with minimal intervention while retaining alternatives.

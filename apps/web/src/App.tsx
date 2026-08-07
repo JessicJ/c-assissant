@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import "./manual-accommodation.css";
 import type { RuntimeCheck } from "@c-assistant/agent-adapters";
+import type { HousingAreaSkillResult } from "@c-assistant/china-country-pack";
 import { createAmapDrivingHandoff, createAmapPlaceHandoff } from "@c-assistant/connectors";
 import type { AmapNearbyPlace, AmapPlace, AmapRoute, ConnectorResult, OfficialSourceDefinition, QWeatherWeatherSnapshot, TelegramBotIdentity, TelegramConfiguration } from "@c-assistant/connectors";
 import type { AgentRun, AgentRuntimeKind, PolicyPreparationAssessment, SourceSnapshotWriteResult, Task, WorkspaceSnapshot } from "@c-assistant/core";
@@ -9,6 +10,7 @@ import { recommendPlanTransport, type TransportWeatherFact } from "@c-assistant/
 type View = "Today" | "Plans" | "Inbox" | "Profile" | "Settings";
 type RouteMode = AmapRoute["mode"];
 type RouteComparisons = Partial<Record<RouteMode, ConnectorResult<AmapRoute>>>;
+type AccommodationDiscoveryResult = ConnectorResult<AmapNearbyPlace[]> & { skill?: HousingAreaSkillResult };
 type ChatMode = "new_plan" | "revise_plan";
 type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
 type TelegramPairingView = {
@@ -52,7 +54,7 @@ function App() {
   const [foodResult, setFoodResult] = useState<ConnectorResult<AmapNearbyPlace[]> | null>(null);
   const [findingFood, setFindingFood] = useState(false);
   const [stayCentre, setStayCentre] = useState<AmapPlace | null>(null);
-  const [stayResult, setStayResult] = useState<ConnectorResult<AmapNearbyPlace[]> | null>(null);
+  const [stayResult, setStayResult] = useState<AccommodationDiscoveryResult | null>(null);
   const [findingStay, setFindingStay] = useState(false);
   const [savingAccommodation, setSavingAccommodation] = useState(false);
   const [confirmingAccommodation, setConfirmingAccommodation] = useState(false);
@@ -441,9 +443,9 @@ function App() {
     try {
       setStayCentre(place);
       setFindingStay(true);
-      const query = new URLSearchParams({ location: place.location });
+      const query = new URLSearchParams({ location: place.location, name: place.name });
       const response = await fetch(`/api/amap/nearby/accommodation?${query}`);
-      setStayResult((await response.json()) as ConnectorResult<AmapNearbyPlace[]>);
+      setStayResult((await response.json()) as AccommodationDiscoveryResult);
     } catch {
       setStayResult({ status: "unavailable", provider: "amap", observedAt: new Date().toISOString(), failure: { code: "network_error", message: "Amap could not be reached right now.", retryable: true } });
     } finally {
@@ -931,7 +933,8 @@ function AmapResults({ result, onChooseRouteOrigin, onChooseRouteDestination, on
 
 function NearbyAccommodation({ centre, result, finding, saving, onSaveCandidate }: { centre: AmapPlace | null; result: ConnectorResult<AmapNearbyPlace[]> | null; finding: boolean; saving: boolean; onSaveCandidate: (place: AmapNearbyPlace) => Promise<void> }) {
   if (!centre && !result) return null;
-  return <div className="nearby-food"><p><strong>Stay options near {centre?.name ?? "this place"}</strong><span>Accommodation location facts from Amap. Compare the area, then complete any booking in your chosen service.</span></p>{finding ? <p className="connector-message">Checking nearby stays…</p> : null}{result?.status === "available" ? result.data?.length ? <div className="nearby-food-results">{result.data.map((place) => <div key={place.id}><strong>{place.name}</strong><span>{formatDistance(place.distanceMeters)} · {place.address}</span><div className="place-actions"><a className="text-button" href={createAmapPlaceHandoff({ place }).url}>Open in Amap</a><button className="text-button" disabled={saving} onClick={() => void onSaveCandidate(place)}>{saving ? "Saving…" : "Keep as Plan stay candidate"}</button></div></div>)}</div> : <p className="connector-message">Amap found no nearby accommodation POIs.</p> : result ? <p className="connector-message">{result.failure?.message ?? "Amap is not available."} <code>{result.failure?.code}</code></p> : null}</div>;
+  const skill = (result as AccommodationDiscoveryResult | null)?.skill;
+  return <div className="nearby-food"><p><strong>Stay options near {centre?.name ?? "this place"}</strong><span>Preliminary access reasons from the internal China Pack Skill, based on Amap location facts.</span></p>{finding ? <p className="connector-message">Checking nearby stays…</p> : null}{result?.status === "available" ? result.data?.length ? <><div className="nearby-food-results">{result.data.map((place) => { const recommendation = skill?.recommendations.find((item) => item.candidateId === place.id); return <div key={place.id}><strong>{place.name}</strong><span>{formatDistance(place.distanceMeters)} · {place.address}</span>{recommendation ? <small>{recommendation.reason}</small> : <small>Amap location fact only; no preliminary Skill recommendation.</small>}<div className="place-actions"><a className="text-button" href={createAmapPlaceHandoff({ place }).url}>Open in Amap</a><button className="text-button" disabled={saving} onClick={() => void onSaveCandidate(place)}>{saving ? "Saving…" : "Keep as Plan stay candidate"}</button></div></div>; })}</div>{skill?.warnings.length ? <p className="connector-message">{skill.warnings.join(" ")}</p> : null}</> : <p className="connector-message">Amap found no nearby accommodation POIs.</p> : result ? <p className="connector-message">{result.failure?.message ?? "Amap is not available."} <code>{result.failure?.code}</code></p> : null}</div>;
 }
 
 function NearbyFood({ centre, result, finding }: { centre: AmapPlace | null; result: ConnectorResult<AmapNearbyPlace[]> | null; finding: boolean }) {
