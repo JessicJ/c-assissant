@@ -11,6 +11,7 @@ import { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue } from "./arrival-reminder.js";
 import { arrivalRouteDestination, formatArrivalRoute, selectArrivalTransport } from "./arrival-route.js";
 import { parseTelegramCommand } from "./telegram-commands.js";
+import { createTelegramPlan, formatTelegramPlanCreation } from "./telegram-plan.js";
 
 const server = Fastify({ logger: true });
 const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -312,7 +313,7 @@ async function pollTelegram(): Promise<void> {
         await sendArrivalRouteFromSharedLocation(pairing.binding.chatId, update.location);
         continue;
       }
-      const response = telegramCommandResponse(update.text);
+      const response = await telegramCommandResponse(update.text);
       if (response) await telegram.sendMessage({ chatId: pairing.binding.chatId, text: response });
     }
     if (updates.data.nextOffset !== undefined) store.advanceTelegramUpdateOffset(updates.data.nextOffset);
@@ -436,18 +437,30 @@ async function requestTelegramArrivalLocation(chatId: string, intro: string): Pr
   }
 }
 
-function telegramCommandResponse(text: string | undefined): string | undefined {
+async function telegramCommandResponse(text: string | undefined): Promise<string | undefined> {
   const command = parseTelegramCommand(text);
   if (command.type === "empty") return undefined;
-  if (command.type === "help") return "C-assistant is connected. Send a normal message to create a draft Plan, or use:\n/plan — show the current Plan\n/new <what you need to do> — create a draft Plan\n/help — show this help\n\nReminders, location requests, bookings, and payments are not enabled.";
+  if (command.type === "help") return "C-assistant is connected. Send a normal message to create a Plan draft with local Codex, or use:\n/plan — show the current Plan\n/new <what you need to do> — create a Plan draft\n/help — show this help\n\nEvery Plan still needs Web review and confirmation. Bookings and payments are not enabled.";
   if (command.type === "plan") {
     const plan = store.getWorkspace().activePlan;
     return `Current Plan\n${plan.title}\n${plan.location} · ${plan.dates}\nStatus: ${plan.status}\nNext: ${plan.nextAction}\n\nUse the Web workspace to review or confirm the complete Plan.`;
   }
   if (command.type === "create_plan") {
     if (command.request.length > 1_500) return "Keep a new Plan request under 1,500 characters, then send it again.";
-    const workspace = store.createPlan({ request: command.request });
-    return `A new draft Plan is ready for review:\n${workspace.activePlan.title}\n${workspace.activePlan.location} · ${workspace.activePlan.dates}\n\nReview and confirm the complete Plan in the Web workspace before any future automation.`;
+    if (generatingPlan) return "A Plan draft is already being prepared. Please wait for it before sending another request.";
+    generatingPlan = true;
+    try {
+      const workspace = store.getWorkspace();
+      const result = await createTelegramPlan({
+        request: command.request,
+        generate: () => codex.generatePlanDraft({ request: command.request, profile: { preferredLanguage: workspace.profile.preferredLanguage, nationality: workspace.profile.nationality } }),
+        saveGenerated: (draft) => store.createGeneratedPlan(draft),
+        saveTemplate: () => store.createPlan({ request: command.request })
+      });
+      return formatTelegramPlanCreation(result);
+    } finally {
+      generatingPlan = false;
+    }
   }
   if (command.type === "start") return "This Telegram account is already connected to C-assistant. Send /help to see available commands.";
   return "That command is not available yet. Send /help to see what C-assistant can do.";
