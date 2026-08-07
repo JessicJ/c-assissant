@@ -62,6 +62,8 @@ pnpm typecheck
 pnpm test
 ```
 
+Pull Request 以及向 `master`/`main` 的推送会在 GitHub Actions 中执行相同的构建、类型检查和测试；CI 不配置任何真实 Connector 或运行底座凭据。
+
 首次启动会在 `data/c-assistant.sqlite` 创建本地数据库。配置本地 `.env` 后，高德可提供地点、周边餐饮与住宿、驾车、步行和公共交通事实，并把路线交接给用户自行打开；QWeather 可提供实况和三天预报。住宿只有在用户明确表示已完成第三方预订后才会标记为已确认，系统不会点餐、预订、叫车或支付。
 
 Settings 会显示 SQLite schema 与完整性状态，并允许用户显式创建经过再次校验的本地备份。备份保存到 `data/backups`（自定义数据库则保存在其旁边），权限为 `0600`，不包含 Codex/Claude Code 登录凭据或 Connector 密钥。恢复会覆盖当前 workspace，因此 V1 不自动执行恢复。
