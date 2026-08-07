@@ -9,6 +9,8 @@ import { recommendPlanTransport, type TransportWeatherFact } from "@c-assistant/
 type View = "Today" | "Plans" | "Inbox" | "Profile" | "Settings";
 type RouteMode = AmapRoute["mode"];
 type RouteComparisons = Partial<Record<RouteMode, ConnectorResult<AmapRoute>>>;
+type ChatMode = "new_plan" | "revise_plan";
+type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
 type TelegramPairingView = {
   state: "not_paired" | "waiting_for_start" | "paired";
   code?: string;
@@ -30,6 +32,13 @@ function App() {
   const [confirming, setConfirming] = useState(false);
   const [requestText, setRequestText] = useState("");
   const [creating, setCreating] = useState(false);
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [agentInput, setAgentInput] = useState("");
+  const [agentMode, setAgentMode] = useState<ChatMode>("new_plan");
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [agentMessages, setAgentMessages] = useState<ChatMessage[]>([
+    { id: "agent-welcome", role: "assistant", text: "Hi — tell me what you need for China. I can turn it into a complete Plan, or revise the current draft when you want to correct something." }
+  ]);
   const [amapQuery, setAmapQuery] = useState("Shanghai Railway Station");
   const [amapResult, setAmapResult] = useState<ConnectorResult<AmapPlace[]> | null>(null);
   const [searchingAmap, setSearchingAmap] = useState(false);
@@ -265,6 +274,35 @@ function App() {
       setError(caught instanceof Error ? caught.message : "The selected runtime could not generate a Plan.");
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function sendAgentMessage() {
+    const message = agentInput.trim();
+    if (!message || agentBusy) return;
+    setAgentInput("");
+    setAgentMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", text: message }]);
+    try {
+      setAgentBusy(true);
+      const response = await fetch("/api/agent/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message, mode: agentMode })
+      });
+      const payload = await response.json() as { reply?: string; workspace?: WorkspaceSnapshot; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "The Agent could not respond right now.");
+      if (payload.workspace) {
+        setWorkspace(payload.workspace);
+        setView("Plans");
+        await loadPolicyPreparation();
+        await loadAgentRuns();
+      }
+      setAgentMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: payload.reply ?? "The Agent prepared an updated Plan for you." }]);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "The Agent could not respond right now.";
+      setAgentMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: message }]);
+    } finally {
+      setAgentBusy(false);
     }
   }
 
@@ -601,7 +639,10 @@ function App() {
             <p className="eyebrow">{view}</p>
             <h1>{view === "Today" ? "A calm start for your China plan." : view}</h1>
           </div>
-          <button className="profile-chip" onClick={() => setView("Profile")}>{workspace.profile.displayName}</button>
+          <div className="topbar-actions">
+            <button className="agent-launch-button" onClick={() => { if (workspace.activePlan.status !== "draft") setAgentMode("new_plan"); setAgentOpen(true); }}><span aria-hidden="true">✦</span> Ask Agent</button>
+            <button className="profile-chip" onClick={() => setView("Profile")}>{workspace.profile.displayName}</button>
+          </div>
         </header>
 
         {error ? <p className="inline-error">{error}</p> : null}
@@ -644,7 +685,7 @@ function App() {
               <div>
                 <p className="eyebrow">Create another Plan</p>
                 <h2>Describe what you need in China.</h2>
-                <p>This saves a local draft with transparent assumptions. Agent-generated detail comes in the next phase.</p>
+                <p>For a real conversation, use Ask Agent above. This quick form saves a local draft with transparent assumptions.</p>
               </div>
               <label className="request-field">
                 <span className="sr-only">Describe your plan</span>
@@ -684,8 +725,25 @@ function App() {
         {view === "Profile" ? <ProfileView workspace={workspace} onSave={saveProfile} /> : null}
         {view === "Settings" ? <SettingsView workspace={workspace} runtimeChecks={runtimeChecks} agentRuns={agentRuns} savingRuntime={savingRuntime} onSaveRuntime={saveRuntime} officialSources={officialSources} refreshingSourceId={refreshingSourceId} linkingSourceSnapshotId={linkingSourceSnapshotId} onRefreshOfficialSource={refreshOfficialSource} onLinkSourceSnapshotToPlan={linkSourceSnapshotToPlan} telegramStatus={telegramStatus} telegramVerification={telegramVerification} verifyingTelegram={verifyingTelegram} telegramPairing={telegramPairing} pairingTelegram={pairingTelegram} disconnectingTelegram={disconnectingTelegram} onVerifyTelegram={verifyTelegram} onStartTelegramPairing={startTelegramPairing} onCompleteTelegramPairing={completeTelegramPairing} onDisconnectTelegram={disconnectTelegramPairing} weatherLocation={weatherLocation} setWeatherLocation={setWeatherLocation} weatherResult={weatherResult} checkingWeather={checkingWeather} onCheckWeather={checkWeather} /> : null}
       </section>
+      {agentOpen ? <AgentDialog messages={agentMessages} input={agentInput} mode={agentMode} canRevise={workspace.activePlan.status === "draft"} busy={agentBusy} onClose={() => setAgentOpen(false)} onInput={setAgentInput} onMode={setAgentMode} onSend={sendAgentMessage} /> : null}
     </main>
   );
+}
+
+function AgentDialog({ messages, input, mode, canRevise, busy, onClose, onInput, onMode, onSend }: { messages: ChatMessage[]; input: string; mode: ChatMode; canRevise: boolean; busy: boolean; onClose: () => void; onInput: (value: string) => void; onMode: (value: ChatMode) => void; onSend: () => Promise<void> }) {
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void onSend();
+  }
+
+  return <div className="agent-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className="agent-dialog" role="dialog" aria-modal="true" aria-labelledby="agent-dialog-title" aria-busy={busy}>
+      <header className="agent-dialog-header"><div><p className="eyebrow">C-assistant Agent</p><h2 id="agent-dialog-title">What can I help you with?</h2><span>One focused turn creates or revises a complete Plan draft with your selected local Runtime.</span></div><button type="button" className="dialog-close" onClick={onClose} aria-label="Close Agent dialog">×</button></header>
+      <div className="agent-mode-switch" aria-label="Agent mode"><button type="button" className={mode === "new_plan" ? "selected" : ""} onClick={() => onMode("new_plan")}>New Plan</button><button type="button" className={mode === "revise_plan" ? "selected" : ""} disabled={!canRevise} title={canRevise ? "Replace the current draft after a complete revision returns" : "Only a draft Plan can be revised"} onClick={() => onMode("revise_plan")}>Adjust current draft</button></div>
+      <div className="agent-messages" aria-live="polite">{messages.map((message) => <div className={`agent-message ${message.role}`} key={message.id}><span>{message.role === "assistant" ? "Agent" : "You"}</span><p>{message.text}</p></div>)}{busy ? <div className="agent-message assistant"><span>Agent</span><p className="agent-thinking"><i /> Thinking through your Plan…</p></div> : null}</div>
+      <form className="agent-composer" onSubmit={submit}><textarea value={input} onChange={(event) => onInput(event.target.value)} placeholder={mode === "revise_plan" ? "Tell the Agent what to change in the current draft…" : "For example: I am moving to Shanghai for work in October…"} rows={3} maxLength={1_500} disabled={busy} /><div><small>{mode === "revise_plan" ? "The current draft is replaced only after a complete revision returns. Newer Plan changes are never overwritten." : "The result stays a draft until you review its complete details and confirm it."} · {input.length}/1500</small><button className="primary-button" disabled={busy || !input.trim()}>{busy ? "Working…" : "Send to Agent"}</button></div></form>
+    </section>
+  </div>;
 }
 
 function PlanView({ plan, policyPreparation, onActivate, confirming, amapQuery, setAmapQuery, amapResult, searchingAmap, onSearch, routeOrigin, routeDestination, routeMode, routeResult, routing, routeComparisons, comparingRoutes, planWeatherResult, checkingPlanWeather, foodCentre, foodResult, findingFood, stayCentre, stayResult, findingStay, savingAccommodation, confirmingAccommodation, savingTransportPreference, savingTravelContext, savingArrival, cancellingReminderTaskId, onChooseRouteOrigin, onChooseRouteDestination, onRouteModeChange, onFindNearbyFood, onFindNearbyAccommodation, onSaveAccommodationCandidate, onSaveManualAccommodation, onConfirmAccommodation, onSaveTransportPreference, onSaveTravelContext, onSaveArrival, onCancelReminder, onPlanRoute, onCompareRoutes, onCheckPlanWeather }: { plan: WorkspaceSnapshot["activePlan"]; policyPreparation: PolicyPreparationAssessment | null; onActivate: () => Promise<void>; confirming: boolean; amapQuery: string; setAmapQuery: (value: string) => void; amapResult: ConnectorResult<AmapPlace[]> | null; searchingAmap: boolean; onSearch: () => Promise<void>; routeOrigin: AmapPlace | null; routeDestination: AmapPlace | null; routeMode: RouteMode; routeResult: ConnectorResult<AmapRoute> | null; routing: boolean; routeComparisons: RouteComparisons | null; comparingRoutes: boolean; planWeatherResult: ConnectorResult<QWeatherWeatherSnapshot> | null; checkingPlanWeather: boolean; foodCentre: AmapPlace | null; foodResult: ConnectorResult<AmapNearbyPlace[]> | null; findingFood: boolean; stayCentre: AmapPlace | null; stayResult: ConnectorResult<AmapNearbyPlace[]> | null; findingStay: boolean; savingAccommodation: boolean; confirmingAccommodation: boolean; savingTransportPreference: boolean; savingTravelContext: boolean; savingArrival: boolean; cancellingReminderTaskId: string | null; onChooseRouteOrigin: (place: AmapPlace) => void; onChooseRouteDestination: (place: AmapPlace) => void; onRouteModeChange: (mode: RouteMode) => void; onFindNearbyFood: (place: AmapPlace) => Promise<void>; onFindNearbyAccommodation: (place: AmapPlace) => Promise<void>; onSaveAccommodationCandidate: (place: AmapNearbyPlace) => Promise<void>; onSaveManualAccommodation: (input: { name: string; address: string; status: "candidate" | "confirmed" }) => Promise<void>; onConfirmAccommodation: () => Promise<void>; onSaveTransportPreference: (preference: WorkspaceSnapshot["activePlan"]["configuration"]["transport"]["preference"]) => Promise<void>; onSaveTravelContext: (context: WorkspaceSnapshot["activePlan"]["configuration"]["travelContext"]) => Promise<void>; onSaveArrival: (arrival: WorkspaceSnapshot["activePlan"]["configuration"]["arrival"]) => Promise<void>; onCancelReminder: (taskId: string) => Promise<void>; onPlanRoute: () => Promise<void>; onCompareRoutes: () => Promise<void>; onCheckPlanWeather: (planId: string, location: string) => Promise<void> }) {
