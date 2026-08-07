@@ -45,6 +45,8 @@ This flow now invokes the first executable internal China Pack Skill, `food-near
 
 The Web accommodation flow invokes `housing-area-recommendation` `0.1.0` after Amap normalization. Its first slice explains candidates relative to one selected Plan anchor using nearby-place distance, and clearly separates that fact from a real commute or a complete area recommendation. Live inventory, price, booking, quality, and foreign-guest eligibility remain unverified.
 
+Web route comparison and Telegram arrival routing invoke `transport-planner` `0.1.0` through the complete China Country Pack. It combines current Amap route facts with this Plan's preference, party, luggage, and matched weather, without a fixed walking-distance threshold or any automatic travel action.
+
 ## Product shape
 
 - Web workspace: the full desktop-grade product interface.

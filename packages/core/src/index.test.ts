@@ -63,11 +63,11 @@ test("heavy luggage makes an available driving route the preliminary choice", ()
   assert.match(recommendation.limitations[0] ?? "", /No weather fact matched/i);
 });
 
-test("a short route can preliminarily favour walking without heavy luggage", () => {
+test("the shortest timed route can preliminarily favour walking without a fixed distance threshold", () => {
   const recommendation = recommendPlanTransport({
     preference: "plan_recommended",
     luggage: "light",
-    routeFacts: [{ mode: "walking", distanceMeters: 1_100, durationSeconds: 16 * 60 }, { mode: "transit", distanceMeters: 1_400 }]
+    routeFacts: [{ mode: "walking", distanceMeters: 2_100, durationSeconds: 16 * 60 }, { mode: "transit", distanceMeters: 1_400, durationSeconds: 22 * 60 }]
   });
 
   assert.equal(recommendation.mode, "walking");

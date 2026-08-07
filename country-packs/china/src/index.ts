@@ -1,3 +1,7 @@
+import { recommendPlanTransport } from "@c-assistant/core/transport";
+import type { LuggageLevel, TransportPreference } from "@c-assistant/core";
+import type { TransportMode, TransportRouteFact, TransportWeatherFact } from "@c-assistant/core/transport";
+
 export type FoodNearbySkillStatus = "success" | "needs_input" | "degraded" | "failed";
 
 export interface FoodNearbyCandidateInput {
@@ -138,4 +142,78 @@ export function runHousingAreaRecommendationSkill(input: { centreName?: string; 
 
 function formatSkillDistance(distanceMeters: number): string {
   return distanceMeters < 1_000 ? `${Math.round(distanceMeters)} m` : `${(distanceMeters / 1_000).toFixed(1)} km`;
+}
+
+export interface TransportPlannerSkillResult {
+  skill: { id: "transport-planner"; version: "0.1.0" };
+  status: "success" | "needs_input" | "failed";
+  summary: string;
+  facts: TransportRouteFact[];
+  assumptions: string[];
+  recommendations: Array<{ mode: TransportMode; reasons: string[] }>;
+  proposedPlanChanges: [];
+  proposedTasks: [];
+  proposedReminders: [];
+  actionCards: Array<{ kind: "external_handoff"; provider: "amap"; mode: TransportMode; completion: "unknown_until_user_confirms" }>;
+  sources: Array<{ provider: "amap" | "qweather"; observedAt: string }>;
+  warnings: string[];
+  needsInput?: { field: "routeFacts"; reason: string };
+}
+
+/** Plan-scoped transport decision over normalized facts; it never starts travel. */
+export function runTransportPlannerSkill(input: {
+  preference: TransportPreference;
+  partySize?: number;
+  luggage: LuggageLevel;
+  routeFacts: TransportRouteFact[];
+  routeObservedAt: string;
+  weather?: TransportWeatherFact;
+  weatherObservedAt?: string;
+}): TransportPlannerSkillResult {
+  const identity = { id: "transport-planner" as const, version: "0.1.0" as const };
+  const noChanges = { proposedPlanChanges: [] as [], proposedTasks: [] as [], proposedReminders: [] as [] };
+  if (!input.routeFacts.length) {
+    return { skill: identity, ...noChanges, status: "needs_input", summary: "Compare current routes before choosing transport for this Plan.", facts: [], assumptions: [], recommendations: [], actionCards: [], sources: [], warnings: [], needsInput: { field: "routeFacts", reason: "A transport choice needs at least one current route fact." } };
+  }
+  const validContext = ["plan_recommended", "taxi", "public_transit", "walking"].includes(input.preference)
+    && ["unknown", "light", "standard", "heavy"].includes(input.luggage)
+    && Number.isFinite(Date.parse(input.routeObservedAt))
+    && (input.partySize === undefined || (Number.isInteger(input.partySize) && input.partySize >= 1 && input.partySize <= 20))
+    && ((input.weather === undefined && input.weatherObservedAt === undefined)
+      || (input.weather !== undefined && input.weatherObservedAt !== undefined
+        && input.weather.condition.trim().length > 0
+        && Number.isFinite(input.weather.precipitationMm) && input.weather.precipitationMm >= 0
+        && Number.isFinite(Date.parse(input.weatherObservedAt))));
+  const validFacts = input.routeFacts.every((fact) => ["driving", "transit", "walking"].includes(fact.mode)
+    && Number.isFinite(fact.distanceMeters) && fact.distanceMeters >= 0
+    && (fact.durationSeconds === undefined || (Number.isFinite(fact.durationSeconds) && fact.durationSeconds >= 0)));
+  if (!validContext || !validFacts) {
+    return { skill: identity, ...noChanges, status: "failed", summary: "The transport input did not pass the Skill contract.", facts: [], assumptions: [], recommendations: [], actionCards: [], sources: [], warnings: ["No transport conclusion was produced from malformed context."] };
+  }
+  const recommendation = recommendPlanTransport({
+    preference: input.preference,
+    ...(input.partySize !== undefined ? { partySize: input.partySize } : {}),
+    luggage: input.luggage,
+    routeFacts: input.routeFacts,
+    ...(input.weather ? { weather: input.weather } : {})
+  });
+  const recommendations = recommendation.mode ? [{ mode: recommendation.mode, reasons: recommendation.reasons }] : [];
+  const sources: TransportPlannerSkillResult["sources"] = [{ provider: "amap", observedAt: input.routeObservedAt }];
+  if (input.weather && input.weatherObservedAt) sources.push({ provider: "qweather", observedAt: input.weatherObservedAt });
+  return {
+    skill: identity,
+    status: "success",
+    summary: recommendation.mode ? `Preliminary Plan transport choice: ${transportModeName(recommendation.mode)}.` : "No preliminary transport mode can be selected from the available facts.",
+    facts: input.routeFacts,
+    assumptions: input.weather ? ["The supplied weather fact was already matched to the expected arrival date."] : [],
+    recommendations,
+    ...noChanges,
+    actionCards: recommendation.mode ? [{ kind: "external_handoff", provider: "amap", mode: recommendation.mode, completion: "unknown_until_user_confirms" }] : [],
+    sources,
+    warnings: [...recommendation.limitations, "No ride, booking, navigation session, or payment has been started."]
+  };
+}
+
+function transportModeName(mode: TransportMode): string {
+  return mode === "driving" ? "driving / taxi" : mode === "transit" ? "public transit" : "walking";
 }

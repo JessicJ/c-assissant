@@ -17,6 +17,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test src/index.test.ts"
   },
+  "dependencies": {
+    "@c-assistant/core": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "tsx": "^4.19.2"

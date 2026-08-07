@@ -8,4 +8,6 @@ The first executable internal module is `food-nearby` `0.1.0`. Server invokes it
 
 `housing-area-recommendation` `0.1.0` adds the first access-oriented accommodation comparison to Web. It explains nearby stay candidates relative to a user-selected Plan anchor, while explicitly deferring full area choice until route facts and preferences are available.
 
+`transport-planner` `0.1.0` turns current Amap route facts and this Plan's confirmed preference, party, luggage, and date-matched QWeather fact into an explainable preliminary mode. It uses relative route duration instead of a fixed walking-distance threshold and never starts travel.
+
 See [China Country Pack V1](../../docs/china-pack-v1.md).

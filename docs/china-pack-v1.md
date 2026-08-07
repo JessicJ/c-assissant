@@ -48,6 +48,8 @@ If the user does not respond after an appropriate buffer and location would mate
 
 V1 does not hail or pay for a ride.
 
+Implemented slice: `transport-planner` `0.1.0` receives normalized Amap route facts plus this Plan's preference, party size, luggage, and an optional QWeather fact already matched to the expected arrival date. It returns a structured preliminary mode, reasons, limitations, source timestamps, and an external Amap handoff proposal. Walking is considered through relative route duration rather than a fixed distance threshold. The Skill never starts navigation, hails a ride, books, pays, or marks a Task complete.
+
 ### `local-food-guide`
 
 Adds local specialties and useful food context to the Plan. It avoids prematurely scheduling specific restaurants unless the user asks.

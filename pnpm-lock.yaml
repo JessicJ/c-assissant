@@ -81,6 +81,10 @@ importers:
         version: 19.2.4(@types/react@19.2.18)
 
   country-packs/china:
+    dependencies:
+      '@c-assistant/core':
+        specifier: workspace:*
+        version: link:../../packages/core
     devDependencies:
       '@types/node':
         specifier: ^22.10.2
