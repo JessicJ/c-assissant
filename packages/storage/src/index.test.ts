@@ -125,6 +125,16 @@ test("SQLite persists official-source snapshots, deduplicates equal content, and
   store.close();
 });
 
+test("SQLite refuses to mutate an active Plan when linking official evidence", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const plan = store.getWorkspace().activePlan;
+  const snapshot = store.saveSourceSnapshot({ sourceId: "nia-english", authority: "National Immigration Administration", titleOriginal: "Guidance", url: "https://en.nia.gov.cn/guide", retrievedAt: "2026-08-07T08:00:00.000Z", contentHash: "a".repeat(64), excerpt: "Official evidence only." }).snapshot;
+  store.confirmPlan(plan.id);
+  assert.throws(() => store.linkSourceSnapshotToPlan(plan.id, snapshot.id), /only while.*draft/i);
+  assert.equal(store.getWorkspace().activePlan.sources.length, 0);
+  store.close();
+});
+
 test("SQLite links selected official evidence to the current Plan without making a policy conclusion", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const plan = store.getWorkspace().activePlan;

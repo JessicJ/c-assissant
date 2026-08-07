@@ -212,6 +212,19 @@ export interface PlanCompilationRun {
   compiledAt: string;
 }
 
+/** One minimized internal Skill result belonging to a successful Country Pack compilation. */
+export interface CountryPackSkillRun {
+  id: string;
+  kind: "country_pack_skill";
+  compilationRunId: string;
+  planId: string;
+  sourcePlanVersion: number;
+  skillId: string;
+  skillVersion: string;
+  status: "success" | "degraded" | "needs_input" | "blocked" | "failed" | "not_supported";
+  finishedAt: string;
+}
+
 /** A Telegram account bound to this single-user local instance. */
 export interface TelegramBinding {
   chatId: string;

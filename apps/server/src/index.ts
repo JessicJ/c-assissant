@@ -1,13 +1,14 @@
 import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-adapters";
 import { AmapConnector, OfficialSourceConnector, QWeatherConnector, TelegramConnector, type AmapPlace, type AmapRoute, type TelegramReplyMarkup } from "@c-assistant/connectors";
 import { runFoodNearbySkill, runHousingAreaRecommendationSkill, type PolicyApplicabilitySkillResult } from "@c-assistant/china-country-pack";
 import { chinaSkillRegistry } from "@c-assistant/china-country-pack/registry";
+import { createChinaReferenceCatalog } from "@c-assistant/china-country-pack/reference-catalog";
 import { type AgentRuntimeKind, type CreatePlanInput, type GeneratedPlanDraft, type PlanAccommodationInput, type PlanArrivalInput, type PlanTransportPreferenceInput, type PlanTravelContextInput, type ProfileUpdate, type RuntimeSelectionUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue } from "./arrival-reminder.js";
@@ -21,6 +22,11 @@ import { fetchTelegramPlanWeather, formatTelegramWeather } from "./telegram-weat
 import { assertWebAgentPlanUnchanged, formatWebAgentPlanReply, parseWebAgentTurn } from "./web-agent.js";
 import { dueTaskReminders, formatTaskReminder } from "./task-reminder.js";
 import { refreshTaskReminderWeather, taskReminderNeedsWeather, type TaskReminderWeatherContext } from "./task-reminder-weather.js";
+import { createChinaArrivalFactCollector } from "./china-arrival-facts.js";
+import { createChinaArrivalCompilationService } from "./china-plan-compilation.js";
+import { createChinaPlanWorkflow } from "./china-plan-workflow.js";
+import { presentChinaPlanPreparation } from "./china-plan-presentation.js";
+import { createChinaSourcePreparationService } from "./china-source-preparation.js";
 
 const server = Fastify({ logger: true });
 const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -29,10 +35,26 @@ const officialSourceRegistryPath = resolve(projectRoot, "country-packs", "china"
 if (existsSync(envPath)) process.loadEnvFile(envPath);
 const databasePath = process.env.C_ASSISTANT_DATA_PATH || resolve(projectRoot, "data", "c-assistant.sqlite");
 const store = new SqliteWorkspaceStore(databasePath);
-const amap = new AmapConnector({ apiKey: process.env.AMAP_API_KEY });
-const qweather = new QWeatherConnector({ apiKey: process.env.QWEATHER_API_KEY, apiHost: process.env.QWEATHER_API_HOST });
-const telegram = new TelegramConnector({ botToken: process.env.TELEGRAM_BOT_TOKEN });
+let amap = new AmapConnector({ apiKey: process.env.AMAP_API_KEY });
+let qweather = new QWeatherConnector({ apiKey: process.env.QWEATHER_API_KEY, apiHost: process.env.QWEATHER_API_HOST });
+let telegram = new TelegramConnector({ botToken: process.env.TELEGRAM_BOT_TOKEN });
 const officialSources = createOfficialSourceService(new OfficialSourceConnector({ sources: parseOfficialSourceRegistry(JSON.parse(readFileSync(officialSourceRegistryPath, "utf8")) as unknown) }), store);
+const chinaFactCollector = createChinaArrivalFactCollector({
+  amap: {
+    geocodeAddress: (input) => amap.geocodeAddress(input),
+    nearbyAccommodation: (input) => amap.nearbyAccommodation(input),
+    drivingRoute: (input) => amap.drivingRoute(input),
+    walkingRoute: (input) => amap.walkingRoute(input),
+    reverseGeocode: (input) => amap.reverseGeocode(input),
+    transitRoute: (input) => amap.transitRoute(input)
+  },
+  qweather: { weather: (input) => qweather.weather(input) },
+  sourceSnapshots: () => store.getWorkspace().sourceSnapshots,
+  referenceCatalog: () => createChinaReferenceCatalog({ snapshots: store.getWorkspace().sourceSnapshots })
+});
+const chinaCompilation = createChinaArrivalCompilationService({ store, factCollector: chinaFactCollector });
+const chinaSourcePreparation = createChinaSourcePreparationService({ store, refresher: { refresh: (input) => officialSources.refresh(input) } });
+const chinaPlanWorkflow = createChinaPlanWorkflow({ sourcePreparation: chinaSourcePreparation, compilation: chinaCompilation });
 const codex = new CodexRuntimeAdapter();
 const claudeCode = new ClaudeCodeRuntimeAdapter();
 let generatingPlan = false;
@@ -43,7 +65,14 @@ let checkingArrivalLocationPrompt = false;
 let requestingArrivalLocation = false;
 let requestingFoodLocation = false;
 
-await server.register(cors, { origin: true });
+const localWebOrigin = /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/;
+await server.register(cors, {
+  origin: (origin, callback) => callback(null, !origin || localWebOrigin.test(origin))
+});
+server.addHook("onRequest", async (request, reply) => {
+  const origin = request.headers.origin;
+  if (origin && !localWebOrigin.test(origin)) return reply.code(403).send({ error: "This local instance accepts browser changes only from its local Web workspace." });
+});
 
 server.get("/health", async () => ({
   status: "ok",
@@ -54,6 +83,8 @@ server.get("/health", async () => ({
 server.get("/api/workspace", async () => store.getWorkspace());
 server.get("/api/runs", async () => store.listRecentAgentRuns());
 server.get("/api/runs/task-reminders", async () => store.listRecentTaskReminderRuns());
+server.get("/api/runs/plan-compilations", async () => store.listRecentPlanCompilationRuns());
+server.get("/api/runs/country-pack-skills", async () => store.listRecentCountryPackSkillRuns());
 
 server.get("/api/policy-applicability", async () => {
   const workspace = store.getWorkspace();
@@ -82,6 +113,15 @@ server.post<{ Params: { planId: string; snapshotId: string } }>("/api/plans/:pla
   } catch (error) {
     return reply.code(400).send({ error: error instanceof Error ? error.message : "The official evidence could not be linked to this Plan." });
   }
+});
+
+server.post<{ Params: { planId: string } }>("/api/plans/:planId/china/prepare", async (request, reply) => {
+  const result = await chinaPlanWorkflow.prepareCurrentPlan({ planId: request.params.planId });
+  if (result.status === "blocked") {
+    const statusCode = result.reasonCode === "critical_source_unavailable" || result.reasonCode === "fact_collection_failed" ? 503 : result.reasonCode === "plan_not_draft" || result.reasonCode === "plan_changed" ? 409 : 422;
+    return reply.code(statusCode).send(presentChinaPlanPreparation(result));
+  }
+  return presentChinaPlanPreparation(result);
 });
 
 server.post<{ Params: { planId: string } }>("/api/plans/:planId/confirm", async (request, reply) => {
@@ -272,6 +312,62 @@ server.put<{ Body: ProfileUpdate }>("/api/profile", async (request, reply) => {
     return reply.code(400).send({
       error: error instanceof Error ? error.message : "The Profile could not be saved."
     });
+  }
+});
+
+type LocalConfigurationUpdate = {
+  amapApiKey?: string;
+  qweatherApiKey?: string;
+  qweatherApiHost?: string;
+  telegramBotToken?: string;
+};
+
+function localConfigurationSnapshot() {
+  return {
+    amap: { configured: Boolean(process.env.AMAP_API_KEY) },
+    qweather: { configured: Boolean(process.env.QWEATHER_API_KEY), host: process.env.QWEATHER_API_HOST ?? "" },
+    telegram: { configured: Boolean(process.env.TELEGRAM_BOT_TOKEN) }
+  };
+}
+
+function saveLocalConfiguration(update: LocalConfigurationUpdate): void {
+  const values: Record<string, string> = {};
+  if (update.amapApiKey?.trim()) values.AMAP_API_KEY = update.amapApiKey.trim();
+  if (update.qweatherApiKey?.trim()) values.QWEATHER_API_KEY = update.qweatherApiKey.trim();
+  if (update.qweatherApiHost?.trim()) values.QWEATHER_API_HOST = update.qweatherApiHost.trim().replace(/\/$/, "");
+  if (update.telegramBotToken?.trim()) values.TELEGRAM_BOT_TOKEN = update.telegramBotToken.trim();
+  if (!Object.keys(values).length) return;
+
+  let content = existsSync(envPath) ? readFileSync(envPath, "utf8") : "";
+  for (const [key, value] of Object.entries(values)) {
+    const line = `${key}=${value.replaceAll(/\r?\n/g, "")}`;
+    const pattern = new RegExp(`^${key}=.*$`, "m");
+    content = pattern.test(content) ? content.replace(pattern, line) : `${content.trimEnd()}\n${line}\n`;
+    process.env[key] = value;
+  }
+  writeFileSync(envPath, content, { encoding: "utf8", mode: 0o600 });
+  amap = new AmapConnector({ apiKey: process.env.AMAP_API_KEY });
+  qweather = new QWeatherConnector({ apiKey: process.env.QWEATHER_API_KEY, apiHost: process.env.QWEATHER_API_HOST });
+  telegram = new TelegramConnector({ botToken: process.env.TELEGRAM_BOT_TOKEN });
+}
+
+server.get("/api/configuration", async () => localConfigurationSnapshot());
+
+server.put<{ Body: LocalConfigurationUpdate }>("/api/configuration", async (request, reply) => {
+  const host = request.body?.qweatherApiHost?.trim();
+  if (host) {
+    try {
+      const parsed = new URL(host.includes("://") ? host : `https://${host}`);
+      if (parsed.protocol !== "https:" || !parsed.hostname.endsWith(".qweatherapi.com")) throw new Error("unsupported host");
+    } catch {
+      return reply.code(400).send({ error: "QWeather API host must be a valid HTTPS qweatherapi.com URL." });
+    }
+  }
+  try {
+    saveLocalConfiguration(request.body ?? {});
+    return localConfigurationSnapshot();
+  } catch (error) {
+    return reply.code(500).send({ error: error instanceof Error ? error.message : "Local configuration could not be saved." });
   }
 });
 
@@ -774,12 +870,22 @@ async function sendTelegramCommandReplies(chatId: string, replies: TelegramComma
 async function telegramCommandResponse(text: string | undefined): Promise<TelegramCommandReply[] | undefined> {
   const command = parseTelegramCommand(text);
   if (command.type === "empty") return undefined;
-  if (command.type === "help") return [{ text: "C-assistant is connected. Send a normal message to create or revise a Plan draft with your selected local runtime, or use:\n/plan — show the current Plan and confirmation control\n/new <what you need to do> — create a separate Plan draft\n/profile — review or change your basic Profile\n/weather — check current weather for the Plan location\n/food — find nearby food after an explicit location share\n/help — show this help\n\nReview the complete Plan in Telegram or Web before confirming it. Bookings and payments are not enabled." }];
+  if (command.type === "help") return [{ text: "C-assistant is connected. Send a normal message to create or revise a Plan draft with your selected local runtime, or use:\n/plan — show the current Plan and confirmation control\n/prepare — prepare the current draft with China Pack sources and Skills\n/new <what you need to do> — create a separate Plan draft\n/profile — review or change your basic Profile\n/weather — check current weather for the Plan location\n/food — find nearby food after an explicit location share\n/help — show this help\n\nReview the complete Plan in Telegram or Web before confirming it. Bookings and payments are not enabled." }];
   if (command.type === "plan") {
     const plan = store.getWorkspace().activePlan;
     const replyMarkup = telegramPlanConfirmationMarkup(plan);
     const pages = formatTelegramPlanPages(plan);
     return pages.map((page, index) => ({ text: page, ...(index === pages.length - 1 && replyMarkup ? { replyMarkup } : {}) }));
+  }
+  if (command.type === "prepare") {
+    const current = store.getWorkspace().activePlan;
+    if (current.status !== "draft") return [{ text: "The current Plan is already active. Create or revise a draft before preparing another China Pack proposal." }];
+    const presented = presentChinaPlanPreparation(await chinaPlanWorkflow.prepareCurrentPlan({ planId: current.id }));
+    if (presented.status === "blocked") {
+      const actions = presented.actionItems.map((item) => `• ${item}`).join("\n");
+      return [{ text: `China Pack preparation needs attention\n\n${presented.message}${actions ? `\n\n${actions}` : ""}\n\nThe current draft was preserved. Update the missing details in Telegram or Web, then send /prepare again.` }];
+    }
+    return telegramPlanReplies(presented.workspace.activePlan, `China Pack prepared a new complete draft with ${presented.taskCount} Tasks and ${presented.reminderCount} Reminders. Review every page before confirming.`);
   }
   if (command.type === "profile") {
     store.clearTelegramProfileTextEdit();

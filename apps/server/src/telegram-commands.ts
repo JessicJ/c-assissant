@@ -2,6 +2,7 @@ export type TelegramCommand =
   | { type: "empty" }
   | { type: "help" }
   | { type: "plan" }
+  | { type: "prepare" }
   | { type: "profile" }
   | { type: "weather" }
   | { type: "food"; partySize?: number }
@@ -15,6 +16,7 @@ export function parseTelegramCommand(text: string | undefined): TelegramCommand 
   if (!normalized) return { type: "empty" };
   if (/^\/help(?:@[-_A-Za-z0-9]+)?$/i.test(normalized)) return { type: "help" };
   if (/^\/plan(?:@[-_A-Za-z0-9]+)?$/i.test(normalized)) return { type: "plan" };
+  if (/^\/prepare(?:@[-_A-Za-z0-9]+)?$/i.test(normalized)) return { type: "prepare" };
   if (/^\/profile(?:@[-_A-Za-z0-9]+)?$/i.test(normalized)) return { type: "profile" };
   if (/^\/weather(?:@[-_A-Za-z0-9]+)?$/i.test(normalized)) return { type: "weather" };
   const food = normalized.match(/^\/food(?:@[-_A-Za-z0-9]+)?(?:\s+(\d+))?$/i);

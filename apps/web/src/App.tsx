@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import "./manual-accommodation.css";
+import landiLogoUrl from "../../../assets/branding/landi-round-otter-earth-icon-final.png";
 import type { RuntimeCheck } from "@c-assistant/agent-adapters";
 import { runTransportPlannerSkill, runWeatherAndPackingSkill, type HousingAreaSkillResult, type TransportPlannerSkillResult } from "@c-assistant/china-country-pack";
 import { createAmapDrivingHandoff, createAmapPlaceHandoff } from "@c-assistant/connectors";
@@ -7,13 +8,19 @@ import type { AmapNearbyPlace, AmapPlace, AmapRoute, ConnectorResult, OfficialSo
 import type { AgentRun, AgentRuntimeKind, PolicyPreparationAssessment, SourceSnapshotWriteResult, Task, WorkspaceSnapshot } from "@c-assistant/core";
 import type { TransportWeatherFact } from "@c-assistant/core/transport";
 
-type View = "Today" | "Plans" | "Inbox" | "Profile" | "Settings";
+type View = "Today" | "Plans" | "Inbox" | "Settings";
 type RouteMode = AmapRoute["mode"];
 type RouteComparisons = Partial<Record<RouteMode, ConnectorResult<AmapRoute>>>;
 type AccommodationDiscoveryResult = ConnectorResult<AmapNearbyPlace[]> & { skill?: HousingAreaSkillResult };
 type MatchedTransportWeather = TransportWeatherFact & { observedAt: string };
 type ChatMode = "new_plan" | "revise_plan";
 type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
+type LocalConfiguration = {
+  amap: { configured: boolean };
+  qweather: { configured: boolean; host: string };
+  telegram: { configured: boolean };
+};
+type LocalConfigurationForm = { amapApiKey: string; qweatherApiKey: string; qweatherApiHost: string; telegramBotToken: string };
 type TelegramPairingView = {
   state: "not_paired" | "waiting_for_start" | "paired";
   code?: string;
@@ -24,8 +31,11 @@ type TelegramPairingView = {
   confirmationMessageSent?: boolean;
   binding?: { firstName: string; username?: string; pairedAt: string };
 };
+type ChinaPlanPreparationView =
+  | { status: "saved"; message: string; workspace: WorkspaceSnapshot; taskCount: number; reminderCount: number; sources: Array<{ sourceId: string; status: "ready" | "unavailable" }> }
+  | { status: "blocked"; stage: "source_preparation" | "compilation"; reasonCode: string; message: string; actionItems: string[]; sources: Array<{ sourceId: string; status: "ready" | "unavailable" }> };
 
-const navigation: View[] = ["Today", "Plans", "Inbox", "Profile", "Settings"];
+const navigation: View[] = ["Today", "Plans", "Inbox", "Settings"];
 
 function App() {
   const [workspace, setWorkspace] = useState<WorkspaceSnapshot | null>(null);
@@ -69,6 +79,10 @@ function App() {
   const [planWeather, setPlanWeather] = useState<{ planId: string; result: ConnectorResult<QWeatherWeatherSnapshot> } | null>(null);
   const [checkingPlanWeather, setCheckingPlanWeather] = useState(false);
   const [runtimeChecks, setRuntimeChecks] = useState<RuntimeCheck[]>([]);
+  const [configuration, setConfiguration] = useState<LocalConfiguration | null>(null);
+  const [configurationForm, setConfigurationForm] = useState<LocalConfigurationForm>({ amapApiKey: "", qweatherApiKey: "", qweatherApiHost: "", telegramBotToken: "" });
+  const [savingConfiguration, setSavingConfiguration] = useState(false);
+  const [refreshingRuntimes, setRefreshingRuntimes] = useState(false);
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [savingRuntime, setSavingRuntime] = useState(false);
   const [officialSources, setOfficialSources] = useState<OfficialSourceDefinition[]>([]);
@@ -82,16 +96,21 @@ function App() {
   const [pairingTelegram, setPairingTelegram] = useState(false);
   const [disconnectingTelegram, setDisconnectingTelegram] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [preparingChinaPlan, setPreparingChinaPlan] = useState(false);
+  const [chinaPlanPreparation, setChinaPlanPreparation] = useState<ChinaPlanPreparationView | null>(null);
 
   useEffect(() => {
     void loadWorkspace();
     void loadRuntimeChecks();
+    void loadConfiguration();
     void loadAgentRuns();
     void loadOfficialSources();
     void loadPolicyPreparation();
     void loadTelegramStatus();
     void loadTelegramPairing();
   }, []);
+
+  useEffect(() => setChinaPlanPreparation(null), [workspace?.activePlan.id]);
 
   async function loadWorkspace() {
     try {
@@ -112,6 +131,43 @@ function App() {
       if (response.ok) setRuntimeChecks((await response.json()) as RuntimeCheck[]);
     } catch {
       setRuntimeChecks([]);
+    }
+  }
+
+  async function loadConfiguration() {
+    try {
+      const response = await fetch("/api/configuration");
+      if (response.ok) setConfiguration((await response.json()) as LocalConfiguration);
+    } catch {
+      setConfiguration(null);
+    }
+  }
+
+  async function refreshRuntimes() {
+    try {
+      setRefreshingRuntimes(true);
+      await loadRuntimeChecks();
+    } finally {
+      setRefreshingRuntimes(false);
+    }
+  }
+
+  async function saveConfiguration() {
+    try {
+      setSavingConfiguration(true);
+      const response = await fetch("/api/configuration", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(configurationForm)
+      });
+      if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "Local configuration could not be saved.");
+      setConfiguration((await response.json()) as LocalConfiguration);
+      setConfigurationForm({ amapApiKey: "", qweatherApiKey: "", qweatherApiHost: "", telegramBotToken: "" });
+      await loadTelegramStatus();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Local configuration could not be saved.");
+    } finally {
+      setSavingConfiguration(false);
     }
   }
 
@@ -232,6 +288,26 @@ function App() {
       setError(caught instanceof Error ? caught.message : "The Plan could not be activated.");
     } finally {
       setConfirming(false);
+    }
+  }
+
+  async function prepareChinaPlan() {
+    if (!workspace || workspace.activePlan.status !== "draft") return;
+    try {
+      setPreparingChinaPlan(true);
+      setError(null);
+      const response = await fetch(`/api/plans/${workspace.activePlan.id}/china/prepare`, { method: "POST" });
+      const payload = await response.json() as ChinaPlanPreparationView | { error?: string };
+      if (!("status" in payload)) throw new Error(payload.error ?? "The China Pack could not prepare this Plan.");
+      setChinaPlanPreparation(payload);
+      if (payload.status === "saved") {
+        setWorkspace(payload.workspace);
+        await loadPolicyPreparation();
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The China Pack could not prepare this Plan.");
+    } finally {
+      setPreparingChinaPlan(false);
     }
   }
 
@@ -619,8 +695,8 @@ function App() {
     <main className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <span className="brand-mark">C</span>
-          <span>C-assistant</span>
+          <img className="brand-mark" src={landiLogoUrl} alt="Landi" />
+          <span>Landi</span>
         </div>
         <nav aria-label="Workspace navigation">
           {navigation.map((item) => (
@@ -641,7 +717,7 @@ function App() {
             <p className="eyebrow">{view}</p>
             <h1>{view === "Today" ? "A calm start for your China plan." : view}</h1>
           </div>
-          <button className="profile-chip" onClick={() => setView("Profile")}>{workspace.profile.displayName}</button>
+          <button className="profile-chip" onClick={() => setView("Settings")}>{workspace.profile.displayName}</button>
         </header>
 
         {error ? <p className="inline-error">{error}</p> : null}
@@ -661,7 +737,7 @@ function App() {
               </div>
             </section>
 
-            {workspace.profile.status === "incomplete" ? <section className="card profile-prompt"><div><p className="eyebrow">First-use basics</p><h2>Make China guidance fit you from the start.</h2><p>Add your name, language, nationality, and—only if you are comfortable—your visa or residence status. You can change these later, and you can still create a Plan now.</p></div><button className="primary-button" onClick={() => setView("Profile")}>Set up my basics</button></section> : null}
+            {workspace.profile.status === "incomplete" ? <section className="card profile-prompt"><div><p className="eyebrow">First-use basics</p><h2>Make China guidance fit you from the start.</h2><p>Add your name, language, nationality, and—only if you are comfortable—your visa or residence status. You can change these later, and you can still create a Plan now.</p></div><button className="primary-button" onClick={() => setView("Settings")}>Set up my basics</button></section> : null}
 
             <section className="grid-two">
               <article className="card next-card">
@@ -721,10 +797,10 @@ function App() {
           </>
         ) : null}
 
+        {view === "Plans" ? <ChinaPlanPreparationCard plan={plan} result={chinaPlanPreparation} preparing={preparingChinaPlan} onPrepare={prepareChinaPlan} /> : null}
         {view === "Plans" ? <PlanView plan={plan} policyPreparation={policyPreparation} onActivate={activatePlan} confirming={confirming} amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={searchAmap} routeOrigin={routeOrigin} routeDestination={routeDestination} routeMode={routeMode} routeResult={routeResult} routing={routing} routeComparisons={routeComparisons} comparingRoutes={comparingRoutes} planWeatherResult={planWeather?.planId === plan.id ? planWeather.result : null} checkingPlanWeather={checkingPlanWeather} foodCentre={foodCentre} foodResult={foodResult} findingFood={findingFood} stayCentre={stayCentre} stayResult={stayResult} findingStay={findingStay} savingAccommodation={savingAccommodation} confirmingAccommodation={confirmingAccommodation} savingTransportPreference={savingTransportPreference} savingTravelContext={savingTravelContext} savingArrival={savingArrival} cancellingReminderTaskId={cancellingReminderTaskId} onChooseRouteOrigin={(place) => { setRouteOrigin(place); setRouteResult(null); setRouteComparisons(null); }} onChooseRouteDestination={(place) => { setRouteDestination(place); setRouteResult(null); setRouteComparisons(null); }} onRouteModeChange={(mode) => { setRouteMode(mode); setRouteResult(null); }} onFindNearbyFood={findNearbyFood} onFindNearbyAccommodation={findNearbyAccommodation} onSaveAccommodationCandidate={saveAccommodationCandidate} onSaveManualAccommodation={saveManualAccommodation} onConfirmAccommodation={confirmAccommodationBooking} onSaveTransportPreference={saveTransportPreference} onSaveTravelContext={saveTravelContext} onSaveArrival={saveArrival} onCancelReminder={cancelTaskReminder} onPlanRoute={planAmapRoute} onCompareRoutes={compareAmapRoutes} onCheckPlanWeather={checkPlanWeather} /> : null}
         {view === "Inbox" ? <InboxView workspace={workspace} /> : null}
-        {view === "Profile" ? <ProfileView workspace={workspace} onSave={saveProfile} /> : null}
-        {view === "Settings" ? <SettingsView workspace={workspace} runtimeChecks={runtimeChecks} agentRuns={agentRuns} savingRuntime={savingRuntime} onSaveRuntime={saveRuntime} officialSources={officialSources} refreshingSourceId={refreshingSourceId} linkingSourceSnapshotId={linkingSourceSnapshotId} onRefreshOfficialSource={refreshOfficialSource} onLinkSourceSnapshotToPlan={linkSourceSnapshotToPlan} telegramStatus={telegramStatus} telegramVerification={telegramVerification} verifyingTelegram={verifyingTelegram} telegramPairing={telegramPairing} pairingTelegram={pairingTelegram} disconnectingTelegram={disconnectingTelegram} onVerifyTelegram={verifyTelegram} onStartTelegramPairing={startTelegramPairing} onCompleteTelegramPairing={completeTelegramPairing} onDisconnectTelegram={disconnectTelegramPairing} weatherLocation={weatherLocation} setWeatherLocation={setWeatherLocation} weatherResult={weatherResult} checkingWeather={checkingWeather} onCheckWeather={checkWeather} /> : null}
+        {view === "Settings" ? <SettingsView workspace={workspace} onSaveProfile={saveProfile} configuration={configuration} configurationForm={configurationForm} savingConfiguration={savingConfiguration} onConfigurationFormChange={(next) => setConfigurationForm((current) => ({ ...current, ...next }))} onSaveConfiguration={saveConfiguration} runtimeChecks={runtimeChecks} refreshingRuntimes={refreshingRuntimes} onRefreshRuntimes={refreshRuntimes} agentRuns={agentRuns} savingRuntime={savingRuntime} onSaveRuntime={saveRuntime} officialSources={officialSources} refreshingSourceId={refreshingSourceId} linkingSourceSnapshotId={linkingSourceSnapshotId} onRefreshOfficialSource={refreshOfficialSource} onLinkSourceSnapshotToPlan={linkSourceSnapshotToPlan} telegramStatus={telegramStatus} telegramVerification={telegramVerification} verifyingTelegram={verifyingTelegram} telegramPairing={telegramPairing} pairingTelegram={pairingTelegram} disconnectingTelegram={disconnectingTelegram} onVerifyTelegram={verifyTelegram} onStartTelegramPairing={startTelegramPairing} onCompleteTelegramPairing={completeTelegramPairing} onDisconnectTelegram={disconnectTelegramPairing} weatherLocation={weatherLocation} setWeatherLocation={setWeatherLocation} weatherResult={weatherResult} checkingWeather={checkingWeather} onCheckWeather={checkWeather} /> : null}
       </section>
     </main>
   );
@@ -737,7 +813,7 @@ function AgentPanel({ messages, input, mode, canRevise, busy, onInput, onMode, o
   }
 
   return <section className="agent-panel" role="region" aria-labelledby="agent-panel-title" aria-busy={busy}>
-      <header className="agent-panel-header"><div><p className="eyebrow">C-assistant Agent</p><h2 id="agent-panel-title">What can I help you with?</h2><span>Start here. Tell me what you need, and I’ll help shape it into a complete China Plan.</span></div></header>
+      <header className="agent-panel-header"><div><p className="eyebrow">Landi Agent</p><h2 id="agent-panel-title">What can I help you with?</h2><span>Start here. Tell me what you need, and I’ll help shape it into a complete China Plan.</span></div></header>
       <div className="agent-mode-switch" aria-label="Agent mode"><button type="button" className={mode === "new_plan" ? "selected" : ""} onClick={() => onMode("new_plan")}>New Plan</button><button type="button" className={mode === "revise_plan" ? "selected" : ""} disabled={!canRevise} title={canRevise ? "Replace the current draft after a complete revision returns" : "Only a draft Plan can be revised"} onClick={() => onMode("revise_plan")}>Adjust current draft</button></div>
       <div className="agent-messages" aria-live="polite">{messages.map((message) => <div className={`agent-message ${message.role}`} key={message.id}><span>{message.role === "assistant" ? "Agent" : "You"}</span><p>{message.text}</p></div>)}{busy ? <div className="agent-message assistant"><span>Agent</span><p className="agent-thinking"><i /> Thinking through your Plan…</p></div> : null}</div>
       <form className="agent-composer" onSubmit={submit}><textarea value={input} onChange={(event) => onInput(event.target.value)} placeholder={mode === "revise_plan" ? "Tell the Agent what to change in the current draft…" : "For example: I am moving to Shanghai for work in October…"} rows={3} maxLength={1_500} disabled={busy} /><div><small>{mode === "revise_plan" ? "The current draft is replaced only after a complete revision returns. Newer Plan changes are never overwritten." : "The result stays a draft until you review its complete details and confirm it."} · {input.length}/1500</small><button className="primary-button" disabled={busy || !input.trim()}>{busy ? "Working…" : "Send to Agent"}</button></div></form>
@@ -797,20 +873,42 @@ function ProfileView({ workspace, onSave }: { workspace: WorkspaceSnapshot; onSa
     setSaving(false);
   }
 
-  return <section className="card profile-view"><p className="eyebrow">Long-term information</p><h2>Save only the basics you confirm</h2><form onSubmit={(event) => void submit(event)} className="profile-form"><label>Name<input value={profile.displayName} onChange={(event) => setProfile({ ...profile, displayName: event.target.value })} /></label><label>Preferred language<input value={profile.preferredLanguage} onChange={(event) => setProfile({ ...profile, preferredLanguage: event.target.value })} /></label><label>Nationality<input value={profile.nationality} onChange={(event) => setProfile({ ...profile, nationality: event.target.value })} /></label><label>Gender<select value={profile.gender} onChange={(event) => setProfile({ ...profile, gender: event.target.value as typeof profile.gender })}><option value="not_specified">Not specified</option><option value="woman">Woman</option><option value="man">Man</option><option value="nonbinary">Nonbinary</option><option value="prefer_not_to_say">Prefer not to say</option></select></label><label>China visa / residence status<select value={profile.immigrationStatus} onChange={(event) => setProfile({ ...profile, immigrationStatus: event.target.value as typeof profile.immigrationStatus })}><option value="unknown">Not sure yet</option><option value="short_term_visitor">Short-term visitor</option><option value="tourist_visa">Tourist visa</option><option value="student_visa">Student visa</option><option value="work_visa">Work visa</option><option value="residence_permit">Residence permit</option><option value="other">Other</option></select></label><p>These details help C-assistant later find the right policy route. Travel dates, companions, accommodation, and precise location remain inside a Plan, not this long-term Profile.</p><button className="primary-button" disabled={saving}>{saving ? "Saving…" : "Save confirmed Profile"}</button></form></section>;
+  return <section className="card profile-view"><p className="eyebrow">Long-term information</p><h2>Save only the basics you confirm</h2><form onSubmit={(event) => void submit(event)} className="profile-form"><label>Name<input value={profile.displayName} onChange={(event) => setProfile({ ...profile, displayName: event.target.value })} /></label><label>Preferred language<input value={profile.preferredLanguage} onChange={(event) => setProfile({ ...profile, preferredLanguage: event.target.value })} /></label><label>Nationality<input value={profile.nationality} onChange={(event) => setProfile({ ...profile, nationality: event.target.value })} /></label><label>Gender<select value={profile.gender} onChange={(event) => setProfile({ ...profile, gender: event.target.value as typeof profile.gender })}><option value="not_specified">Not specified</option><option value="woman">Woman</option><option value="man">Man</option><option value="nonbinary">Nonbinary</option><option value="prefer_not_to_say">Prefer not to say</option></select></label><label>China visa / residence status<select value={profile.immigrationStatus} onChange={(event) => setProfile({ ...profile, immigrationStatus: event.target.value as typeof profile.immigrationStatus })}><option value="unknown">Not sure yet</option><option value="short_term_visitor">Short-term visitor</option><option value="tourist_visa">Tourist visa</option><option value="student_visa">Student visa</option><option value="work_visa">Work visa</option><option value="residence_permit">Residence permit</option><option value="other">Other</option></select></label><p>These details help Landi later find the right policy route. Travel dates, companions, accommodation, and precise location remain inside a Plan, not this long-term Profile.</p><button className="primary-button" disabled={saving}>{saving ? "Saving…" : "Save confirmed Profile"}</button></form></section>;
 }
 
-function SettingsView({ workspace, runtimeChecks, agentRuns, savingRuntime, onSaveRuntime, officialSources, refreshingSourceId, linkingSourceSnapshotId, onRefreshOfficialSource, onLinkSourceSnapshotToPlan, telegramStatus, telegramVerification, verifyingTelegram, telegramPairing, pairingTelegram, disconnectingTelegram, onVerifyTelegram, onStartTelegramPairing, onCompleteTelegramPairing, onDisconnectTelegram, weatherLocation, setWeatherLocation, weatherResult, checkingWeather, onCheckWeather }: { workspace: WorkspaceSnapshot; runtimeChecks: RuntimeCheck[]; agentRuns: AgentRun[]; savingRuntime: boolean; onSaveRuntime: (kind: AgentRuntimeKind) => Promise<void>; officialSources: OfficialSourceDefinition[]; refreshingSourceId: string | null; linkingSourceSnapshotId: string | null; onRefreshOfficialSource: (sourceId: string) => Promise<void>; onLinkSourceSnapshotToPlan: (snapshotId: string) => Promise<void>; telegramStatus: ConnectorResult<TelegramConfiguration> | null; telegramVerification: ConnectorResult<TelegramBotIdentity> | null; verifyingTelegram: boolean; telegramPairing: TelegramPairingView | null; pairingTelegram: boolean; disconnectingTelegram: boolean; onVerifyTelegram: () => Promise<void>; onStartTelegramPairing: () => Promise<void>; onCompleteTelegramPairing: () => Promise<void>; onDisconnectTelegram: () => Promise<void>; weatherLocation: string; setWeatherLocation: (value: string) => void; weatherResult: ConnectorResult<QWeatherWeatherSnapshot> | null; checkingWeather: boolean; onCheckWeather: () => Promise<void> }) {
+function LocalConfigurationView({ configuration, form, saving, onChange, onSave }: { configuration: LocalConfiguration | null; form: LocalConfigurationForm; saving: boolean; onChange: (next: Partial<LocalConfigurationForm>) => void; onSave: () => Promise<void> }) {
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void onSave();
+  }
+
+  const stateLabel = (configured: boolean | undefined) => configured === undefined ? "Checking" : configured ? "Configured" : "Needs setup";
+  return <section className="card connector-config-card">
+    <div className="split-heading"><div><p className="eyebrow">Local service connections</p><h2>Bring your own API keys</h2></div><span className={`configuration-state ${configuration ? "ready" : "checking"}`}>{configuration ? "Local only" : "Checking"}</span></div>
+    <p>These keys belong to you. Landi saves them only in this local instance’s ignored <code>.env</code> file, sends them only to the matching service, and never returns their values to the Web UI or Agent.</p>
+    <form className="connector-config-form" onSubmit={submit}>
+      <label><span><strong>Amap API key</strong><em>{stateLabel(configuration?.amap.configured)}</em></span><input type="password" autoComplete="off" value={form.amapApiKey} onChange={(event) => onChange({ amapApiKey: event.target.value })} placeholder={configuration?.amap.configured ? "Already configured · enter a new key to replace it" : "Paste your Amap Web service key"} /><small>Places, routes, nearby food and accommodation verification.</small></label>
+      <label><span><strong>QWeather API key</strong><em>{stateLabel(configuration?.qweather.configured)}</em></span><input type="password" autoComplete="off" value={form.qweatherApiKey} onChange={(event) => onChange({ qweatherApiKey: event.target.value })} placeholder={configuration?.qweather.configured ? "Already configured · enter a new key to replace it" : "Paste your QWeather key"} /><small>Current conditions and short forecasts.</small></label>
+      <label><span><strong>QWeather API host</strong><em>{configuration?.qweather.host || "Required with the key"}</em></span><input type="url" value={form.qweatherApiHost} onChange={(event) => onChange({ qweatherApiHost: event.target.value })} placeholder={configuration?.qweather.host || "https://devapi.qweather.com"} /><small>Use the host provided by your QWeather account.</small></label>
+      <label><span><strong>Telegram Bot token</strong><em>{stateLabel(configuration?.telegram.configured)}</em></span><input type="password" autoComplete="off" value={form.telegramBotToken} onChange={(event) => onChange({ telegramBotToken: event.target.value })} placeholder={configuration?.telegram.configured ? "Already configured · enter a new token to replace it" : "Paste the token from BotFather"} /><small>Required for Telegram identity verification, pairing and reminders.</small></label>
+      <div className="connector-config-actions"><small>Save once, then Landi will reload connector configuration immediately.</small><button className="primary-button" disabled={saving}>{saving ? "Saving securely…" : "Save connection settings"}</button></div>
+    </form>
+  </section>;
+}
+
+function SettingsView({ workspace, onSaveProfile, configuration, configurationForm, savingConfiguration, onConfigurationFormChange, onSaveConfiguration, runtimeChecks, refreshingRuntimes, onRefreshRuntimes, agentRuns, savingRuntime, onSaveRuntime, officialSources, refreshingSourceId, linkingSourceSnapshotId, onRefreshOfficialSource, onLinkSourceSnapshotToPlan, telegramStatus, telegramVerification, verifyingTelegram, telegramPairing, pairingTelegram, disconnectingTelegram, onVerifyTelegram, onStartTelegramPairing, onCompleteTelegramPairing, onDisconnectTelegram, weatherLocation, setWeatherLocation, weatherResult, checkingWeather, onCheckWeather }: { workspace: WorkspaceSnapshot; onSaveProfile: (profile: WorkspaceSnapshot["profile"]) => Promise<void>; configuration: LocalConfiguration | null; configurationForm: LocalConfigurationForm; savingConfiguration: boolean; onConfigurationFormChange: (next: Partial<LocalConfigurationForm>) => void; onSaveConfiguration: () => Promise<void>; runtimeChecks: RuntimeCheck[]; refreshingRuntimes: boolean; onRefreshRuntimes: () => Promise<void>; agentRuns: AgentRun[]; savingRuntime: boolean; onSaveRuntime: (kind: AgentRuntimeKind) => Promise<void>; officialSources: OfficialSourceDefinition[]; refreshingSourceId: string | null; linkingSourceSnapshotId: string | null; onRefreshOfficialSource: (sourceId: string) => Promise<void>; onLinkSourceSnapshotToPlan: (snapshotId: string) => Promise<void>; telegramStatus: ConnectorResult<TelegramConfiguration> | null; telegramVerification: ConnectorResult<TelegramBotIdentity> | null; verifyingTelegram: boolean; telegramPairing: TelegramPairingView | null; pairingTelegram: boolean; disconnectingTelegram: boolean; onVerifyTelegram: () => Promise<void>; onStartTelegramPairing: () => Promise<void>; onCompleteTelegramPairing: () => Promise<void>; onDisconnectTelegram: () => Promise<void>; weatherLocation: string; setWeatherLocation: (value: string) => void; weatherResult: ConnectorResult<QWeatherWeatherSnapshot> | null; checkingWeather: boolean; onCheckWeather: () => Promise<void> }) {
   const telegramConfigured = telegramStatus?.status === "available";
   const statusFor = (kind: AgentRuntimeKind) => runtimeChecks.find((runtime) => runtime.kind === kind);
   const runtimeLabel = (kind: AgentRuntimeKind) => kind === "claude-code" ? "Claude Code" : "Codex";
   const snapshotsFor = (sourceId: string) => workspace.sourceSnapshots.filter((snapshot) => snapshot.sourceId === sourceId);
   const isLinkedToActivePlan = (snapshot: WorkspaceSnapshot["sourceSnapshots"][number]) => workspace.activePlan.sources.some((source) => source.url === snapshot.url && source.authority === snapshot.authority && source.retrievedAt === snapshot.retrievedAt);
   return <section className="content-stack">
+    <ProfileView workspace={workspace} onSave={onSaveProfile} />
+    <LocalConfigurationView configuration={configuration} form={configurationForm} saving={savingConfiguration} onChange={onConfigurationFormChange} onSave={onSaveConfiguration} />
     <section className="card settings-view">
       <p className="eyebrow">Plan runtime</p>
       <h2>Choose the account that creates Plan drafts</h2>
-      <p>This instance uses one local runtime at a time. C-assistant checks its availability but never asks for, reads, or stores its login credentials.</p>
+      <p>This instance uses one local runtime at a time. Landi checks its availability but never asks for, reads, or stores its login credentials.</p>
       <div className="runtime-options">
         {(["codex", "claude-code"] as AgentRuntimeKind[]).map((kind) => {
           const runtime = statusFor(kind);
@@ -819,7 +917,7 @@ function SettingsView({ workspace, runtimeChecks, agentRuns, savingRuntime, onSa
           return <label className={`runtime-option ${selected ? "selected" : ""}`} key={kind}><input type="radio" name="plan-runtime" value={kind} checked={selected} disabled={savingRuntime} onChange={() => void onSaveRuntime(kind)} /><span><strong>{runtimeLabel(kind)}</strong><small>{state}{runtime?.version ? ` · ${runtime.version}` : ""}</small></span></label>;
         })}
       </div>
-      <p>Future Web and Telegram Plan drafts use this choice. If it is not ready, C-assistant explains the issue and does not silently switch runtimes.</p>
+      <div className="runtime-footer"><p>Future Web and Telegram Plan drafts use this choice. When the selected runtime shows <strong>ready</strong>, the Agent can be used directly from the Today conversation.</p><button className="secondary-button" disabled={refreshingRuntimes} onClick={() => void onRefreshRuntimes()}>{refreshingRuntimes ? "Checking…" : "Refresh runtime status"}</button></div>
     </section>
     <section className="card run-history-card"><p className="eyebrow">Plan generation history</p><h2>See what happened, without saving your private content</h2><p>Only the runtime, entry point, time, outcome, and generated Plan reference are retained. Your request, raw model output, and account credentials are never included in this history.</p>{agentRuns.length ? <div className="run-history-list">{agentRuns.map((run) => <article key={run.id}><strong>{run.runtimeKind === "claude-code" ? "Claude Code" : "Codex"} · {run.status.replaceAll("_", " ")}</strong><span>{run.trigger === "telegram" ? "Telegram" : "Web"} · started {run.startedAt}{run.failureCode ? ` · ${run.failureCode.replaceAll("_", " ")}` : ""}</span></article>)}</div> : <p className="connector-message">No Plan generation runs have been recorded yet.</p>}</section>
     <section className="card official-sources-card">
@@ -835,7 +933,7 @@ function SettingsView({ workspace, runtimeChecks, agentRuns, savingRuntime, onSa
       <p className="connector-message">A changed page needs review. It is not, by itself, a policy change or a personal eligibility result.</p>
     </section>
     <section className="card settings-view"><p className="eyebrow">Connection status</p><h2>Services are separated from the product UI</h2><div className="status-grid">{Object.entries(workspace.system).map(([name, status]) => <div key={name}><span>{name}</span><strong>{status.replaceAll("_", " ")}</strong></div>)}<div><span>Telegram</span><strong>{telegramPairing?.state === "paired" ? "paired" : telegramConfigured ? "configured" : telegramStatus?.status === "not_configured" ? "token needed" : telegramStatus?.status ?? "checking"}</strong></div></div><p>Plan drafting starts only after you press its explicit button. Telegram starts with a private, user-owned pairing step.</p></section>
-    <section className="card weather-card"><p className="eyebrow">QWeather facts</p><h2>Check what the destination weather reports.</h2><div className="amap-search"><input value={weatherLocation} onChange={(event) => setWeatherLocation(event.target.value)} aria-label="Check destination weather" placeholder="City or region" /><button className="primary-button" disabled={checkingWeather || !weatherLocation.trim()} onClick={() => void onCheckWeather()}>{checkingWeather ? "Checking…" : "Check weather"}</button></div>{weatherResult ? <WeatherResults result={weatherResult} /> : <p>Weather is a changing fact, not a promise. C-assistant will use it for cautious packing and route suggestions after a Plan is confirmed.</p>}</section>
+    <section className="card weather-card"><p className="eyebrow">QWeather facts</p><h2>Check what the destination weather reports.</h2><div className="amap-search"><input value={weatherLocation} onChange={(event) => setWeatherLocation(event.target.value)} aria-label="Check destination weather" placeholder="City or region" /><button className="primary-button" disabled={checkingWeather || !weatherLocation.trim()} onClick={() => void onCheckWeather()}>{checkingWeather ? "Checking…" : "Check weather"}</button></div>{weatherResult ? <WeatherResults result={weatherResult} /> : <p>Weather is a changing fact, not a promise. Landi will use it for cautious packing and route suggestions after a Plan is confirmed.</p>}</section>
     <section className="card telegram-card"><p className="eyebrow">Telegram bot</p><h2>Connect your private Telegram account</h2>{telegramConfigured ? <><p>Verification makes one safe identity request. It does not read messages or send a notification.</p><button className="secondary-button" disabled={verifyingTelegram} onClick={() => void onVerifyTelegram()}>{verifyingTelegram ? "Verifying…" : "Verify Telegram bot"}</button><TelegramPairing pairing={telegramPairing} busy={pairingTelegram} disconnecting={disconnectingTelegram} onStart={onStartTelegramPairing} onComplete={onCompleteTelegramPairing} onDisconnect={onDisconnectTelegram} /></> : <p>Add <code>TELEGRAM_BOT_TOKEN</code> to the local <code>.env</code> file, then restart the local service. The token is not shown in this workspace.</p>}{telegramVerification ? <TelegramVerification result={telegramVerification} /> : null}</section>
   </section>;
 }
@@ -882,7 +980,7 @@ function ManualAccommodation({ saving, onSave }: { saving: boolean; onSave: (inp
     void onSave({ name: name.trim(), address: address.trim(), status: alreadyBooked ? "confirmed" : "candidate" });
   }
 
-  return <form className="plan-accommodation manual-accommodation-form" onSubmit={submit}><strong>Already chose a stay?</strong><span>Enter its name and address. C-assistant will use Amap only to verify a location for this Plan.</span><div><label>Stay name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Hotel, apartment, or residence" /></label><label>Address or area<input value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Street address, district, or city" /></label></div><label className="checkbox-label"><input type="checkbox" checked={alreadyBooked} onChange={(event) => setAlreadyBooked(event.target.checked)} />I have already completed the booking elsewhere</label><button className="secondary-button" disabled={saving || !name.trim() || !address.trim()}>{saving ? "Saving…" : alreadyBooked ? "Save confirmed accommodation" : "Save accommodation candidate"}</button></form>;
+  return <form className="plan-accommodation manual-accommodation-form" onSubmit={submit}><strong>Already chose a stay?</strong><span>Enter its name and address. Landi will use Amap only to verify a location for this Plan.</span><div><label>Stay name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Hotel, apartment, or residence" /></label><label>Address or area<input value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Street address, district, or city" /></label></div><label className="checkbox-label"><input type="checkbox" checked={alreadyBooked} onChange={(event) => setAlreadyBooked(event.target.checked)} />I have already completed the booking elsewhere</label><button className="secondary-button" disabled={saving || !name.trim() || !address.trim()}>{saving ? "Saving…" : alreadyBooked ? "Save confirmed accommodation" : "Save accommodation candidate"}</button></form>;
 }
 
 function ArrivalTiming({ arrival, saving, onSave }: { arrival: WorkspaceSnapshot["activePlan"]["configuration"]["arrival"]; saving: boolean; onSave: (arrival: WorkspaceSnapshot["activePlan"]["configuration"]["arrival"]) => Promise<void> }) {
@@ -898,11 +996,11 @@ function ArrivalTiming({ arrival, saving, onSave }: { arrival: WorkspaceSnapshot
     void onSave({ ...(expectedAtLocal ? { expectedAtLocal } : {}), ...(timeZone ? { timeZone } : {}) });
   }
 
-  return <form className="plan-accommodation travel-context-form" onSubmit={submit}><strong>Expected first arrival</strong><span>Optional. Once this Plan is active and Telegram is paired, C-assistant sends one arrival check-in at this local time. It never starts a ride, booking, payment, or location request.</span><div><label>Local date and time<input type="datetime-local" value={expectedAtLocal} onChange={(event) => setExpectedAtLocal(event.target.value)} /></label><label>Time zone<select value={timeZone} onChange={(event) => setTimeZone(event.target.value)}><option value="Asia/Shanghai">China Standard Time (Asia/Shanghai)</option></select></label></div><button className="secondary-button" disabled={saving}>{saving ? "Saving…" : expectedAtLocal ? "Save expected arrival" : "Clear expected arrival"}</button></form>;
+  return <form className="plan-accommodation travel-context-form" onSubmit={submit}><strong>Expected first arrival</strong><span>Optional. Once this Plan is active and Telegram is paired, Landi sends one arrival check-in at this local time. It never starts a ride, booking, payment, or location request.</span><div><label>Local date and time<input type="datetime-local" value={expectedAtLocal} onChange={(event) => setExpectedAtLocal(event.target.value)} /></label><label>Time zone<select value={timeZone} onChange={(event) => setTimeZone(event.target.value)}><option value="Asia/Shanghai">China Standard Time (Asia/Shanghai)</option></select></label></div><button className="secondary-button" disabled={saving}>{saving ? "Saving…" : expectedAtLocal ? "Save expected arrival" : "Clear expected arrival"}</button></form>;
 }
 
 function TransportPreference({ preference, saving, onSave }: { preference: WorkspaceSnapshot["activePlan"]["configuration"]["transport"]["preference"]; saving: boolean; onSave: (preference: WorkspaceSnapshot["activePlan"]["configuration"]["transport"]["preference"]) => Promise<void> }) {
-  return <label className="plan-accommodation"><strong>Transport for this Plan</strong><span>Keep the default unless you have a clear preference. It will guide future route decisions, not start a trip.</span><select value={preference} disabled={saving} onChange={(event) => void onSave(event.target.value as typeof preference)}><option value="plan_recommended">Let C-assistant decide from the Plan</option><option value="taxi">Prefer taxi</option><option value="public_transit">Prefer public transit</option><option value="walking">Prefer walking when practical</option></select></label>;
+  return <label className="plan-accommodation"><strong>Transport for this Plan</strong><span>Keep the default unless you have a clear preference. It will guide future route decisions, not start a trip.</span><select value={preference} disabled={saving} onChange={(event) => void onSave(event.target.value as typeof preference)}><option value="plan_recommended">Let Landi decide from the Plan</option><option value="taxi">Prefer taxi</option><option value="public_transit">Prefer public transit</option><option value="walking">Prefer walking when practical</option></select></label>;
 }
 
 function TravelContext({ context, saving, onSave }: { context: WorkspaceSnapshot["activePlan"]["configuration"]["travelContext"]; saving: boolean; onSave: (context: WorkspaceSnapshot["activePlan"]["configuration"]["travelContext"]) => Promise<void> }) {
@@ -993,6 +1091,16 @@ function routePlaceFromAccommodation(accommodation: WorkspaceSnapshot["activePla
     city: "",
     district: ""
   };
+}
+
+function ChinaPlanPreparationCard({ plan, result, preparing, onPrepare }: { plan: WorkspaceSnapshot["activePlan"]; result: ChinaPlanPreparationView | null; preparing: boolean; onPrepare: () => Promise<void> }) {
+  return <section className="card china-preparation-card">
+    <div className="split-heading"><div><p className="eyebrow">China Country Pack</p><h2>Prepare this complete Plan</h2></div><span className={`configuration-state ${result?.status === "saved" ? "ready" : ""}`}>{result?.status ?? "not prepared"}</span></div>
+    <p>Refresh approved official sources, collect current Amap and QWeather facts, and let the internal China Skills propose preparation Tasks and Reminders. Nothing is activated or booked.</p>
+    {result?.status === "saved" ? <div className="china-preparation-result success"><strong>{result.message}</strong><span>{result.taskCount} Tasks · {result.reminderCount} Reminders · {result.sources.filter((source) => source.status === "ready").length} sources ready</span></div> : null}
+    {result?.status === "blocked" ? <div className="china-preparation-result blocked"><strong>{result.message}</strong><ul className="compact-list">{result.actionItems.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
+    {plan.status === "draft" ? <button className="primary-button" disabled={preparing} onClick={() => void onPrepare()}>{preparing ? "Preparing with current sources…" : result?.status === "saved" ? "Prepare this updated draft again" : "Prepare with China Pack"}</button> : <p className="connector-message">This Plan is active. Create or revise a draft before preparing a new Country Pack proposal.</p>}
+  </section>;
 }
 
 export default App;

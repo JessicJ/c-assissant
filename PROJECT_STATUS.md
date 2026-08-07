@@ -105,16 +105,16 @@
 - Plan 路线卡可一键并列比较驾车、步行与公共交通的路线事实；某个方式不可比较时保留其原因，不影响其他方式的事实返回。
 - 实现可解释的初步交通选择：尊重本次 Plan 的明确偏好，并结合同行人数、行李和已比较路线事实；当预计抵达日期与 QWeather 三天预报中的日期精确匹配时，也会谨慎考虑降水，且不触发出行。
 
-## 未完成内容
+## V1 完成状态与后续范围
 
-- 生产 Fact Collector、数字生活来源目录、七 Skill orchestrator、Server 编排保存服务、Core Plan 编译器、China Pack Proposal Adapter 与 SQLite 原子版本写入已分别完成并通过测试，但尚未在 Server 入口完成依赖装配，也未接入 Web/Telegram 完整审阅或逐 Skill Run 审计。当前 UI 不会触发这条路径；当地饮食正式来源目录仍待建立。
+- 生产 Fact Collector、数字生活来源目录、七 Skill orchestrator、Server 编排保存服务、Core Plan 编译器、China Pack Proposal Adapter 与 SQLite 原子版本写入已在 Server 完成装配。Web Plan 页面和 Telegram `/prepare` 共用同一条来源准备、编排、原子保存和用户可读失败路径；成功后完整显示新草稿，并保存组合编译 Run 与八条逐 Skill Run，最终仍需用户确认。
 
 - 已完成 Telegram Bot 身份验证、一次性私聊配对，以及已绑定账号的最小输入入口：普通文本和 `/new` 都会使用 Settings 中选定的本机 Codex 或 Claude Code 生成待确认 Plan；所选运行底座不可用时会明确降级为本地模板草案，另有 `/help` 和 `/plan`。官方来源 Connector 已具备受限刷新和快照能力；完整的数据库迁移体系尚未实现。
 - 已实现第一条 Plan 事件状态转换：任务只有显式 `arrival` 触发标记时，预计抵达事件才会把它从 `scheduled` 转为 `ready`，记录本地收件箱并更新当前下一步；不会推断或自动完成任何任务。
 - 已实现到达任务的显式完成闭环：只有绑定 Telegram 用户点击“我已完成此步骤”时，当前 Plan 内的 `ready` 任务才会改为 `completed`，并记录为用户确认；不会把打开高德或其他第三方应用当作完成回执。
 - Telegram 的 `/plan` 已提供当前完整 Plan：已知信息、需要纠正的假设、阶段、任务状态、提醒策略和下一步都会显示；超过单条消息安全长度时自动分页，确认按钮只附在最后一页。
-- Claude Code Adapter 已实现并通过契约测试、接入用户可选的运行底座，但尚未在真实已登录账号上做端到端验证；Plan 生成已具备最小 Run 审计，取消、优先级队列及 Task/Reminder/Event/Skill 级审计仍未实现。
-- 尚未实现本地 MCP Tool Gateway。
+- Claude Code Adapter 已实现并通过契约测试、接入用户可选的运行底座，但真实已登录账号验证仍需用户在本机完成；Plan 生成、Task Reminder、Country Pack 编译和逐 Skill 已具备最小 Run 审计。
+- 本地 MCP Tool Gateway 调整为 V1 后续项：V1 的 Codex/Claude Code 只做无工具结构化草案，所有 Connector 调用由 Core 的受限工作流执行，避免把密钥或任意工具权限交给 Agent。
 - 尚未实现天气兜底、餐饮与住宿的第三方应用行动交接、地图深链接真机验证和限额/配额可视化。
 - 住宿候选已有相对一个 Plan 中心点的初步距离理由，并支持保存或直接录入后由用户显式确认；尚未支持多中心路线、住宿地点偏好和完整区域级比较。
 - 初步交通选择只会在预计抵达日期落入已刷新 QWeather 三天预报窗口时考虑降水；没有日期匹配时不会用天气猜测未来行程。它已成为独立的 `transport-planner` Skill，不再使用固定步行距离阈值，但仍未纳入服务中断或精确位置，也不会替用户自动启动出行。
@@ -128,7 +128,7 @@
 
 ## 运行方法
 
-当前仓库已进入第一段可运行实现：Server 和 Web 使用本地 SQLite Workspace 数据，可以完成 Plan 展示与确认演示；高德地点/路线/地理编码、QWeather 天气事实和 Codex 结构化草案已做过真实验证；Claude Code 也已有同契约的适配器并可被选中，待真实账号验证；Telegram 可在配置 Token 后做显式 Bot 身份验证。它仍不能用于真实用户提醒或外部行动。
+当前仓库已形成可运行的单用户本地 V1：Server 与 Web 使用 SQLite Workspace，可创建、修订、准备、完整审阅和确认 Plan；Telegram 可完成相同审阅确认、到期提醒、按需天气、附近餐饮及一次性定位路线交接。高德、QWeather、Telegram 和 Codex 已做过本地真实验证；Claude Code 保留同契约实现，待用户用真实已登录账号验证。V1 不执行交易型外部行动。
 
 阅读顺序：
 
@@ -157,18 +157,16 @@
 - 全天在线依赖部署主机持续运行，目前没有确定的一键部署和进程守护方案。
 - 当前远端默认工作分支为 `master`；是否迁移为 `main` 尚未决定。
 
-## 下一步建议
+## V1 后续建议
 
-优先完成一条端到端的最小闭环，避免先同时开发全部模块：
+以下事项不阻塞当前本地 V1 代码闭环，进入发布准备或下一版本：
 
-1. 为 monorepo 各应用与包补充可构建的 TypeScript 配置和测试框架。
-2. 实现最小 Core 数据模型、SQLite 迁移和 Plan 版本确认。
-3. 实现一个 Runtime Adapter，先用 Codex 或 Claude Code 其中之一完成结构化输出 PoC。
-4. 实现受限的本地 Tool Gateway。
-5. 实现 Amap 的路线与地图交接最小能力。
-6. 实现 Telegram 用户配对、文本接收、计划确认和定时交通卡片发送。
-7. 实现最小 Web 页面，展示完整 Plan、Timeline、Sources 和确认入口。
-8. 用场景测试验证：用户描述来华事项 → 生成完整 Plan → 用户确认 → 到达时间触发 → 刷新路线事实 → Telegram 发送交通卡片 → 跳转 Amap。
+1. 用户用已登录的 Claude Code 做一次真实草案端到端验证，并在手机上验证 Telegram 与高德 HTTPS 深链接。
+2. 确定最终项目名称、开源许可证、贡献治理和版本发布方式。
+3. 设计正式 SQLite 迁移、备份、恢复、加密与数据保留策略。
+4. 选择一键部署、进程守护与全天在线方案，并增加配额/限额可视化。
+5. 按城市逐步建立可追溯的当地特色饮食来源目录；没有可靠来源时继续明确降级。
+6. 评估 V1 后的 MCP Tool Gateway；只有出现受控 Agent 工具调用需求时才接入，且不得暴露 Connector 密钥。
 
 ## 安全交接说明
 

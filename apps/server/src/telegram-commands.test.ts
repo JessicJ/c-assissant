@@ -21,6 +21,7 @@ test("new Plan command remains available for an explicit request", () => {
 
 test("control commands do not create a Plan", () => {
   assert.equal(parseTelegramCommand("/plan").type, "plan");
+  assert.equal(parseTelegramCommand("/prepare@landi_life_bot").type, "prepare");
   assert.equal(parseTelegramCommand("/profile").type, "profile");
   assert.equal(parseTelegramCommand("/weather").type, "weather");
   assert.deepEqual(parseTelegramCommand("/food"), { type: "food" });

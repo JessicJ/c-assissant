@@ -78,6 +78,10 @@ test("China compilation service orchestrates and atomically saves the next inert
   assert.equal(result.workspace.activePlan.status, "draft");
   assert.equal(result.workspace.activePlan.stages.at(-1)?.tasks.find((task) => task.title === "Check essential carry-on items")?.reminder?.scheduledAtLocal, "2026-09-01T05:00");
   assert.equal(store.listRecentPlanCompilationRuns().length, 1);
+  const skillRuns = store.listRecentCountryPackSkillRuns();
+  assert.equal(skillRuns.length, 8);
+  assert.deepEqual(skillRuns.map((run) => run.skillId).sort(), ["arrival-preparation", "china-arrival-plan", "digital-life-setup", "housing-area-recommendation", "local-food-guide", "policy-applicability", "transport-planner", "weather-and-packing"]);
+  assert.ok(skillRuns.every((run) => run.compilationRunId === store.listRecentPlanCompilationRuns()[0]!.id));
   store.close();
 });
 
