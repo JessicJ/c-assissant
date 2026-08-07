@@ -13,6 +13,7 @@ import {
   type ImmigrationStatus,
   type Plan,
   type PlanAccommodationInput,
+  type PlanArrivalInput,
   type PlanConfiguration,
   type PlanTravelContextInput,
   type PlanTransportPreferenceInput,
@@ -255,6 +256,32 @@ export class SqliteWorkspaceStore {
     return this.getWorkspace();
   }
 
+  updatePlanArrival(planId: string, input: PlanArrivalInput): WorkspaceSnapshot {
+    const workspace = this.getWorkspace();
+    if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
+    const expectedAtLocal = input.expectedAtLocal?.trim();
+    const timeZone = input.timeZone?.trim();
+    if (expectedAtLocal && !isLocalDateTime(expectedAtLocal)) throw new Error("Expected arrival must be a valid local date and time.");
+    if (timeZone && !isTimeZoneName(timeZone)) throw new Error("Use a valid IANA time-zone name for the expected arrival.");
+
+    const configuration: PlanConfiguration = {
+      ...workspace.activePlan.configuration,
+      arrival: {
+        ...(expectedAtLocal ? { expectedAtLocal } : {}),
+        ...(timeZone ? { timeZone } : {})
+      }
+    };
+    this.database.prepare("UPDATE plans SET configuration_json = ?, version = version + 1 WHERE id = ?").run(JSON.stringify(configuration), planId);
+    this.addInbox({
+      id: `arrival-timing-${planId}-${Date.now()}`,
+      tone: "notice",
+      title: expectedAtLocal ? "Expected arrival saved in this Plan" : "Expected arrival cleared from this Plan",
+      body: expectedAtLocal ? `Arrival is saved for ${expectedAtLocal}${timeZone ? ` (${timeZone})` : ""}. No reminder has been scheduled yet.` : "No reminder has been scheduled or sent.",
+      timestamp: "Just now"
+    });
+    return this.getWorkspace();
+  }
+
   private migrate(): void {
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS profiles (
@@ -440,9 +467,18 @@ function parsePlanConfiguration(value: string): PlanConfiguration {
     const accommodation = parsed.accommodation && ["not_set", "candidate", "confirmed"].includes(parsed.accommodation.status) ? parsed.accommodation : defaults.accommodation;
     const preference = parsed.transport && ["plan_recommended", "taxi", "public_transit", "walking"].includes(parsed.transport.preference) ? parsed.transport.preference : defaults.transport.preference;
     const travelContext = parsed.travelContext && ["unknown", "light", "standard", "heavy"].includes(parsed.travelContext.luggage) ? { ...(Number.isInteger(parsed.travelContext.partySize) && parsed.travelContext.partySize! >= 1 && parsed.travelContext.partySize! <= 20 ? { partySize: parsed.travelContext.partySize } : {}), luggage: parsed.travelContext.luggage } : defaults.travelContext;
-    return { accommodation, transport: { preference }, travelContext };
+    const arrival = parsed.arrival && typeof parsed.arrival === "object" ? { ...(typeof parsed.arrival.expectedAtLocal === "string" && isLocalDateTime(parsed.arrival.expectedAtLocal) ? { expectedAtLocal: parsed.arrival.expectedAtLocal } : {}), ...(typeof parsed.arrival.timeZone === "string" && isTimeZoneName(parsed.arrival.timeZone) ? { timeZone: parsed.arrival.timeZone } : {}) } : defaults.arrival;
+    return { accommodation, arrival, transport: { preference }, travelContext };
   } catch {
     // Old local data can safely fall back to an empty Plan configuration.
   }
   return defaults;
+}
+
+function isLocalDateTime(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}:00Z`));
+}
+
+function isTimeZoneName(value: string): boolean {
+  return /^[A-Za-z_]+(?:\/[A-Za-z_+-]+)+$/.test(value);
 }

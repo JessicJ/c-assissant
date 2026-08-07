@@ -104,3 +104,15 @@ test("SQLite keeps travel party and luggage context inside the current Plan", ()
   assert.equal(updated.activePlan.configuration.travelContext.luggage, "heavy");
   store.close();
 });
+
+test("SQLite keeps and clears expected arrival timing inside the current Plan", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const plan = store.getWorkspace().activePlan;
+  const updated = store.updatePlanArrival(plan.id, { expectedAtLocal: "2026-09-01T07:00", timeZone: "Asia/Shanghai" });
+
+  assert.equal(updated.activePlan.configuration.arrival.expectedAtLocal, "2026-09-01T07:00");
+  assert.equal(updated.activePlan.configuration.arrival.timeZone, "Asia/Shanghai");
+  const cleared = store.updatePlanArrival(plan.id, { timeZone: "Asia/Shanghai" });
+  assert.equal(cleared.activePlan.configuration.arrival.expectedAtLocal, undefined);
+  store.close();
+});

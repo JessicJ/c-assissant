@@ -39,9 +39,16 @@ export interface PlanAccommodation {
   updatedAt?: string;
 }
 
+/** A local arrival time belongs to one Plan, never to the long-term Profile. */
+export interface PlanArrival {
+  expectedAtLocal?: string;
+  timeZone?: string;
+}
+
 /** Temporary, Plan-scoped facts. They must not leak into the long-term Profile. */
 export interface PlanConfiguration {
   accommodation: PlanAccommodation;
+  arrival: PlanArrival;
   transport: {
     preference: TransportPreference;
   };
@@ -125,6 +132,11 @@ export interface PlanTransportPreferenceInput {
 export interface PlanTravelContextInput {
   partySize?: number;
   luggage: LuggageLevel;
+}
+
+export interface PlanArrivalInput {
+  expectedAtLocal?: string;
+  timeZone?: string;
 }
 
 export interface GeneratedPlanDraft {
@@ -303,7 +315,7 @@ export function createPlanFromDraft(draft: GeneratedPlanDraft): Plan {
 }
 
 export function createDefaultPlanConfiguration(): PlanConfiguration {
-  return { accommodation: { status: "not_set" }, transport: { preference: "plan_recommended" }, travelContext: { luggage: "unknown" } };
+  return { accommodation: { status: "not_set" }, arrival: {}, transport: { preference: "plan_recommended" }, travelContext: { luggage: "unknown" } };
 }
 
 export function confirmPlan(snapshot: WorkspaceSnapshot, planId: string): WorkspaceSnapshot {
