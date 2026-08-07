@@ -65,6 +65,15 @@ export interface AmapPlaceHandoff {
   requiresUserAction: true;
 }
 
+/** A portable H5 route handoff that can be opened from Telegram or the Web workspace. */
+export interface AmapNavigationHandoff {
+  provider: "amap";
+  action: "route_planning";
+  transport: "driving" | "walking" | "transit";
+  url: string;
+  requiresUserAction: true;
+}
+
 export interface AmapConnectorOptions {
   apiKey?: string | undefined;
   fetcher?: typeof fetch;
@@ -106,6 +115,7 @@ interface AmapResponse {
     district?: string | string[];
     level?: string;
   }>;
+  locations?: string;
 }
 
 export class AmapConnector {
@@ -376,6 +386,19 @@ export class AmapConnector {
     };
   }
 
+  /** Converts a GPS/WGS-84 coordinate into the Amap coordinate system for one live interaction. */
+  async convertGpsCoordinate(input: { location: string }): Promise<ConnectorResult<{ location: string }>> {
+    if (!isCoordinate(input.location)) return this.failure("unsupported", "Coordinate conversion needs a valid longitude,latitude GPS point.", "invalid_coordinates", false);
+    if (!this.apiKey) return this.failure("not_configured", "Amap is not configured on this instance.", "not_configured", false);
+    const params = new URLSearchParams({ key: this.apiKey, locations: coordinateWithSixDecimals(input.location), coordsys: "gps" });
+    const response = await this.request("/v3/assistant/coordinate/convert", params);
+    if (!response.ok) return response.failure;
+    if (response.payload.status !== "1") return this.fromAmapFailure(response.payload);
+    const location = response.payload.locations?.split(";")[0]?.trim();
+    if (!location || !isCoordinate(location)) return this.failure("degraded", "Amap did not return a usable converted coordinate.", "missing_converted_coordinate", true);
+    return { status: "available", provider: "amap", observedAt: new Date().toISOString(), data: { location } };
+  }
+
   private async request(path: string, params: URLSearchParams): Promise<{ ok: true; payload: AmapResponse } | { ok: false; failure: ConnectorResult<never> }> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
@@ -458,12 +481,40 @@ export function createAmapPlaceHandoff(input: { place: AmapPlace }): AmapPlaceHa
   };
 }
 
+/**
+ * Creates an HTTPS Amap navigation handoff suitable for Telegram. Coordinates
+ * passed here must already be in Amap/GCJ-02 form.
+ */
+export function createAmapNavigationHandoff(input: { origin: AmapPlace; destination: AmapPlace; transport: AmapNavigationHandoff["transport"] }): AmapNavigationHandoff {
+  const mode = input.transport === "driving" ? "car" : input.transport === "walking" ? "walk" : "bus";
+  const parameters = new URLSearchParams({
+    from: `${input.origin.location},${input.origin.name.slice(0, 80)}`,
+    to: `${input.destination.location},${input.destination.name.slice(0, 80)}`,
+    mode,
+    policy: input.transport === "driving" ? "1" : "0",
+    src: "C-assistant",
+    callnative: "1"
+  });
+  return {
+    provider: "amap",
+    action: "route_planning",
+    transport: input.transport,
+    url: `https://uri.amap.com/navigation?${parameters.toString()}`,
+    requiresUserAction: true
+  };
+}
+
 function isCoordinate(value: string): boolean {
   const [longitude, latitude, extra] = value.split(",");
   if (extra || longitude === undefined || latitude === undefined) return false;
   const lng = Number(longitude);
   const lat = Number(latitude);
   return Number.isFinite(lng) && Number.isFinite(lat) && lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90;
+}
+
+function coordinateWithSixDecimals(value: string): string {
+  const [longitude, latitude] = coordinateParts(value);
+  return `${Number(longitude).toFixed(6)},${Number(latitude).toFixed(6)}`;
 }
 
 function optionalNonNegativeNumber(value: string | undefined): number | undefined {
@@ -720,7 +771,7 @@ export interface TelegramMessageReceipt {
 }
 
 export type TelegramReplyMarkup =
-  | { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> }
+  | { inline_keyboard: Array<Array<{ text: string; callback_data: string } | { text: string; url: string }>> }
   | { keyboard: Array<Array<{ text: string; request_location: true }>>; resize_keyboard: true; one_time_keyboard: true };
 
 /** A deliberately small, normalized subset of a Telegram update. */
