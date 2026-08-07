@@ -62,7 +62,7 @@
 - 实现 Telegram Profile 基础资料编辑：`/profile` 展示长期配置，姓名、语言和国籍使用显式选择后的 15 分钟下一条文本输入，性别及来华签证/居留状态使用白名单按钮；命令和定位不会被误写入。编辑状态只保存字段名与开始时间，解绑时清除；国籍或来华身份缺失时继续标为 incomplete，不构成政策结论。
 - 实现 Telegram 按需天气查询：`/weather` 只在用户发送命令时按当前 Plan 地点调用高德地理编码和 QWeather，返回实况、带明确日期的三天预报、保守携带建议、抓取时间和官方来源。地点未确认或 Provider 失败时不猜测；结果不写入 Profile/Plan，也不创建提醒。
 - 实现 Telegram 附近餐饮闭环：`/food` 读取或补充当前 Plan 人数，再由 Telegram 明确请求一次定位；定位用途绑定当前 Plan，15 分钟过期并在一次使用前消费，未请求、过期或旧 Plan 的坐标不会调用高德，任何坐标均不落库。高德返回附近餐饮名称、分类、地址和距离事实，Telegram 保留 Provider 顺序并提供 HTTPS 高德地点跳转；不做 AI 排名、桌位判断、下单、订座或支付。
-- 实现 Web 工作台的 `Ask Agent` 入口：用户明确选择创建新 Plan 或修订当前草案，由 Settings 中选定的本机 Codex/Claude Code 返回完整结构化草案。输入与模式严格校验，结果保持待确认；Runtime 执行期间若 Plan ID 或版本发生变化，旧结果会被拒绝，保留用户较新的修改。该入口不是无限制通用聊天，也不执行 Connector 或外部行动。
+- 实现 Web 工作台 Today 顶部常驻的 `Ask Agent` 主入口：用户无需先寻找或打开弹窗，可直接选择创建新 Plan 或修订当前草案，由 Settings 中选定的本机 Codex/Claude Code 返回完整结构化草案；成功后自动进入完整 Plan 审查。输入与模式严格校验，结果保持待确认；Runtime 执行期间若 Plan ID 或版本发生变化，旧结果会被拒绝，保留用户较新的修改。该入口不是无限制通用聊天，也不执行 Connector 或外部行动。
 - 落地首个可执行的 China Pack 内部 Skill：`food-nearby` `0.1.0`。它以独立 manifest、instruction、TypeScript 入口和测试存在，只通过完整 China Pack 包供 Core/Server 调用；输入为 Plan 人数及高德已归一化事实，输出有版本的结构化 SkillResult、最多五个事实和外部交接提案。Telegram 只负责渲染和链接；Skill 不做虚假排名、桌位判断或完成推断。
 - 实现高德路线行动交接：选择高德地点后可检查驾车路线，并生成由用户自行打开的高德路线链接；不调用叫车、预订或支付。
 - 实现 QWeather Connector：经高德地理编码解析地点后，提供实况和三天预报；Key 与 Host 不会暴露给 Web 或 Agent。
