@@ -236,6 +236,8 @@ server.post("/api/connectors/telegram/verify", async (_request, reply) => {
 
 server.get("/api/connectors/telegram/pairing", async () => store.getTelegramPairingStatus());
 
+server.delete("/api/connectors/telegram/pairing", async () => store.unpairTelegram());
+
 server.post("/api/connectors/telegram/pairing/start", async (_request, reply) => {
   const identity = await telegram.getMe();
   if (identity.status !== "available" || !identity.data?.username) return reply.code(connectorResponseStatus(identity.status)).send(identity);
