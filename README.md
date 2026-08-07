@@ -49,6 +49,8 @@ Web route comparison and Telegram arrival routing invoke `transport-planner` `0.
 
 Weather interpretation is centralized in `weather-and-packing` `0.1.0` for Web, Telegram, and reminder delivery. It preserves QWeather provenance, uses exact-date matching for reminder forecasts, and returns only cautious packing prompts without silently changing a Plan.
 
+The production policy evidence gate now runs through `policy-applicability` `0.1.0`. It sees only minimized Profile/Plan facts and official snapshot metadata, and reports readiness for separate review without interpreting policy or deciding eligibility.
+
 ## Product shape
 
 - Web workspace: the full desktop-grade product interface.

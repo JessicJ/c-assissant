@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { runFoodNearbySkill, runHousingAreaRecommendationSkill, runTransportPlannerSkill, runWeatherAndPackingSkill } from "./index.js";
+import { runFoodNearbySkill, runHousingAreaRecommendationSkill, runPolicyApplicabilitySkill, runTransportPlannerSkill, runWeatherAndPackingSkill } from "./index.js";
 
 const candidates = [
   { id: "near", name: "Nearby Noodles", address: "1 Example Road", location: "121.47,31.23", type: "Chinese food", distanceMeters: 180 },
@@ -140,4 +140,37 @@ test("weather-and-packing omits unapproved attribution and fails closed on malfo
   assert.equal(unapproved.sources[0]?.url, undefined);
   assert.match(unapproved.warnings.join(" "), /unapproved attribution/);
   assert.equal(runWeatherAndPackingSkill({ ...weatherInput, retrievedAt: "not-a-date" }).status, "failed");
+});
+
+const policyEvidence = { id: "source-1", sourceId: "nia-english", authority: "National Immigration Administration", titleOriginal: "Guidance", url: "https://en.nia.gov.cn/", retrievedAt: "2026-08-06T12:00:00.000Z", contentHash: "a".repeat(64) };
+
+test("policy-applicability identity matches its internal manifest and asks only for missing facts", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../skills/policy-applicability/skill.json", import.meta.url), "utf8")) as { id: string; version: string; visibility: string; entrypoint: string };
+  const result = runPolicyApplicabilitySkill({ immigrationStatus: "unknown", location: "Shanghai, China", dates: "September 2026", evidence: [], now: "2026-08-07T00:00:00.000Z" });
+  assert.deepEqual(result.skill, { id: manifest.id, version: manifest.version });
+  assert.equal(manifest.visibility, "internal");
+  assert.equal(manifest.entrypoint, "runPolicyApplicabilitySkill");
+  assert.equal(result.status, "needs_input");
+  assert.deepEqual(result.needsInput.map((item) => item.field), ["profile.nationality", "profile.immigrationStatus", "official_source.nia-english"]);
+});
+
+test("policy-applicability marks fresh approved evidence ready only for separate review", () => {
+  const result = runPolicyApplicabilitySkill({ nationality: "Canada", immigrationStatus: "tourist_visa", location: "Shanghai, China", dates: "September 2026", evidence: [policyEvidence], now: "2026-08-07T00:00:00.000Z" });
+  assert.equal(result.status, "success");
+  assert.equal(result.sources[0]?.id, "source-1");
+  assert.match(result.nextAction, /separate source-backed policy review/);
+  assert.match(result.warnings.join(" "), /does not determine/);
+  assert.deepEqual(result.proposedTasks, []);
+});
+
+test("policy-applicability rejects stale, future, and unapproved evidence for current review without interpreting content", () => {
+  const stale = runPolicyApplicabilitySkill({ nationality: "Canada", immigrationStatus: "tourist_visa", location: "Shanghai, China", dates: "September 2026", evidence: [{ ...policyEvidence, retrievedAt: "2026-07-01T00:00:00.000Z" }], now: "2026-08-07T00:00:00.000Z" });
+  assert.equal(stale.status, "needs_evidence");
+  assert.equal(stale.sources[0]?.id, "source-1");
+  const future = runPolicyApplicabilitySkill({ nationality: "Canada", immigrationStatus: "tourist_visa", location: "Shanghai, China", dates: "September 2026", evidence: [{ ...policyEvidence, retrievedAt: "2026-08-08T00:00:00.000Z" }], now: "2026-08-07T00:00:00.000Z" });
+  assert.equal(future.status, "needs_evidence");
+  const unapproved = runPolicyApplicabilitySkill({ nationality: "Canada", immigrationStatus: "tourist_visa", location: "Shanghai, China", dates: "September 2026", evidence: [{ ...policyEvidence, url: "https://example.com/policy" }], now: "2026-08-07T00:00:00.000Z" });
+  assert.equal(unapproved.status, "needs_evidence");
+  assert.equal(unapproved.sources.length, 0);
+  assert.match(unapproved.warnings.join(" "), /omitted/);
 });

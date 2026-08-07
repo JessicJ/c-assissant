@@ -6,8 +6,8 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-adapters";
 import { AmapConnector, OfficialSourceConnector, QWeatherConnector, TelegramConnector, type AmapPlace, type AmapRoute, type TelegramReplyMarkup } from "@c-assistant/connectors";
-import { runFoodNearbySkill, runHousingAreaRecommendationSkill } from "@c-assistant/china-country-pack";
-import { assessPolicyPreparation, type AgentRuntimeKind, type CreatePlanInput, type GeneratedPlanDraft, type PlanAccommodationInput, type PlanArrivalInput, type PlanTransportPreferenceInput, type PlanTravelContextInput, type ProfileUpdate, type RuntimeSelectionUpdate } from "@c-assistant/core";
+import { runFoodNearbySkill, runHousingAreaRecommendationSkill, runPolicyApplicabilitySkill } from "@c-assistant/china-country-pack";
+import { type AgentRuntimeKind, type CreatePlanInput, type GeneratedPlanDraft, type PlanAccommodationInput, type PlanArrivalInput, type PlanTransportPreferenceInput, type PlanTravelContextInput, type ProfileUpdate, type RuntimeSelectionUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue } from "./arrival-reminder.js";
 import { arrivalRouteDestination, formatArrivalRoute, selectArrivalTransport } from "./arrival-route.js";
@@ -56,11 +56,23 @@ server.get("/api/runs/task-reminders", async () => store.listRecentTaskReminderR
 
 server.get("/api/policy-applicability", async () => {
   const workspace = store.getWorkspace();
-  return assessPolicyPreparation({
-    profile: workspace.profile,
-    plan: workspace.activePlan,
-    sourceSnapshots: workspace.sourceSnapshots
+  const result = runPolicyApplicabilitySkill({
+    ...(workspace.profile.nationality ? { nationality: workspace.profile.nationality } : {}),
+    immigrationStatus: workspace.profile.immigrationStatus,
+    location: workspace.activePlan.location,
+    dates: workspace.activePlan.dates,
+    evidence: workspace.sourceSnapshots.map((snapshot) => ({ id: snapshot.id, sourceId: snapshot.sourceId, authority: snapshot.authority, titleOriginal: snapshot.titleOriginal, url: snapshot.url, retrievedAt: snapshot.retrievedAt, contentHash: snapshot.contentHash })),
+    now: new Date().toISOString()
   });
+  return {
+    status: result.status === "success" ? "ready_for_review" : result.status,
+    knownInformation: result.facts,
+    missingInformation: result.needsInput,
+    evidence: result.sources,
+    nextAction: result.nextAction,
+    warning: result.warnings.join(" "),
+    skill: result.skill
+  };
 });
 
 server.post<{ Params: { planId: string; snapshotId: string } }>("/api/plans/:planId/sources/:snapshotId", async (request, reply) => {

@@ -20,3 +20,4 @@ Implemented slice:
 - `housing-area-recommendation` `0.1.0`: first access-oriented slice that explains accommodation candidates relative to a selected Plan anchor. It does not claim a complete neighborhood recommendation until multi-anchor routes and preferences exist.
 - `transport-planner` `0.1.0`: chooses a preliminary Plan transport mode from normalized Amap route facts and confirmed Plan context. It has no fixed walking-distance threshold and leaves every Amap handoff incomplete until the user confirms otherwise.
 - `weather-and-packing` `0.1.0`: turns normalized QWeather observations and short forecasts into source-bound rain, warmth, heat, and UV packing prompts. Reminder-date guidance uses only an exact date match.
+- `policy-applicability` `0.1.0`: checks whether minimized user/Plan facts and a current approved NIA evidence snapshot are ready for separate review. It does not read policy text or decide eligibility.
