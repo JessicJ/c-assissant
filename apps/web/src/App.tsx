@@ -408,6 +408,8 @@ function App() {
               </div>
             </section>
 
+            {workspace.profile.status === "incomplete" ? <section className="card profile-prompt"><div><p className="eyebrow">First-use basics</p><h2>Make China guidance fit you from the start.</h2><p>Add your name, language, nationality, and—only if you are comfortable—your visa or residence status. You can change these later, and you can still create a Plan now.</p></div><button className="primary-button" onClick={() => setView("Profile")}>Set up my basics</button></section> : null}
+
             <section className="grid-two">
               <article className="card next-card">
                 <p className="eyebrow">Next action</p>
