@@ -4,7 +4,7 @@ import landiLogoUrl from "../../../assets/branding/landi-round-otter-earth-icon-
 import type { RuntimeCheck } from "@c-assistant/agent-adapters";
 import { runTransportPlannerSkill, runWeatherAndPackingSkill, type HousingAreaSkillResult, type TransportPlannerSkillResult } from "@c-assistant/china-country-pack";
 import { createAmapDrivingHandoff, createAmapPlaceHandoff } from "@c-assistant/connectors";
-import type { AmapNearbyPlace, AmapPlace, AmapRoute, ConnectorResult, OfficialSourceDefinition, QWeatherWeatherSnapshot, TelegramBotIdentity, TelegramConfiguration } from "@c-assistant/connectors";
+import type { AmapBasicWeatherSnapshot, AmapNearbyPlace, AmapPlace, AmapRoute, ConnectorResult, OfficialSourceDefinition, QWeatherWeatherSnapshot as CompleteWeatherSnapshot, TelegramBotIdentity, TelegramConfiguration } from "@c-assistant/connectors";
 import type { AgentRun, AgentRuntimeKind, PolicyPreparationAssessment, SourceSnapshotWriteResult, Task, WorkspaceSnapshot } from "@c-assistant/core";
 import type { TransportWeatherFact } from "@c-assistant/core/transport";
 
@@ -13,6 +13,8 @@ type RouteMode = AmapRoute["mode"];
 type RouteComparisons = Partial<Record<RouteMode, ConnectorResult<AmapRoute>>>;
 type AccommodationDiscoveryResult = ConnectorResult<AmapNearbyPlace[]> & { skill?: HousingAreaSkillResult };
 type MatchedTransportWeather = TransportWeatherFact & { observedAt: string };
+type UserWeatherSnapshot = CompleteWeatherSnapshot | AmapBasicWeatherSnapshot;
+type QWeatherWeatherSnapshot = UserWeatherSnapshot;
 type ChatMode = "new_plan" | "revise_plan";
 type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
 type LocalConfiguration = {
@@ -83,9 +85,9 @@ function App() {
   const [savingArrival, setSavingArrival] = useState(false);
   const [cancellingReminderTaskId, setCancellingReminderTaskId] = useState<string | null>(null);
   const [weatherLocation, setWeatherLocation] = useState("Shanghai");
-  const [weatherResult, setWeatherResult] = useState<ConnectorResult<QWeatherWeatherSnapshot> | null>(null);
+  const [weatherResult, setWeatherResult] = useState<ConnectorResult<UserWeatherSnapshot> | null>(null);
   const [checkingWeather, setCheckingWeather] = useState(false);
-  const [planWeather, setPlanWeather] = useState<{ planId: string; result: ConnectorResult<QWeatherWeatherSnapshot> } | null>(null);
+  const [planWeather, setPlanWeather] = useState<{ planId: string; result: ConnectorResult<UserWeatherSnapshot> } | null>(null);
   const [checkingPlanWeather, setCheckingPlanWeather] = useState(false);
   const [runtimeChecks, setRuntimeChecks] = useState<RuntimeCheck[]>([]);
   const [configuration, setConfiguration] = useState<LocalConfiguration | null>(null);
@@ -674,7 +676,7 @@ function App() {
     try {
       setCheckingWeather(true);
       const response = await fetch(`/api/weather?${new URLSearchParams({ location: weatherLocation, language: "en" })}`);
-      setWeatherResult((await response.json()) as ConnectorResult<QWeatherWeatherSnapshot>);
+      setWeatherResult((await response.json()) as ConnectorResult<UserWeatherSnapshot>);
     } catch {
       setWeatherResult({ status: "unavailable", provider: "qweather", observedAt: new Date().toISOString(), failure: { code: "network_error", message: "QWeather could not be reached right now.", retryable: true } });
     } finally {
@@ -686,7 +688,7 @@ function App() {
     try {
       setCheckingPlanWeather(true);
       const response = await fetch(`/api/weather?${new URLSearchParams({ location, language: "en" })}`);
-      setPlanWeather({ planId, result: (await response.json()) as ConnectorResult<QWeatherWeatherSnapshot> });
+      setPlanWeather({ planId, result: (await response.json()) as ConnectorResult<UserWeatherSnapshot> });
     } catch {
       setPlanWeather({ planId, result: { status: "unavailable", provider: "qweather", observedAt: new Date().toISOString(), failure: { code: "network_error", message: "QWeather could not be reached right now.", retryable: true } } });
     } finally {
@@ -949,7 +951,7 @@ function SettingsView({ workspace, onSaveProfile, configuration, configurationFo
       <p className="connector-message">A changed page needs review. It is not, by itself, a policy change or a personal eligibility result.</p>
     </section>
     <section className="card settings-view"><p className="eyebrow">Connection status</p><h2>Services are separated from the product UI</h2><div className="status-grid">{Object.entries(workspace.system).map(([name, status]) => <div key={name}><span>{name}</span><strong>{status.replaceAll("_", " ")}</strong></div>)}<div><span>Telegram</span><strong>{telegramPairing?.state === "paired" ? "paired" : telegramConfigured ? "configured" : telegramStatus?.status === "not_configured" ? "token needed" : telegramStatus?.status ?? "checking"}</strong></div></div><p>Plan drafting starts only after you press its explicit button. Telegram starts with a private, user-owned pairing step.</p></section>
-    <section className="card weather-card"><p className="eyebrow">QWeather facts</p><h2>Check what the destination weather reports.</h2><div className="amap-search"><input value={weatherLocation} onChange={(event) => setWeatherLocation(event.target.value)} aria-label="Check destination weather" placeholder="City or region" /><button className="primary-button" disabled={checkingWeather || !weatherLocation.trim()} onClick={() => void onCheckWeather()}>{checkingWeather ? "Checking…" : "Check weather"}</button></div>{weatherResult ? <WeatherResults result={weatherResult} /> : <p>Weather is a changing fact, not a promise. Landi will use it for cautious packing and route suggestions after a Plan is confirmed.</p>}</section>
+    <section className="card weather-card"><p className="eyebrow">Weather facts</p><h2>Check what the destination weather reports.</h2><div className="amap-search"><input value={weatherLocation} onChange={(event) => setWeatherLocation(event.target.value)} aria-label="Check destination weather" placeholder="City or region" /><button className="primary-button" disabled={checkingWeather || !weatherLocation.trim()} onClick={() => void onCheckWeather()}>{checkingWeather ? "Checking…" : "Check weather"}</button></div>{weatherResult ? <WeatherResults result={weatherResult} /> : <p>QWeather is preferred for complete weather and cautious advice. If it is unavailable, Amap may provide display-only basic facts without inventing missing precipitation, UV, or feels-like values.</p>}</section>
     <section className="card telegram-card"><p className="eyebrow">Telegram bot</p><h2>Connect your private Telegram account</h2>{telegramConfigured ? <><p>Verification makes one safe identity request. It does not read messages or send a notification.</p><button className="secondary-button" disabled={verifyingTelegram} onClick={() => void onVerifyTelegram()}>{verifyingTelegram ? "Verifying…" : "Verify Telegram bot"}</button><TelegramPairing pairing={telegramPairing} busy={pairingTelegram} disconnecting={disconnectingTelegram} onStart={onStartTelegramPairing} onComplete={onCompleteTelegramPairing} onDisconnect={onDisconnectTelegram} /></> : <p>Add <code>TELEGRAM_BOT_TOKEN</code> to the local <code>.env</code> file, then restart the local service. The token is not shown in this workspace.</p>}{telegramVerification ? <TelegramVerification result={telegramVerification} /> : null}</section>
   </section>;
 }
@@ -973,6 +975,10 @@ function PlanWeather({ plan, result, checking, onCheck }: { plan: WorkspaceSnaps
 
 function WeatherResults({ result }: { result: ConnectorResult<QWeatherWeatherSnapshot> }) {
   if (result.status !== "available" || !result.data) return <p className="connector-message">{result.failure?.message ?? "QWeather is not available."} <code>{result.failure?.code}</code></p>;
+  if (isAmapWeather(result.data)) {
+    const fallback = result.data;
+    return <div className="weather-results"><div className="weather-now"><strong>{fallback.location.name}{fallback.location.province ? ` · ${fallback.location.province}` : ""}</strong><span>{fallback.current.condition} · {fallback.current.temperatureC}°C · humidity {fallback.current.humidityPercent}%</span><small>Observed {fallback.current.observedAt} · basic Amap fallback</small></div><div className="weather-days">{fallback.daily.map((day) => <div key={day.date}><strong>{day.date}</strong><span>{day.conditionDay} / {day.conditionNight}</span><span>{day.lowC}–{day.highC}°C</span><small>Precipitation and UV unavailable</small></div>)}</div><p className="connector-message">{fallback.limitations.join(" ")}</p><a className="source-link weather-source" href={fallback.attributionUrl} target="_blank" rel="noreferrer"><strong>Weather source</strong><span>Open Amap API documentation</span></a></div>;
+  }
   const { current, daily, location } = result.data;
   const skill = runWeatherAndPackingSkill({ locationName: location.name, current, daily, retrievedAt: result.data.retrievedAt, ...(result.data.attributionUrl ? { attributionUrl: result.data.attributionUrl } : {}) });
   const sourceUrl = skill.sources[0]?.url;
@@ -1090,10 +1096,14 @@ function formatRouteFact(route: AmapRoute): string {
 }
 
 function weatherForExpectedArrival(arrival: WorkspaceSnapshot["activePlan"]["configuration"]["arrival"], result: ConnectorResult<QWeatherWeatherSnapshot> | null): MatchedTransportWeather | null {
-  if (!arrival.expectedAtLocal || result?.status !== "available" || !result.data) return null;
+  if (!arrival.expectedAtLocal || result?.status !== "available" || !result.data || isAmapWeather(result.data)) return null;
   const arrivalDate = arrival.expectedAtLocal.slice(0, 10);
   const forecast = result.data.daily.find((day) => day.date === arrivalDate);
   return forecast ? { condition: forecast.conditionDay, precipitationMm: forecast.precipitationMm, observedAt: result.data.retrievedAt } : null;
+}
+
+function isAmapWeather(snapshot: UserWeatherSnapshot): snapshot is AmapBasicWeatherSnapshot {
+  return "source" in snapshot && snapshot.source === "amap";
 }
 
 function routePlaceFromAccommodation(accommodation: WorkspaceSnapshot["activePlan"]["configuration"]["accommodation"]): AmapPlace | null {
