@@ -114,7 +114,7 @@ test("SQLite persists the selected Plan runtime without storing any credentials"
   const updated = store.updateRuntimeSelection({ kind: "claude-code" });
   assert.equal(updated.runtime.selectedKind, "claude-code");
   assert.equal(updated.inbox[0]?.title, "Plan runtime selected");
-  assert.match(updated.inbox[0]?.body ?? "", /never stored by C-assistant/i);
+  assert.match(updated.inbox[0]?.body ?? "", /never stored by Landi/i);
   store.close();
 });
 

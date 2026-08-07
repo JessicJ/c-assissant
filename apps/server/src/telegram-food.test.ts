@@ -33,5 +33,5 @@ test("nearby food is presented as Amap facts with user handoff", () => {
 
 test("empty nearby food does not imply a fixed search radius", () => {
   const result = formatTelegramNearbyFood({ partySize: 1, places: [], result: runFoodNearbySkill({ partySize: 1, candidates: [], observedAt: "2026-08-07T00:00:00.000Z" }) });
-  assert.match(result.text, /No distance limit was imposed by C-assistant/);
+  assert.match(result.text, /No distance limit was imposed by Landi/);
 });

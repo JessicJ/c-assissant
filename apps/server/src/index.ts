@@ -489,7 +489,7 @@ server.post<{ Body: { code?: string } }>("/api/connectors/telegram/pairing/compl
       ...(startUpdate.username ? { username: startUpdate.username } : {})
     });
     store.advanceTelegramUpdateOffset(startUpdate.updateId + 1);
-    const receipt = await telegram.sendMessage({ chatId: startUpdate.chatId, text: "C-assistant is connected to this Telegram account. You will control future reminders and actions from your Plan. Send /profile whenever you want to complete or change your basic long-term settings." });
+    const receipt = await telegram.sendMessage({ chatId: startUpdate.chatId, text: "Landi is connected to this Telegram account. You will control future reminders and actions from your Plan. Send /profile whenever you want to complete or change your basic long-term settings." });
     return { ...paired, confirmationMessageSent: receipt.status === "available" };
   } catch (error) {
     return reply.code(400).send({ error: error instanceof Error ? error.message : "Telegram could not be paired." });
@@ -630,7 +630,7 @@ async function pollTelegram(): Promise<void> {
         if (completedTaskId && update.callbackId) {
           const completed = store.completeReadyTask(store.getWorkspace().activePlan.id, completedTaskId);
           await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: completed ? "Task marked complete." : "That task is not ready to complete." });
-          if (completed) await telegram.sendMessage({ chatId: pairing.binding.chatId, text: `Completed by your confirmation: ${completed.title}\n\nNo external completion was inferred by C-assistant.` });
+          if (completed) await telegram.sendMessage({ chatId: pairing.binding.chatId, text: `Completed by your confirmation: ${completed.title}\n\nNo external completion was inferred by Landi.` });
         }
         continue;
       }
@@ -865,7 +865,7 @@ async function requestTelegramArrivalLocation(chatId: string, intro: string): Pr
   if (existing?.locationReceivedAt || (activeIntent?.purpose === "arrival_route" && activeIntent.planId === planId)) return;
   requestingArrivalLocation = true;
   try {
-    const receipt = await telegram.sendMessage({ chatId, text: `${intro} C-assistant will use it only for this interaction and will not save it to your Profile.`, replyMarkup: { keyboard: [[{ text: "Share current location", request_location: true }]], resize_keyboard: true, one_time_keyboard: true } });
+    const receipt = await telegram.sendMessage({ chatId, text: `${intro} Landi will use it only for this interaction and will not save it to your Profile.`, replyMarkup: { keyboard: [[{ text: "Share current location", request_location: true }]], resize_keyboard: true, one_time_keyboard: true } });
     if (receipt.status === "available") {
       store.markTelegramArrivalLocationRequested(planId, new Date().toISOString());
       store.startTelegramLocationIntent({ purpose: "arrival_route", planId });
@@ -911,7 +911,7 @@ async function sendTelegramCommandReplies(chatId: string, replies: TelegramComma
 async function telegramCommandResponse(text: string | undefined): Promise<TelegramCommandReply[] | undefined> {
   const command = parseTelegramCommand(text);
   if (command.type === "empty") return undefined;
-  if (command.type === "help") return [{ text: "C-assistant is connected. Send a normal message to create or revise a Plan draft with your selected local runtime, or use:\n/plan — show the current Plan and confirmation control\n/prepare — prepare the current draft with China Pack sources and Skills\n/new <what you need to do> — create a separate Plan draft\n/profile — review or change your basic Profile\n/weather — check current weather for the Plan location\n/food — find nearby food after an explicit location share\n/help — show this help\n\nReview the complete Plan in Telegram or Web before confirming it. Bookings and payments are not enabled." }];
+  if (command.type === "help") return [{ text: "Landi is connected. Send a normal message to create or revise a Plan draft with your selected local runtime, or use:\n/plan — show the current Plan and confirmation control\n/prepare — prepare the current draft with China Pack sources and Skills\n/new <what you need to do> — create a separate Plan draft\n/profile — review or change your basic Profile\n/weather — check current weather for the Plan location\n/food — find nearby food after an explicit location share\n/help — show this help\n\nReview the complete Plan in Telegram or Web before confirming it. Bookings and payments are not enabled." }];
   if (command.type === "plan") {
     const plan = store.getWorkspace().activePlan;
     const replyMarkup = telegramPlanConfirmationMarkup(plan);
@@ -1022,8 +1022,8 @@ async function telegramCommandResponse(text: string | undefined): Promise<Telegr
       generatingPlan = false;
     }
   }
-  if (command.type === "start") return [{ text: "This Telegram account is already connected to C-assistant. Send /help to see available commands." }];
-  return [{ text: "That command is not available yet. Send /help to see what C-assistant can do." }];
+  if (command.type === "start") return [{ text: "This Telegram account is already connected to Landi. Send /help to see available commands." }];
+  return [{ text: "That command is not available yet. Send /help to see what Landi can do." }];
 }
 
 function telegramPlanReplies(plan: ReturnType<SqliteWorkspaceStore["getWorkspace"]>["activePlan"], intro?: string): TelegramCommandReply[] {

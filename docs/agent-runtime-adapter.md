@@ -1,6 +1,6 @@
 # Agent Runtime Adapter
 
-C-assistant may run on either Codex or Claude Code. Core treats them as replaceable execution runtimes behind one contract.
+Landi may run on either Codex or Claude Code. Core treats them as replaceable execution runtimes behind one contract.
 
 ## Ownership boundary
 
@@ -13,7 +13,7 @@ Core owns:
 - persistence and audit records;
 - delivery to Telegram and Web.
 
-The selected Agent runtime owns one bounded reasoning run. It does not stay alive as C-assistant's memory, scheduler, gateway, or notification service.
+The selected Agent runtime owns one bounded reasoning run. It does not stay alive as Landi's memory, scheduler, gateway, or notification service.
 
 ## Adapter contract
 
@@ -44,7 +44,7 @@ All outputs must pass the declared schema. Core may ask the same runtime for one
 
 Every Run starts from an explicit context package. The runtime must not be trusted to remember a previous conversation. The package contains only the Profile and Plan fields declared by the relevant Skill contract.
 
-V1 Plan-drafting Runs disable built-in tools and MCP access. A future Agent tool path may call only a local C-assistant MCP Tool Gateway with an allowlist for that Run. In either case, the Agent cannot access:
+V1 Plan-drafting Runs disable built-in tools and MCP access. A future Agent tool path may call only a local Landi MCP Tool Gateway with an allowlist for that Run. In either case, the Agent cannot access:
 
 - the raw SQLite database;
 - Telegram bot tokens;
@@ -62,7 +62,7 @@ Setup in the Web workspace should:
 4. verify authentication with a harmless check;
 5. save only the selected runtime type; health is checked live and is not treated as a credential record.
 
-C-assistant does not collect or store the user's Codex or Claude Code credentials. The current Web workspace detects both CLIs, lets the user select one, and reports its live availability; users complete the runtime's own official login flow outside C-assistant. One runtime is active per instance. If it fails, Core reports the failure and does not silently switch accounts or runtimes.
+Landi does not collect or store the user's Codex or Claude Code credentials. The current Web workspace detects both CLIs, lets the user select one, and reports its live availability; users complete the runtime's own official login flow outside Landi. One runtime is active per instance. If it fails, Core reports the failure and does not silently switch accounts or runtimes.
 
 Implementation references:
 

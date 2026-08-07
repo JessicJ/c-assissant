@@ -4,8 +4,8 @@ This document separates accepted product decisions from questions that still req
 
 ## Accepted decisions
 
-- C-assistant is a regional-assistant ecosystem, with China as the first Country Pack.
-- The name is a temporary codename.
+- Landi is a regional-assistant ecosystem, with China as the first Country Pack.
+- Landi is the confirmed product name.
 - One user runs one instance and authenticates with their own Codex or Claude Code account.
 - Users may self-deploy, ask a friend to deploy, or eventually use a one-click deployment service.
 - Telegram is the only V1 messaging channel; WhatsApp is deferred.
@@ -26,9 +26,8 @@ This document separates accepted product decisions from questions that still req
 
 ## Open items before implementation claims
 
-### Branding and licensing
+### Licensing and governance
 
-- final project and package names;
 - open-source license;
 - public contribution and governance model.
 

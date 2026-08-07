@@ -702,7 +702,7 @@ export class AmapConnector {
 
 /**
  * Creates a device-level handoff only. Opening it is the user's choice, and
- * neither C-assistant nor Amap is asked to hail a ride, pay, or book anything.
+ * neither Landi nor Amap is asked to hail a ride, pay, or book anything.
  * The source coordinates originate from Amap, so `dev=0` marks them as already
  * converted for use by the Amap client URI.
  */
@@ -710,7 +710,7 @@ export function createAmapDrivingHandoff(input: { origin: AmapPlace; destination
   const [originLongitude, originLatitude] = coordinateParts(input.origin.location);
   const [destinationLongitude, destinationLatitude] = coordinateParts(input.destination.location);
   const parameters = new URLSearchParams({
-    sourceApplication: "C-assistant",
+    sourceApplication: "Landi",
     slat: originLatitude,
     slon: originLongitude,
     sname: input.origin.name.slice(0, 80),
@@ -738,7 +738,7 @@ export function createAmapDrivingHandoff(input: { origin: AmapPlace; destination
  */
 export function createAmapPlaceHandoff(input: { place: AmapPlace }): AmapPlaceHandoff {
   const parameters = new URLSearchParams({
-    src: "C-assistant",
+    src: "Landi",
     callnative: "1"
   });
   if (input.place.id) {
@@ -768,7 +768,7 @@ export function createAmapNavigationHandoff(input: { origin: AmapPlace; destinat
     to: `${input.destination.location},${input.destination.name.slice(0, 80)}`,
     mode,
     policy: input.transport === "driving" ? "1" : "0",
-    src: "C-assistant",
+    src: "Landi",
     callnative: "1"
   });
   return {

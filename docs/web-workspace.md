@@ -1,6 +1,6 @@
 # Web Workspace
 
-The Web workspace is C-assistant's desktop product surface. It replaces a desktop client; it is not an engineering dashboard.
+The Web workspace is Landi's desktop product surface. It replaces a desktop client; it is not an engineering dashboard.
 
 ## Navigation
 

@@ -544,7 +544,7 @@ export class SqliteWorkspaceStore {
         id: `task-reminder-failed-${input.planId}-${input.reminderKey}`,
         tone: "attention",
         title: `Reminder could not be sent${task ? `: ${task.title}` : ""}`,
-        body: `C-assistant stopped after ${row.attempt_count} delivery attempt${row.attempt_count === 1 ? "" : "s"}. Review the current Plan; no external action was performed.`,
+        body: `Landi stopped after ${row.attempt_count} delivery attempt${row.attempt_count === 1 ? "" : "s"}. Review the current Plan; no external action was performed.`,
         timestamp: "Just now"
       });
       this.database.exec("COMMIT");
@@ -901,7 +901,7 @@ export class SqliteWorkspaceStore {
       id: `runtime-selected-${input.kind}-${Date.now()}`,
       tone: "notice",
       title: "Plan runtime selected",
-      body: `${runtimeDisplayName(input.kind)} is selected for future Plan drafts. Its login remains in the local CLI and is never stored by C-assistant.`,
+      body: `${runtimeDisplayName(input.kind)} is selected for future Plan drafts. Its login remains in the local CLI and is never stored by Landi.`,
       timestamp: "Just now"
     });
     return this.getWorkspace();
@@ -1111,7 +1111,7 @@ export class SqliteWorkspaceStore {
       id: `transport-preference-${planId}-${Date.now()}`,
       tone: "notice",
       title: "Transport preference saved in this Plan",
-      body: input.preference === "plan_recommended" ? "C-assistant will choose a transport approach from the Plan context when that capability is connected." : `This Plan now prefers ${input.preference.replaceAll("_", " ")}.`,
+      body: input.preference === "plan_recommended" ? "Landi will choose a transport approach from the Plan context when that capability is connected." : `This Plan now prefers ${input.preference.replaceAll("_", " ")}.`,
       timestamp: "Just now"
     });
     return this.getWorkspace();
@@ -1174,7 +1174,7 @@ export class SqliteWorkspaceStore {
       applied_at TEXT NOT NULL
     );`);
     const existingVersion = (this.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number | null } | undefined)?.version ?? 0;
-    if (existingVersion > CURRENT_SCHEMA_VERSION) throw new Error(`This C-assistant build supports schema ${CURRENT_SCHEMA_VERSION}, but the workspace uses schema ${existingVersion}.`);
+    if (existingVersion > CURRENT_SCHEMA_VERSION) throw new Error(`This Landi build supports schema ${CURRENT_SCHEMA_VERSION}, but the workspace uses schema ${existingVersion}.`);
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS profiles (
         id INTEGER PRIMARY KEY CHECK (id = 1),

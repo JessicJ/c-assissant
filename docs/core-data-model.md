@@ -102,7 +102,7 @@ A Task is an executable or trackable unit, not just checklist text.
 ### Ownership
 
 ```text
-assistant   C-assistant can complete it
+assistant   Landi can complete it
 user        the user must complete it
 external    a third-party service or real-world action completes it
 ```

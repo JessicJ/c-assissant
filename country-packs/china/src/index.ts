@@ -65,7 +65,7 @@ export function runFoodNearbySkill(input: { partySize?: number; candidates: Food
   const valid = input.candidates.filter(isValidCandidate);
   const facts = valid.slice(0, 5).map((candidate, index) => ({ ...candidate, position: index + 1 }));
   const warnings = [
-    "Provider order is preserved; C-assistant has not independently ranked these places.",
+    "Provider order is preserved; Landi has not independently ranked these places.",
     "Opening Amap does not prove an order, reservation, payment, visit, or completion."
   ];
   if (valid.length !== input.candidates.length) warnings.push("Malformed provider candidates were omitted.");
@@ -656,7 +656,7 @@ export function runDigitalLifeSetupSkill(input: {
   });
   const warnings = [
     "Opening an official link does not prove installation, registration, identity verification, payment readiness, or Task completion.",
-    "C-assistant does not receive passwords, verification codes, payment credentials, or account sessions."
+    "Landi does not receive passwords, verification codes, payment credentials, or account sessions."
   ];
   if (facts.length !== input.items.length || sourceById.size !== input.sources.length) warnings.push("Malformed, duplicate, stale, unapproved, irrelevant, or untraceable setup material was omitted.");
   if (unresolvedCapabilities.length) warnings.push(`No current approved setup guidance is available for: ${unresolvedCapabilities.join(", ")}.`);

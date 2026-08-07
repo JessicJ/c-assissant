@@ -32,7 +32,7 @@
         "Open the official WeChat English website.",
         "Choose the official download option for your phone platform.",
         "Register by following the current instructions shown in the official app.",
-        "Complete only the verification steps shown in the official app, and never share a verification code with C-assistant."
+        "Complete only the verification steps shown in the official app, and never share a verification code with Landi."
       ],
       "sourceId": "wechat-official"
     },
@@ -45,7 +45,7 @@
       "stepsEnglish": [
         "Open the official Amap mobile download page.",
         "Choose the official iOS, Android, Google Play, or HarmonyOS option for your device.",
-        "Install Amap and use C-assistant links only as handoffs; opening a link does not start navigation or a ride."
+        "Install Amap and use Landi links only as handoffs; opening a link does not start navigation or a ride."
       ],
       "sourceId": "amap-mobile-official"
     },
@@ -60,7 +60,7 @@
         "Register with a supported foreign or Chinese mobile number by following the in-app instructions.",
         "Follow the app prompts to bind an eligible international bank card; the issuer may require verification.",
         "Review the product page and service agreement for current card brands, limits, and fees.",
-        "Keep a bank card or RMB cash as a fallback; C-assistant does not verify or perform payment setup."
+        "Keep a bank card or RMB cash as a fallback; Landi does not verify or perform payment setup."
       ],
       "sourceId": "china-working-living-guide-2025"
     }

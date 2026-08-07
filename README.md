@@ -1,8 +1,8 @@
-# C-assistant
+# Landi
 
 [中文说明](README.zh-CN.md)
 
-C-assistant is a working codename for an open-source regional assistant. Its first Country Pack, `china`, is designed to help foreigners prepare for and adapt to life in China through plans, timely reminders, official-source guidance, and actionable handoffs to local services.
+Landi is an open-source regional assistant. Its first Country Pack, `china`, is designed to help foreigners prepare for and adapt to life in China through plans, timely reminders, official-source guidance, and actionable handoffs to local services.
 
 The project is not limited to tourism. The long-term direction includes daily life, study, work, business, banking, legal, and other country-specific capabilities. The Core is country-neutral so additional Country Packs can be added later.
 
@@ -45,7 +45,7 @@ In the paired Telegram chat, complete Plans are paginated without omission and o
 
 `/weather` performs an explicit read-only weather check for the current Plan location through Amap and QWeather. It returns current and dated three-day facts with attribution, but creates no Reminder and stores no weather result in Profile or Plan.
 
-`/food` provides the first Telegram food-discovery loop. It uses the Plan's party size (or asks once), then displays Telegram's explicit location-share control. That location is accepted only for the current Plan and named purpose for 15 minutes, converted for Amap, used once to retrieve nearby restaurant and distance facts, and never persisted. Results preserve Amap's provider order and hand the user to an HTTPS Amap place page; C-assistant does not independently rank, order, reserve, or pay.
+`/food` provides the first Telegram food-discovery loop. It uses the Plan's party size (or asks once), then displays Telegram's explicit location-share control. That location is accepted only for the current Plan and named purpose for 15 minutes, converted for Amap, used once to retrieve nearby restaurant and distance facts, and never persisted. Results preserve Amap's provider order and hand the user to an HTTPS Amap place page; Landi does not independently rank, order, reserve, or pay.
 
 This flow now invokes the first executable internal China Pack Skill, `food-nearby` `0.1.0`, after Amap normalization. The versioned Skill emits structured facts and handoff proposals; Telegram only renders them. The Skill remains internal and cannot be installed separately from the complete China Country Pack.
 
@@ -88,7 +88,7 @@ China Pack now supplies the first source-backed digital-life reference catalog. 
 ```text
 Web / Telegram
   ├── Codex or Claude Code (tool-free structured Plan draft)
-  └── C-assistant Core
+  └── Landi Core
           ├── Skill Runtime → China Country Pack
           └── restricted Connectors → Amap / QWeather / official sources / Telegram
 ```
@@ -147,4 +147,4 @@ docs/                     Architecture and contract documents
 
 ## Scope note
 
-The repository name uses `c-assissant`; the product codename remains `C-assistant` until a final name is selected.
+The product name is Landi. The repository name `c-assissant`, package scope `@c-assistant/*`, environment-variable prefix, and existing database filenames remain compatibility-oriented technical identifiers for now.
