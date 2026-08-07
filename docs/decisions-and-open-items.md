@@ -67,3 +67,5 @@ This document separates accepted product decisions from questions that still req
 ### V1 release gate
 
 V1 should not be called complete until the selected runtime, Amap Connector, Telegram delivery, persistence, scheduler, Web workspace, Plan confirmation, source traceability, and the arrival transport demo work together in a fresh one-user installation.
+
+Implementation status (2026-08-07): the repository satisfies this gate in an isolated, credential-free integration scenario and in component tests. Real-account/device release checks remain for Claude Code login, Telegram delivery, and Amap mobile handoff; those checks require the user's external sessions and are not simulated as successful.

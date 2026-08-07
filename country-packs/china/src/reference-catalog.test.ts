@@ -4,7 +4,7 @@ import test from "node:test";
 
 import type { SourceSnapshot } from "@c-assistant/core";
 
-import { createChinaReferenceCatalog, parseDigitalLifeCatalog } from "./reference-catalog.js";
+import { createChinaReferenceCatalog, listChinaDigitalLifeSourceIds, parseDigitalLifeCatalog } from "./reference-catalog.js";
 
 const snapshot = (sourceId: string, retrievedAt: string, suffix: string): SourceSnapshot => ({
   id: `snapshot-${sourceId}-${suffix}`,
@@ -55,4 +55,5 @@ test("every approved digital-life source is present in the official source regis
     assert.equal(url.protocol, "https:");
     assert.ok(source.allowedDomains.some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`)));
   }
+  assert.deepEqual(listChinaDigitalLifeSourceIds(), catalog.approvedSourceIds);
 });

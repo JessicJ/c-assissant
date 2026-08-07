@@ -34,6 +34,10 @@ export interface ChinaReferenceCatalogResult {
 const digitalLifeCatalog = parseDigitalLifeCatalog(JSON.parse(readFileSync(new URL("../sources/digital-life-catalog.json", import.meta.url), "utf8")) as unknown);
 const allCapabilities: DigitalLifeCapability[] = ["mobile_connectivity", "communication", "map_navigation", "local_payments"];
 
+export function listChinaDigitalLifeSourceIds(): string[] {
+  return [...digitalLifeCatalog.approvedSourceIds];
+}
+
 /** Joins static Country Pack guidance to current immutable source snapshots without passing excerpts. */
 export function createChinaReferenceCatalog(input: {
   snapshots: SourceSnapshot[];

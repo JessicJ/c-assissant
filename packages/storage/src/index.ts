@@ -9,6 +9,7 @@ import {
   createPlanFromRequest,
   createDefaultPlanConfiguration,
   type CreatePlanInput,
+  type CountryPackSkillRun,
   type AgentRuntimeKind,
   type AgentRun,
   type GeneratedPlanDraft,
@@ -101,6 +102,17 @@ interface PlanCompilationRunRow {
   task_count: number;
   reminder_count: number;
   compiled_at: string;
+}
+
+interface CountryPackSkillRunRow {
+  id: string;
+  compilation_run_id: string;
+  plan_id: string;
+  source_plan_version: number;
+  skill_id: string;
+  skill_version: string;
+  status: CountryPackSkillRun["status"];
+  finished_at: string;
 }
 
 interface InboxRow {
@@ -637,7 +649,7 @@ export class SqliteWorkspaceStore {
   }
 
   /** Atomically applies an already authorized Core compilation to the exact current draft version. */
-  saveCompiledPlan(input: { plan: Plan; expectedPlanId: string; expectedVersion: number; audit: PlanCompilationAudit; compiledAt?: string }): WorkspaceSnapshot {
+  saveCompiledPlan(input: { plan: Plan; expectedPlanId: string; expectedVersion: number; audit: PlanCompilationAudit; skillRuns?: Array<Pick<CountryPackSkillRun, "skillId" | "skillVersion" | "status">>; compiledAt?: string }): WorkspaceSnapshot {
     const compiledAt = input.compiledAt ?? new Date().toISOString();
     validateCompiledPlanWrite(input, compiledAt);
     const run: PlanCompilationRun = {
@@ -689,6 +701,12 @@ export class SqliteWorkspaceStore {
         run.reminderCount,
         run.compiledAt
       );
+      const insertSkillRun = this.database.prepare(`INSERT INTO country_pack_skill_runs
+        (id, compilation_run_id, plan_id, source_plan_version, skill_id, skill_version, status, finished_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+      for (const skillRun of input.skillRuns ?? []) {
+        insertSkillRun.run(`run-${randomUUID()}`, run.id, run.planId, run.sourcePlanVersion, skillRun.skillId, skillRun.skillVersion, skillRun.status, compiledAt);
+      }
       this.addInbox({
         id: `plan-compiled-${input.plan.id}-${input.plan.version}`,
         tone: "notice",
@@ -709,6 +727,22 @@ export class SqliteWorkspaceStore {
     return (this.database.prepare(`SELECT id, plan_id, country_pack_id, country_pack_version, composition_skill_id, composition_skill_version,
       source_plan_version, compiled_plan_version, task_count, reminder_count, compiled_at
       FROM plan_compilation_runs ORDER BY compiled_at DESC, rowid DESC LIMIT ?`).all(safeLimit) as unknown as PlanCompilationRunRow[]).map(planCompilationRunFromRow);
+  }
+
+  listRecentCountryPackSkillRuns(limit = 100): CountryPackSkillRun[] {
+    const safeLimit = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), 500) : 100;
+    return (this.database.prepare(`SELECT id, compilation_run_id, plan_id, source_plan_version, skill_id, skill_version, status, finished_at
+      FROM country_pack_skill_runs ORDER BY finished_at DESC, rowid DESC LIMIT ?`).all(safeLimit) as unknown as CountryPackSkillRunRow[]).map((row) => ({
+      id: row.id,
+      kind: "country_pack_skill",
+      compilationRunId: row.compilation_run_id,
+      planId: row.plan_id,
+      sourcePlanVersion: row.source_plan_version,
+      skillId: row.skill_id,
+      skillVersion: row.skill_version,
+      status: row.status,
+      finishedAt: row.finished_at
+    }));
   }
 
   confirmPlan(planId: string): WorkspaceSnapshot {
@@ -936,10 +970,11 @@ export class SqliteWorkspaceStore {
     return { snapshot, ...(previousSnapshot ? { previousSnapshot } : {}), duplicate: false, contentChanged: Boolean(previousSnapshot && previousSnapshot.contentHash !== snapshot.contentHash) };
   }
 
-  /** Adds a saved immutable official snapshot to the current Plan only after an explicit user action. */
+  /** Adds a saved immutable official snapshot to the exact current draft version. */
   linkSourceSnapshotToPlan(planId: string, sourceSnapshotId: string): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
     if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
+    if (workspace.activePlan.status !== "draft") throw new Error("Official evidence can be linked only while the current Plan is a draft.");
     const snapshot = this.database.prepare(`SELECT id, source_id, authority, title_original, url, retrieved_at, content_hash, excerpt
       FROM source_snapshots WHERE id = ?`).get(sourceSnapshotId.trim()) as SourceSnapshotRow | undefined;
     if (!snapshot) throw new Error("The saved official evidence was not found.");
@@ -956,7 +991,8 @@ export class SqliteWorkspaceStore {
       sourceSnapshotId: source.id,
       contentHash: source.contentHash
     }];
-    this.database.prepare("UPDATE plans SET sources_json = ?, version = version + 1 WHERE id = ?").run(JSON.stringify(sources), planId);
+    const updated = this.database.prepare("UPDATE plans SET sources_json = ?, version = version + 1 WHERE id = ? AND version = ? AND status = 'draft' AND is_current = 1").run(JSON.stringify(sources), planId, workspace.activePlan.version) as { changes: number | bigint };
+    if (Number(updated.changes) !== 1) throw new Error("The Plan changed before official evidence could be linked.");
     this.addInbox({
       id: `source-linked-${planId}-${source.id}`,
       tone: "notice",
@@ -1182,6 +1218,17 @@ export class SqliteWorkspaceStore {
         compiled_at TEXT NOT NULL,
         UNIQUE (plan_id, compiled_plan_version)
       );
+      CREATE TABLE IF NOT EXISTS country_pack_skill_runs (
+        id TEXT PRIMARY KEY,
+        compilation_run_id TEXT NOT NULL REFERENCES plan_compilation_runs(id) ON DELETE CASCADE,
+        plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+        source_plan_version INTEGER NOT NULL,
+        skill_id TEXT NOT NULL,
+        skill_version TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('success', 'degraded', 'needs_input', 'blocked', 'failed', 'not_supported')),
+        finished_at TEXT NOT NULL,
+        UNIQUE (compilation_run_id, skill_id)
+      );
       CREATE TABLE IF NOT EXISTS telegram_binding (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         chat_id TEXT NOT NULL,
@@ -1249,6 +1296,7 @@ export class SqliteWorkspaceStore {
       CREATE INDEX IF NOT EXISTS idx_agent_runs_recent ON agent_runs(started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_task_reminder_runs_recent ON task_reminder_runs(started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_plan_compilation_runs_recent ON plan_compilation_runs(compiled_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_country_pack_skill_runs_recent ON country_pack_skill_runs(finished_at DESC);
       CREATE INDEX IF NOT EXISTS idx_telegram_pairing_requests_active ON telegram_pairing_requests(consumed_at, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_telegram_task_reminders_due ON telegram_task_reminder_deliveries(status, next_attempt_at);
       CREATE INDEX IF NOT EXISTS idx_telegram_arrival_checkins_follow_up ON telegram_arrival_checkins(location_requested_at, location_received_at, check_in_sent_at);
@@ -1444,7 +1492,7 @@ function parseTaskReminder(value: string | null): TaskReminder | undefined {
   }
 }
 
-function validateCompiledPlanWrite(input: { plan: Plan; expectedPlanId: string; expectedVersion: number; audit: PlanCompilationAudit }, compiledAt: string): void {
+function validateCompiledPlanWrite(input: { plan: Plan; expectedPlanId: string; expectedVersion: number; audit: PlanCompilationAudit; skillRuns?: Array<Pick<CountryPackSkillRun, "skillId" | "skillVersion" | "status">> }, compiledAt: string): void {
   if (!input.expectedPlanId.trim() || !Number.isInteger(input.expectedVersion) || input.expectedVersion < 1) throw new Error("A compiled Plan write needs an exact expected Plan version.");
   if (input.plan.id !== input.expectedPlanId || input.plan.version !== input.expectedVersion + 1 || input.plan.status !== "draft") throw new Error("The compiled Plan must be the next draft version of the expected Plan.");
   if (!Number.isFinite(Date.parse(compiledAt))) throw new Error("A compiled Plan write needs a valid audit time.");
@@ -1464,6 +1512,10 @@ function validateCompiledPlanWrite(input: { plan: Plan; expectedPlanId: string; 
   if (generatedStage.tasks.some((task) => !originMatchesAudit(task.origin, expectedOrigin))) throw new Error("Every generated Task needs provenance matching the compilation audit.");
   const reminderCount = generatedStage.tasks.filter((task) => task.reminder).length;
   if (input.audit.taskCount !== generatedStage.tasks.length || input.audit.reminderCount !== reminderCount) throw new Error("The compilation audit counts do not match the generated Plan content.");
+  const skillIds = (input.skillRuns ?? []).map((run) => run.skillId);
+  if (new Set(skillIds).size !== skillIds.length || (input.skillRuns ?? []).some((run) => !isStableId(run.skillId) || !isSemver(run.skillVersion) || !["success", "degraded", "needs_input", "blocked", "failed", "not_supported"].includes(run.status))) {
+    throw new Error("The compilation Skill audit contains an invalid or duplicate Skill result.");
+  }
 }
 
 function parsePlanCompilationOrigin(value: string | null | undefined): PlanCompilationOrigin | undefined {

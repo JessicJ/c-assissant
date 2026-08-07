@@ -44,7 +44,7 @@ All outputs must pass the declared schema. Core may ask the same runtime for one
 
 Every Run starts from an explicit context package. The runtime must not be trusted to remember a previous conversation. The package contains only the Profile and Plan fields declared by the relevant Skill contract.
 
-The Agent can call only a local C-assistant MCP Tool Gateway with an allowlist for that Run. It cannot access:
+V1 Plan-drafting Runs disable built-in tools and MCP access. A future Agent tool path may call only a local C-assistant MCP Tool Gateway with an allowlist for that Run. In either case, the Agent cannot access:
 
 - the raw SQLite database;
 - Telegram bot tokens;
@@ -90,7 +90,7 @@ Startup diagnostics check:
 
 - executable presence and supported version range;
 - authentication state;
-- Tool Gateway reachability;
+- Tool Gateway reachability when a future tool-enabled Run is configured;
 - a minimal structured-output Run;
 - writable local storage and scheduler health.
 
@@ -98,7 +98,7 @@ Runtime upgrades are never automatic in V1. The Web workspace tells the user whe
 
 ## Run audit
 
-The current Plan-generation Run record stores the runtime kind, trigger surface, start/finish time, outcome, resulting Plan id when applicable, and a sanitized failure classification. A separate Core-owned Task Reminder Run records minimized scheduler, weather-availability, retry, and Telegram outcome metadata without invoking the Agent runtime. Neither form stores prompts, reminder copy, tool results, raw model or weather output, coordinates, account state, or credentials. Future broader Runs may add purpose, Skill version, minimized input/output hashes, and allowed-tool metadata only after a clear retention policy exists.
+The Plan-generation Run record stores the runtime kind, trigger surface, start/finish time, outcome, resulting Plan id when applicable, and a sanitized failure classification. A separate Core-owned Task Reminder Run records minimized scheduler, weather-availability, retry, and Telegram outcome metadata without invoking the Agent runtime. Successful Country Pack compilation also records the version transition plus one minimized row for each supporting/composite Skill identity, version and status. None stores prompts, reminder copy, tool results, raw model or weather output, coordinates, account state, or credentials.
 
 The shared Plan draft schema also permits an optional Task reminder proposal. It must contain an exact local `YYYY-MM-DDTHH:mm` value, an IANA time zone, a short purpose, and `refreshFacts`. Weather may be declared only when it can materially change the immediate packing, departure, outdoor, or transport decision; documents, apps, payments, policy checks, and other Tasks use an empty list. The prompt forbids inventing missing dates, departure time zones, or unsupported dynamic facts. A proposal remains inert until the complete Plan is reviewed and confirmed; Core then owns the separate Telegram delivery decision.
 

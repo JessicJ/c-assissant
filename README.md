@@ -8,7 +8,7 @@ The project is not limited to tourism. The long-term direction includes daily li
 
 ## Current status
 
-The repository contains the approved V1 architecture baseline plus a first local workflow: a Core HTTP service, a Web workspace, local SQLite persistence, Profile editing for nationality, gender, and China visa/residence status, Plan creation and confirmation, a restricted Amap place, nearby-restaurant, and route-facts Connector, a QWeather current/three-day weather-facts Connector, Codex and Claude Code structured Plan-draft flows, an allowlisted official-source Connector with local evidence snapshots, and safe local Telegram bot configuration/identity verification. The user can select one runtime per local instance; Web and Telegram then use that choice without storing its credentials or silently switching it. It is not yet a personal assistant for real use: source-to-Plan applicability analysis, full reminder scheduling, and external action handoffs beyond Amap routing still need implementation.
+The repository now contains the complete local V1 implementation slice: a Core HTTP service and scheduler, a Web workspace, local SQLite persistence, Profile and Plan editing, Codex/Claude Code Plan drafting, the complete internal China Pack orchestration path, approved official-source refresh and traceability, Amap and QWeather facts, Telegram pairing/Plan review/reminders/location handoff, and explicit Plan activation. The user selects one runtime per instance; neither runtime login credentials nor Connector secrets are stored in domain data or passed to Skills. V1 remains intentionally bounded: it does not decide regulated eligibility from page text, place orders, book accommodation, hail rides, or pay.
 
 ## Run the local demo
 
@@ -35,6 +35,8 @@ The Web workspace also provides a persistent `Ask Agent` panel at the top of Tod
 
 In the paired Telegram chat, complete Plans are paginated without omission and only the final page carries the version-bound confirmation button. Ordinary text revises the current user-created draft; `/new <request>` starts a separate Plan. Revision failure leaves the existing draft unchanged, and stale Runtime results cannot overwrite a Plan that changed while they were running.
 
+`/prepare` runs the current draft through the complete China Country Pack path. It refreshes only approved source IDs when their cache is stale, links current National Immigration Administration evidence to the exact draft, collects normalized Amap/QWeather facts, invokes the seven supporting Skills plus the composite Skill, and atomically saves the next inert draft version. A blocked run returns concise missing details and preserves the existing Plan; a successful run sends the full updated Plan for review and confirmation.
+
 `/profile` lets the paired user complete long-term basics without switching to Web. Text entry is captured only after the user chooses a specific field and expires after 15 minutes; enum fields use allowlisted buttons. Partial setup remains visibly incomplete and does not imply any policy eligibility.
 
 `/weather` performs an explicit read-only weather check for the current Plan location through Amap and QWeather. It returns current and dated three-day facts with attribution, but creates no Reminder and stores no weather result in Profile or Plan.
@@ -59,13 +61,13 @@ The internal `digital-life-setup` `0.1.0` selects only the connectivity, communi
 
 The internal `arrival-preparation` `0.1.0` deduplicates normalized supporting guidance into user-confirmable Task and Reminder proposals. It skips completed work, asks for time only when a critical item needs an absent anchor, and calculates reminders only from offset-qualified departure or arrival timestamps. Core compilation and activation remain separate work.
 
-The first Core compilation boundary is now implemented. China Pack accepts only the exact `arrival-preparation` version/status recorded by a ready composite, converts it to the country-neutral proposal contract, and Core compiles that proposal only against the matching draft Plan version. SQLite can atomically compare and save the next draft version, including Task descriptions, Skill provenance, inert reminders, and a minimized compilation audit; a stale or already activated target is rejected. Server orchestration is not connected to this compiler yet.
+The Core compilation boundary is implemented and connected. China Pack accepts only the exact `arrival-preparation` version/status recorded by a ready composite, converts it to the country-neutral proposal contract, and Core compiles that proposal only against the matching draft Plan version. SQLite atomically saves the next draft version with Task descriptions, inert reminders, compilation provenance, one minimized compilation Run, and eight per-Skill Run records; stale or activated targets are rejected.
 
-The deterministic China arrival orchestrator now runs credential-free normalized inputs through the seven supporting Skills in the declared order, derives preparation items, invokes the composite, creates the China-to-Core proposal, and returns an inert compiled draft. It fails closed when a critical supporting Skill needs input. Connector fact collection, production source catalogs, SQLite save invocation, and Server/Web/Telegram entry points remain separate.
+The deterministic China arrival orchestrator runs credential-free normalized inputs through the seven supporting Skills in the declared order, derives preparation items, invokes the composite, creates the China-to-Core proposal, and returns an inert compiled draft. Server assembles it with source preparation, the production fact collector, atomic persistence, and shared Web/Telegram presentation; it fails closed when a critical source, provider fact, or supporting Skill input is unavailable.
 
-Server now has a credential-free compilation service boundary around that orchestrator. It captures the exact current draft Plan/Profile, requests normalized facts from an injected collector, orchestrates the China proposal, and atomically saves only the matching next draft version. Provider failures, Country Pack gates, and Plan-version races return separate blocked outcomes without sending messages or exposing raw Connector errors. The production fact collector and user-facing trigger are not connected yet.
+Web exposes this workflow on the Plan screen, and Telegram exposes it through `/prepare`. Both show a complete updated Plan only after a successful atomic save; no Task or Reminder becomes active until the user confirms that exact Plan version.
 
-The first production China fact collector is also implemented. It resolves the Plan destination through Amap, fetches QWeather facts and nearby accommodation candidates, and obtains driving, walking, and transit facts only when this Plan already contains a chosen accommodation coordinate. It includes only immutable official snapshots explicitly linked to the current Plan and accepts food/digital-life reference catalogs as injected Country Pack data. It does not invent a route origin, use a fixed nearby radius, read environment variables, or expose provider failure text. Server construction and the Web/Telegram trigger remain unconnected.
+The production China fact collector resolves the Plan destination through Amap, fetches QWeather facts and nearby accommodation candidates, and obtains driving, walking, and transit facts only when this Plan already contains a chosen accommodation coordinate. It includes only immutable official snapshots explicitly linked to the current Plan and accepts food/digital-life reference catalogs as injected Country Pack data. It does not invent a route origin, use a fixed nearby radius, read environment variables, or expose provider failure text.
 
 China Pack now supplies the first source-backed digital-life reference catalog. It covers China Mobile SIM setup, WeChat, Amap, and Alipay across connectivity, communication, navigation, and payment preparation. Catalog text is inert: the runtime loader emits an item only when an approved current snapshot exists, chooses the newest snapshot per source, and strips retained page excerpts before Skill invocation.
 
@@ -81,16 +83,10 @@ China Pack now supplies the first source-backed digital-life reference catalog. 
 
 ```text
 Web / Telegram
-      ↓
-C-assistant Core
-      ↓
-Skill Runtime
-      ↓
-Codex or Claude Code
-      ↓
-C-assistant Tool Gateway
-      ↓
-Amap / Official Sources / External Handoffs
+  ├── Codex or Claude Code (tool-free structured Plan draft)
+  └── C-assistant Core
+          ├── Skill Runtime → China Country Pack
+          └── restricted Connectors → Amap / QWeather / official sources / Telegram
 ```
 
 ## V1 principles
@@ -143,7 +139,7 @@ docs/                     Architecture and contract documents
 - React and Vite for the Web workspace
 - HTTP plus Server-Sent Events for Web updates
 - Telegram Bot API for mobile interaction
-- MCP-based local Tool Gateway for controlled Agent tools
+- A future MCP-based local Tool Gateway for controlled Agent tools; V1 keeps Agent drafting tool-free and runs Connectors through Core
 
 ## Scope note
 
