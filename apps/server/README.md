@@ -6,6 +6,7 @@ Current endpoints:
 
 - `GET /health`
 - `GET /api/workspace`
+- `GET /api/maintenance`, `POST /api/backups` for schema/integrity status and a verified private SQLite snapshot
 - `GET /api/configuration`, `PUT /api/configuration` for write-only local Connector setup (secret values are never returned)
 - `POST /api/plans/:planId/china/prepare`
 - `POST /api/plans/:planId/confirm`
