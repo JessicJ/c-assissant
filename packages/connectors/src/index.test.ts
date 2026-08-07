@@ -118,12 +118,46 @@ test("Amap geocoding resolves a city fact without exposing the key", async () =>
     apiKey: "test-key",
     fetcher: async (input) => {
       assert.match(String(input), /\/v3\/geocode\/geo/);
-      return new Response(JSON.stringify({ status: "1", geocodes: [{ formatted_address: "Shanghai City", location: "121.4737,31.2304", province: "Shanghai", city: "Shanghai", district: "Huangpu", level: "city" }] }));
+      return new Response(JSON.stringify({ status: "1", geocodes: [{ formatted_address: "Shanghai City", location: "121.4737,31.2304", adcode: "310101", province: "Shanghai", city: "Shanghai", district: "Huangpu", level: "city" }] }));
     }
   });
   const result = await connector.geocodeAddress({ address: "Shanghai" });
   assert.equal(result.status, "available");
   assert.equal(result.data?.location, "121.4737,31.2304");
+  assert.equal(result.data?.adcode, "310101");
+});
+
+test("Amap basic weather preserves only returned facts and never exposes its key", async () => {
+  const requestUrls: string[] = [];
+  const connector = new AmapConnector({
+    apiKey: "test-key",
+    fetcher: async (input) => {
+      requestUrls.push(String(input));
+      return new Response(JSON.stringify({
+        status: "1",
+        lives: [{ province: "上海", city: "黄浦区", adcode: "310101", weather: "多云", temperature: "30", winddirection: "东", windpower: "3", humidity: "68", reporttime: "2026-08-08 11:00:00" }],
+        forecasts: [{ casts: [{ date: "2026-08-08", dayweather: "多云", nightweather: "晴", daytemp: "32", nighttemp: "26", daywind: "东", nightwind: "东南", daypower: "3", nightpower: "2" }] }]
+      }));
+    }
+  });
+
+  const result = await connector.basicWeather({ adcode: "310101", locationName: "Shanghai" });
+  assert.equal(result.status, "available");
+  assert.equal(result.data?.source, "amap");
+  assert.equal(result.data?.current.temperatureC, 30);
+  assert.equal(result.data?.daily[0]?.highC, 32);
+  assert.equal(requestUrls.length, 2);
+  assert.ok(requestUrls.every((requestUrl) => new URL(requestUrl).pathname === "/v3/weather/weatherInfo"));
+  assert.deepEqual(requestUrls.map((requestUrl) => new URL(requestUrl).searchParams.get("extensions")).sort(), ["all", "base"]);
+  assert.doesNotMatch(JSON.stringify(result), /test-key/);
+  assert.equal("precipitationMm" in (result.data?.current ?? {}), false);
+});
+
+test("Amap classifies official daily quota responses as rate limited", async () => {
+  const connector = new AmapConnector({ apiKey: "test-key", fetcher: async () => new Response(JSON.stringify({ status: "0", infocode: "10003", info: "DAILY_QUERY_OVER_LIMIT" })) });
+  const result = await connector.basicWeather({ adcode: "310101", locationName: "Shanghai" });
+  assert.equal(result.status, "rate_limited");
+  assert.equal(result.failure?.retryable, true);
 });
 
 test("Amap converts a GPS coordinate before using it as an Amap route point", async () => {
@@ -150,12 +184,13 @@ test("Amap reverse geocoding returns the live city code needed for public transi
     apiKey: "test-key",
     fetcher: async (input) => {
       requestUrl = String(input);
-      return new Response(JSON.stringify({ status: "1", regeocode: { formatted_address: "Shanghai Huangpu District", addressComponent: { city: [], citycode: "021", district: "Huangpu" } } }));
+      return new Response(JSON.stringify({ status: "1", regeocode: { formatted_address: "Shanghai Huangpu District", addressComponent: { city: [], citycode: "021", adcode: "310101", district: "Huangpu" } } }));
     }
   });
   const result = await connector.reverseGeocode({ location: "121.4700001,31.2300001" });
   const url = new URL(requestUrl);
   assert.equal(result.data?.cityCode, "021");
+  assert.equal(result.data?.adcode, "310101");
   assert.equal(result.data?.district, "Huangpu");
   assert.equal(url.pathname, "/v3/geocode/regeo");
   assert.equal(url.searchParams.get("location"), "121.470000,31.230000");

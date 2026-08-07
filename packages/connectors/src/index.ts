@@ -170,6 +170,8 @@ export interface AmapRoute {
 export interface AmapGeocodedPlace {
   formattedAddress: string;
   location: string;
+  /** Amap administrative code, required by its basic weather endpoint. */
+  adcode?: string;
   province: string;
   city: string;
   district: string;
@@ -181,6 +183,7 @@ export interface AmapReverseGeocodedPlace {
   formattedAddress: string;
   city: string;
   cityCode: string;
+  adcode?: string;
   district: string;
 }
 
@@ -244,6 +247,7 @@ interface AmapResponse {
   geocodes?: Array<{
     formatted_address?: string;
     location?: string;
+    adcode?: string;
     province?: string | string[];
     city?: string | string[];
     district?: string | string[];
@@ -254,10 +258,49 @@ interface AmapResponse {
     addressComponent?: {
       city?: string | string[];
       citycode?: string;
+      adcode?: string;
       district?: string | string[];
     };
   };
   locations?: string;
+  lives?: Array<{
+    province?: string;
+    city?: string;
+    adcode?: string;
+    weather?: string;
+    temperature?: string;
+    winddirection?: string;
+    windpower?: string;
+    humidity?: string;
+    reporttime?: string;
+  }>;
+  forecasts?: Array<{
+    province?: string;
+    city?: string;
+    adcode?: string;
+    reporttime?: string;
+    casts?: Array<{
+      date?: string;
+      dayweather?: string;
+      nightweather?: string;
+      daytemp?: string;
+      nighttemp?: string;
+      daywind?: string;
+      nightwind?: string;
+      daypower?: string;
+      nightpower?: string;
+    }>;
+  }>;
+}
+
+export interface AmapBasicWeatherSnapshot {
+  source: "amap";
+  location: { name: string; province: string; adcode: string };
+  current: { observedAt: string; condition: string; temperatureC: number; humidityPercent: number; windDirection: string; windScale: string };
+  daily: Array<{ date: string; conditionDay: string; conditionNight: string; highC: number; lowC: number; windDirectionDay: string; windDirectionNight: string; windScaleDay: string; windScaleNight: string }>;
+  retrievedAt: string;
+  attributionUrl: "https://lbs.amap.com/api/webservice/guide/api/weatherinfo";
+  limitations: string[];
 }
 
 export class AmapConnector {
@@ -520,10 +563,74 @@ export class AmapConnector {
       data: {
         formattedAddress: place.formatted_address,
         location: place.location,
+        ...(place.adcode?.trim() ? { adcode: place.adcode.trim() } : {}),
         province: firstText(place.province),
         city,
         district: firstText(place.district),
         level: place.level ?? ""
+      }
+    };
+  }
+
+  /**
+   * Returns Amap's lower-detail city weather as a user-visible fallback only.
+   * Missing precipitation, UV, and feels-like facts are never synthesized.
+   */
+  async basicWeather(input: { adcode: string; locationName: string }): Promise<ConnectorResult<AmapBasicWeatherSnapshot>> {
+    const adcode = input.adcode.trim();
+    const locationName = input.locationName.trim();
+    if (!/^\d{6}$/.test(adcode) || !locationName) return this.failure("unsupported", "Amap basic weather needs a resolved six-digit administrative code and location name.", "invalid_weather_location", false);
+    if (!this.apiKey) return this.failure("not_configured", "Amap is not configured on this instance.", "not_configured", false);
+    const baseParams = new URLSearchParams({ key: this.apiKey, city: adcode, extensions: "base", output: "JSON" });
+    const forecastParams = new URLSearchParams({ key: this.apiKey, city: adcode, extensions: "all", output: "JSON" });
+    const [baseResponse, forecastResponse] = await Promise.all([
+      this.request("/v3/weather/weatherInfo", baseParams),
+      this.request("/v3/weather/weatherInfo", forecastParams)
+    ]);
+    if (!baseResponse.ok) return baseResponse.failure;
+    if (!forecastResponse.ok) return forecastResponse.failure;
+    if (baseResponse.payload.status !== "1") return this.fromAmapFailure(baseResponse.payload);
+    if (forecastResponse.payload.status !== "1") return this.fromAmapFailure(forecastResponse.payload);
+    const current = baseResponse.payload.lives?.[0];
+    const forecast = forecastResponse.payload.forecasts?.[0];
+    if (!current?.weather || !current.reporttime || !isNumericString(current.temperature) || !isNumericString(current.humidity)) {
+      return this.failure("degraded", "Amap did not return usable current weather facts.", "invalid_basic_weather", true);
+    }
+    const daily = (forecast?.casts ?? []).flatMap((day) => {
+      if (!day.date || !day.dayweather || !day.nightweather || !isNumericString(day.daytemp) || !isNumericString(day.nighttemp)) return [];
+      return [{
+        date: day.date,
+        conditionDay: day.dayweather,
+        conditionNight: day.nightweather,
+        highC: Number(day.daytemp),
+        lowC: Number(day.nighttemp),
+        windDirectionDay: day.daywind ?? "",
+        windDirectionNight: day.nightwind ?? "",
+        windScaleDay: day.daypower ?? "",
+        windScaleNight: day.nightpower ?? ""
+      }];
+    });
+    if (!daily.length) return this.failure("degraded", "Amap did not return a usable basic forecast.", "invalid_basic_forecast", true);
+    const retrievedAt = new Date().toISOString();
+    return {
+      status: "available",
+      provider: "amap",
+      observedAt: retrievedAt,
+      data: {
+        source: "amap",
+        location: { name: current.city?.trim() || locationName, province: current.province?.trim() ?? "", adcode },
+        current: {
+          observedAt: current.reporttime,
+          condition: current.weather,
+          temperatureC: Number(current.temperature),
+          humidityPercent: Number(current.humidity),
+          windDirection: current.winddirection ?? "",
+          windScale: current.windpower ?? ""
+        },
+        daily,
+        retrievedAt,
+        attributionUrl: "https://lbs.amap.com/api/webservice/guide/api/weatherinfo",
+        limitations: ["Amap basic weather does not provide precipitation amount, UV index, or feels-like temperature here.", "This fallback is display-only and is not used for packing or transport decisions."]
       }
     };
   }
@@ -562,6 +669,7 @@ export class AmapConnector {
         formattedAddress,
         city: firstText(addressComponent?.city),
         cityCode,
+        ...(addressComponent?.adcode?.trim() ? { adcode: addressComponent.adcode.trim() } : {}),
         district: firstText(addressComponent?.district)
       }
     };
@@ -583,7 +691,7 @@ export class AmapConnector {
 
   private fromAmapFailure(payload: AmapResponse): ConnectorResult<never> {
     const code = payload.infocode ?? "amap_error";
-    const status = code === "10001" || code === "10002" || code === "10003" ? "unauthorized" : code === "10021" ? "rate_limited" : "degraded";
+    const status = code === "10001" || code === "10002" ? "unauthorized" : code === "10003" || code === "10004" || code === "10021" ? "rate_limited" : "degraded";
     return this.failure(status, "Amap returned an error. Check the configured Web Service API key and its enabled products.", code, status === "rate_limited");
   }
 

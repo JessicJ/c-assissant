@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-adapters";
-import { AmapConnector, OfficialSourceConnector, QWeatherConnector, TelegramConnector, type AmapPlace, type AmapRoute, type TelegramReplyMarkup } from "@c-assistant/connectors";
+import { AmapConnector, OfficialSourceConnector, QWeatherConnector, TelegramConnector, type AmapGeocodedPlace, type AmapPlace, type AmapRoute, type ConnectorResult, type TelegramReplyMarkup } from "@c-assistant/connectors";
 import { runFoodNearbySkill, runHousingAreaRecommendationSkill, type PolicyApplicabilitySkillResult } from "@c-assistant/china-country-pack";
 import { chinaSkillRegistry } from "@c-assistant/china-country-pack/registry";
 import { createChinaReferenceCatalog } from "@c-assistant/china-country-pack/reference-catalog";
@@ -28,6 +28,7 @@ import { createChinaPlanWorkflow } from "./china-plan-workflow.js";
 import { presentChinaPlanPreparation } from "./china-plan-presentation.js";
 import { createChinaSourcePreparationService } from "./china-source-preparation.js";
 import { assessSetupReadiness } from "./setup-readiness.js";
+import { fetchUserWeather } from "./user-weather.js";
 
 const server = Fastify({ logger: true });
 const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -359,6 +360,14 @@ function localConfigurationSnapshot() {
   };
 }
 
+async function geocodeWeatherAddress(input: { address: string }): Promise<ConnectorResult<AmapGeocodedPlace>> {
+  const geocoded = await amap.geocodeAddress(input);
+  if (geocoded.status !== "available" || !geocoded.data || geocoded.data.adcode) return geocoded;
+  const reverse = await amap.reverseGeocode({ location: geocoded.data.location });
+  if (reverse.status !== "available" || !reverse.data?.adcode) return geocoded;
+  return { ...geocoded, data: { ...geocoded.data, adcode: reverse.data.adcode } };
+}
+
 function saveLocalConfiguration(update: LocalConfigurationUpdate): void {
   const values: Record<string, string> = {};
   if (update.amapApiKey?.trim()) values.AMAP_API_KEY = update.amapApiKey.trim();
@@ -412,20 +421,23 @@ server.post<{ Params: { sourceId: string }; Body: { url?: string } }>("/api/offi
 });
 
 server.get<{ Querystring: { location?: string; language?: string } }>("/api/weather", async (request, reply) => {
-  const configuration = qweather.configurationStatus();
-  if (configuration.status !== "available") return reply.code(connectorResponseStatus(configuration.status)).send(configuration);
   const requestedLocation = request.query.location?.trim() ?? "";
   if (!requestedLocation) return reply.code(400).send({ error: "A weather check needs a city or region name." });
-  const placeFacts = await amap.geocodeAddress({ address: requestedLocation });
+  const placeFacts = await geocodeWeatherAddress({ address: requestedLocation });
   if (placeFacts.status !== "available") return reply.code(connectorResponseStatus(placeFacts.status)).send(placeFacts);
   if (!placeFacts.data) return reply.code(404).send({ error: "Amap could not resolve that city or region." });
   const place = placeFacts.data;
-  const result = await qweather.weather({
+  const result = await fetchUserWeather({
     coordinates: place.location,
     locationName: place.formattedAddress,
+    ...(place.adcode ? { adcode: place.adcode } : {}),
     adminArea: place.district || place.city || place.province,
     country: "China",
-    language: request.query.language === "zh" ? "zh" : "en"
+    language: request.query.language === "zh" ? "zh" : "en",
+    dependencies: {
+      qweather: (input) => qweather.weather(input),
+      amap: (input) => amap.basicWeather(input)
+    }
   });
   return reply.code(connectorResponseStatus(result.status)).send(result);
 });
@@ -922,14 +934,18 @@ async function telegramCommandResponse(text: string | undefined): Promise<Telegr
   }
   if (command.type === "weather") {
     const workspace = store.getWorkspace();
-    const weatherConfiguration = qweather.configurationStatus();
-    if (weatherConfiguration.status !== "available") return [{ text: `Weather is unavailable for the current Plan. ${weatherConfiguration.failure?.message ?? "QWeather is not configured on this instance."}\n\nAmap was not called, no reminder was created, and your Plan was not changed.` }];
     const result = await fetchTelegramPlanWeather({
       location: workspace.activePlan.location,
       language: /^zh|chinese/i.test(workspace.profile.preferredLanguage) ? "zh" : "en",
       dependencies: {
-        geocodeAddress: (input) => amap.geocodeAddress(input),
-        weather: (input) => qweather.weather(input)
+        geocodeAddress: (input) => geocodeWeatherAddress(input),
+        weather: (input) => fetchUserWeather({
+          ...input,
+          dependencies: {
+            qweather: (weatherInput) => qweather.weather(weatherInput),
+            amap: (weatherInput) => amap.basicWeather(weatherInput)
+          }
+        })
       }
     });
     return [{ text: result.status === "available" ? formatTelegramWeather(result.data) : `Weather is unavailable for the current Plan. ${result.message}\nFailure stage: ${result.stage}${result.connectorStatus ? ` · status: ${result.connectorStatus}` : ""}\n\nNo weather was guessed, no reminder was created, and your Plan was not changed.` }];
