@@ -43,6 +43,8 @@ In the paired Telegram chat, complete Plans are paginated without omission and o
 
 This flow now invokes the first executable internal China Pack Skill, `food-nearby` `0.1.0`, after Amap normalization. The versioned Skill emits structured facts and handoff proposals; Telegram only renders them. The Skill remains internal and cannot be installed separately from the complete China Country Pack.
 
+The Web accommodation flow invokes `housing-area-recommendation` `0.1.0` after Amap normalization. Its first slice explains candidates relative to one selected Plan anchor using nearby-place distance, and clearly separates that fact from a real commute or a complete area recommendation. Live inventory, price, booking, quality, and foreign-guest eligibility remain unverified.
+
 ## Product shape
 
 - Web workspace: the full desktop-grade product interface.

@@ -51,6 +51,9 @@ importers:
       '@c-assistant/agent-adapters':
         specifier: workspace:*
         version: link:../../packages/agent-adapters
+      '@c-assistant/china-country-pack':
+        specifier: workspace:*
+        version: link:../../country-packs/china
       '@c-assistant/connectors':
         specifier: workspace:*
         version: link:../../packages/connectors
