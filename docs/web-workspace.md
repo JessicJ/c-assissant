@@ -8,7 +8,7 @@ The Web workspace is C-assistant's desktop product surface. It replaces a deskto
 - **Plans** — all Plans and the active Plan.
 - **Inbox** — proactive notices, changes, warnings, and items that need a response.
 - **Profile** — long-term facts and preferences, with provenance and edit controls.
-- **Settings** — runtime, Telegram pairing, Country Pack, data, language, and recovery.
+- **Settings** — runtime, Telegram pairing, approved official-source evidence, Country Pack, data, language, and recovery.
 
 Conversation is globally available and shares Core context with Telegram.
 
@@ -66,3 +66,5 @@ Setup is optional and progressive. A user can start by writing an open request s
 ## Diagnostics boundary
 
 The Web workspace may show user-actionable health messages, such as “Codex login expired” or “Amap is not configured.” Detailed logs, traces, raw model output, and stack errors remain in local logs or CLI diagnostics.
+
+Official-source settings show only Country Pack-approved sources, their original links, latest retained snapshot time, and a content-change warning when saved versions differ. Refresh is always explicit. A warning means the page content differs; it is not a policy conclusion or eligibility result.

@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import "./manual-accommodation.css";
 import type { RuntimeCheck } from "@c-assistant/agent-adapters";
 import { createAmapDrivingHandoff, createAmapPlaceHandoff } from "@c-assistant/connectors";
-import type { AmapNearbyPlace, AmapPlace, AmapRoute, ConnectorResult, QWeatherWeatherSnapshot, TelegramBotIdentity, TelegramConfiguration } from "@c-assistant/connectors";
-import type { AgentRuntimeKind, WorkspaceSnapshot } from "@c-assistant/core";
+import type { AmapNearbyPlace, AmapPlace, AmapRoute, ConnectorResult, OfficialSourceDefinition, QWeatherWeatherSnapshot, TelegramBotIdentity, TelegramConfiguration } from "@c-assistant/connectors";
+import type { AgentRuntimeKind, SourceSnapshotWriteResult, WorkspaceSnapshot } from "@c-assistant/core";
 import { recommendPlanTransport, type TransportWeatherFact } from "@c-assistant/core/transport";
 
 type View = "Today" | "Plans" | "Inbox" | "Profile" | "Settings";
@@ -58,6 +58,8 @@ function App() {
   const [checkingPlanWeather, setCheckingPlanWeather] = useState(false);
   const [runtimeChecks, setRuntimeChecks] = useState<RuntimeCheck[]>([]);
   const [savingRuntime, setSavingRuntime] = useState(false);
+  const [officialSources, setOfficialSources] = useState<OfficialSourceDefinition[]>([]);
+  const [refreshingSourceId, setRefreshingSourceId] = useState<string | null>(null);
   const [telegramStatus, setTelegramStatus] = useState<ConnectorResult<TelegramConfiguration> | null>(null);
   const [telegramVerification, setTelegramVerification] = useState<ConnectorResult<TelegramBotIdentity> | null>(null);
   const [verifyingTelegram, setVerifyingTelegram] = useState(false);
@@ -68,6 +70,7 @@ function App() {
   useEffect(() => {
     void loadWorkspace();
     void loadRuntimeChecks();
+    void loadOfficialSources();
     void loadTelegramStatus();
     void loadTelegramPairing();
   }, []);
@@ -91,6 +94,16 @@ function App() {
       if (response.ok) setRuntimeChecks((await response.json()) as RuntimeCheck[]);
     } catch {
       setRuntimeChecks([]);
+    }
+  }
+
+  async function loadOfficialSources() {
+    try {
+      const response = await fetch("/api/official-sources");
+      const result = (await response.json()) as ConnectorResult<OfficialSourceDefinition[]>;
+      setOfficialSources(result.status === "available" && result.data ? result.data : []);
+    } catch {
+      setOfficialSources([]);
     }
   }
 
@@ -239,6 +252,20 @@ function App() {
       setError(caught instanceof Error ? caught.message : "The Plan runtime could not be selected.");
     } finally {
       setSavingRuntime(false);
+    }
+  }
+
+  async function refreshOfficialSource(sourceId: string) {
+    try {
+      setRefreshingSourceId(sourceId);
+      const response = await fetch(`/api/official-sources/${encodeURIComponent(sourceId)}/refresh`, { method: "POST" });
+      const result = (await response.json()) as ConnectorResult<SourceSnapshotWriteResult>;
+      if (!response.ok || result.status !== "available") throw new Error(result.failure?.message ?? "This official source could not be refreshed.");
+      await loadWorkspace();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "This official source could not be refreshed.");
+    } finally {
+      setRefreshingSourceId(null);
     }
   }
 
@@ -584,7 +611,7 @@ function App() {
         {view === "Plans" ? <PlanView plan={plan} onActivate={activatePlan} confirming={confirming} amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={searchAmap} routeOrigin={routeOrigin} routeDestination={routeDestination} routeMode={routeMode} routeResult={routeResult} routing={routing} routeComparisons={routeComparisons} comparingRoutes={comparingRoutes} planWeatherResult={planWeather?.planId === plan.id ? planWeather.result : null} checkingPlanWeather={checkingPlanWeather} foodCentre={foodCentre} foodResult={foodResult} findingFood={findingFood} stayCentre={stayCentre} stayResult={stayResult} findingStay={findingStay} savingAccommodation={savingAccommodation} confirmingAccommodation={confirmingAccommodation} savingTransportPreference={savingTransportPreference} savingTravelContext={savingTravelContext} savingArrival={savingArrival} onChooseRouteOrigin={(place) => { setRouteOrigin(place); setRouteResult(null); setRouteComparisons(null); }} onChooseRouteDestination={(place) => { setRouteDestination(place); setRouteResult(null); setRouteComparisons(null); }} onRouteModeChange={(mode) => { setRouteMode(mode); setRouteResult(null); }} onFindNearbyFood={findNearbyFood} onFindNearbyAccommodation={findNearbyAccommodation} onSaveAccommodationCandidate={saveAccommodationCandidate} onSaveManualAccommodation={saveManualAccommodation} onConfirmAccommodation={confirmAccommodationBooking} onSaveTransportPreference={saveTransportPreference} onSaveTravelContext={saveTravelContext} onSaveArrival={saveArrival} onPlanRoute={planAmapRoute} onCompareRoutes={compareAmapRoutes} onCheckPlanWeather={checkPlanWeather} /> : null}
         {view === "Inbox" ? <InboxView workspace={workspace} /> : null}
         {view === "Profile" ? <ProfileView workspace={workspace} onSave={saveProfile} /> : null}
-        {view === "Settings" ? <SettingsView workspace={workspace} runtimeChecks={runtimeChecks} savingRuntime={savingRuntime} onSaveRuntime={saveRuntime} telegramStatus={telegramStatus} telegramVerification={telegramVerification} verifyingTelegram={verifyingTelegram} telegramPairing={telegramPairing} pairingTelegram={pairingTelegram} onVerifyTelegram={verifyTelegram} onStartTelegramPairing={startTelegramPairing} onCompleteTelegramPairing={completeTelegramPairing} weatherLocation={weatherLocation} setWeatherLocation={setWeatherLocation} weatherResult={weatherResult} checkingWeather={checkingWeather} onCheckWeather={checkWeather} /> : null}
+        {view === "Settings" ? <SettingsView workspace={workspace} runtimeChecks={runtimeChecks} savingRuntime={savingRuntime} onSaveRuntime={saveRuntime} officialSources={officialSources} refreshingSourceId={refreshingSourceId} onRefreshOfficialSource={refreshOfficialSource} telegramStatus={telegramStatus} telegramVerification={telegramVerification} verifyingTelegram={verifyingTelegram} telegramPairing={telegramPairing} pairingTelegram={pairingTelegram} onVerifyTelegram={verifyTelegram} onStartTelegramPairing={startTelegramPairing} onCompleteTelegramPairing={completeTelegramPairing} weatherLocation={weatherLocation} setWeatherLocation={setWeatherLocation} weatherResult={weatherResult} checkingWeather={checkingWeather} onCheckWeather={checkWeather} /> : null}
       </section>
     </main>
   );
@@ -608,7 +635,7 @@ function PlanView({ plan, onActivate, confirming, amapQuery, setAmapQuery, amapR
       {plan.status === "draft" ? <button className="primary-button" disabled={confirming} onClick={() => void onActivate()}>Confirm complete Plan</button> : null}
     </section>
     <PlaceDecisionPanel amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={onSearch} routeOrigin={routeOrigin} routeDestination={routeDestination} savedAccommodation={savedAccommodation} routeMode={routeMode} routeResult={routeResult} routing={routing} routeComparisons={routeComparisons} comparingRoutes={comparingRoutes} transportPreference={plan.configuration.transport.preference} travelContext={plan.configuration.travelContext} arrivalWeather={arrivalWeather} foodCentre={foodCentre} foodResult={foodResult} findingFood={findingFood} stayCentre={stayCentre} stayResult={stayResult} findingStay={findingStay} savingAccommodation={savingAccommodation} onChooseRouteOrigin={onChooseRouteOrigin} onChooseRouteDestination={onChooseRouteDestination} onRouteModeChange={onRouteModeChange} onFindNearbyFood={onFindNearbyFood} onFindNearbyAccommodation={onFindNearbyAccommodation} onSaveAccommodationCandidate={onSaveAccommodationCandidate} onPlanRoute={onPlanRoute} onCompareRoutes={onCompareRoutes} />
-    <section className="card"><p className="eyebrow">Sources</p>{plan.sources.length ? plan.sources.map((source) => <a className="source-link" href={source.url} key={source.title} target="_blank" rel="noreferrer"><strong>{source.title}</strong><span>{source.authority} · {source.retrievedAt}</span></a>) : <p>No source snapshots yet. Official sources are added when the policy connector is implemented.</p>}</section>
+    <section className="card"><p className="eyebrow">Sources</p>{plan.sources.length ? plan.sources.map((source) => <a className="source-link" href={source.url} key={source.title} target="_blank" rel="noreferrer"><strong>{source.title}</strong><span>{source.authority} · {source.retrievedAt}</span></a>) : <p>No evidence is linked to this Plan yet. Official-source snapshots are managed in Settings and are not used for policy conclusions until the policy Skill is implemented.</p>}</section>
   </div>;
 }
 
@@ -632,10 +659,11 @@ function ProfileView({ workspace, onSave }: { workspace: WorkspaceSnapshot; onSa
   return <section className="card profile-view"><p className="eyebrow">Long-term information</p><h2>Save only the basics you confirm</h2><form onSubmit={(event) => void submit(event)} className="profile-form"><label>Name<input value={profile.displayName} onChange={(event) => setProfile({ ...profile, displayName: event.target.value })} /></label><label>Preferred language<input value={profile.preferredLanguage} onChange={(event) => setProfile({ ...profile, preferredLanguage: event.target.value })} /></label><label>Nationality<input value={profile.nationality} onChange={(event) => setProfile({ ...profile, nationality: event.target.value })} /></label><label>Gender<select value={profile.gender} onChange={(event) => setProfile({ ...profile, gender: event.target.value as typeof profile.gender })}><option value="not_specified">Not specified</option><option value="woman">Woman</option><option value="man">Man</option><option value="nonbinary">Nonbinary</option><option value="prefer_not_to_say">Prefer not to say</option></select></label><label>China visa / residence status<select value={profile.immigrationStatus} onChange={(event) => setProfile({ ...profile, immigrationStatus: event.target.value as typeof profile.immigrationStatus })}><option value="unknown">Not sure yet</option><option value="short_term_visitor">Short-term visitor</option><option value="tourist_visa">Tourist visa</option><option value="student_visa">Student visa</option><option value="work_visa">Work visa</option><option value="residence_permit">Residence permit</option><option value="other">Other</option></select></label><p>These details help C-assistant later find the right policy route. Travel dates, companions, accommodation, and precise location remain inside a Plan, not this long-term Profile.</p><button className="primary-button" disabled={saving}>{saving ? "Saving…" : "Save confirmed Profile"}</button></form></section>;
 }
 
-function SettingsView({ workspace, runtimeChecks, savingRuntime, onSaveRuntime, telegramStatus, telegramVerification, verifyingTelegram, telegramPairing, pairingTelegram, onVerifyTelegram, onStartTelegramPairing, onCompleteTelegramPairing, weatherLocation, setWeatherLocation, weatherResult, checkingWeather, onCheckWeather }: { workspace: WorkspaceSnapshot; runtimeChecks: RuntimeCheck[]; savingRuntime: boolean; onSaveRuntime: (kind: AgentRuntimeKind) => Promise<void>; telegramStatus: ConnectorResult<TelegramConfiguration> | null; telegramVerification: ConnectorResult<TelegramBotIdentity> | null; verifyingTelegram: boolean; telegramPairing: TelegramPairingView | null; pairingTelegram: boolean; onVerifyTelegram: () => Promise<void>; onStartTelegramPairing: () => Promise<void>; onCompleteTelegramPairing: () => Promise<void>; weatherLocation: string; setWeatherLocation: (value: string) => void; weatherResult: ConnectorResult<QWeatherWeatherSnapshot> | null; checkingWeather: boolean; onCheckWeather: () => Promise<void> }) {
+function SettingsView({ workspace, runtimeChecks, savingRuntime, onSaveRuntime, officialSources, refreshingSourceId, onRefreshOfficialSource, telegramStatus, telegramVerification, verifyingTelegram, telegramPairing, pairingTelegram, onVerifyTelegram, onStartTelegramPairing, onCompleteTelegramPairing, weatherLocation, setWeatherLocation, weatherResult, checkingWeather, onCheckWeather }: { workspace: WorkspaceSnapshot; runtimeChecks: RuntimeCheck[]; savingRuntime: boolean; onSaveRuntime: (kind: AgentRuntimeKind) => Promise<void>; officialSources: OfficialSourceDefinition[]; refreshingSourceId: string | null; onRefreshOfficialSource: (sourceId: string) => Promise<void>; telegramStatus: ConnectorResult<TelegramConfiguration> | null; telegramVerification: ConnectorResult<TelegramBotIdentity> | null; verifyingTelegram: boolean; telegramPairing: TelegramPairingView | null; pairingTelegram: boolean; onVerifyTelegram: () => Promise<void>; onStartTelegramPairing: () => Promise<void>; onCompleteTelegramPairing: () => Promise<void>; weatherLocation: string; setWeatherLocation: (value: string) => void; weatherResult: ConnectorResult<QWeatherWeatherSnapshot> | null; checkingWeather: boolean; onCheckWeather: () => Promise<void> }) {
   const telegramConfigured = telegramStatus?.status === "available";
   const statusFor = (kind: AgentRuntimeKind) => runtimeChecks.find((runtime) => runtime.kind === kind);
   const runtimeLabel = (kind: AgentRuntimeKind) => kind === "claude-code" ? "Claude Code" : "Codex";
+  const snapshotsFor = (sourceId: string) => workspace.sourceSnapshots.filter((snapshot) => snapshot.sourceId === sourceId);
   return <section className="content-stack">
     <section className="card settings-view">
       <p className="eyebrow">Plan runtime</p>
@@ -650,6 +678,18 @@ function SettingsView({ workspace, runtimeChecks, savingRuntime, onSaveRuntime, 
         })}
       </div>
       <p>Future Web and Telegram Plan drafts use this choice. If it is not ready, C-assistant explains the issue and does not silently switch runtimes.</p>
+    </section>
+    <section className="card official-sources-card">
+      <p className="eyebrow">Official source evidence</p>
+      <h2>Refresh approved sources when you need current facts</h2>
+      <p>Refreshing saves a limited evidence snapshot from the original official page. It does not decide whether a policy applies to you.</p>
+      {officialSources.length ? <div className="official-source-list">{officialSources.map((source) => {
+        const snapshots = snapshotsFor(source.id);
+        const latest = snapshots[0];
+        const changed = new Set(snapshots.map((snapshot) => snapshot.contentHash)).size > 1;
+        return <article key={source.id}><div><strong>{latest?.titleOriginal ?? source.title}</strong><span>{source.authority}</span><small>{latest ? `Last checked ${latest.retrievedAt}${changed ? " · content changed across saved snapshots" : ""}` : "Not refreshed yet"}</small></div><div className="official-source-actions"><a className="text-button" href={latest?.url ?? source.url} target="_blank" rel="noreferrer">Open original source</a><button className="secondary-button" disabled={refreshingSourceId !== null} onClick={() => void onRefreshOfficialSource(source.id)}>{refreshingSourceId === source.id ? "Refreshing…" : "Refresh evidence"}</button></div></article>;
+      })}</div> : <p className="connector-message">Approved source registry is not available right now.</p>}
+      <p className="connector-message">A changed page needs review. It is not, by itself, a policy change or a personal eligibility result.</p>
     </section>
     <section className="card settings-view"><p className="eyebrow">Connection status</p><h2>Services are separated from the product UI</h2><div className="status-grid">{Object.entries(workspace.system).map(([name, status]) => <div key={name}><span>{name}</span><strong>{status.replaceAll("_", " ")}</strong></div>)}<div><span>Telegram</span><strong>{telegramPairing?.state === "paired" ? "paired" : telegramConfigured ? "configured" : telegramStatus?.status === "not_configured" ? "token needed" : telegramStatus?.status ?? "checking"}</strong></div></div><p>Plan drafting starts only after you press its explicit button. Telegram starts with a private, user-owned pairing step.</p></section>
     <section className="card weather-card"><p className="eyebrow">QWeather facts</p><h2>Check what the destination weather reports.</h2><div className="amap-search"><input value={weatherLocation} onChange={(event) => setWeatherLocation(event.target.value)} aria-label="Check destination weather" placeholder="City or region" /><button className="primary-button" disabled={checkingWeather || !weatherLocation.trim()} onClick={() => void onCheckWeather()}>{checkingWeather ? "Checking…" : "Check weather"}</button></div>{weatherResult ? <WeatherResults result={weatherResult} /> : <p>Weather is a changing fact, not a promise. C-assistant will use it for cautious packing and route suggestions after a Plan is confirmed.</p>}</section>
