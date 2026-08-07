@@ -14,12 +14,16 @@
     "./registry": {
       "types": "./lib/registry.d.ts",
       "default": "./lib/registry.js"
+    },
+    "./orchestrator": {
+      "types": "./lib/orchestrator.d.ts",
+      "default": "./lib/orchestrator.js"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/index.test.ts"
+    "test": "tsx --test src/index.test.ts src/orchestrator.test.ts"
   },
   "dependencies": {
     "@c-assistant/core": "workspace:*",

@@ -16,6 +16,8 @@ Implemented slice: `china-arrival-plan` `0.1.0` is a fail-closed composition gat
 
 Compilation boundary: a China-specific adapter now requires the exact `arrival-preparation` version and status recorded by a ready composite before producing the country-neutral Core proposal. Core independently verifies the target draft Plan ID/version and proposal structure, then creates a new draft version with inert Tasks and Reminders. SQLite can atomically save that exact version transition with provenance and a minimized compilation audit. Orchestration, user presentation, confirmation, and activation are not connected yet.
 
+Orchestration boundary: the China package now has a deterministic orchestrator that receives normalized, credential-free facts and invokes the seven supporting Skills through the Registry in the declared order. It derives bounded preparation items from successful policy-review readiness, weather prompts, housing/transport recommendations, and incomplete digital setup, then runs arrival preparation, the composite, the China Adapter, and Core compiler. A critical `needs_input` or blocked supporting result prevents compilation. Provider fetching, source-catalog expansion, SQLite invocation, UI presentation, confirmation, and activation remain host responsibilities.
+
 ### `policy-applicability`
 
 Matches official requirements to nationality, passport or travel document, visa or permit, residence status, student status, purpose, date, and location. A missing requirement becomes a user-owned Task with a Reminder when appropriate; it does not automatically block unrelated parts of the Plan.
