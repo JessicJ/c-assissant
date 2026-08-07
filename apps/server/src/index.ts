@@ -11,7 +11,7 @@ import { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue } from "./arrival-reminder.js";
 import { arrivalRouteDestination, formatArrivalRoute, selectArrivalTransport } from "./arrival-route.js";
 import { parseTelegramCommand } from "./telegram-commands.js";
-import { createTelegramPlan, formatTelegramPlanCreation } from "./telegram-plan.js";
+import { createTelegramPlan, formatTelegramPlan, formatTelegramPlanCreation } from "./telegram-plan.js";
 
 const server = Fastify({ logger: true });
 const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -454,8 +454,7 @@ async function telegramCommandResponse(text: string | undefined): Promise<string
   if (command.type === "empty") return undefined;
   if (command.type === "help") return "C-assistant is connected. Send a normal message to create a Plan draft with local Codex, or use:\n/plan — show the current Plan\n/new <what you need to do> — create a Plan draft\n/help — show this help\n\nEvery Plan still needs Web review and confirmation. Bookings and payments are not enabled.";
   if (command.type === "plan") {
-    const plan = store.getWorkspace().activePlan;
-    return `Current Plan\n${plan.title}\n${plan.location} · ${plan.dates}\nStatus: ${plan.status}\nNext: ${plan.nextAction}\n\nUse the Web workspace to review or confirm the complete Plan.`;
+    return formatTelegramPlan(store.getWorkspace().activePlan);
   }
   if (command.type === "create_plan") {
     if (command.request.length > 1_500) return "Keep a new Plan request under 1,500 characters, then send it again.";
