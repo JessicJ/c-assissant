@@ -11,4 +11,6 @@ Implemented local adapters are `CodexRuntimeAdapter` and `ClaudeCodeRuntimeAdapt
 - strips C-assistant Connector secrets from the child environment;
 - returns a validated draft to Core, which creates and stores the Plan.
 
-Codex uses its JSON Schema output option. Claude Code uses Print mode with JSON wrapping, disables built-in tools and MCP configuration, then validates the returned `result` against the same Plan contract. The Adapter does not keep an Agent process alive, schedule reminders, access SQLite, or deliver messages. Runtime selection in the Web workspace is the next implementation step.
+Codex uses its JSON Schema output option. Claude Code uses Print mode with JSON wrapping, disables built-in tools and MCP configuration, then validates the returned `result` against the same Plan contract. The Adapter does not keep an Agent process alive, schedule reminders, access SQLite, or deliver messages. The Web workspace selects one runtime per instance and Core uses that choice for Web and Telegram Plan drafts.
+
+The Claude Code Adapter has a simulated CLI integration test that verifies the installed/login checks, no-tools Print-mode arguments, temporary-directory cleanup, contract validation, and Connector-secret stripping without invoking a real Claude account. A real logged-in account still needs one deliberate end-to-end validation before Claude Code is declared supported for V1.
