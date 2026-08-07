@@ -59,6 +59,8 @@ The internal `digital-life-setup` `0.1.0` selects only the connectivity, communi
 
 The internal `arrival-preparation` `0.1.0` deduplicates normalized supporting guidance into user-confirmable Task and Reminder proposals. It skips completed work, asks for time only when a critical item needs an absent anchor, and calculates reminders only from offset-qualified departure or arrival timestamps. Core compilation and activation remain separate work.
 
+The first Core compilation boundary is now implemented as a pure, non-persisting step. China Pack accepts only the exact `arrival-preparation` version/status recorded by a ready composite, converts it to the country-neutral proposal contract, and Core compiles that proposal only against the matching draft Plan version. The result is a new draft with Skill provenance and inert reminders; SQLite and Server orchestration are not connected to this compiler yet.
+
 ## Product shape
 
 - Web workspace: the full desktop-grade product interface.

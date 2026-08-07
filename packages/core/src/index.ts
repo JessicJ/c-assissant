@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import type { PlanCompilationOrigin } from "./plan-compiler.js";
 
 export { recommendPlanTransport, type TransportMode, type TransportRecommendation, type TransportRouteFact } from "./transport.js";
 export { assessPolicyPreparation, type PolicyPreparationAssessment, type PolicyPreparationItem, type PolicyPreparationStatus } from "./policy-applicability.js";
+export { compilePlanProposal, type PlanCompilationAudit, type PlanCompilationBlockReason, type PlanCompilationDecision, type PlanCompilationOrigin, type PlanCompilationProposal, type PlanCompilationTaskProposal } from "./plan-compiler.js";
 
 export type PlanStatus = "draft" | "active" | "completed" | "cancelled";
 export type TaskStatus = "scheduled" | "ready" | "running" | "waiting_user" | "blocked" | "completed" | "skipped" | "failed" | "cancelled";
@@ -29,6 +31,8 @@ export interface TaskReminder {
 export interface Task {
   id: string;
   title: string;
+  /** Optional user-facing detail for a compiled preparation item. */
+  description?: string;
   owner: "assistant" | "user" | "external";
   status: TaskStatus;
   dueLabel: string;
@@ -36,6 +40,8 @@ export interface Task {
   activationTrigger?: TaskActivationTrigger;
   /** A proposed reminder remains inert until this exact Plan version is confirmed. */
   reminder?: TaskReminder;
+  /** Version-bound provenance for a task compiled from a Country Pack proposal. */
+  origin?: PlanCompilationOrigin;
 }
 
 export interface Stage {
@@ -43,6 +49,8 @@ export interface Stage {
   title: string;
   description: string;
   tasks: Task[];
+  /** Allows a later compilation to replace this exact generated stage safely. */
+  origin?: PlanCompilationOrigin;
 }
 
 export interface SourceReference {
