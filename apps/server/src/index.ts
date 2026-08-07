@@ -477,11 +477,21 @@ async function runTaskReminders(): Promise<void> {
   checkingTaskReminders = true;
   try {
     for (const item of due) {
-      const claimed = store.claimTelegramReminder({ planId: plan.id, reminderKey: item.reminderKey, dueAt: item.dueAt.toISOString() });
-      if (!claimed) continue;
+      const attempt = store.claimTelegramTaskReminderAttempt({ planId: plan.id, reminderKey: item.reminderKey, taskId: item.task.id, dueAt: item.dueAt.toISOString() });
+      if (!attempt.claimed) continue;
       const receipt = await telegram.sendMessage({ chatId: pairing.binding.chatId, text: formatTaskReminder(plan, item.task) });
-      if (receipt.status === "available") store.recordTelegramTaskReminderDelivered(plan.id, item.task.id);
-      else server.log.warn({ status: receipt.status, code: receipt.failure?.code, taskId: item.task.id }, "Telegram Task reminder could not be delivered");
+      if (receipt.status === "available") {
+        store.recordTelegramTaskReminderDelivered({ planId: plan.id, reminderKey: item.reminderKey, taskId: item.task.id });
+      } else {
+        const outcome = store.recordTelegramTaskReminderFailure({
+          planId: plan.id,
+          reminderKey: item.reminderKey,
+          taskId: item.task.id,
+          failureCode: receipt.failure?.code ?? "unknown_failure",
+          retryable: receipt.failure?.retryable ?? false
+        });
+        server.log.warn({ status: receipt.status, code: receipt.failure?.code, taskId: item.task.id, attempt: attempt.attemptNumber, outcome: outcome.status }, "Telegram Task reminder could not be delivered");
+      }
     }
   } catch (error) {
     server.log.warn({ error }, "Telegram Task reminder failed");
