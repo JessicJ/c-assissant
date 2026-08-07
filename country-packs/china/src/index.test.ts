@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { chinaArrivalPlanSupportingSkillOrder, runArrivalPreparationSkill, runChinaArrivalPlanSkill, runDigitalLifeSetupSkill, runFoodNearbySkill, runHousingAreaRecommendationSkill, runLocalFoodGuideSkill, runPolicyApplicabilitySkill, runTransportPlannerSkill, runWeatherAndPackingSkill, type ArrivalPreparationItemInput, type ChinaArrivalPlanSupportingResult, type ChinaArrivalPlanSupportingSkillId } from "./index.js";
+import { compilePlanProposal, createPlanFromRequest } from "@c-assistant/core";
+import { chinaArrivalPlanSupportingSkillOrder, createChinaPlanCompilationProposal, runArrivalPreparationSkill, runChinaArrivalPlanSkill, runDigitalLifeSetupSkill, runFoodNearbySkill, runHousingAreaRecommendationSkill, runLocalFoodGuideSkill, runPolicyApplicabilitySkill, runTransportPlannerSkill, runWeatherAndPackingSkill, type ArrivalPreparationItemInput, type ChinaArrivalPlanSupportingResult, type ChinaArrivalPlanSupportingSkillId } from "./index.js";
 import { chinaSkillRegistry } from "./registry.js";
 
 const candidates = [
@@ -347,4 +348,35 @@ test("china-arrival-plan fails duplicate results and propagates supporting gates
   assert.equal(runChinaArrivalPlanSkill({ planId: "plan-1", planVersion: 1, supportingResults: needsInput }).status, "needs_input");
   const blocked = chinaArrivalPlanSupportingSkillOrder.map((id) => supportingResult(id, id === "policy-applicability" ? "blocked" : "success"));
   assert.equal(runChinaArrivalPlanSkill({ planId: "plan-1", planVersion: 1, supportingResults: blocked }).reasonCode, "supporting_skill_blocked");
+});
+
+test("China compilation adapter requires the exact composed arrival-preparation result", () => {
+  const preparation = runArrivalPreparationSkill({ items: [preparationItems[0]!], schedule: { departureAt: "2026-09-01T07:00:00+08:00", timeZone: "Asia/Shanghai" } });
+  const supporting = chinaArrivalPlanSupportingSkillOrder.map((id) => supportingResult(id, id === "arrival-preparation" ? preparation.status : "success"));
+  const composite = runChinaArrivalPlanSkill({ planId: "plan-1", planVersion: 2, supportingResults: supporting });
+  const ready = createChinaPlanCompilationProposal({ composite, preparation });
+  assert.equal(ready.status, "ready");
+  if (ready.status === "ready") {
+    assert.equal(ready.proposal.planRef.version, 2);
+    assert.equal(ready.proposal.tasks[0]?.reminder?.dueAt, "2026-08-31T21:00:00.000Z");
+    assert.deepEqual(ready.proposal.tasks[0]?.sourceSkills.map((source) => source.id), ["policy-applicability", "arrival-preparation"]);
+  }
+  const mismatched = createChinaPlanCompilationProposal({ composite: { ...composite, facts: composite.facts.map((fact) => fact.skillId === "arrival-preparation" ? { ...fact, version: "9.9.9" } : fact) }, preparation });
+  assert.equal(mismatched.status, "blocked");
+});
+
+test("China proposal passes the country-neutral Core compiler without activating the Plan", () => {
+  const plan = createPlanFromRequest({ request: "I will attend an exhibition in Shanghai in September 2026." });
+  const preparation = runArrivalPreparationSkill({ items: [preparationItems[0]!], schedule: { departureAt: "2026-09-01T07:00:00+08:00", timeZone: "Asia/Shanghai" } });
+  const supporting = chinaArrivalPlanSupportingSkillOrder.map((id) => supportingResult(id, id === "arrival-preparation" ? preparation.status : "success"));
+  const composite = runChinaArrivalPlanSkill({ planId: plan.id, planVersion: plan.version, supportingResults: supporting });
+  const decision = createChinaPlanCompilationProposal({ composite, preparation });
+  assert.equal(decision.status, "ready");
+  if (decision.status !== "ready") return;
+  const compiled = compilePlanProposal(plan, decision.proposal, new Date("2026-08-07T00:00:00.000Z"));
+  assert.equal(compiled.status, "compiled");
+  if (compiled.status !== "compiled") return;
+  assert.equal(compiled.plan.status, "draft");
+  assert.equal(compiled.plan.version, plan.version + 1);
+  assert.equal(compiled.plan.stages.at(-1)?.tasks[0]?.reminder?.scheduledAtLocal, "2026-09-01T05:00");
 });

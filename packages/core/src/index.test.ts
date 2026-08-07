@@ -1,7 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { assessPolicyPreparation, confirmPlan, createInitialWorkspace, createPlanFromDraft, createPlanFromRequest, recommendPlanTransport } from "./index.js";
+import { assessPolicyPreparation, compilePlanProposal, confirmPlan, createInitialWorkspace, createPlanFromDraft, createPlanFromRequest, recommendPlanTransport, type PlanCompilationProposal } from "./index.js";
+
+function compilationProposal(planId: string, planVersion: number): PlanCompilationProposal {
+  return {
+    planRef: { id: planId, version: planVersion },
+    countryPack: { id: "china", version: "0.0.0", name: "China Country Pack" },
+    composition: { skillId: "china-arrival-plan", version: "0.1.0", status: "degraded" },
+    compilationKey: "china-arrival-preparation",
+    stage: { title: "China arrival preparation", description: "Source-backed preparation proposed by the China Country Pack." },
+    tasks: [{
+      proposalId: "arrival-preparation:carry-entry-documents",
+      title: "Carry entry documents",
+      description: "Keep the reviewed documents accessible.",
+      owner: "user",
+      dueLabel: "Before departure",
+      sourceSkills: [{ id: "policy-applicability", version: "0.1.0" }, { id: "arrival-preparation", version: "0.1.0" }],
+      reminder: { dueAt: "2026-08-31T21:00:00.000Z", timeZone: "Asia/Shanghai", purpose: "Carry entry documents", refreshFacts: [] }
+    }],
+    assumptions: ["The exact document set still requires source-backed review."],
+    limitations: ["No entry eligibility conclusion has been made."]
+  };
+}
 
 test("a confirmed demo Plan becomes active and leaves an inbox receipt", () => {
   const workspace = createInitialWorkspace();
@@ -153,4 +174,60 @@ test("stale official evidence requires an explicit refresh before review", () =>
   const assessment = assessPolicyPreparation({ profile: workspace.profile, plan: workspace.activePlan, sourceSnapshots: workspace.sourceSnapshots, now: new Date("2026-08-07T00:00:00.000Z") });
   assert.equal(assessment.status, "needs_evidence");
   assert.equal(assessment.missingInformation[0]?.field, "official_source.nia-english");
+});
+
+test("Core compiles a version-bound Country Pack proposal into a new draft Plan", () => {
+  const plan = createPlanFromRequest({ request: "I will attend an exhibition in Shanghai in September 2026." });
+  const result = compilePlanProposal(plan, compilationProposal(plan.id, plan.version), new Date("2026-08-07T00:00:00.000Z"));
+  assert.equal(result.status, "compiled");
+  if (result.status !== "compiled") return;
+  assert.equal(result.plan.version, plan.version + 1);
+  assert.equal(result.plan.status, "draft");
+  assert.equal(plan.version, 1);
+  const stage = result.plan.stages.at(-1)!;
+  assert.equal(stage.origin?.compilationKey, "china-arrival-preparation");
+  assert.equal(stage.tasks[0]?.description, "Keep the reviewed documents accessible.");
+  assert.equal(stage.tasks[0]?.reminder?.scheduledAtLocal, "2026-09-01T05:00");
+  assert.equal(stage.tasks[0]?.status, "waiting_user");
+  assert.deepEqual(stage.tasks[0]?.origin?.sourceSkills.map((source) => source.id), ["policy-applicability", "arrival-preparation"]);
+  assert.equal(result.audit.sourcePlanVersion, 1);
+  assert.equal(result.audit.compiledPlanVersion, 2);
+  assert.match(result.plan.nextAction, /Review the complete compiled Plan/);
+});
+
+test("Core rejects stale Plan references and non-draft mutation", () => {
+  const plan = createPlanFromRequest({ request: "I will arrive in Shanghai." });
+  const staleRef = compilePlanProposal(plan, compilationProposal(plan.id, plan.version + 1));
+  assert.equal(staleRef.status, "blocked");
+  if (staleRef.status === "blocked") assert.equal(staleRef.reasonCode, "plan_reference_mismatch");
+  const active = { ...plan, status: "active" as const };
+  const activeResult = compilePlanProposal(active, compilationProposal(active.id, active.version));
+  assert.equal(activeResult.status, "blocked");
+  if (activeResult.status === "blocked") assert.equal(activeResult.reasonCode, "plan_not_draft");
+});
+
+test("Core fails closed on duplicate proposal ids and stale reminders", () => {
+  const plan = createPlanFromRequest({ request: "I will arrive in Shanghai." });
+  const duplicate = compilationProposal(plan.id, plan.version);
+  duplicate.tasks.push({ ...duplicate.tasks[0]! });
+  const duplicateResult = compilePlanProposal(plan, duplicate, new Date("2026-08-07T00:00:00.000Z"));
+  assert.equal(duplicateResult.status, "blocked");
+  if (duplicateResult.status === "blocked") assert.equal(duplicateResult.reasonCode, "invalid_proposal");
+  const stale = compilationProposal(plan.id, plan.version);
+  stale.tasks[0]!.reminder!.dueAt = "2026-01-01T00:00:00.000Z";
+  const staleResult = compilePlanProposal(plan, stale, new Date("2026-08-07T00:00:00.000Z"));
+  assert.equal(staleResult.status, "blocked");
+  if (staleResult.status === "blocked") assert.equal(staleResult.reasonCode, "stale_reminder");
+});
+
+test("Core requires an explicit limitation before compiling a degraded composition", () => {
+  const plan = createPlanFromRequest({ request: "I will arrive in Shanghai." });
+  const proposal = compilationProposal(plan.id, plan.version);
+  proposal.limitations = [];
+  const result = compilePlanProposal(plan, proposal, new Date("2026-08-07T00:00:00.000Z"));
+  assert.equal(result.status, "blocked");
+  if (result.status === "blocked") assert.equal(result.reasonCode, "invalid_proposal");
+  const malformed = compilePlanProposal(plan, undefined as never, new Date("2026-08-07T00:00:00.000Z"));
+  assert.equal(malformed.status, "blocked");
+  if (malformed.status === "blocked") assert.equal(malformed.reasonCode, "invalid_proposal");
 });

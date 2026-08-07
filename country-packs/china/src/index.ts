@@ -1,5 +1,5 @@
 import { recommendPlanTransport } from "@c-assistant/core/transport";
-import type { LuggageLevel, TransportPreference } from "@c-assistant/core";
+import type { LuggageLevel, PlanCompilationProposal, TransportPreference } from "@c-assistant/core";
 import type { TransportMode, TransportRouteFact, TransportWeatherFact } from "@c-assistant/core/transport";
 import type { SkillStatus } from "@c-assistant/skill-runtime";
 
@@ -1000,4 +1000,56 @@ function isValidSupportingResult(result: ChinaArrivalPlanSupportingResult): bool
     && ["success", "needs_input", "degraded", "not_supported", "blocked", "failed"].includes(result.status)
     && Boolean(result.summary.trim())
     && [result.facts, result.assumptions, result.recommendations, result.proposedPlanChanges, result.proposedTasks, result.proposedReminders, result.actionCards, result.sources, result.warnings].every(Array.isArray);
+}
+
+export type ChinaPlanCompilationProposalDecision =
+  | { status: "ready"; proposal: PlanCompilationProposal }
+  | { status: "blocked"; reasonCode: "composition_not_ready" | "preparation_not_composed" | "invalid_preparation"; message: string };
+
+/** Converts already composed China results into the country-neutral Core proposal contract. */
+export function createChinaPlanCompilationProposal(input: { composite: ChinaArrivalPlanSkillResult; preparation: ArrivalPreparationSkillResult }): ChinaPlanCompilationProposalDecision {
+  const { composite, preparation } = input;
+  if ((composite.status !== "success" && composite.status !== "degraded") || composite.missingSkills.length) {
+    return { status: "blocked", reasonCode: "composition_not_ready", message: "All required China supporting results must be composed before Core compilation." };
+  }
+  const preparationFact = composite.facts.find((fact) => fact.skillId === "arrival-preparation");
+  if (!preparationFact || preparationFact.version !== preparation.skill.version || preparationFact.status !== preparation.status) {
+    return { status: "blocked", reasonCode: "preparation_not_composed", message: "The arrival-preparation result does not match the version and status recorded by the composite." };
+  }
+  if ((preparation.status !== "success" && preparation.status !== "degraded") || preparation.needsInput.length) {
+    return { status: "blocked", reasonCode: "invalid_preparation", message: "Arrival preparation still needs input or failed before Core compilation." };
+  }
+  const taskIds = preparation.proposedTasks.map((task) => task.proposalId);
+  const reminderTaskIds = preparation.proposedReminders.map((reminder) => reminder.taskProposalId);
+  if (new Set(taskIds).size !== taskIds.length || new Set(reminderTaskIds).size !== reminderTaskIds.length || reminderTaskIds.some((taskId) => !taskIds.includes(taskId))) {
+    return { status: "blocked", reasonCode: "invalid_preparation", message: "Arrival preparation contains duplicate or orphan Reminder proposals." };
+  }
+  const reminders = new Map(preparation.proposedReminders.map((reminder) => [reminder.taskProposalId, reminder]));
+  const limitations = [...new Set([...composite.warnings, ...preparation.warnings].filter((warning) => warning.trim()))];
+  const assumptions = composite.assumptions.flatMap((assumption) => typeof assumption.value === "string" && assumption.value.trim() ? [assumption.value.trim()] : []);
+  return {
+    status: "ready",
+    proposal: {
+      planRef: { ...composite.planRef },
+      countryPack: { id: "china", version: "0.0.0", name: "China Country Pack" },
+      composition: { skillId: composite.skill.id, version: composite.skill.version, status: composite.status },
+      compilationKey: "china-arrival-preparation",
+      stage: { title: "China arrival preparation", description: "Source-bound preparation compiled from the reviewed China Country Pack results." },
+      tasks: preparation.proposedTasks.map((task) => {
+        const reminder = reminders.get(task.proposalId);
+        const sourceSkills = [...task.sourceSkills, { id: preparation.skill.id, version: preparation.skill.version }].filter((source, index, all) => all.findIndex((candidate) => candidate.id === source.id && candidate.version === source.version) === index);
+        return {
+          proposalId: task.proposalId,
+          title: task.title,
+          description: task.details,
+          owner: "user" as const,
+          dueLabel: reminder ? "At the proposed reminder time" : "Before arrival",
+          sourceSkills,
+          ...(reminder ? { reminder: { dueAt: reminder.dueAt, timeZone: reminder.timeZone, purpose: reminder.purpose, refreshFacts: reminder.refreshFacts } } : {})
+        };
+      }),
+      assumptions,
+      limitations
+    }
+  };
 }
