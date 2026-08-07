@@ -100,6 +100,23 @@ test("Amap converts a GPS coordinate before using it as an Amap route point", as
   assert.equal(url.searchParams.get("locations"), "121.470000,31.230000");
 });
 
+test("Amap reverse geocoding returns the live city code needed for public transit", async () => {
+  let requestUrl = "";
+  const connector = new AmapConnector({
+    apiKey: "test-key",
+    fetcher: async (input) => {
+      requestUrl = String(input);
+      return new Response(JSON.stringify({ status: "1", regeocode: { formatted_address: "Shanghai Huangpu District", addressComponent: { city: [], citycode: "021", district: "Huangpu" } } }));
+    }
+  });
+  const result = await connector.reverseGeocode({ location: "121.4700001,31.2300001" });
+  const url = new URL(requestUrl);
+  assert.equal(result.data?.cityCode, "021");
+  assert.equal(result.data?.district, "Huangpu");
+  assert.equal(url.pathname, "/v3/geocode/regeo");
+  assert.equal(url.searchParams.get("location"), "121.470000,31.230000");
+});
+
 test("Amap nearby restaurant discovery keeps distance facts and uses the restaurant category", async () => {
   let requestUrl = "";
   const connector = new AmapConnector({

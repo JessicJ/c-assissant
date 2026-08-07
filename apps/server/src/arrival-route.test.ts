@@ -25,3 +25,10 @@ test("arrival route copy makes the Amap handoff and its boundary explicit", () =
   assert.match(result.text, /not hailed a ride/i);
   assert.match(result.handoffUrl, /^https:\/\/uri\.amap\.com\/navigation/);
 });
+
+test("arrival route copy includes a public-transit fare when Amap provides one", () => {
+  const origin = { id: "", name: "Shared current location", address: "", location: "121.455,31.249", type: "Temporary location", city: "", district: "" };
+  const destination = { id: "stay-1", name: "Riverside Hotel", address: "1 River Road", location: "121.456,31.250", type: "Accommodation", city: "Shanghai", district: "Jing'an" };
+  const result = formatArrivalRoute({ origin, destination, transport: "transit", route: { mode: "transit", origin: origin.location, destination: destination.location, distanceMeters: 2_400, durationSeconds: 1_020, transitCostYuan: 4, strategy: "public_transit_recommended" } });
+  assert.match(result.text, /estimated transit fare ¥4/);
+});

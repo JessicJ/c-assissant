@@ -346,18 +346,38 @@ async function sendArrivalRouteFromSharedLocation(chatId: string, location: { la
   } else if (preference === "walking") {
     const route = await amap.walkingRoute({ origin: origin.location, destination: destination.location, destinationId: destination.id || undefined });
     if (route.status === "available" && route.data) routeFacts.push(route.data);
+  } else if (preference === "public_transit") {
+    const route = await arrivalTransitRoute(origin, destination);
+    if (route) routeFacts.push(route);
   } else if (preference === "plan_recommended") {
-    const [driving, walking] = await Promise.all([
+    const [driving, walking, transit] = await Promise.all([
       amap.drivingRoute({ origin: origin.location, destination: destination.location, destinationId: destination.id || undefined }),
-      amap.walkingRoute({ origin: origin.location, destination: destination.location, destinationId: destination.id || undefined })
+      amap.walkingRoute({ origin: origin.location, destination: destination.location, destinationId: destination.id || undefined }),
+      arrivalTransitRoute(origin, destination)
     ]);
     if (driving.status === "available" && driving.data) routeFacts.push(driving.data);
     if (walking.status === "available" && walking.data) routeFacts.push(walking.data);
+    if (transit) routeFacts.push(transit);
   }
   const transport = selectArrivalTransport(plan, routeFacts);
   const selectedRoute = routeFacts.find((route) => route.mode === transport);
   const result = formatArrivalRoute({ origin, destination, transport, ...(selectedRoute ? { route: selectedRoute } : {}) });
   await telegram.sendMessage({ chatId, text: result.text, replyMarkup: { inline_keyboard: [[{ text: "Open route in Amap", url: result.handoffUrl }]] } });
+}
+
+async function arrivalTransitRoute(origin: AmapPlace, destination: AmapPlace): Promise<AmapRoute | undefined> {
+  const [originArea, destinationArea] = await Promise.all([
+    amap.reverseGeocode({ location: origin.location }),
+    amap.reverseGeocode({ location: destination.location })
+  ]);
+  if (originArea.status !== "available" || !originArea.data || destinationArea.status !== "available" || !destinationArea.data) return undefined;
+  const route = await amap.transitRoute({
+    origin: origin.location,
+    destination: destination.location,
+    originCityCode: originArea.data.cityCode,
+    destinationCityCode: destinationArea.data.cityCode
+  });
+  return route.status === "available" && route.data ? route.data : undefined;
 }
 
 async function runArrivalReminder(): Promise<void> {

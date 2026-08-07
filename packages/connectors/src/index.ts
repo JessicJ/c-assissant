@@ -50,6 +50,14 @@ export interface AmapGeocodedPlace {
   level: string;
 }
 
+/** Administrative facts derived from an Amap-coordinate point for transit lookup. */
+export interface AmapReverseGeocodedPlace {
+  formattedAddress: string;
+  city: string;
+  cityCode: string;
+  district: string;
+}
+
 export interface AmapRouteHandoff {
   provider: "amap";
   action: "route_planning";
@@ -115,6 +123,14 @@ interface AmapResponse {
     district?: string | string[];
     level?: string;
   }>;
+  regeocode?: {
+    formatted_address?: string;
+    addressComponent?: {
+      city?: string | string[];
+      citycode?: string;
+      district?: string | string[];
+    };
+  };
   locations?: string;
 }
 
@@ -397,6 +413,32 @@ export class AmapConnector {
     const location = response.payload.locations?.split(";")[0]?.trim();
     if (!location || !isCoordinate(location)) return this.failure("degraded", "Amap did not return a usable converted coordinate.", "missing_converted_coordinate", true);
     return { status: "available", provider: "amap", observedAt: new Date().toISOString(), data: { location } };
+  }
+
+  /** Resolves only the administrative facts needed to request Amap public transit. */
+  async reverseGeocode(input: { location: string }): Promise<ConnectorResult<AmapReverseGeocodedPlace>> {
+    if (!isCoordinate(input.location)) return this.failure("unsupported", "Reverse geocoding needs valid longitude,latitude coordinates.", "invalid_coordinates", false);
+    if (!this.apiKey) return this.failure("not_configured", "Amap is not configured on this instance.", "not_configured", false);
+    const params = new URLSearchParams({ key: this.apiKey, location: coordinateWithSixDecimals(input.location) });
+    const response = await this.request("/v3/geocode/regeo", params);
+    if (!response.ok) return response.failure;
+    if (response.payload.status !== "1") return this.fromAmapFailure(response.payload);
+    const place = response.payload.regeocode;
+    const addressComponent = place?.addressComponent;
+    const cityCode = addressComponent?.citycode?.trim();
+    const formattedAddress = place?.formatted_address?.trim();
+    if (!formattedAddress || !cityCode) return this.failure("degraded", "Amap did not return the city code needed for public transit.", "missing_city_code", false);
+    return {
+      status: "available",
+      provider: "amap",
+      observedAt: new Date().toISOString(),
+      data: {
+        formattedAddress,
+        city: firstText(addressComponent?.city),
+        cityCode,
+        district: firstText(addressComponent?.district)
+      }
+    };
   }
 
   private async request(path: string, params: URLSearchParams): Promise<{ ok: true; payload: AmapResponse } | { ok: false; failure: ConnectorResult<never> }> {
