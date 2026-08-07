@@ -429,6 +429,138 @@ function isConfirmedPolicyValue(value: string | undefined): boolean {
   return Boolean(normalized) && !normalized.includes("to be confirmed") && !normalized.includes("not sure");
 }
 
+export interface LocalFoodGuideSourceInput {
+  id: string;
+  authority: string;
+  titleOriginal: string;
+  url: string;
+  retrievedAt: string;
+  contentHash: string;
+}
+
+export interface LocalFoodGuideFactInput {
+  id: string;
+  nameOriginal: string;
+  nameEnglish: string;
+  descriptionEnglish: string;
+  sourceId: string;
+}
+
+export interface LocalFoodGuideSkillResult {
+  skill: { id: "local-food-guide"; version: "0.1.0" };
+  status: "success" | "needs_input" | "degraded" | "failed";
+  summary: string;
+  facts: LocalFoodGuideFactInput[];
+  assumptions: [];
+  recommendations: Array<{ factId: string; text: string; sourceId: string }>;
+  proposedPlanChanges: [];
+  proposedTasks: [];
+  proposedReminders: [];
+  actionCards: [];
+  sources: LocalFoodGuideSourceInput[];
+  warnings: string[];
+  needsInput?: { field: "plan.location"; reason: string };
+}
+
+const LOCAL_FOOD_SOURCE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1_000;
+
+/**
+ * Plan-time food orientation only. It preserves approved official-source facts
+ * and never turns them into restaurant, ordering, booking, or payment actions.
+ */
+export function runLocalFoodGuideSkill(input: {
+  locationName?: string;
+  facts: LocalFoodGuideFactInput[];
+  sources: LocalFoodGuideSourceInput[];
+  approvedSourceIds: string[];
+  now: string;
+}): LocalFoodGuideSkillResult {
+  const identity = { id: "local-food-guide" as const, version: "0.1.0" as const };
+  const noActions = { assumptions: [] as [], proposedPlanChanges: [] as [], proposedTasks: [] as [], proposedReminders: [] as [], actionCards: [] as [] };
+  const locationName = input.locationName?.trim();
+  if (!locationName) {
+    return {
+      skill: identity,
+      ...noActions,
+      status: "needs_input",
+      summary: "A confirmed Plan location is needed before adding local food guidance.",
+      facts: [],
+      recommendations: [],
+      sources: [],
+      warnings: [],
+      needsInput: { field: "plan.location", reason: "Local food context must be tied to the destination in this Plan." }
+    };
+  }
+  const nowMs = Date.parse(input.now);
+  if (!Number.isFinite(nowMs) || !Array.isArray(input.facts) || !Array.isArray(input.sources) || !Array.isArray(input.approvedSourceIds) || !input.approvedSourceIds.every((id) => typeof id === "string" && id.trim())) {
+    return { skill: identity, ...noActions, status: "failed", summary: "The local food input did not pass the Skill contract.", facts: [], recommendations: [], sources: [], warnings: ["No food guidance was produced from malformed context."] };
+  }
+
+  const approvedSourceIds = new Set(input.approvedSourceIds);
+  const sourceById = new Map(input.sources.filter((source) => approvedSourceIds.has(source.id) && isValidLocalFoodSource(source, nowMs)).map((source) => [source.id, source]));
+  const seenNames = new Set<string>();
+  const facts = input.facts.filter((fact) => {
+    if (!isValidLocalFoodFact(fact) || !sourceById.has(fact.sourceId)) return false;
+    const key = `${fact.nameOriginal.trim().toLocaleLowerCase()}\u0000${fact.nameEnglish.trim().toLocaleLowerCase()}`;
+    if (seenNames.has(key)) return false;
+    seenNames.add(key);
+    return true;
+  }).slice(0, 5).map((fact) => ({
+    id: fact.id.trim(),
+    nameOriginal: fact.nameOriginal.trim(),
+    nameEnglish: fact.nameEnglish.trim(),
+    descriptionEnglish: fact.descriptionEnglish.trim(),
+    sourceId: fact.sourceId
+  }));
+  const usedSourceIds = new Set(facts.map((fact) => fact.sourceId));
+  const sources = [...usedSourceIds].flatMap((id) => {
+    const source = sourceById.get(id);
+    return source ? [source] : [];
+  });
+  const warnings = [
+    "These are destination food references, not restaurant recommendations or proof of current availability.",
+    "No restaurant, order, reservation, payment, or visit has been selected or started."
+  ];
+  if (facts.length !== input.facts.length || sourceById.size !== input.sources.length) warnings.push("Malformed, duplicate, or untraceable food facts and sources were omitted.");
+  if (!facts.length) {
+    return {
+      skill: identity,
+      ...noActions,
+      status: "degraded",
+      summary: `No source-backed local food guidance is currently available for ${locationName}.`,
+      facts: [],
+      recommendations: [],
+      sources: [],
+      warnings
+    };
+  }
+  return {
+    skill: identity,
+    ...noActions,
+    status: "success",
+    summary: `${facts.length} source-backed local food references are available for ${locationName}; specific places can be considered after arrival or on request.`,
+    facts,
+    recommendations: facts.map((fact) => ({ factId: fact.id, sourceId: fact.sourceId, text: `Learn about ${fact.nameEnglish} (${fact.nameOriginal}): ${fact.descriptionEnglish}` })),
+    sources,
+    warnings
+  };
+}
+
+function isValidLocalFoodSource(source: LocalFoodGuideSourceInput, nowMs: number): boolean {
+  if (!source.id.trim() || !source.authority.trim() || !source.titleOriginal.trim() || !/^[a-f0-9]{64}$/i.test(source.contentHash) || !Number.isFinite(Date.parse(source.retrievedAt))) return false;
+  const retrievedAt = Date.parse(source.retrievedAt);
+  if (retrievedAt > nowMs + 5 * 60 * 1_000 || retrievedAt < nowMs - LOCAL_FOOD_SOURCE_MAX_AGE_MS) return false;
+  try {
+    return new URL(source.url).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function isValidLocalFoodFact(fact: LocalFoodGuideFactInput): boolean {
+  return Boolean(fact.id.trim() && fact.nameOriginal.trim() && fact.nameEnglish.trim() && fact.descriptionEnglish.trim() && fact.sourceId.trim());
+}
+
 export const chinaArrivalPlanSupportingSkillOrder = [
   "policy-applicability",
   "weather-and-packing",

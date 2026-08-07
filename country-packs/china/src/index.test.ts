@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { chinaArrivalPlanSupportingSkillOrder, runChinaArrivalPlanSkill, runFoodNearbySkill, runHousingAreaRecommendationSkill, runPolicyApplicabilitySkill, runTransportPlannerSkill, runWeatherAndPackingSkill, type ChinaArrivalPlanSupportingResult, type ChinaArrivalPlanSupportingSkillId } from "./index.js";
+import { chinaArrivalPlanSupportingSkillOrder, runChinaArrivalPlanSkill, runFoodNearbySkill, runHousingAreaRecommendationSkill, runLocalFoodGuideSkill, runPolicyApplicabilitySkill, runTransportPlannerSkill, runWeatherAndPackingSkill, type ChinaArrivalPlanSupportingResult, type ChinaArrivalPlanSupportingSkillId } from "./index.js";
 import { chinaSkillRegistry } from "./registry.js";
 
 const candidates = [
@@ -177,8 +177,47 @@ test("policy-applicability rejects stale, future, and unapproved evidence for cu
   assert.match(unapproved.warnings.join(" "), /omitted/);
 });
 
+const localFoodSource = { id: "shanghai-culture-1", authority: "Shanghai Municipal Administration of Culture and Tourism", titleOriginal: "上海美食介绍", url: "https://example.shanghai.gov.cn/food", retrievedAt: "2026-08-07T00:00:00.000Z", contentHash: "b".repeat(64) };
+const localFoodFacts = [
+  { id: "xiaolongbao", nameOriginal: "小笼包", nameEnglish: "xiaolongbao", descriptionEnglish: "A steamed bun style associated with the destination's food culture.", sourceId: localFoodSource.id },
+  { id: "scallion-noodles", nameOriginal: "葱油拌面", nameEnglish: "scallion oil noodles", descriptionEnglish: "A noodle dish described by the linked destination source.", sourceId: localFoodSource.id }
+];
+
+test("local-food-guide identity matches its internal manifest and asks only for Plan location", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../skills/local-food-guide/skill.json", import.meta.url), "utf8")) as { id: string; version: string; visibility: string; entrypoint: string };
+  const result = runLocalFoodGuideSkill({ facts: localFoodFacts, sources: [localFoodSource], approvedSourceIds: [localFoodSource.id], now: "2026-08-07T01:00:00.000Z" });
+  assert.deepEqual(result.skill, { id: manifest.id, version: manifest.version });
+  assert.equal(manifest.visibility, "internal");
+  assert.equal(manifest.entrypoint, "runLocalFoodGuideSkill");
+  assert.equal(result.status, "needs_input");
+  assert.equal(result.needsInput?.field, "plan.location");
+});
+
+test("local-food-guide preserves bilingual source-backed context without choosing restaurants", () => {
+  const result = runLocalFoodGuideSkill({ locationName: "Shanghai", facts: localFoodFacts, sources: [localFoodSource], approvedSourceIds: [localFoodSource.id], now: "2026-08-07T01:00:00.000Z" });
+  assert.equal(result.status, "success");
+  assert.deepEqual(result.facts.map((fact) => [fact.nameOriginal, fact.nameEnglish]), [["小笼包", "xiaolongbao"], ["葱油拌面", "scallion oil noodles"]]);
+  assert.equal(result.recommendations.length, 2);
+  assert.deepEqual(result.actionCards, []);
+  assert.deepEqual(result.proposedTasks, []);
+  assert.match(result.summary, /specific places can be considered after arrival or on request/);
+  assert.match(result.warnings.join(" "), /not restaurant recommendations/);
+});
+
+test("local-food-guide degrades without traceable facts and omits malformed or duplicate input", () => {
+  const untraceable = runLocalFoodGuideSkill({ locationName: "Shanghai", facts: localFoodFacts, sources: [], approvedSourceIds: [localFoodSource.id], now: "2026-08-07T01:00:00.000Z" });
+  assert.equal(untraceable.status, "degraded");
+  assert.equal(untraceable.facts.length, 0);
+  const filtered = runLocalFoodGuideSkill({ locationName: "Shanghai", facts: [...localFoodFacts, { ...localFoodFacts[0]!, id: "duplicate" }, { ...localFoodFacts[0]!, id: "", sourceId: "missing" }], sources: [localFoodSource, { ...localFoodSource, id: "bad", url: "http://example.com" }], approvedSourceIds: [localFoodSource.id], now: "2026-08-07T01:00:00.000Z" });
+  assert.equal(filtered.status, "success");
+  assert.equal(filtered.facts.length, 2);
+  assert.match(filtered.warnings.join(" "), /omitted/);
+  const stale = runLocalFoodGuideSkill({ locationName: "Shanghai", facts: localFoodFacts, sources: [{ ...localFoodSource, retrievedAt: "2026-01-01T00:00:00.000Z" }], approvedSourceIds: [localFoodSource.id], now: "2026-08-07T01:00:00.000Z" });
+  assert.equal(stale.status, "degraded");
+});
+
 test("China Skill Registry loads every internal manifest and validates invocation envelopes", async () => {
-  assert.deepEqual(chinaSkillRegistry.list().map((manifest) => manifest.id).sort(), ["china-arrival-plan", "food-nearby", "housing-area-recommendation", "policy-applicability", "transport-planner", "weather-and-packing"]);
+  assert.deepEqual(chinaSkillRegistry.list().map((manifest) => manifest.id).sort(), ["china-arrival-plan", "food-nearby", "housing-area-recommendation", "local-food-guide", "policy-applicability", "transport-planner", "weather-and-packing"]);
   const result = await chinaSkillRegistry.invoke("food-nearby", { partySize: 2, candidates, observedAt: "2026-08-07T00:00:00.000Z" });
   assert.equal(result.skill.id, "food-nearby");
   assert.equal(result.status, "success");

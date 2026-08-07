@@ -12,7 +12,7 @@ The Pack helps foreigners prepare for and adapt to life in China. It is a region
 
 Composite entry point. Core orchestrates the supporting Skills and compiles one complete Plan. It is not one giant prompt.
 
-Implemented slice: `china-arrival-plan` `0.1.0` is a fail-closed composition gate in the China Skill Registry. It binds supporting results to an exact Plan ID/version, orders them according to this document, and preserves Skill versions, statuses, summaries, assumptions, recommendations, sources, and warnings. It remains `blocked:composition_incomplete` while `local-food-guide`, `digital-life-setup`, and `arrival-preparation` are absent. Until Core compilation and authorization are connected, it deliberately promotes no Plan changes, Tasks, Reminders, or action cards.
+Implemented slice: `china-arrival-plan` `0.1.0` is a fail-closed composition gate in the China Skill Registry. It binds supporting results to an exact Plan ID/version, orders them according to this document, and preserves Skill versions, statuses, summaries, assumptions, recommendations, sources, and warnings. It remains `blocked:composition_incomplete` while `digital-life-setup` and `arrival-preparation` are absent. Until Core compilation and authorization are connected, it deliberately promotes no Plan changes, Tasks, Reminders, or action cards.
 
 ### `policy-applicability`
 
@@ -55,6 +55,8 @@ Implemented slice: `transport-planner` `0.1.0` receives normalized Amap route fa
 ### `local-food-guide`
 
 Adds local specialties and useful food context to the Plan. It avoids prematurely scheduling specific restaurants unless the user asks.
+
+Implemented slice: `local-food-guide` `0.1.0` accepts only normalized food facts linked to an official-source ID from the Country Pack allowlist and a snapshot retrieved inside a 30-day freshness window. It preserves each Chinese original name, adds an English name and explanation, deduplicates and limits the Plan-time result to five items, and degrades rather than inventing local specialties when no traceable fact is available. It does not select restaurants or propose map, order, reservation, payment, or completion actions; specific places remain the later `food-nearby` flow.
 
 ### `food-nearby`
 
