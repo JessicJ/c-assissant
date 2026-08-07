@@ -1,5 +1,8 @@
 import type { AgentRuntimeKind, GeneratedPlanDraft, Plan, WorkspaceSnapshot } from "@c-assistant/core";
 
+export type TelegramPlanConfirmationDecision = "confirm" | "already_active" | "stale" | "not_confirmation";
+export type TelegramPlanConfirmationMarkup = { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+
 export interface TelegramPlanCreation {
   source: "runtime" | "template";
   runtime: AgentRuntimeKind;
@@ -27,11 +30,25 @@ export function formatTelegramPlanCreation(result: TelegramPlanCreation): string
   const plan = result.workspace.activePlan;
   const runtime = result.runtime === "claude-code" ? "Claude Code" : "Codex";
   const origin = result.source === "runtime" ? `${runtime} created a complete Plan draft` : `${runtime} is unavailable, so C-assistant created a local template draft`;
-  return `${origin}:\n${plan.title}\n${plan.location} · ${plan.dates}\n\nReview the complete Plan in the Web workspace before confirmation or any future automation.`;
+  return truncateTelegramText(`${origin}.\n\n${formatTelegramPlan(plan)}`);
 }
 
-/** A readable mobile summary; the Web workspace remains the canonical complete Plan view. */
+export function formatTelegramPlanCreationPages(result: TelegramPlanCreation): string[] {
+  const runtime = result.runtime === "claude-code" ? "Claude Code" : "Codex";
+  const origin = result.source === "runtime" ? `${runtime} created a complete Plan draft.` : `${runtime} is unavailable, so C-assistant created a local template draft.`;
+  return paginateTelegramText(`${origin}\n\n${telegramPlanText(result.workspace.activePlan)}`);
+}
+
+/** A readable mobile copy of the complete Plan, bounded by Telegram's message limit. */
 export function formatTelegramPlan(plan: Plan): string {
+  return truncateTelegramText(telegramPlanText(plan));
+}
+
+export function formatTelegramPlanPages(plan: Plan): string[] {
+  return paginateTelegramText(telegramPlanText(plan));
+}
+
+function telegramPlanText(plan: Plan): string {
   const lines = [
     "Current Plan",
     plan.title,
@@ -56,8 +73,24 @@ export function formatTelegramPlan(plan: Plan): string {
       }
     });
   });
-  lines.push("", `Next: ${oneLine(plan.nextAction)}`, "", "Use the Web workspace to review every field and confirm or revise this Plan.");
-  return truncateTelegramText(lines.join("\n"));
+  const closing = plan.status === "draft"
+    ? "Review every field above. Confirm only if this complete Plan is correct; otherwise send your correction or create a revised Plan."
+    : "This Plan is active. Send a correction to create a new draft before changing its automation scope.";
+  lines.push("", `Next: ${oneLine(plan.nextAction)}`, "", closing);
+  return lines.join("\n");
+}
+
+export function telegramPlanConfirmationMarkup(plan: Plan): TelegramPlanConfirmationMarkup | undefined {
+  if (plan.status !== "draft") return undefined;
+  return { inline_keyboard: [[{ text: "Confirm complete Plan", callback_data: `confirm_plan:${plan.id}:${plan.version}` }]] };
+}
+
+export function telegramPlanConfirmationDecision(plan: Plan, callbackData: string | undefined): TelegramPlanConfirmationDecision {
+  const match = callbackData?.match(/^confirm_plan:(plan-[0-9a-f-]{36}):(\d+)$/);
+  if (!match) return "not_confirmation";
+  const [, planId, rawVersion] = match;
+  if (plan.id !== planId || plan.version !== Number(rawVersion)) return "stale";
+  return plan.status === "active" ? "already_active" : "confirm";
 }
 
 function oneLine(value: string, maxLength = 220): string {
@@ -68,5 +101,23 @@ function oneLine(value: string, maxLength = 220): string {
 function truncateTelegramText(value: string): string {
   const maxLength = 3_800;
   if (value.length <= maxLength) return value;
-  return `${value.slice(0, maxLength - 110).trimEnd()}\n\n[Plan preview shortened for Telegram. Open the Web workspace for the complete Plan.]`;
+  return `${value.slice(0, maxLength - 110).trimEnd()}\n\n[Plan preview shortened. Use the paginated Telegram Plan or Web workspace for the complete version.]`;
+}
+
+function paginateTelegramText(value: string): string[] {
+  const maxBodyLength = 3_650;
+  if (value.length <= maxBodyLength) return [value];
+  const pages: string[] = [];
+  let current = "";
+  for (const line of value.split("\n")) {
+    const candidate = current ? `${current}\n${line}` : line;
+    if (candidate.length <= maxBodyLength) {
+      current = candidate;
+      continue;
+    }
+    if (current) pages.push(current);
+    current = line;
+  }
+  if (current) pages.push(current);
+  return pages.map((page, index) => `[Plan ${index + 1}/${pages.length}]\n${page}`);
 }
