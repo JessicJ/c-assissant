@@ -18,7 +18,8 @@ All implemented manifests are loaded by one China Pack registry. Duplicate IDs, 
 
 Implemented slice:
 
-- `china-arrival-plan` `0.1.0`: orders seven required supporting results against one Plan ID/version, preserves their identity, status, recommendations, sources, and warnings, and blocks while two planned Skills are absent. It does not promote state or action proposals yet.
+- `china-arrival-plan` `0.1.0`: orders seven required supporting results against one Plan ID/version, preserves their identity, status, recommendations, sources, and warnings, and blocks while one planned Skill is absent. It does not promote state or action proposals yet.
+- `digital-life-setup` `0.1.0`: selects fresh first-party setup guidance for Plan-derived connectivity, communication, navigation, and payment capabilities, while keeping credentials and completion claims outside the Skill.
 - `local-food-guide` `0.1.0`: converts up to five traceable official-source food facts into bilingual Plan-time orientation, without selecting a restaurant or creating an action proposal.
 - `food-nearby` `0.1.0`: deterministic, bounded transformation of current Amap nearby-place facts into a structured Skill result and external-handoff proposals. Runtime code is exported only through the complete `@c-assistant/china-country-pack` package.
 - `housing-area-recommendation` `0.1.0`: first access-oriented slice that explains accommodation candidates relative to a selected Plan anchor. It does not claim a complete neighborhood recommendation until multi-anchor routes and preferences exist.
