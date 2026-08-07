@@ -14,6 +14,7 @@ import { createOfficialSourceService, parseOfficialSourceRegistry } from "./offi
 import { parseTelegramCommand } from "./telegram-commands.js";
 import { createTelegramPlan, formatTelegramPlan, formatTelegramPlanCreation } from "./telegram-plan.js";
 import { dueTaskReminders, formatTaskReminder } from "./task-reminder.js";
+import { refreshTaskReminderWeather, type TaskReminderWeatherContext } from "./task-reminder-weather.js";
 
 const server = Fastify({ logger: true });
 const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -487,7 +488,23 @@ async function runTaskReminders(): Promise<void> {
     for (const item of due) {
       const attempt = store.claimTelegramTaskReminderAttempt({ planId: plan.id, reminderKey: item.reminderKey, taskId: item.task.id, dueAt: item.dueAt.toISOString(), reminder: item.reminder });
       if (!attempt.claimed) continue;
-      const receipt = await telegram.sendMessage({ chatId: pairing.binding.chatId, text: formatTaskReminder(plan, item.task) });
+      let weather: TaskReminderWeatherContext | undefined;
+      try {
+        const refreshed = await refreshTaskReminderWeather({
+          plan,
+          reminder: item.reminder,
+          language: /^zh|chinese/i.test(store.getWorkspace().profile.preferredLanguage) ? "zh" : "en",
+          dependencies: {
+            geocodeAddress: (input) => amap.geocodeAddress(input),
+            weather: (input) => qweather.weather(input)
+          }
+        });
+        if (refreshed.status === "available") weather = refreshed.data;
+        else server.log.warn({ stage: refreshed.stage, code: refreshed.code, taskId: item.task.id }, "Task reminder weather context was unavailable");
+      } catch (error) {
+        server.log.warn({ error, taskId: item.task.id }, "Task reminder weather refresh failed unexpectedly");
+      }
+      const receipt = await telegram.sendMessage({ chatId: pairing.binding.chatId, text: formatTaskReminder(plan, item.task, weather) });
       if (receipt.status === "available") {
         store.recordTelegramTaskReminderDelivered({ planId: plan.id, reminderKey: item.reminderKey, taskId: item.task.id, taskTitle: item.task.title, reminder: item.reminder });
       } else {

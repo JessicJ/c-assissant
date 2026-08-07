@@ -1,5 +1,6 @@
 import type { Plan, Task, TaskReminder } from "@c-assistant/core";
 import { localDateTimeInstant } from "./arrival-reminder.js";
+import type { TaskReminderWeatherContext } from "./task-reminder-weather.js";
 
 const REMINDER_CATCH_UP_MS = 30 * 60_000;
 const TERMINAL_TASK_STATUSES = new Set<Task["status"]>(["completed", "skipped", "failed", "cancelled"]);
@@ -25,7 +26,8 @@ export function dueTaskReminders(plan: Plan, now = new Date()): DueTaskReminder[
 }
 
 /** Builds current delivery copy from the confirmed Plan and Task, not a frozen draft message. */
-export function formatTaskReminder(plan: Plan, task: Task): string {
+export function formatTaskReminder(plan: Plan, task: Task, weather?: TaskReminderWeatherContext): string {
   if (!task.reminder) throw new Error("A Task reminder is required.");
-  return `Plan reminder\n${plan.title}\n\nTask: ${task.title}\nWhy now: ${task.reminder.purpose}\nCurrent status: ${task.status.replaceAll("_", " ")}\n\nOpen the current Plan or send /plan to review the full context. No booking, payment, ride, or external action has been started.`;
+  const weatherSection = weather ? `\n\nLatest destination weather\n${weather.summary}\nRetrieved: ${weather.retrievedAt}\nSource: QWeather${weather.attributionUrl ? ` — ${weather.attributionUrl}` : ""}` : "";
+  return `Plan reminder\n${plan.title}\n\nTask: ${task.title}\nWhy now: ${task.reminder.purpose}\nCurrent status: ${task.status.replaceAll("_", " ")}${weatherSection}\n\nOpen the current Plan or send /plan to review the full context. No booking, payment, ride, or external action has been started.`;
 }

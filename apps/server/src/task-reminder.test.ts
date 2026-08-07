@@ -60,3 +60,15 @@ test("Task reminder copy reads the current Task and preserves external-action bo
   assert.match(message, /Check passport, travel documents/);
   assert.match(message, /No booking, payment, ride, or external action has been started/);
 });
+
+test("Task reminder copy identifies fresh weather facts and their source", () => {
+  const plan = reminderPlan();
+  const message = formatTaskReminder(plan, plan.stages[0]!.tasks[0]!, {
+    summary: "Shanghai: Rain, 21–27°C, forecast precipitation 5 mm. Consider carrying rain or snow protection. Forecast for 2026-09-01; conditions may change.",
+    retrievedAt: "2026-09-01T00:00:01Z",
+    attributionUrl: "https://www.qweather.com/weather/shanghai.html"
+  });
+  assert.match(message, /Latest destination weather/);
+  assert.match(message, /Retrieved: 2026-09-01T00:00:01Z/);
+  assert.match(message, /Source: QWeather — https:\/\/www\.qweather\.com/);
+});
