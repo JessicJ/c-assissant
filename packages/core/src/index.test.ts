@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { confirmPlan, createInitialWorkspace, createPlanFromDraft, createPlanFromRequest } from "./index.js";
+import { confirmPlan, createInitialWorkspace, createPlanFromDraft, createPlanFromRequest, recommendPlanTransport } from "./index.js";
 
 test("a confirmed demo Plan becomes active and leaves an inbox receipt", () => {
   const workspace = createInitialWorkspace();
@@ -36,4 +36,36 @@ test("a validated Agent draft becomes a draft Plan with user-owned follow-up Tas
 
   assert.equal(plan.status, "draft");
   assert.equal(plan.stages[0]?.tasks[0]?.status, "waiting_user");
+});
+
+test("a Plan preference takes precedence in an explainable transport suggestion", () => {
+  const recommendation = recommendPlanTransport({
+    preference: "public_transit",
+    luggage: "heavy",
+    routeFacts: [{ mode: "driving", distanceMeters: 4_000 }, { mode: "transit", distanceMeters: 3_600 }]
+  });
+
+  assert.equal(recommendation.mode, "transit");
+  assert.match(recommendation.reasons[0] ?? "", /explicitly prefers/i);
+});
+
+test("heavy luggage makes an available driving route the preliminary choice", () => {
+  const recommendation = recommendPlanTransport({
+    preference: "plan_recommended",
+    luggage: "heavy",
+    routeFacts: [{ mode: "driving", distanceMeters: 4_000 }, { mode: "transit", distanceMeters: 3_600 }]
+  });
+
+  assert.equal(recommendation.mode, "driving");
+  assert.match(recommendation.limitations[0] ?? "", /Live weather/i);
+});
+
+test("a short route can preliminarily favour walking without heavy luggage", () => {
+  const recommendation = recommendPlanTransport({
+    preference: "plan_recommended",
+    luggage: "light",
+    routeFacts: [{ mode: "walking", distanceMeters: 1_100, durationSeconds: 16 * 60 }, { mode: "transit", distanceMeters: 1_400 }]
+  });
+
+  assert.equal(recommendation.mode, "walking");
 });
