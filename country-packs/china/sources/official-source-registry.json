@@ -1,0 +1,20 @@
+[
+  {
+    "id": "nia-english",
+    "authority": "National Immigration Administration of the People's Republic of China",
+    "title": "National Immigration Administration — English",
+    "url": "https://en.nia.gov.cn/",
+    "allowedDomains": ["en.nia.gov.cn", "www.nia.gov.cn"],
+    "topics": ["immigration", "arrival", "accommodation_registration"],
+    "language": "en"
+  },
+  {
+    "id": "state-council-english",
+    "authority": "The State Council of the People's Republic of China",
+    "title": "The State Council — English",
+    "url": "https://english.www.gov.cn/",
+    "allowedDomains": ["english.www.gov.cn", "www.gov.cn"],
+    "topics": ["arrival", "daily_life", "business", "policy"],
+    "language": "en"
+  }
+]

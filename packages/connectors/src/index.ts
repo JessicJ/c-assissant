@@ -1,5 +1,5 @@
 export type ConnectorStatus = "available" | "degraded" | "not_configured" | "unauthorized" | "rate_limited" | "unavailable" | "unsupported";
-export type ConnectorProvider = "amap" | "qweather" | "telegram";
+export type ConnectorProvider = "amap" | "qweather" | "telegram" | "official_source";
 
 export interface ConnectorResult<T> {
   status: ConnectorStatus;
@@ -11,6 +11,132 @@ export interface ConnectorResult<T> {
     message: string;
     retryable: boolean;
   };
+}
+
+/** A Country Pack-owned allowlist entry, not a policy assertion. */
+export interface OfficialSourceDefinition {
+  id: string;
+  authority: string;
+  title: string;
+  url: string;
+  allowedDomains: string[];
+  topics: string[];
+  language: "en" | "zh" | "multilingual";
+}
+
+export interface OfficialSourceSnapshot {
+  sourceId: string;
+  authority: string;
+  titleOriginal: string;
+  url: string;
+  retrievedAt: string;
+  contentHash: string;
+  excerpt: string;
+}
+
+export interface OfficialSourceConnectorOptions {
+  sources: OfficialSourceDefinition[];
+  fetcher?: typeof fetch;
+}
+
+/**
+ * Fetches evidence only from a Country Pack's approved official-source
+ * registry. It deliberately returns facts and a bounded excerpt, never an
+ * applicability conclusion for a person's visa, residence, or legal status.
+ */
+export class OfficialSourceConnector {
+  private readonly sources: OfficialSourceDefinition[];
+  private readonly sourceById: Map<string, OfficialSourceDefinition>;
+  private readonly fetcher: typeof fetch;
+
+  constructor({ sources, fetcher = fetch }: OfficialSourceConnectorOptions) {
+    this.sources = sources.filter(isOfficialSourceDefinition);
+    this.sourceById = new Map(this.sources.map((source) => [source.id, source]));
+    this.fetcher = fetcher;
+  }
+
+  discover(input: { topic?: string | undefined } = {}): ConnectorResult<OfficialSourceDefinition[]> {
+    const topic = input.topic?.trim().toLowerCase();
+    const data = topic ? this.sources.filter((source) => source.topics.some((candidate) => candidate.toLowerCase() === topic)) : this.sources;
+    return { status: "available", provider: "official_source", observedAt: new Date().toISOString(), data };
+  }
+
+  async fetchSnapshot(input: { sourceId: string; url?: string | undefined }): Promise<ConnectorResult<OfficialSourceSnapshot>> {
+    const source = this.sourceById.get(input.sourceId.trim());
+    if (!source) return this.failure("unsupported", "This source is not in the active Country Pack registry.", "unknown_source", false);
+
+    const requestedUrl = input.url?.trim() || source.url;
+    const requested = parseApprovedUrl(requestedUrl, source.allowedDomains);
+    if (!requested) return this.failure("unsupported", "Only approved HTTPS URLs from this official source may be fetched.", "unapproved_source_url", false);
+
+    let response: Response;
+    try {
+      response = await this.fetcher(requested, { headers: { accept: "text/html,application/xhtml+xml" }, redirect: "follow" });
+    } catch {
+      return this.failure("unavailable", "The official source could not be reached right now.", "fetch_failed", true);
+    }
+    if (!response.ok) return this.failure("unavailable", `The official source returned HTTP ${response.status}.`, "source_http_error", response.status >= 500);
+
+    const finalUrl = parseApprovedUrl(response.url || requested.toString(), source.allowedDomains);
+    if (!finalUrl) return this.failure("unsupported", "The official source redirected outside its approved domains.", "unapproved_redirect", false);
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    if (contentType && !contentType.includes("text/html") && !contentType.includes("application/xhtml+xml")) {
+      return this.failure("unsupported", "The official source did not return an HTML document.", "unsupported_content_type", false);
+    }
+
+    const html = (await response.text()).slice(0, 250_000);
+    const extracted = extractOfficialPage(html);
+    if (!extracted.excerpt) return this.failure("degraded", "The official source did not contain readable text.", "empty_source_text", true);
+    const retrievedAt = new Date().toISOString();
+    return {
+      status: "available",
+      provider: "official_source",
+      observedAt: retrievedAt,
+      data: {
+        sourceId: source.id,
+        authority: source.authority,
+        titleOriginal: extracted.title || source.title,
+        url: finalUrl.toString(),
+        retrievedAt,
+        contentHash: await sha256(html),
+        excerpt: extracted.excerpt
+      }
+    };
+  }
+
+  private failure<T>(status: Exclude<ConnectorStatus, "available">, message: string, code: string, retryable: boolean): ConnectorResult<T> {
+    return { status, provider: "official_source", observedAt: new Date().toISOString(), failure: { code, message, retryable } };
+  }
+}
+
+function isOfficialSourceDefinition(value: OfficialSourceDefinition): boolean {
+  return Boolean(value.id.trim() && value.authority.trim() && value.title.trim() && parseApprovedUrl(value.url, value.allowedDomains) && value.allowedDomains.length && value.topics.length);
+}
+
+function parseApprovedUrl(value: string, allowedDomains: string[]): URL | undefined {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || !allowedDomains.some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`))) return undefined;
+    return url;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractOfficialPage(html: string): { title: string; excerpt: string } {
+  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const title = normalizeHtmlText(titleMatch?.[1] ?? "");
+  const excerpt = normalizeHtmlText(html.replace(/<script\b[^>]*>[\s\S]*?<\/script>|<style\b[^>]*>[\s\S]*?<\/style>/gi, "")).slice(0, 12_000);
+  return { title, excerpt };
+}
+
+function normalizeHtmlText(value: string): string {
+  return value.replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&quot;/gi, "\"").replaceAll(/\s+/g, " ").trim();
+}
+
+async function sha256(value: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export interface AmapPlace {
