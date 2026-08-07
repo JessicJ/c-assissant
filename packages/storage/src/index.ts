@@ -294,6 +294,21 @@ export class SqliteWorkspaceStore {
     return true;
   }
 
+  recordTelegramTaskReminderDelivered(planId: string, taskId: string): void {
+    const workspace = this.getWorkspace();
+    if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
+    if (workspace.activePlan.status !== "active") throw new Error("A Task reminder can be recorded only for an active Plan.");
+    const task = workspace.activePlan.stages.flatMap((stage) => stage.tasks).find((candidate) => candidate.id === taskId);
+    if (!task?.reminder) throw new Error("The delivered Task reminder was not found in the current Plan.");
+    this.addInbox({
+      id: `task-reminder-delivered-${planId}-${task.id}-${task.reminder.scheduledAtLocal}`,
+      tone: "ready",
+      title: `Reminder sent: ${task.title}`,
+      body: task.reminder.purpose,
+      timestamp: "Just now"
+    });
+  }
+
   recordTelegramArrivalCheckin(input: { planId: string; checkInSentAt: string }): void {
     const planId = input.planId.trim();
     if (!planId || !Number.isFinite(Date.parse(input.checkInSentAt))) throw new Error("Telegram arrival check-in needs a Plan and valid delivery time.");
