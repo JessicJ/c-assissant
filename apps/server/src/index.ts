@@ -4,9 +4,9 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-adapters";
+import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-adapters";
 import { AmapConnector, QWeatherConnector, TelegramConnector, type AmapPlace, type AmapRoute } from "@c-assistant/connectors";
-import type { CreatePlanInput, PlanAccommodationInput, PlanArrivalInput, PlanTransportPreferenceInput, PlanTravelContextInput, ProfileUpdate } from "@c-assistant/core";
+import type { AgentRuntimeKind, CreatePlanInput, PlanAccommodationInput, PlanArrivalInput, PlanTransportPreferenceInput, PlanTravelContextInput, ProfileUpdate, RuntimeSelectionUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue } from "./arrival-reminder.js";
 import { arrivalRouteDestination, formatArrivalRoute, selectArrivalTransport } from "./arrival-route.js";
@@ -23,6 +23,7 @@ const amap = new AmapConnector({ apiKey: process.env.AMAP_API_KEY });
 const qweather = new QWeatherConnector({ apiKey: process.env.QWEATHER_API_KEY, apiHost: process.env.QWEATHER_API_HOST });
 const telegram = new TelegramConnector({ botToken: process.env.TELEGRAM_BOT_TOKEN });
 const codex = new CodexRuntimeAdapter();
+const claudeCode = new ClaudeCodeRuntimeAdapter();
 let generatingPlan = false;
 let pollingTelegram = false;
 let checkingArrivalReminder = false;
@@ -124,13 +125,24 @@ server.post<{ Body: CreatePlanInput }>("/api/plans", async (request, reply) => {
 });
 
 server.get("/api/runtimes/codex", async () => codex.check());
+server.get("/api/runtimes/claude-code", async () => claudeCode.check());
+server.get("/api/runtimes", async () => Promise.all([codex.check(), claudeCode.check()]));
+
+server.put<{ Body: RuntimeSelectionUpdate }>("/api/runtime", async (request, reply) => {
+  try {
+    return store.updateRuntimeSelection(request.body);
+  } catch (error) {
+    return reply.code(400).send({ error: error instanceof Error ? error.message : "The Plan runtime could not be selected." });
+  }
+});
 
 server.post<{ Body: CreatePlanInput }>("/api/plans/generate", async (request, reply) => {
   if (generatingPlan) return reply.code(409).send({ error: "Another Plan generation is already running." });
   generatingPlan = true;
   try {
     const workspace = store.getWorkspace();
-    const draft = await codex.generatePlanDraft({
+    const runtime = selectedRuntimeAdapter(workspace.runtime.selectedKind);
+    const draft = await runtime.generatePlanDraft({
       request: request.body.request,
       profile: {
         preferredLanguage: workspace.profile.preferredLanguage,
@@ -139,10 +151,10 @@ server.post<{ Body: CreatePlanInput }>("/api/plans/generate", async (request, re
         immigrationStatus: workspace.profile.immigrationStatus
       }
     });
-    return store.createGeneratedPlan(draft);
+    return store.createGeneratedPlan(draft, workspace.runtime.selectedKind);
   } catch (error) {
     return reply.code(error instanceof RuntimeAdapterError && (error.code === "not_installed" || error.code === "not_authenticated") ? 503 : 400).send({
-      error: error instanceof Error ? error.message : "Codex could not generate a Plan draft."
+      error: error instanceof Error ? error.message : "The selected runtime could not generate a Plan draft."
     });
   } finally {
     generatingPlan = false;
@@ -452,7 +464,7 @@ async function requestTelegramArrivalLocation(chatId: string, intro: string): Pr
 async function telegramCommandResponse(text: string | undefined): Promise<string | undefined> {
   const command = parseTelegramCommand(text);
   if (command.type === "empty") return undefined;
-  if (command.type === "help") return "C-assistant is connected. Send a normal message to create a Plan draft with local Codex, or use:\n/plan — show the current Plan\n/new <what you need to do> — create a Plan draft\n/help — show this help\n\nEvery Plan still needs Web review and confirmation. Bookings and payments are not enabled.";
+  if (command.type === "help") return "C-assistant is connected. Send a normal message to create a Plan draft with your selected local runtime, or use:\n/plan — show the current Plan\n/new <what you need to do> — create a Plan draft\n/help — show this help\n\nEvery Plan still needs Web review and confirmation. Bookings and payments are not enabled.";
   if (command.type === "plan") {
     return formatTelegramPlan(store.getWorkspace().activePlan);
   }
@@ -462,10 +474,12 @@ async function telegramCommandResponse(text: string | undefined): Promise<string
     generatingPlan = true;
     try {
       const workspace = store.getWorkspace();
+      const runtime = selectedRuntimeAdapter(workspace.runtime.selectedKind);
       const result = await createTelegramPlan({
         request: command.request,
-        generate: () => codex.generatePlanDraft({ request: command.request, profile: { preferredLanguage: workspace.profile.preferredLanguage, nationality: workspace.profile.nationality, gender: workspace.profile.gender, immigrationStatus: workspace.profile.immigrationStatus } }),
-        saveGenerated: (draft) => store.createGeneratedPlan(draft),
+        runtime: workspace.runtime.selectedKind,
+        generate: () => runtime.generatePlanDraft({ request: command.request, profile: { preferredLanguage: workspace.profile.preferredLanguage, nationality: workspace.profile.nationality, gender: workspace.profile.gender, immigrationStatus: workspace.profile.immigrationStatus } }),
+        saveGenerated: (draft) => store.createGeneratedPlan(draft, workspace.runtime.selectedKind),
         saveTemplate: () => store.createPlan({ request: command.request })
       });
       return formatTelegramPlanCreation(result);
@@ -475,6 +489,10 @@ async function telegramCommandResponse(text: string | undefined): Promise<string
   }
   if (command.type === "start") return "This Telegram account is already connected to C-assistant. Send /help to see available commands.";
   return "That command is not available yet. Send /help to see what C-assistant can do.";
+}
+
+function selectedRuntimeAdapter(kind: AgentRuntimeKind): CodexRuntimeAdapter | ClaudeCodeRuntimeAdapter {
+  return kind === "claude-code" ? claudeCode : codex;
 }
 
 const port = Number(process.env.C_ASSISTANT_PORT ?? 8787);

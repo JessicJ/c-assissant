@@ -8,6 +8,7 @@ import {
   createPlanFromRequest,
   createDefaultPlanConfiguration,
   type CreatePlanInput,
+  type AgentRuntimeKind,
   type GeneratedPlanDraft,
   type InboxItem,
   type ImmigrationStatus,
@@ -19,6 +20,7 @@ import {
   type PlanTransportPreferenceInput,
   type ProfileGender,
   type ProfileUpdate,
+  type RuntimeSelectionUpdate,
   type SourceReference,
   type Stage,
   type Task,
@@ -34,6 +36,10 @@ interface ProfileRow {
   gender: ProfileGender;
   immigration_status: ImmigrationStatus;
   status: "incomplete" | "ready";
+}
+
+interface RuntimeSettingsRow {
+  selected_runtime: AgentRuntimeKind;
 }
 
 interface PlanRow {
@@ -117,8 +123,9 @@ export class SqliteWorkspaceStore {
 
   getWorkspace(): WorkspaceSnapshot {
     const profile = this.database.prepare("SELECT display_name, preferred_language, nationality, gender, immigration_status, status FROM profiles WHERE id = 1").get() as ProfileRow | undefined;
+    const runtime = this.database.prepare("SELECT selected_runtime FROM runtime_settings WHERE id = 1").get() as RuntimeSettingsRow | undefined;
     const activePlan = this.getCurrentPlan();
-    if (!profile || !activePlan) throw new Error("The local workspace is not initialized.");
+    if (!profile || !runtime || !activePlan) throw new Error("The local workspace is not initialized.");
 
     return {
       profile: {
@@ -129,6 +136,7 @@ export class SqliteWorkspaceStore {
         immigrationStatus: profile.immigration_status,
         status: profile.status
       },
+      runtime: { selectedKind: runtime.selected_runtime },
       activePlan,
       inbox: (this.database.prepare("SELECT id, tone, title, body, timestamp FROM inbox_items ORDER BY created_at DESC, rowid DESC").all() as unknown as InboxRow[]).map((row) => ({
         id: row.id,
@@ -140,7 +148,7 @@ export class SqliteWorkspaceStore {
       system: {
         core: "ready",
         storage: "local",
-        runtime: "not_configured",
+        runtime: "configured",
         telegram: "not_configured",
         amap: "not_configured"
       }
@@ -327,13 +335,13 @@ export class SqliteWorkspaceStore {
     return this.getWorkspace();
   }
 
-  createGeneratedPlan(draft: GeneratedPlanDraft): WorkspaceSnapshot {
+  createGeneratedPlan(draft: GeneratedPlanDraft, runtime: AgentRuntimeKind = "codex"): WorkspaceSnapshot {
     const plan = createPlanFromDraft(draft);
     this.savePlan(plan);
     this.addInbox({
       id: `plan-generated-${plan.id}`,
       tone: "notice",
-      title: "Codex Plan draft saved locally",
+      title: `${runtimeDisplayName(runtime)} Plan draft saved locally`,
       body: "Review the generated assumptions and the complete Plan before activation.",
       timestamp: "Just now"
     });
@@ -373,6 +381,21 @@ export class SqliteWorkspaceStore {
       tone: "ready",
       title: "Profile saved locally",
       body: "Only confirmed long-term information is stored in the Profile.",
+      timestamp: "Just now"
+    });
+    return this.getWorkspace();
+  }
+
+  updateRuntimeSelection(input: RuntimeSelectionUpdate): WorkspaceSnapshot {
+    if (!isAgentRuntimeKind(input.kind)) throw new Error("Choose Codex or Claude Code as the Plan runtime.");
+    const current = this.getWorkspace().runtime.selectedKind;
+    if (current === input.kind) return this.getWorkspace();
+    this.database.prepare("UPDATE runtime_settings SET selected_runtime = ?, updated_at = ? WHERE id = 1").run(input.kind, new Date().toISOString());
+    this.addInbox({
+      id: `runtime-selected-${input.kind}-${Date.now()}`,
+      tone: "notice",
+      title: "Plan runtime selected",
+      body: `${runtimeDisplayName(input.kind)} is selected for future Plan drafts. Its login remains in the local CLI and is never stored by C-assistant.`,
       timestamp: "Just now"
     });
     return this.getWorkspace();
@@ -490,6 +513,11 @@ export class SqliteWorkspaceStore {
         status TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS runtime_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        selected_runtime TEXT NOT NULL CHECK (selected_runtime IN ('codex', 'claude-code')),
+        updated_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS plans (
         id TEXT PRIMARY KEY,
         version INTEGER NOT NULL,
@@ -583,6 +611,7 @@ export class SqliteWorkspaceStore {
     const profileColumns = this.database.prepare("PRAGMA table_info(profiles)").all() as unknown as Array<{ name: string }>;
     if (!profileColumns.some((column) => column.name === "gender")) this.database.exec("ALTER TABLE profiles ADD COLUMN gender TEXT NOT NULL DEFAULT 'not_specified'");
     if (!profileColumns.some((column) => column.name === "immigration_status")) this.database.exec("ALTER TABLE profiles ADD COLUMN immigration_status TEXT NOT NULL DEFAULT 'unknown'");
+    this.database.prepare("INSERT OR IGNORE INTO runtime_settings (id, selected_runtime, updated_at) VALUES (1, 'codex', ?)").run(new Date().toISOString());
   }
 
   private seedIfEmpty(): void {
@@ -599,6 +628,7 @@ export class SqliteWorkspaceStore {
       workspace.profile.status,
       new Date().toISOString()
     );
+    this.database.prepare("INSERT OR IGNORE INTO runtime_settings (id, selected_runtime, updated_at) VALUES (1, ?, ?)").run(workspace.runtime.selectedKind, new Date().toISOString());
     this.savePlan(workspace.activePlan);
     workspace.inbox.forEach((item) => this.addInbox(item));
   }
@@ -720,4 +750,12 @@ function isLocalDateTime(value: string): boolean {
 
 function isTimeZoneName(value: string): boolean {
   return /^[A-Za-z_]+(?:\/[A-Za-z_+-]+)+$/.test(value);
+}
+
+function isAgentRuntimeKind(value: unknown): value is AgentRuntimeKind {
+  return value === "codex" || value === "claude-code";
+}
+
+function runtimeDisplayName(kind: AgentRuntimeKind): string {
+  return kind === "claude-code" ? "Claude Code" : "Codex";
 }
