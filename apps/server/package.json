@@ -7,7 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/telegram-commands.test.ts src/telegram-profile.test.ts src/telegram-weather.test.ts src/telegram-food.test.ts src/arrival-reminder.test.ts src/arrival-route.test.ts src/telegram-plan.test.ts src/official-sources.test.ts src/task-reminder.test.ts src/task-reminder-weather.test.ts src/web-agent.test.ts",
+    "test": "tsx --test src/telegram-commands.test.ts src/telegram-profile.test.ts src/telegram-weather.test.ts src/telegram-food.test.ts src/arrival-reminder.test.ts src/arrival-route.test.ts src/telegram-plan.test.ts src/official-sources.test.ts src/task-reminder.test.ts src/task-reminder-weather.test.ts src/web-agent.test.ts src/china-plan-compilation.test.ts",
     "start": "node lib/index.js"
   },
   "dependencies": {
