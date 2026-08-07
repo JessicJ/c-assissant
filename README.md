@@ -61,6 +61,8 @@ The internal `arrival-preparation` `0.1.0` deduplicates normalized supporting gu
 
 The first Core compilation boundary is now implemented. China Pack accepts only the exact `arrival-preparation` version/status recorded by a ready composite, converts it to the country-neutral proposal contract, and Core compiles that proposal only against the matching draft Plan version. SQLite can atomically compare and save the next draft version, including Task descriptions, Skill provenance, inert reminders, and a minimized compilation audit; a stale or already activated target is rejected. Server orchestration is not connected to this compiler yet.
 
+The deterministic China arrival orchestrator now runs credential-free normalized inputs through the seven supporting Skills in the declared order, derives preparation items, invokes the composite, creates the China-to-Core proposal, and returns an inert compiled draft. It fails closed when a critical supporting Skill needs input. Connector fact collection, production source catalogs, SQLite save invocation, and Server/Web/Telegram entry points remain separate.
+
 ## Product shape
 
 - Web workspace: the full desktop-grade product interface.

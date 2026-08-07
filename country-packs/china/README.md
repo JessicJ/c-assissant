@@ -16,6 +16,8 @@ The Node-side `chinaSkillRegistry` loads the internal `skill.json` files as runt
 
 The package-level China compilation adapter now verifies that the exact arrival-preparation version and status were included in a ready composite before producing the country-neutral Core proposal. Core can compile that proposal into a new draft Plan, but no production orchestrator or persistence path invokes it yet.
 
+The package also exposes a deterministic arrival orchestrator. Given normalized, credential-free provider facts, it invokes all seven supporting Skills in the declared order, derives preparation items, composes them, and asks Core for a new inert draft. It does not fetch provider data, persist the result, or send messages; those responsibilities remain with the host application.
+
 The first executable internal module is `food-nearby` `0.1.0`. Server invokes it after Amap returns normalized nearby POI facts; the Skill emits a bounded structured result while Telegram remains only a renderer and action-handoff surface. Individual Skill installation is still disabled.
 
 `housing-area-recommendation` `0.1.0` adds the first access-oriented accommodation comparison to Web. It explains nearby stay candidates relative to a user-selected Plan anchor, while explicitly deferring full area choice until route facts and preferences are available.
