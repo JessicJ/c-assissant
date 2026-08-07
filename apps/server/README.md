@@ -21,6 +21,7 @@ Current endpoints:
 - `GET /api/connectors/amap`
 - `GET /api/connectors/qweather`
 - `GET /api/runs/task-reminders` for minimized local Reminder Run audit records
+- `POST /api/agent/chat` for one focused new-Plan or draft-revision turn
 - `GET /api/weather?location=<city-or-region>&language=en|zh`
 - `GET /api/amap/places?query=<place>&region=<optional-region>`
 - `GET /api/amap/nearby/restaurants?location=<longitude,latitude>`

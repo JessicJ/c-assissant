@@ -16,6 +16,7 @@ import { formatTelegramNearbyFood, parseTelegramFoodPartyCallback, telegramFoodP
 import { createTelegramPlan, formatTelegramPlanCreationPages, formatTelegramPlanPages, planDraftForRevision, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
 import { formatTelegramProfile, parseTelegramProfileCallback, telegramProfileChoiceMarkup, telegramProfileMarkup, telegramProfileTextPrompt, updateProfileText } from "./telegram-profile.js";
 import { fetchTelegramPlanWeather, formatTelegramWeather } from "./telegram-weather.js";
+import { assertWebAgentPlanUnchanged, formatWebAgentPlanReply, parseWebAgentTurn } from "./web-agent.js";
 import { dueTaskReminders, formatTaskReminder } from "./task-reminder.js";
 import { refreshTaskReminderWeather, taskReminderNeedsWeather, type TaskReminderWeatherContext } from "./task-reminder-weather.js";
 
@@ -197,6 +198,53 @@ server.post<{ Body: CreatePlanInput }>("/api/plans/generate", async (request, re
     if (runId) store.finishPlanGenerationRun({ runId, status: "failed", failureCode: planGenerationFailureCode(error) });
     return reply.code(error instanceof RuntimeAdapterError && (error.code === "not_installed" || error.code === "not_authenticated") ? 503 : 400).send({
       error: error instanceof Error ? error.message : "The selected runtime could not generate a Plan draft."
+    });
+  } finally {
+    generatingPlan = false;
+  }
+});
+
+server.post<{ Body: unknown }>("/api/agent/chat", async (request, reply) => {
+  let turn: ReturnType<typeof parseWebAgentTurn>;
+  try {
+    turn = parseWebAgentTurn(request.body);
+  } catch (error) {
+    return reply.code(400).send({ error: error instanceof Error ? error.message : "The Agent request is invalid." });
+  }
+  if (generatingPlan) return reply.code(409).send({ error: "The Agent is already working on a Plan. Please wait for that response." });
+
+  generatingPlan = true;
+  let runId: string | undefined;
+  try {
+    const workspace = store.getWorkspace();
+    if (turn.mode === "revise_plan" && workspace.activePlan.status !== "draft") {
+      return reply.code(400).send({ error: "Only a draft Plan can be revised. Start a new Plan or review the active Plan first." });
+    }
+    runId = store.startPlanGenerationRun({ runtimeKind: workspace.runtime.selectedKind, trigger: "web" }).id;
+    const runtime = selectedRuntimeAdapter(workspace.runtime.selectedKind);
+    const draft = await runtime.generatePlanDraft({
+      request: turn.message,
+      ...(turn.mode === "revise_plan" ? { currentPlan: planDraftForRevision(workspace.activePlan) } : {}),
+      profile: {
+        preferredLanguage: workspace.profile.preferredLanguage,
+        nationality: workspace.profile.nationality,
+        gender: workspace.profile.gender,
+        immigrationStatus: workspace.profile.immigrationStatus
+      }
+    });
+    assertWebAgentPlanUnchanged(workspace.activePlan, store.getWorkspace().activePlan);
+    const updated = turn.mode === "revise_plan"
+      ? store.reviseGeneratedPlan({ draft, runtime: workspace.runtime.selectedKind, expectedPlanId: workspace.activePlan.id, expectedVersion: workspace.activePlan.version })
+      : store.createGeneratedPlan(draft, workspace.runtime.selectedKind);
+    store.finishPlanGenerationRun({ runId, status: "succeeded", outputPlanId: updated.activePlan.id });
+    return {
+      reply: formatWebAgentPlanReply({ runtimeName: runtimeName(workspace.runtime.selectedKind), mode: turn.mode, plan: updated.activePlan }),
+      workspace: updated
+    };
+  } catch (error) {
+    if (runId) store.finishPlanGenerationRun({ runId, status: "failed", failureCode: planGenerationFailureCode(error) });
+    return reply.code(error instanceof RuntimeAdapterError && (error.code === "not_installed" || error.code === "not_authenticated") ? 503 : 400).send({
+      error: error instanceof Error ? error.message : "The Agent could not respond right now."
     });
   } finally {
     generatingPlan = false;
