@@ -16,6 +16,8 @@ Composite entry point. Core orchestrates the supporting Skills and compiles one 
 
 Matches official requirements to nationality, passport or travel document, visa or permit, residence status, student status, purpose, date, and location. A missing requirement becomes a user-owned Task with a Reminder when appropriate; it does not automatically block unrelated parts of the Plan.
 
+The current implemented slice is deliberately narrower: an evidence-preparation gate checks that the active Profile has nationality and known immigration status, the Plan has a destination and dates, and a saved National Immigration Administration snapshot is no more than seven days old. Its only outcomes are `needs_input`, `needs_evidence`, and `ready_for_review`. It does not read the source text to determine a policy, visa, residence, or entry outcome; that remains the responsibility of a future source-backed Skill review.
+
 ### `arrival-preparation`
 
 Builds the preparation checklist and timing for entry documents, communications, essential apps, payments readiness, luggage, and arrival logistics.

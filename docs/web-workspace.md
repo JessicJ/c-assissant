@@ -21,6 +21,8 @@ A Plan has four views:
 - **Decisions** — selected transport, accommodation area, unresolved choices, and reasons.
 - **Sources** — official sources, retrieval dates, applicability summaries, and freshness warnings.
 
+The current Plan screen also shows an **evidence preparation** card. It tells the user which saved facts or approved official snapshot are still needed before a separate policy review can begin. “Ready for review” is never presented as an eligibility or policy conclusion.
+
 The initial generation should present a complete Plan, not a questionnaire. It begins with the information used to generate it and allows a one-sentence correction.
 
 Before activation, the user sees the complete final Plan in normal presentation. One confirmation activates that exact Plan version and its declared automation scope. Later material changes create a new version that must be confirmed when they exceed the existing scope.

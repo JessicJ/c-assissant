@@ -3,7 +3,7 @@ import "./manual-accommodation.css";
 import type { RuntimeCheck } from "@c-assistant/agent-adapters";
 import { createAmapDrivingHandoff, createAmapPlaceHandoff } from "@c-assistant/connectors";
 import type { AmapNearbyPlace, AmapPlace, AmapRoute, ConnectorResult, OfficialSourceDefinition, QWeatherWeatherSnapshot, TelegramBotIdentity, TelegramConfiguration } from "@c-assistant/connectors";
-import type { AgentRuntimeKind, SourceSnapshotWriteResult, WorkspaceSnapshot } from "@c-assistant/core";
+import type { AgentRuntimeKind, PolicyPreparationAssessment, SourceSnapshotWriteResult, WorkspaceSnapshot } from "@c-assistant/core";
 import { recommendPlanTransport, type TransportWeatherFact } from "@c-assistant/core/transport";
 
 type View = "Today" | "Plans" | "Inbox" | "Profile" | "Settings";
@@ -60,6 +60,7 @@ function App() {
   const [savingRuntime, setSavingRuntime] = useState(false);
   const [officialSources, setOfficialSources] = useState<OfficialSourceDefinition[]>([]);
   const [refreshingSourceId, setRefreshingSourceId] = useState<string | null>(null);
+  const [policyPreparation, setPolicyPreparation] = useState<PolicyPreparationAssessment | null>(null);
   const [telegramStatus, setTelegramStatus] = useState<ConnectorResult<TelegramConfiguration> | null>(null);
   const [telegramVerification, setTelegramVerification] = useState<ConnectorResult<TelegramBotIdentity> | null>(null);
   const [verifyingTelegram, setVerifyingTelegram] = useState(false);
@@ -71,6 +72,7 @@ function App() {
     void loadWorkspace();
     void loadRuntimeChecks();
     void loadOfficialSources();
+    void loadPolicyPreparation();
     void loadTelegramStatus();
     void loadTelegramPairing();
   }, []);
@@ -104,6 +106,15 @@ function App() {
       setOfficialSources(result.status === "available" && result.data ? result.data : []);
     } catch {
       setOfficialSources([]);
+    }
+  }
+
+  async function loadPolicyPreparation() {
+    try {
+      const response = await fetch("/api/policy-applicability");
+      if (response.ok) setPolicyPreparation((await response.json()) as PolicyPreparationAssessment);
+    } catch {
+      setPolicyPreparation(null);
     }
   }
 
@@ -196,6 +207,7 @@ function App() {
       setWorkspace((await response.json()) as WorkspaceSnapshot);
       setRequestText("");
       setView("Plans");
+      await loadPolicyPreparation();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The Plan could not be saved.");
     } finally {
@@ -216,6 +228,7 @@ function App() {
       setWorkspace((await response.json()) as WorkspaceSnapshot);
       setRequestText("");
       setView("Plans");
+      await loadPolicyPreparation();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The selected runtime could not generate a Plan.");
     } finally {
@@ -232,6 +245,7 @@ function App() {
       });
       if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "The Profile could not be saved.");
       setWorkspace((await response.json()) as WorkspaceSnapshot);
+      await loadPolicyPreparation();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The Profile could not be saved.");
     }
@@ -262,6 +276,7 @@ function App() {
       const result = (await response.json()) as ConnectorResult<SourceSnapshotWriteResult>;
       if (!response.ok || result.status !== "available") throw new Error(result.failure?.message ?? "This official source could not be refreshed.");
       await loadWorkspace();
+      await loadPolicyPreparation();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "This official source could not be refreshed.");
     } finally {
@@ -608,7 +623,7 @@ function App() {
           </>
         ) : null}
 
-        {view === "Plans" ? <PlanView plan={plan} onActivate={activatePlan} confirming={confirming} amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={searchAmap} routeOrigin={routeOrigin} routeDestination={routeDestination} routeMode={routeMode} routeResult={routeResult} routing={routing} routeComparisons={routeComparisons} comparingRoutes={comparingRoutes} planWeatherResult={planWeather?.planId === plan.id ? planWeather.result : null} checkingPlanWeather={checkingPlanWeather} foodCentre={foodCentre} foodResult={foodResult} findingFood={findingFood} stayCentre={stayCentre} stayResult={stayResult} findingStay={findingStay} savingAccommodation={savingAccommodation} confirmingAccommodation={confirmingAccommodation} savingTransportPreference={savingTransportPreference} savingTravelContext={savingTravelContext} savingArrival={savingArrival} onChooseRouteOrigin={(place) => { setRouteOrigin(place); setRouteResult(null); setRouteComparisons(null); }} onChooseRouteDestination={(place) => { setRouteDestination(place); setRouteResult(null); setRouteComparisons(null); }} onRouteModeChange={(mode) => { setRouteMode(mode); setRouteResult(null); }} onFindNearbyFood={findNearbyFood} onFindNearbyAccommodation={findNearbyAccommodation} onSaveAccommodationCandidate={saveAccommodationCandidate} onSaveManualAccommodation={saveManualAccommodation} onConfirmAccommodation={confirmAccommodationBooking} onSaveTransportPreference={saveTransportPreference} onSaveTravelContext={saveTravelContext} onSaveArrival={saveArrival} onPlanRoute={planAmapRoute} onCompareRoutes={compareAmapRoutes} onCheckPlanWeather={checkPlanWeather} /> : null}
+        {view === "Plans" ? <PlanView plan={plan} policyPreparation={policyPreparation} onActivate={activatePlan} confirming={confirming} amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={searchAmap} routeOrigin={routeOrigin} routeDestination={routeDestination} routeMode={routeMode} routeResult={routeResult} routing={routing} routeComparisons={routeComparisons} comparingRoutes={comparingRoutes} planWeatherResult={planWeather?.planId === plan.id ? planWeather.result : null} checkingPlanWeather={checkingPlanWeather} foodCentre={foodCentre} foodResult={foodResult} findingFood={findingFood} stayCentre={stayCentre} stayResult={stayResult} findingStay={findingStay} savingAccommodation={savingAccommodation} confirmingAccommodation={confirmingAccommodation} savingTransportPreference={savingTransportPreference} savingTravelContext={savingTravelContext} savingArrival={savingArrival} onChooseRouteOrigin={(place) => { setRouteOrigin(place); setRouteResult(null); setRouteComparisons(null); }} onChooseRouteDestination={(place) => { setRouteDestination(place); setRouteResult(null); setRouteComparisons(null); }} onRouteModeChange={(mode) => { setRouteMode(mode); setRouteResult(null); }} onFindNearbyFood={findNearbyFood} onFindNearbyAccommodation={findNearbyAccommodation} onSaveAccommodationCandidate={saveAccommodationCandidate} onSaveManualAccommodation={saveManualAccommodation} onConfirmAccommodation={confirmAccommodationBooking} onSaveTransportPreference={saveTransportPreference} onSaveTravelContext={saveTravelContext} onSaveArrival={saveArrival} onPlanRoute={planAmapRoute} onCompareRoutes={compareAmapRoutes} onCheckPlanWeather={checkPlanWeather} /> : null}
         {view === "Inbox" ? <InboxView workspace={workspace} /> : null}
         {view === "Profile" ? <ProfileView workspace={workspace} onSave={saveProfile} /> : null}
         {view === "Settings" ? <SettingsView workspace={workspace} runtimeChecks={runtimeChecks} savingRuntime={savingRuntime} onSaveRuntime={saveRuntime} officialSources={officialSources} refreshingSourceId={refreshingSourceId} onRefreshOfficialSource={refreshOfficialSource} telegramStatus={telegramStatus} telegramVerification={telegramVerification} verifyingTelegram={verifyingTelegram} telegramPairing={telegramPairing} pairingTelegram={pairingTelegram} onVerifyTelegram={verifyTelegram} onStartTelegramPairing={startTelegramPairing} onCompleteTelegramPairing={completeTelegramPairing} weatherLocation={weatherLocation} setWeatherLocation={setWeatherLocation} weatherResult={weatherResult} checkingWeather={checkingWeather} onCheckWeather={checkWeather} /> : null}
@@ -617,7 +632,7 @@ function App() {
   );
 }
 
-function PlanView({ plan, onActivate, confirming, amapQuery, setAmapQuery, amapResult, searchingAmap, onSearch, routeOrigin, routeDestination, routeMode, routeResult, routing, routeComparisons, comparingRoutes, planWeatherResult, checkingPlanWeather, foodCentre, foodResult, findingFood, stayCentre, stayResult, findingStay, savingAccommodation, confirmingAccommodation, savingTransportPreference, savingTravelContext, savingArrival, onChooseRouteOrigin, onChooseRouteDestination, onRouteModeChange, onFindNearbyFood, onFindNearbyAccommodation, onSaveAccommodationCandidate, onSaveManualAccommodation, onConfirmAccommodation, onSaveTransportPreference, onSaveTravelContext, onSaveArrival, onPlanRoute, onCompareRoutes, onCheckPlanWeather }: { plan: WorkspaceSnapshot["activePlan"]; onActivate: () => Promise<void>; confirming: boolean; amapQuery: string; setAmapQuery: (value: string) => void; amapResult: ConnectorResult<AmapPlace[]> | null; searchingAmap: boolean; onSearch: () => Promise<void>; routeOrigin: AmapPlace | null; routeDestination: AmapPlace | null; routeMode: RouteMode; routeResult: ConnectorResult<AmapRoute> | null; routing: boolean; routeComparisons: RouteComparisons | null; comparingRoutes: boolean; planWeatherResult: ConnectorResult<QWeatherWeatherSnapshot> | null; checkingPlanWeather: boolean; foodCentre: AmapPlace | null; foodResult: ConnectorResult<AmapNearbyPlace[]> | null; findingFood: boolean; stayCentre: AmapPlace | null; stayResult: ConnectorResult<AmapNearbyPlace[]> | null; findingStay: boolean; savingAccommodation: boolean; confirmingAccommodation: boolean; savingTransportPreference: boolean; savingTravelContext: boolean; savingArrival: boolean; onChooseRouteOrigin: (place: AmapPlace) => void; onChooseRouteDestination: (place: AmapPlace) => void; onRouteModeChange: (mode: RouteMode) => void; onFindNearbyFood: (place: AmapPlace) => Promise<void>; onFindNearbyAccommodation: (place: AmapPlace) => Promise<void>; onSaveAccommodationCandidate: (place: AmapNearbyPlace) => Promise<void>; onSaveManualAccommodation: (input: { name: string; address: string; status: "candidate" | "confirmed" }) => Promise<void>; onConfirmAccommodation: () => Promise<void>; onSaveTransportPreference: (preference: WorkspaceSnapshot["activePlan"]["configuration"]["transport"]["preference"]) => Promise<void>; onSaveTravelContext: (context: WorkspaceSnapshot["activePlan"]["configuration"]["travelContext"]) => Promise<void>; onSaveArrival: (arrival: WorkspaceSnapshot["activePlan"]["configuration"]["arrival"]) => Promise<void>; onPlanRoute: () => Promise<void>; onCompareRoutes: () => Promise<void>; onCheckPlanWeather: (planId: string, location: string) => Promise<void> }) {
+function PlanView({ plan, policyPreparation, onActivate, confirming, amapQuery, setAmapQuery, amapResult, searchingAmap, onSearch, routeOrigin, routeDestination, routeMode, routeResult, routing, routeComparisons, comparingRoutes, planWeatherResult, checkingPlanWeather, foodCentre, foodResult, findingFood, stayCentre, stayResult, findingStay, savingAccommodation, confirmingAccommodation, savingTransportPreference, savingTravelContext, savingArrival, onChooseRouteOrigin, onChooseRouteDestination, onRouteModeChange, onFindNearbyFood, onFindNearbyAccommodation, onSaveAccommodationCandidate, onSaveManualAccommodation, onConfirmAccommodation, onSaveTransportPreference, onSaveTravelContext, onSaveArrival, onPlanRoute, onCompareRoutes, onCheckPlanWeather }: { plan: WorkspaceSnapshot["activePlan"]; policyPreparation: PolicyPreparationAssessment | null; onActivate: () => Promise<void>; confirming: boolean; amapQuery: string; setAmapQuery: (value: string) => void; amapResult: ConnectorResult<AmapPlace[]> | null; searchingAmap: boolean; onSearch: () => Promise<void>; routeOrigin: AmapPlace | null; routeDestination: AmapPlace | null; routeMode: RouteMode; routeResult: ConnectorResult<AmapRoute> | null; routing: boolean; routeComparisons: RouteComparisons | null; comparingRoutes: boolean; planWeatherResult: ConnectorResult<QWeatherWeatherSnapshot> | null; checkingPlanWeather: boolean; foodCentre: AmapPlace | null; foodResult: ConnectorResult<AmapNearbyPlace[]> | null; findingFood: boolean; stayCentre: AmapPlace | null; stayResult: ConnectorResult<AmapNearbyPlace[]> | null; findingStay: boolean; savingAccommodation: boolean; confirmingAccommodation: boolean; savingTransportPreference: boolean; savingTravelContext: boolean; savingArrival: boolean; onChooseRouteOrigin: (place: AmapPlace) => void; onChooseRouteDestination: (place: AmapPlace) => void; onRouteModeChange: (mode: RouteMode) => void; onFindNearbyFood: (place: AmapPlace) => Promise<void>; onFindNearbyAccommodation: (place: AmapPlace) => Promise<void>; onSaveAccommodationCandidate: (place: AmapNearbyPlace) => Promise<void>; onSaveManualAccommodation: (input: { name: string; address: string; status: "candidate" | "confirmed" }) => Promise<void>; onConfirmAccommodation: () => Promise<void>; onSaveTransportPreference: (preference: WorkspaceSnapshot["activePlan"]["configuration"]["transport"]["preference"]) => Promise<void>; onSaveTravelContext: (context: WorkspaceSnapshot["activePlan"]["configuration"]["travelContext"]) => Promise<void>; onSaveArrival: (arrival: WorkspaceSnapshot["activePlan"]["configuration"]["arrival"]) => Promise<void>; onPlanRoute: () => Promise<void>; onCompareRoutes: () => Promise<void>; onCheckPlanWeather: (planId: string, location: string) => Promise<void> }) {
   const savedAccommodation = routePlaceFromAccommodation(plan.configuration.accommodation);
   const arrivalWeather = weatherForExpectedArrival(plan.configuration.arrival, planWeatherResult);
   return <div className="content-stack">
@@ -634,9 +649,16 @@ function PlanView({ plan, onActivate, confirming, amapQuery, setAmapQuery, amapR
       <ul className="compact-list">{plan.assumptions.map((item) => <li key={item}>{item}</li>)}</ul>
       {plan.status === "draft" ? <button className="primary-button" disabled={confirming} onClick={() => void onActivate()}>Confirm complete Plan</button> : null}
     </section>
+    <PolicyPreparationCard assessment={policyPreparation} />
     <PlaceDecisionPanel amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={onSearch} routeOrigin={routeOrigin} routeDestination={routeDestination} savedAccommodation={savedAccommodation} routeMode={routeMode} routeResult={routeResult} routing={routing} routeComparisons={routeComparisons} comparingRoutes={comparingRoutes} transportPreference={plan.configuration.transport.preference} travelContext={plan.configuration.travelContext} arrivalWeather={arrivalWeather} foodCentre={foodCentre} foodResult={foodResult} findingFood={findingFood} stayCentre={stayCentre} stayResult={stayResult} findingStay={findingStay} savingAccommodation={savingAccommodation} onChooseRouteOrigin={onChooseRouteOrigin} onChooseRouteDestination={onChooseRouteDestination} onRouteModeChange={onRouteModeChange} onFindNearbyFood={onFindNearbyFood} onFindNearbyAccommodation={onFindNearbyAccommodation} onSaveAccommodationCandidate={onSaveAccommodationCandidate} onPlanRoute={onPlanRoute} onCompareRoutes={onCompareRoutes} />
-    <section className="card"><p className="eyebrow">Sources</p>{plan.sources.length ? plan.sources.map((source) => <a className="source-link" href={source.url} key={source.title} target="_blank" rel="noreferrer"><strong>{source.title}</strong><span>{source.authority} · {source.retrievedAt}</span></a>) : <p>No evidence is linked to this Plan yet. Official-source snapshots are managed in Settings and are not used for policy conclusions until the policy Skill is implemented.</p>}</section>
+    <section className="card"><p className="eyebrow">Sources</p>{plan.sources.length ? plan.sources.map((source) => <a className="source-link" href={source.url} key={source.title} target="_blank" rel="noreferrer"><strong>{source.title}</strong><span>{source.authority} · {source.retrievedAt}</span></a>) : <p>No evidence is linked to this Plan yet. The evidence-preparation status above uses only a saved official source snapshot; a separate policy Skill must still review it.</p>}</section>
   </div>;
+}
+
+function PolicyPreparationCard({ assessment }: { assessment: PolicyPreparationAssessment | null }) {
+  if (!assessment) return null;
+  const label = assessment.status === "ready_for_review" ? "Ready for review" : assessment.status === "needs_evidence" ? "Refresh official evidence" : "Complete key details";
+  return <section className={`card policy-preparation ${assessment.status}`}><div className="split-heading"><div><p className="eyebrow">Policy evidence preparation</p><h2>{label}</h2></div><span className="policy-status">{assessment.status.replaceAll("_", " ")}</span></div><p>{assessment.nextAction}</p>{assessment.knownInformation.length ? <div><strong>Known information</strong><ul className="compact-list">{assessment.knownInformation.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}{assessment.missingInformation.length ? <div><strong>Still needed</strong><ul className="compact-list">{assessment.missingInformation.map((item) => <li key={item.field}><strong>{item.label}:</strong> {item.reason}</li>)}</ul></div> : null}{assessment.evidence.map((snapshot) => <a className="source-link" href={snapshot.url} key={snapshot.id} target="_blank" rel="noreferrer"><strong>{snapshot.titleOriginal}</strong><span>{snapshot.authority} · saved {snapshot.retrievedAt}</span></a>)}<small>{assessment.warning}</small></section>;
 }
 
 function InboxView({ workspace }: { workspace: WorkspaceSnapshot }) {

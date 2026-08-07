@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { confirmPlan, createInitialWorkspace, createPlanFromDraft, createPlanFromRequest, recommendPlanTransport } from "./index.js";
+import { assessPolicyPreparation, confirmPlan, createInitialWorkspace, createPlanFromDraft, createPlanFromRequest, recommendPlanTransport } from "./index.js";
 
 test("a confirmed demo Plan becomes active and leaves an inbox receipt", () => {
   const workspace = createInitialWorkspace();
@@ -94,4 +94,61 @@ test("an explicit walking preference remains user-owned in a rainy forecast", ()
 
   assert.equal(recommendation.mode, "walking");
   assert.match(recommendation.reasons.join(" "), /explicit Plan preference is retained/i);
+});
+
+test("policy preparation asks for personal facts before it can be reviewed", () => {
+  const assessment = assessPolicyPreparation({
+    profile: createInitialWorkspace().profile,
+    plan: createInitialWorkspace().activePlan,
+    sourceSnapshots: [],
+    now: new Date("2026-08-07T00:00:00.000Z")
+  });
+
+  assert.equal(assessment.status, "needs_input");
+  assert.deepEqual(assessment.missingInformation.map((item) => item.field), [
+    "profile.nationality",
+    "profile.immigrationStatus",
+    "official_source.nia-english"
+  ]);
+  assert.match(assessment.warning, /does not determine/i);
+});
+
+test("policy preparation is ready only when confirmed facts have fresh official evidence", () => {
+  const workspace = createInitialWorkspace();
+  workspace.profile = { ...workspace.profile, nationality: "Canada", immigrationStatus: "tourist_visa", status: "ready" };
+  workspace.sourceSnapshots = [{
+    id: "source-1",
+    sourceId: "nia-english",
+    authority: "National Immigration Administration",
+    titleOriginal: "Guidance",
+    url: "https://en.nia.gov.cn/",
+    retrievedAt: "2026-08-06T12:00:00.000Z",
+    contentHash: "a".repeat(64),
+    excerpt: "Official evidence only."
+  }];
+
+  const assessment = assessPolicyPreparation({ profile: workspace.profile, plan: workspace.activePlan, sourceSnapshots: workspace.sourceSnapshots, now: new Date("2026-08-07T00:00:00.000Z") });
+
+  assert.equal(assessment.status, "ready_for_review");
+  assert.equal(assessment.evidence[0]?.sourceId, "nia-english");
+  assert.equal(assessment.missingInformation.length, 0);
+});
+
+test("stale official evidence requires an explicit refresh before review", () => {
+  const workspace = createInitialWorkspace();
+  workspace.profile = { ...workspace.profile, nationality: "Canada", immigrationStatus: "tourist_visa", status: "ready" };
+  workspace.sourceSnapshots = [{
+    id: "source-1",
+    sourceId: "nia-english",
+    authority: "National Immigration Administration",
+    titleOriginal: "Guidance",
+    url: "https://en.nia.gov.cn/",
+    retrievedAt: "2026-07-01T00:00:00.000Z",
+    contentHash: "a".repeat(64),
+    excerpt: "Official evidence only."
+  }];
+
+  const assessment = assessPolicyPreparation({ profile: workspace.profile, plan: workspace.activePlan, sourceSnapshots: workspace.sourceSnapshots, now: new Date("2026-08-07T00:00:00.000Z") });
+  assert.equal(assessment.status, "needs_evidence");
+  assert.equal(assessment.missingInformation[0]?.field, "official_source.nia-english");
 });
