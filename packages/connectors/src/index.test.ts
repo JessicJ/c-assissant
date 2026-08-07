@@ -250,10 +250,11 @@ test("Telegram update polling normalizes only a usable private-chat message", as
 
   const result = await connector.getUpdates({ offset: 10 });
   assert.equal(result.status, "available");
-  assert.equal(result.data?.length, 1);
-  assert.equal(result.data?.[0]?.chatId, "1001");
-  assert.equal(result.data?.[0]?.chatType, "private");
-  assert.equal(result.data?.[0]?.text, "/start pair_code_123");
+  assert.equal(result.data?.updates.length, 1);
+  assert.equal(result.data?.updates[0]?.chatId, "1001");
+  assert.equal(result.data?.updates[0]?.chatType, "private");
+  assert.equal(result.data?.updates[0]?.text, "/start pair_code_123");
+  assert.equal(result.data?.nextOffset, 13);
   assert.match(requestBody, /"offset":10/);
   assert.doesNotMatch(JSON.stringify(result), /test-token/);
 });

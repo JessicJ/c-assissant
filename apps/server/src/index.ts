@@ -20,6 +20,7 @@ const qweather = new QWeatherConnector({ apiKey: process.env.QWEATHER_API_KEY, a
 const telegram = new TelegramConnector({ botToken: process.env.TELEGRAM_BOT_TOKEN });
 const codex = new CodexRuntimeAdapter();
 let generatingPlan = false;
+let pollingTelegram = false;
 
 await server.register(cors, { origin: true });
 
@@ -206,7 +207,7 @@ server.post<{ Body: { code?: string } }>("/api/connectors/telegram/pairing/compl
   if (pending.state !== "waiting_for_start") return reply.code(400).send({ error: "Start a new Telegram pairing from the Web workspace." });
   const updates = await telegram.getUpdates();
   if (updates.status !== "available") return reply.code(connectorResponseStatus(updates.status)).send(updates);
-  const startUpdate = updates.data?.find((update) => pairingCodeFromStart(update.text) === code);
+  const startUpdate = updates.data?.updates.find((update) => update.chatType === "private" && pairingCodeFromStart(update.text) === code);
   if (!startUpdate) return { state: "waiting_for_start", expiresAt: pending.expiresAt, foundStart: false };
   try {
     const paired = store.claimTelegramPairing({
@@ -216,6 +217,7 @@ server.post<{ Body: { code?: string } }>("/api/connectors/telegram/pairing/compl
       firstName: startUpdate.firstName,
       ...(startUpdate.username ? { username: startUpdate.username } : {})
     });
+    store.advanceTelegramUpdateOffset(startUpdate.updateId + 1);
     const receipt = await telegram.sendMessage({ chatId: startUpdate.chatId, text: "C-assistant is connected to this Telegram account. You will control future reminders and actions from your Plan." });
     return { ...paired, confirmationMessageSent: receipt.status === "available" };
   } catch (error) {
@@ -281,13 +283,57 @@ function pairingCodeFromStart(value: string | undefined): string | undefined {
   return match?.[1];
 }
 
+async function pollTelegram(): Promise<void> {
+  if (pollingTelegram) return;
+  const pairing = store.getTelegramPairingStatus();
+  if (pairing.state !== "paired" || !pairing.binding) return;
+  pollingTelegram = true;
+  try {
+    const offset = store.getTelegramUpdateOffset();
+    const updates = await telegram.getUpdates({ ...(offset === undefined ? {} : { offset }), timeoutSeconds: 5 });
+    if (updates.status !== "available" || !updates.data) return;
+    for (const update of updates.data.updates) {
+      if (update.chatType !== "private" || update.chatId !== pairing.binding.chatId || update.userId !== pairing.binding.userId) continue;
+      if (!store.claimTelegramUpdate(update.updateId)) continue;
+      const response = telegramCommandResponse(update.text);
+      if (response) await telegram.sendMessage({ chatId: pairing.binding.chatId, text: response });
+    }
+    if (updates.data.nextOffset !== undefined) store.advanceTelegramUpdateOffset(updates.data.nextOffset);
+  } catch (error) {
+    server.log.warn({ error }, "Telegram polling failed");
+  } finally {
+    pollingTelegram = false;
+  }
+}
+
+function telegramCommandResponse(text: string | undefined): string | undefined {
+  const normalized = text?.trim();
+  if (!normalized) return undefined;
+  if (/^\/help(?:@[-_A-Za-z0-9]+)?$/i.test(normalized)) return "C-assistant is connected. Available commands:\n/plan — show the current Plan\n/new <what you need to do> — create a draft Plan for review\n/help — show this help\n\nReminders, location requests, bookings, and payments are not enabled.";
+  if (/^\/plan(?:@[-_A-Za-z0-9]+)?$/i.test(normalized)) {
+    const plan = store.getWorkspace().activePlan;
+    return `Current Plan\n${plan.title}\n${plan.location} · ${plan.dates}\nStatus: ${plan.status}\nNext: ${plan.nextAction}\n\nUse the Web workspace to review or confirm the complete Plan.`;
+  }
+  const newPlan = normalized.match(/^\/new(?:@[-_A-Za-z0-9]+)?\s+(.+)$/is)?.[1]?.trim();
+  if (newPlan) {
+    if (newPlan.length > 1_500) return "Keep a new Plan request under 1,500 characters, then send /new again.";
+    const workspace = store.createPlan({ request: newPlan });
+    return `A new draft Plan is ready for review:\n${workspace.activePlan.title}\n${workspace.activePlan.location} · ${workspace.activePlan.dates}\n\nReview and confirm the complete Plan in the Web workspace before any future automation.`;
+  }
+  if (/^\/start(?:@[-_A-Za-z0-9]+)?(?:\s|$)/i.test(normalized)) return "This Telegram account is already connected to C-assistant. Send /help to see available commands.";
+  return "I only handle explicit commands in this first version. Send /help to see what is available.";
+}
+
 const port = Number(process.env.C_ASSISTANT_PORT ?? 8787);
 const host = process.env.C_ASSISTANT_HOST ?? "127.0.0.1";
 
 await server.listen({ port, host });
+const telegramPollTimer = setInterval(() => void pollTelegram(), 1_000);
+void pollTelegram();
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
+    clearInterval(telegramPollTimer);
     store.close();
     void server.close().finally(() => process.exit(0));
   });
