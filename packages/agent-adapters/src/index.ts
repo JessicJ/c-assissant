@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GeneratedPlanDraft, ImmigrationStatus, ProfileGender } from "@c-assistant/core";
 
+export type RuntimeKind = "codex" | "claude-code";
+
 export interface RuntimeCheck {
-  kind: "codex";
+  kind: RuntimeKind;
   installed: boolean;
   authenticated: boolean;
   version?: string | undefined;
@@ -21,6 +23,8 @@ export interface CodexPlanRequest {
     immigrationStatus: ImmigrationStatus;
   };
 }
+
+export type ClaudeCodePlanRequest = CodexPlanRequest;
 
 export class CodexRuntimeAdapter {
   async check(): Promise<RuntimeCheck> {
@@ -74,6 +78,57 @@ export class CodexRuntimeAdapter {
   }
 }
 
+/**
+ * Executes one bounded Claude Code Print-mode run. Claude Code is deliberately
+ * given no built-in tools or MCP configuration, so it only receives the prompt
+ * and returns a structured Plan draft through stdout.
+ */
+export class ClaudeCodeRuntimeAdapter {
+  async check(): Promise<RuntimeCheck> {
+    const version = await runProcess("claude", ["--version"]);
+    if (version.code !== 0) return { kind: "claude-code", installed: false, authenticated: false, message: "Claude Code CLI is not available on this machine." };
+
+    const login = await runProcess("claude", ["auth", "status"]);
+    return {
+      kind: "claude-code",
+      installed: true,
+      authenticated: login.code === 0,
+      version: version.stdout.trim() || undefined,
+      ...(login.code === 0 ? {} : { message: "Claude Code is installed but needs login before it can generate a Plan." })
+    };
+  }
+
+  async generatePlanDraft(input: ClaudeCodePlanRequest): Promise<GeneratedPlanDraft> {
+    if (!input.request.trim()) throw new RuntimeAdapterError("invalid_request", "Describe what you need before asking Claude Code to create a Plan.");
+    const health = await this.check();
+    if (!health.installed) throw new RuntimeAdapterError("not_installed", health.message ?? "Claude Code CLI is not available.");
+    if (!health.authenticated) throw new RuntimeAdapterError("not_authenticated", health.message ?? "Claude Code login is required.");
+
+    const runDirectory = await mkdtemp(join(tmpdir(), "c-assistant-claude-"));
+    try {
+      const command = await runProcess("claude", [
+        "-p",
+        "--output-format",
+        "json",
+        "--max-turns",
+        "1",
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        buildPlanDraftPrompt(input)
+      ], { cwd: runDirectory, env: scrubbedEnvironment(process.env), timeoutMs: 120_000 });
+      if (command.code !== 0) throw new RuntimeAdapterError("run_failed", "Claude Code could not generate a Plan draft right now.");
+
+      return parsePlanDraft(parseClaudePrintResult(command.stdout));
+    } catch (error) {
+      if (error instanceof RuntimeAdapterError) throw error;
+      throw new RuntimeAdapterError("run_failed", "Claude Code could not generate a Plan draft right now.");
+    } finally {
+      await rm(runDirectory, { recursive: true, force: true });
+    }
+  }
+}
+
 export class RuntimeAdapterError extends Error {
   constructor(readonly code: "invalid_request" | "not_installed" | "not_authenticated" | "run_failed" | "invalid_output", message: string) {
     super(message);
@@ -89,6 +144,19 @@ export function parsePlanDraft(value: string): GeneratedPlanDraft {
   }
   if (!isPlanDraft(parsed)) throw new RuntimeAdapterError("invalid_output", "Codex returned a Plan draft that does not match C-assistant's contract.");
   return parsed;
+}
+
+export function parseClaudePrintResult(value: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new RuntimeAdapterError("invalid_output", "Claude Code returned an invalid Print-mode response.");
+  }
+  if (!isRecord(parsed) || !isString(parsed.result)) {
+    throw new RuntimeAdapterError("invalid_output", "Claude Code did not return a Plan draft result.");
+  }
+  return parsed.result;
 }
 
 const planDraftSchema = {
@@ -175,7 +243,7 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 function scrubbedEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return Object.fromEntries(Object.entries(environment).filter(([key]) => !/(?:AMAP_API_KEY|TELEGRAM_BOT_TOKEN|OPENAI_API_KEY|CODEX_API_KEY|CODEX_ACCESS_TOKEN)$/i.test(key)));
+  return Object.fromEntries(Object.entries(environment).filter(([key]) => !/(?:AMAP_API_KEY|QWEATHER_API_KEY|TELEGRAM_BOT_TOKEN|OPENAI_API_KEY|CODEX_API_KEY|CODEX_ACCESS_TOKEN|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN)$/i.test(key)));
 }
 
 function runProcess(command: string, args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {}): Promise<{ code: number; stdout: string; stderr: string }> {
