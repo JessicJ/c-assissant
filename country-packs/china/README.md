@@ -6,11 +6,13 @@ The pack is installed and versioned as one public unit. Its Skills remain indepe
 
 The Node-side `chinaSkillRegistry` loads the internal `skill.json` files as runtime source, binds each declared entrypoint, and validates every invoked SkillResult envelope. It does not expose individual Skill installation or bypass Core authorization.
 
-`china-arrival-plan` `0.1.0` is now the registered composite gate. It orders supporting results and preserves their provenance, but remains honestly blocked until `arrival-preparation` exists. It does not yet compile or mutate a Core Plan.
+`china-arrival-plan` `0.1.0` is now the registered composite gate. All seven supporting modules exist; it orders supplied results and preserves their provenance, while still blocking any run with a missing required result. It does not yet compile or mutate a Core Plan.
 
 `local-food-guide` `0.1.0` provides bounded, bilingual destination food context only from traceable official-source facts. It does not choose restaurants or propose transactions; specific nearby places remain a separate, explicit flow.
 
 `digital-life-setup` `0.1.0` maps Plan-derived capability needs to fresh, allowlisted first-party setup guidance. It retains Chinese names, provides English steps, skips user-confirmed completed items, and never receives account secrets or infers completion from a link handoff.
+
+`arrival-preparation` `0.1.0` deduplicates normalized preparation items, preserves their supporting Skill versions, suppresses user-confirmed completed work, and calculates bounded Reminder proposals only from explicit offset-qualified schedule anchors. It proposes only; Core still owns Plan-version binding, persistence, confirmation, and activation.
 
 The first executable internal module is `food-nearby` `0.1.0`. Server invokes it after Amap returns normalized nearby POI facts; the Skill emits a bounded structured result while Telegram remains only a renderer and action-handoff surface. Individual Skill installation is still disabled.
 

@@ -12,7 +12,7 @@ The Pack helps foreigners prepare for and adapt to life in China. It is a region
 
 Composite entry point. Core orchestrates the supporting Skills and compiles one complete Plan. It is not one giant prompt.
 
-Implemented slice: `china-arrival-plan` `0.1.0` is a fail-closed composition gate in the China Skill Registry. It binds supporting results to an exact Plan ID/version, orders them according to this document, and preserves Skill versions, statuses, summaries, assumptions, recommendations, sources, and warnings. It remains `blocked:composition_incomplete` while `arrival-preparation` is absent. Until Core compilation and authorization are connected, it deliberately promotes no Plan changes, Tasks, Reminders, or action cards.
+Implemented slice: `china-arrival-plan` `0.1.0` is a fail-closed composition gate in the China Skill Registry. All seven supporting modules now exist. The gate binds supplied results to an exact Plan ID/version, orders them according to this document, preserves Skill versions, statuses, summaries, assumptions, recommendations, sources, and warnings, and remains `blocked:composition_incomplete` whenever a particular run omits a required result. Until Core compilation and authorization are connected, it deliberately promotes no Plan changes, Tasks, Reminders, or action cards.
 
 ### `policy-applicability`
 
@@ -23,6 +23,8 @@ Implemented slice: `policy-applicability` `0.1.0` owns the production evidence-p
 ### `arrival-preparation`
 
 Builds the preparation checklist and timing for entry documents, communications, essential apps, payments readiness, luggage, and arrival logistics.
+
+Implemented slice: `arrival-preparation` `0.1.0` receives normalized preparation items from the six preceding supporting Skills, deduplicates them by stable semantic key, preserves every source Skill ID/version, and gives a user-confirmed completed state precedence. It proposes Tasks only for remaining items. A Reminder is calculated only from an explicit departure or arrival timestamp whose offset agrees with its IANA time zone and a bounded lead time; missing time is requested only for a critical item that actually needs that anchor. Weather refresh must be explicit and is permitted only for packing or transport. These remain proposals until Core binds them to the reviewed Plan version and the user confirms activation.
 
 ### `digital-life-setup`
 

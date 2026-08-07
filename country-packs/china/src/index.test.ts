@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { chinaArrivalPlanSupportingSkillOrder, runChinaArrivalPlanSkill, runDigitalLifeSetupSkill, runFoodNearbySkill, runHousingAreaRecommendationSkill, runLocalFoodGuideSkill, runPolicyApplicabilitySkill, runTransportPlannerSkill, runWeatherAndPackingSkill, type ChinaArrivalPlanSupportingResult, type ChinaArrivalPlanSupportingSkillId } from "./index.js";
+import { chinaArrivalPlanSupportingSkillOrder, runArrivalPreparationSkill, runChinaArrivalPlanSkill, runDigitalLifeSetupSkill, runFoodNearbySkill, runHousingAreaRecommendationSkill, runLocalFoodGuideSkill, runPolicyApplicabilitySkill, runTransportPlannerSkill, runWeatherAndPackingSkill, type ArrivalPreparationItemInput, type ChinaArrivalPlanSupportingResult, type ChinaArrivalPlanSupportingSkillId } from "./index.js";
 import { chinaSkillRegistry } from "./registry.js";
 
 const candidates = [
@@ -259,8 +259,55 @@ test("digital-life-setup degrades on missing or stale approved guidance and fail
   assert.equal(runDigitalLifeSetupSkill({ requiredCapabilities: ["unknown" as never], completedItemIds: [], items: [], sources: [], approvedSourceIds: [], now: "not-a-date" }).status, "failed");
 });
 
+const preparationItems: ArrivalPreparationItemInput[] = [
+  { key: "carry-entry-documents", titleEnglish: "Carry entry documents", titleOriginal: "携带入境材料", detailsEnglish: "Keep the source-backed documents required for review accessible.", category: "documents", criticality: "critical", state: "needed", sourceSkill: { id: "policy-applicability", version: "0.1.0" }, timing: { anchor: "departure", leadMinutes: 120, refreshFacts: [] } },
+  { key: "pack-for-weather", titleEnglish: "Check weather-sensitive packing", detailsEnglish: "Refresh the destination forecast before leaving.", category: "packing", criticality: "supporting", state: "needed", sourceSkill: { id: "weather-and-packing", version: "0.1.0" }, timing: { anchor: "departure", leadMinutes: 720, refreshFacts: ["weather"] } }
+];
+
+test("arrival-preparation identity matches its internal manifest and degrades without valid items", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../skills/arrival-preparation/skill.json", import.meta.url), "utf8")) as { id: string; version: string; visibility: string; entrypoint: string };
+  const result = runArrivalPreparationSkill({ items: [], schedule: { timeZone: "Asia/Shanghai" } });
+  assert.deepEqual(result.skill, { id: manifest.id, version: manifest.version });
+  assert.equal(manifest.visibility, "internal");
+  assert.equal(manifest.entrypoint, "runArrivalPreparationSkill");
+  assert.equal(result.status, "degraded");
+});
+
+test("arrival-preparation deduplicates provenance and does not repropose confirmed work", () => {
+  const result = runArrivalPreparationSkill({
+    items: [...preparationItems, { ...preparationItems[0]!, state: "confirmed_completed", sourceSkill: { id: "digital-life-setup", version: "0.1.0" } }],
+    schedule: { departureAt: "2026-09-01T07:00:00+08:00", timeZone: "Asia/Shanghai" }
+  });
+  assert.equal(result.status, "success");
+  const documents = result.facts.find((fact) => fact.key === "carry-entry-documents");
+  assert.equal(documents?.state, "confirmed_completed");
+  assert.deepEqual(documents?.sourceSkills.map((source) => source.id), ["policy-applicability", "digital-life-setup"]);
+  assert.equal(result.proposedTasks.some((task) => task.proposalId.endsWith("carry-entry-documents")), false);
+  assert.match(result.warnings.join(" "), /Duplicate preparation items/);
+});
+
+test("arrival-preparation calculates the explicit five o'clock reminder without activating it", () => {
+  const result = runArrivalPreparationSkill({ items: [preparationItems[0]!], schedule: { departureAt: "2026-09-01T07:00:00+08:00", timeZone: "Asia/Shanghai" } });
+  assert.equal(result.status, "success");
+  assert.equal(result.proposedReminders[0]?.dueAt, "2026-08-31T21:00:00.000Z");
+  assert.equal(result.proposedReminders[0]?.timeZone, "Asia/Shanghai");
+  assert.deepEqual(result.proposedReminders[0]?.refreshFacts, []);
+  assert.equal(result.proposedTasks[0]?.completion, "requires_user_confirmation");
+  assert.deepEqual(result.actionCards, []);
+});
+
+test("arrival-preparation asks only for a missing critical anchor and fails malformed timing", () => {
+  const missing = runArrivalPreparationSkill({ items: preparationItems, schedule: { timeZone: "Asia/Shanghai" } });
+  assert.equal(missing.status, "needs_input");
+  assert.deepEqual(missing.needsInput.map((item) => item.field), ["schedule.departureAt"]);
+  const malformed = runArrivalPreparationSkill({ items: [{ ...preparationItems[0]!, timing: { anchor: "departure", leadMinutes: -1, refreshFacts: [] } }], schedule: { departureAt: "2026-09-01T07:00:00", timeZone: "not-a-zone" } });
+  assert.equal(malformed.status, "failed");
+  const mismatchedZone = runArrivalPreparationSkill({ items: preparationItems, schedule: { departureAt: "2026-09-01T07:00:00+08:00", timeZone: "America/New_York" } });
+  assert.equal(mismatchedZone.status, "failed");
+});
+
 test("China Skill Registry loads every internal manifest and validates invocation envelopes", async () => {
-  assert.deepEqual(chinaSkillRegistry.list().map((manifest) => manifest.id).sort(), ["china-arrival-plan", "digital-life-setup", "food-nearby", "housing-area-recommendation", "local-food-guide", "policy-applicability", "transport-planner", "weather-and-packing"]);
+  assert.deepEqual(chinaSkillRegistry.list().map((manifest) => manifest.id).sort(), ["arrival-preparation", "china-arrival-plan", "digital-life-setup", "food-nearby", "housing-area-recommendation", "local-food-guide", "policy-applicability", "transport-planner", "weather-and-packing"]);
   const result = await chinaSkillRegistry.invoke("food-nearby", { partySize: 2, candidates, observedAt: "2026-08-07T00:00:00.000Z" });
   assert.equal(result.skill.id, "food-nearby");
   assert.equal(result.status, "success");

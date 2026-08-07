@@ -51,11 +51,13 @@ Weather interpretation is centralized in `weather-and-packing` `0.1.0` for Web, 
 
 The production policy evidence gate now runs through `policy-applicability` `0.1.0`. It sees only minimized Profile/Plan facts and official snapshot metadata, and reports readiness for separate review without interpreting policy or deciding eligibility.
 
-The registered `china-arrival-plan` `0.1.0` composite gate now preserves ordered supporting Skill provenance for one exact Plan version. It deliberately reports incomplete composition until the remaining arrival-preparation Skill is implemented, and does not yet mutate Core state.
+The registered `china-arrival-plan` `0.1.0` composite gate now preserves ordered supporting Skill provenance for one exact Plan version. All seven supporting Skill modules exist; an individual composition still fails closed if any required result is absent, and the composite does not yet mutate Core state.
 
 The internal `local-food-guide` `0.1.0` adds only source-backed destination food context during planning. It preserves the Chinese original name, provides an English explanation and source, and leaves specific restaurant discovery to an explicit later request.
 
 The internal `digital-life-setup` `0.1.0` selects only the connectivity, communication, navigation, or payment setup capabilities required by the current Plan. It uses fresh allowlisted first-party guidance, presents English steps alongside Chinese names, and does not treat opening a link as setup completion.
+
+The internal `arrival-preparation` `0.1.0` deduplicates normalized supporting guidance into user-confirmable Task and Reminder proposals. It skips completed work, asks for time only when a critical item needs an absent anchor, and calculates reminders only from offset-qualified departure or arrival timestamps. Core compilation and activation remain separate work.
 
 ## Product shape
 
