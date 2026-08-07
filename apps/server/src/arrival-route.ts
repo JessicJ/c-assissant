@@ -22,7 +22,7 @@ export function selectArrivalTransport(plan: Plan, routeFacts: AmapRoute[]): Tra
 export function formatArrivalRoute(input: { origin: AmapPlace; destination: AmapPlace; transport: TransportMode; route?: AmapRoute }): { text: string; handoffUrl: string } {
   const handoff = createAmapNavigationHandoff({ origin: input.origin, destination: input.destination, transport: input.transport });
   const transportLabel = input.transport === "driving" ? "Driving / taxi" : input.transport === "walking" ? "Walking" : "Public transit";
-  const routeFact = input.route ? `\nRoute fact: ${formatDistance(input.route.distanceMeters)}${input.route.durationSeconds === undefined ? "" : ` · about ${formatDuration(input.route.durationSeconds)}`}${input.route.taxiCostYuan === undefined ? "" : ` · estimated taxi fare ¥${input.route.taxiCostYuan}`}.` : "\nOpen Amap to get the current live route.";
+  const routeFact = input.route ? `\nRoute fact: ${formatDistance(input.route.distanceMeters)}${input.route.durationSeconds === undefined ? "" : ` · about ${formatDuration(input.route.durationSeconds)}`}${input.route.taxiCostYuan === undefined ? "" : ` · estimated taxi fare ¥${input.route.taxiCostYuan}`}${input.route.transitCostYuan === undefined ? "" : ` · estimated transit fare ¥${input.route.transitCostYuan}`}.` : "\nOpen Amap to get the current live route.";
   return { text: `Arrival route ready\nTo: ${input.destination.name}\nChosen Plan mode: ${transportLabel}.${routeFact}\n\nOpen Amap to review the route and choose the next action. C-assistant has not hailed a ride, made a booking, or started payment.`, handoffUrl: handoff.url };
 }
 
