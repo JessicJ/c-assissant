@@ -73,7 +73,8 @@
 - 落地 `local-food-guide` `0.1.0`：制定 Plan 时只转换已归一化、来源 ID 属于 Country Pack 白名单且官方快照在 30 天新鲜度窗口内的目的地饮食事实，保留中文原名、英文名称、英文解释和来源；最多展示五项并去重。没有可追溯事实时明确降级，不凭模型常识声称“当地特色”，也不提前选择餐厅、创建行动卡或推断预订、点餐、支付和到店完成。具体店仍由抵达后或用户主动要求时的 `food-nearby` 处理。
 - 落地 `digital-life-setup` `0.1.0`：由 Core 根据本次 Plan 传入联网、通讯、地图导航和本地支付能力需求，Skill 从 Country Pack 白名单且 30 天内刷新的第一方资料中选择设置项；保留中文原名并输出英文原因和步骤。用户已明确完成的项目不再进入待办建议；打开官方链接不等于安装、注册、实名、支付就绪或任务完成，Skill 不接收密码、验证码、支付凭据或账号会话，也不直接创建 Task/Reminder。
 - 落地 `arrival-preparation` `0.1.0`：把前序 supporting Skill 已归一化的准备事项按稳定语义键去重，保留来源 Skill ID/版本，并让用户确认完成状态优先，避免重复生成待办。它最多形成 20 项可审查事实，只为仍需处理的事项输出 Task 提案；仅在出发/到达时间带明确时区偏移、该偏移与 IANA 时区一致且提前量不超过 30 天时计算 Reminder 提案，缺少时间时也只对真正依赖该锚点的关键事项追问。已验证 07:00 航班配合提前 120 分钟得到 05:00 提案。所有 Task/Reminder 仍需 Core 绑定准确 Plan 版本并经用户确认后才能写入和激活。
-- 实现第一层 Core Plan 编译与 China Pack 适配边界：China Adapter 只接受 composite 中记录的 `arrival-preparation` ID、版本和状态完全一致且无缺失依赖的结果，再转换为国家无关 Proposal；Core 只允许 Proposal 命中当前 draft Plan 的准确 ID/版本，拒绝已激活 Plan、重复 Proposal ID、结构异常、时区异常和已过期 Reminder。成功结果是版本加一但仍未激活的新 draft Plan，Task/Stage 保存 Country Pack、组合 Skill 和来源 Skill 版本；UTC 提醒会转换为 Core 现有的本地时间加 IANA 时区格式。该步骤目前是纯函数，不写 SQLite、不发送通知、不执行外部动作。
+- 实现第一层 Core Plan 编译与 China Pack 适配边界：China Adapter 只接受 composite 中记录的 `arrival-preparation` ID、版本和状态完全一致且无缺失依赖的结果，再转换为国家无关 Proposal；Core 只允许 Proposal 命中当前 draft Plan 的准确 ID/版本，拒绝已激活 Plan、重复 Proposal ID、结构异常、时区异常和已过期 Reminder。成功结果是版本加一但仍未激活的新 draft Plan，Task/Stage 保存 Country Pack、组合 Skill 和来源 Skill 版本；UTC 提醒会转换为 Core 现有的本地时间加 IANA 时区格式。Core 编译本身保持纯函数，调用方可交给下述 SQLite 原子写入；两层都不发送通知或执行外部动作。
+- 实现编译结果的 SQLite 原子版本写入：只有当前记录仍是预期 Plan ID、版本和 draft 状态时，才能在同一事务内保存下一个版本并替换 Stage/Task；用户抢先确认、其他修改或重复提交都会让 compare-and-write 失败且不留下部分数据。迁移为 Stage/Task 增加 provenance，Task 增加描述，并保存最小 `plan_compilation` Run（Country Pack/组合 Skill 版本、源/目标 Plan 版本、Task/Reminder 数量和时间）；不保存 Proposal 正文、Skill 原始输出或凭据。成功后 Plan 仍为 draft，Reminder 仍未激活。
 - 实现高德路线行动交接：选择高德地点后可检查驾车路线，并生成由用户自行打开的高德路线链接；不调用叫车、预订或支付。
 - 实现 QWeather Connector：经高德地理编码解析地点后，提供实况和三天预报；Key 与 Host 不会暴露给 Web 或 Agent。
 - 实现官方来源 Connector 的安全基础：仅从 Country Pack 注册表批准的 HTTPS 官方域名抓取，保留原始标题、规范链接、抓取时间、内容指纹和限长摘录；拒绝任意外部域名与跳转，且不生成个人政策适用性结论。China Pack 初始注册了国家移民管理局与国务院英文入口。
@@ -102,7 +103,7 @@
 
 ## 未完成内容
 
-- Core Plan 编译器和 China Pack Proposal Adapter 已通过包级集成测试，但尚未由真实 orchestrator 依次运行七个 supporting Skills，也未接入 SQLite 原子版本写入、Server API、Web/Telegram 完整审阅或 Skill Run 审计。当前编译结果只存在于调用方内存；Task 描述和 Skill provenance 也尚未进入存储表迁移。
+- Core Plan 编译器、China Pack Proposal Adapter 与 SQLite 原子版本写入已通过集成测试，但尚未由真实 orchestrator 依次运行七个 supporting Skills，也未接入 Server API、Web/Telegram 完整审阅或逐 Skill Run 审计。当前 UI 不会触发这条编译保存路径。
 
 - 已完成 Telegram Bot 身份验证、一次性私聊配对，以及已绑定账号的最小输入入口：普通文本和 `/new` 都会使用 Settings 中选定的本机 Codex 或 Claude Code 生成待确认 Plan；所选运行底座不可用时会明确降级为本地模板草案，另有 `/help` 和 `/plan`。官方来源 Connector 已具备受限刷新和快照能力；完整的数据库迁移体系尚未实现。
 - 已实现第一条 Plan 事件状态转换：任务只有显式 `arrival` 触发标记时，预计抵达事件才会把它从 `scheduled` 转为 `ready`，记录本地收件箱并更新当前下一步；不会推断或自动完成任何任务。

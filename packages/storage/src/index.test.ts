@@ -1,7 +1,29 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { compilePlanProposal, type PlanCompilationProposal } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "./index.js";
+
+function storageCompilationProposal(planId: string, planVersion: number): PlanCompilationProposal {
+  return {
+    planRef: { id: planId, version: planVersion },
+    countryPack: { id: "china", version: "0.0.0", name: "China Country Pack" },
+    composition: { skillId: "china-arrival-plan", version: "0.1.0", status: "success" },
+    compilationKey: "china-arrival-preparation",
+    stage: { title: "China arrival preparation", description: "Review source-bound preparation." },
+    tasks: [{
+      proposalId: "arrival-preparation:carry-entry-documents",
+      title: "Carry entry documents",
+      description: "Keep the reviewed documents accessible.",
+      owner: "user",
+      dueLabel: "Before departure",
+      sourceSkills: [{ id: "policy-applicability", version: "0.1.0" }, { id: "arrival-preparation", version: "0.1.0" }],
+      reminder: { dueAt: "2026-08-31T21:00:00.000Z", timeZone: "Asia/Shanghai", purpose: "Carry entry documents", refreshFacts: [] }
+    }],
+    assumptions: [],
+    limitations: ["No entry eligibility conclusion has been made."]
+  };
+}
 
 test("SQLite persists a created Plan, a confirmation, and confirmed Profile data", () => {
   const store = new SqliteWorkspaceStore(":memory:");
@@ -144,6 +166,74 @@ test("SQLite persists a validated Agent-generated Plan", () => {
   assert.equal(workspace.activePlan.title, "Attend a Shanghai exhibition");
   assert.equal(workspace.activePlan.stages[0]?.tasks[0]?.reminder?.scheduledAtLocal, "2026-09-01T05:00");
   assert.equal(workspace.inbox[0]?.title, "Codex Plan draft saved locally");
+  store.close();
+});
+
+test("SQLite atomically persists a compiled draft with Skill provenance and audit", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const original = store.getWorkspace().activePlan;
+  const decision = compilePlanProposal(original, storageCompilationProposal(original.id, original.version), new Date("2026-08-07T00:00:00.000Z"));
+  assert.equal(decision.status, "compiled");
+  if (decision.status !== "compiled") return;
+  const saved = store.saveCompiledPlan({ plan: decision.plan, expectedPlanId: original.id, expectedVersion: original.version, audit: decision.audit, compiledAt: "2026-08-07T00:01:00.000Z" });
+  const generatedStage = saved.activePlan.stages.find((stage) => stage.origin?.compilationKey === "china-arrival-preparation");
+  assert.equal(saved.activePlan.version, original.version + 1);
+  assert.equal(saved.activePlan.status, "draft");
+  assert.equal(generatedStage?.tasks[0]?.description, "Keep the reviewed documents accessible.");
+  assert.equal(generatedStage?.tasks[0]?.origin?.sourcePlanVersion, original.version);
+  assert.equal(generatedStage?.tasks[0]?.reminder?.scheduledAtLocal, "2026-09-01T05:00");
+  const run = store.listRecentPlanCompilationRuns()[0];
+  assert.equal(run?.planId, original.id);
+  assert.equal(run?.sourcePlanVersion, original.version);
+  assert.equal(run?.compiledPlanVersion, original.version + 1);
+  assert.equal(run?.taskCount, 1);
+  assert.equal(run?.reminderCount, 1);
+  assert.equal(Object.hasOwn(run ?? {}, "proposal"), false);
+  assert.match(saved.inbox[0]?.body ?? "", /No Task, Reminder, or external action was activated/);
+
+  assert.throws(() => store.saveCompiledPlan({ plan: decision.plan, expectedPlanId: original.id, expectedVersion: original.version, audit: decision.audit }), /changed before/i);
+  assert.equal(store.getWorkspace().activePlan.version, original.version + 1);
+  assert.equal(store.listRecentPlanCompilationRuns().length, 1);
+  store.close();
+});
+
+test("SQLite rejects compilation metadata that does not match generated content", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const original = store.getWorkspace().activePlan;
+  const decision = compilePlanProposal(original, storageCompilationProposal(original.id, original.version), new Date("2026-08-07T00:00:00.000Z"));
+  assert.equal(decision.status, "compiled");
+  if (decision.status !== "compiled") return;
+  assert.throws(() => store.saveCompiledPlan({ plan: decision.plan, expectedPlanId: original.id, expectedVersion: original.version, audit: { ...decision.audit, taskCount: 99 } }), /counts do not match/i);
+  assert.equal(store.getWorkspace().activePlan.version, original.version);
+  assert.equal(store.listRecentPlanCompilationRuns().length, 0);
+  store.close();
+});
+
+test("SQLite refuses a compiled write when the targeted draft was activated first", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const original = store.getWorkspace().activePlan;
+  const decision = compilePlanProposal(original, storageCompilationProposal(original.id, original.version), new Date("2026-08-07T00:00:00.000Z"));
+  assert.equal(decision.status, "compiled");
+  if (decision.status !== "compiled") return;
+  store.confirmPlan(original.id);
+  assert.throws(() => store.saveCompiledPlan({ plan: decision.plan, expectedPlanId: original.id, expectedVersion: original.version, audit: decision.audit }), /changed before/i);
+  assert.equal(store.getWorkspace().activePlan.status, "active");
+  assert.equal(store.listRecentPlanCompilationRuns().length, 0);
+  store.close();
+});
+
+test("SQLite preserves a compiled UTC Reminder", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const original = store.getWorkspace().activePlan;
+  const proposal = storageCompilationProposal(original.id, original.version);
+  proposal.tasks[0]!.reminder = { dueAt: "2026-08-31T21:00:00.000Z", timeZone: "UTC", purpose: "Carry entry documents", refreshFacts: [] };
+  const decision = compilePlanProposal(original, proposal, new Date("2026-08-07T00:00:00.000Z"));
+  assert.equal(decision.status, "compiled");
+  if (decision.status !== "compiled") return;
+  const saved = store.saveCompiledPlan({ plan: decision.plan, expectedPlanId: original.id, expectedVersion: original.version, audit: decision.audit });
+  const reminder = saved.activePlan.stages.find((stage) => stage.origin)?.tasks[0]?.reminder;
+  assert.equal(reminder?.timeZone, "UTC");
+  assert.equal(reminder?.scheduledAtLocal, "2026-08-31T21:00");
   store.close();
 });
 
