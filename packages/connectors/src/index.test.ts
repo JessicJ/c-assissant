@@ -251,12 +251,41 @@ test("Telegram update polling normalizes only a usable private-chat message", as
   const result = await connector.getUpdates({ offset: 10 });
   assert.equal(result.status, "available");
   assert.equal(result.data?.updates.length, 1);
+  assert.equal(result.data?.updates[0]?.kind, "message");
   assert.equal(result.data?.updates[0]?.chatId, "1001");
   assert.equal(result.data?.updates[0]?.chatType, "private");
   assert.equal(result.data?.updates[0]?.text, "/start pair_code_123");
   assert.equal(result.data?.nextOffset, 13);
   assert.match(requestBody, /"offset":10/);
+  assert.match(requestBody, /callback_query/);
   assert.doesNotMatch(JSON.stringify(result), /test-token/);
+});
+
+test("Telegram supports an arrival callback and an explicit shared location without exposing the token", async () => {
+  const bodies: string[] = [];
+  const connector = new TelegramConnector({
+    botToken: "test-token",
+    fetcher: async (input, init) => {
+      bodies.push(String(init?.body));
+      const url = String(input);
+      if (url.endsWith("/getUpdates")) return new Response(JSON.stringify({ ok: true, result: [
+        { update_id: 14, callback_query: { id: "callback-1", data: "arrival_not_here", from: { id: 1001, first_name: "Avery" }, message: { chat: { id: 1001, type: "private" } } } },
+        { update_id: 15, message: { location: { latitude: 31.23, longitude: 121.47 }, chat: { id: 1001, type: "private" }, from: { id: 1001, first_name: "Avery" } } }
+      ] }));
+      if (url.endsWith("/sendMessage")) return new Response(JSON.stringify({ ok: true, result: { message_id: 3, chat: { id: 1001 } } }));
+      return new Response(JSON.stringify({ ok: true, result: true }));
+    }
+  });
+
+  const updates = await connector.getUpdates();
+  assert.equal(updates.data?.updates[0]?.kind, "callback");
+  assert.equal(updates.data?.updates[0]?.callbackData, "arrival_not_here");
+  assert.deepEqual(updates.data?.updates[1]?.location, { latitude: 31.23, longitude: 121.47 });
+  await connector.answerCallbackQuery({ callbackId: "callback-1", text: "Share location" });
+  await connector.sendMessage({ chatId: "1001", text: "Share location", replyMarkup: { keyboard: [[{ text: "Share current location", request_location: true }]], resize_keyboard: true, one_time_keyboard: true } });
+  assert.ok(bodies.some((body) => /callback_query_id/.test(body)));
+  assert.ok(bodies.some((body) => /request_location/.test(body)));
+  assert.doesNotMatch(JSON.stringify({ bodies }), /test-token/);
 });
 
 test("Telegram does not make a request when no bot token is configured", async () => {

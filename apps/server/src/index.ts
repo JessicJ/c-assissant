@@ -298,6 +298,17 @@ async function pollTelegram(): Promise<void> {
     for (const update of updates.data.updates) {
       if (update.chatType !== "private" || update.chatId !== pairing.binding.chatId || update.userId !== pairing.binding.userId) continue;
       if (!store.claimTelegramUpdate(update.updateId)) continue;
+      if (update.kind === "callback") {
+        if (update.callbackData === "arrival_not_here" && update.callbackId) {
+          await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: "Share your location only if you want route help." });
+          await telegram.sendMessage({ chatId: pairing.binding.chatId, text: "If you want route help for this arrival, tap the button below to share your current location. C-assistant will use it only for this interaction and will not save it to your Profile.", replyMarkup: { keyboard: [[{ text: "Share current location", request_location: true }]], resize_keyboard: true, one_time_keyboard: true } });
+        }
+        continue;
+      }
+      if (update.location) {
+        await telegram.sendMessage({ chatId: pairing.binding.chatId, text: "Location received for this interaction. It has not been added to your long-term Profile, and no ride or route has been started yet." });
+        continue;
+      }
       const response = telegramCommandResponse(update.text);
       if (response) await telegram.sendMessage({ chatId: pairing.binding.chatId, text: response });
     }
@@ -324,7 +335,7 @@ async function runArrivalReminder(): Promise<void> {
   try {
     const claimed = store.claimTelegramReminder({ planId: plan.id, reminderKey: "arrival-check-in", dueAt: dueAt.toISOString() });
     if (!claimed) return;
-    const receipt = await telegram.sendMessage({ chatId: pairing.binding.chatId, text: formatArrivalReminder(plan) });
+    const receipt = await telegram.sendMessage({ chatId: pairing.binding.chatId, text: formatArrivalReminder(plan), replyMarkup: { inline_keyboard: [[{ text: "I haven't arrived", callback_data: "arrival_not_here" }]] } });
     if (receipt.status !== "available") server.log.warn({ status: receipt.status, code: receipt.failure?.code }, "Telegram arrival reminder could not be delivered");
   } catch (error) {
     server.log.warn({ error }, "Telegram arrival reminder failed");
