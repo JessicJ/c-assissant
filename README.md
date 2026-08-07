@@ -60,6 +60,7 @@ Amap / Official Sources / External Handoffs
 - Execute approved, reversible work with as little user intervention as possible.
 - Keep long-term Profile data separate from each Plan's temporary configuration.
 - Default to a context-based transport choice; let a user set a Plan-only preference only when they want to override it.
+- Keep traveller count and luggage context optional and Plan-scoped, so it can inform later transport decisions without becoming long-term profile data.
 - Use current official sources for policy, immigration, legal, banking, health, and other regulated information.
 - Do not guess when a high-risk conclusion cannot be verified.
 - Do not place orders, book accommodation, hail rides, pay, cancel, or submit materials in V1.

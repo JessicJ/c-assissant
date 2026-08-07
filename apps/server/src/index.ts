@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-adapters";
 import { AmapConnector, QWeatherConnector, TelegramConnector } from "@c-assistant/connectors";
-import type { CreatePlanInput, PlanAccommodationInput, PlanTransportPreferenceInput, ProfileUpdate } from "@c-assistant/core";
+import type { CreatePlanInput, PlanAccommodationInput, PlanTransportPreferenceInput, PlanTravelContextInput, ProfileUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
 
 const server = Fastify({ logger: true });
@@ -56,6 +56,16 @@ server.put<{ Params: { planId: string }; Body: PlanTransportPreferenceInput }>("
   } catch (error) {
     return reply.code(400).send({
       error: error instanceof Error ? error.message : "The transport preference could not be saved."
+    });
+  }
+});
+
+server.put<{ Params: { planId: string }; Body: PlanTravelContextInput }>("/api/plans/:planId/travel-context", async (request, reply) => {
+  try {
+    return store.updatePlanTravelContext(request.params.planId, request.body);
+  } catch (error) {
+    return reply.code(400).send({
+      error: error instanceof Error ? error.message : "The travel context could not be saved."
     });
   }
 });
