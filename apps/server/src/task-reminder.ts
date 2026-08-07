@@ -1,4 +1,4 @@
-import type { Plan, Task } from "@c-assistant/core";
+import type { Plan, Task, TaskReminder } from "@c-assistant/core";
 import { localDateTimeInstant } from "./arrival-reminder.js";
 
 const REMINDER_CATCH_UP_MS = 30 * 60_000;
@@ -6,6 +6,7 @@ const TERMINAL_TASK_STATUSES = new Set<Task["status"]>(["completed", "skipped", 
 
 export interface DueTaskReminder {
   task: Task;
+  reminder: TaskReminder;
   dueAt: Date;
   reminderKey: string;
 }
@@ -19,7 +20,7 @@ export function dueTaskReminders(plan: Plan, now = new Date()): DueTaskReminder[
     if (!dueAt) return [];
     const elapsed = now.getTime() - dueAt.getTime();
     if (elapsed < 0 || elapsed > REMINDER_CATCH_UP_MS) return [];
-    return [{ task, dueAt, reminderKey: `task-reminder:${task.id}:${dueAt.toISOString()}` }];
+    return [{ task, reminder: task.reminder, dueAt, reminderKey: `task-reminder:${task.id}:${dueAt.toISOString()}` }];
   });
 }
 

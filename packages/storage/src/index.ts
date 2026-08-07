@@ -316,7 +316,7 @@ export class SqliteWorkspaceStore {
     return true;
   }
 
-  claimTelegramTaskReminderAttempt(input: { planId: string; reminderKey: string; taskId: string; dueAt: string; now?: string }): TelegramTaskReminderAttempt {
+  claimTelegramTaskReminderAttempt(input: { planId: string; reminderKey: string; taskId: string; dueAt: string; reminder: TaskReminder; now?: string }): TelegramTaskReminderAttempt {
     const planId = input.planId.trim();
     const reminderKey = input.reminderKey.trim();
     const taskId = input.taskId.trim();
@@ -325,6 +325,10 @@ export class SqliteWorkspaceStore {
     const nowMs = Date.parse(now);
     if (!planId || !reminderKey || !taskId || !Number.isFinite(dueAtMs) || !Number.isFinite(nowMs)) throw new Error("A Task reminder attempt needs a Plan, key, Task, due time, and current time.");
     if (nowMs < dueAtMs || nowMs > dueAtMs + TASK_REMINDER_CATCH_UP_MS) return { claimed: false };
+    const workspace = this.getWorkspace();
+    if (workspace.activePlan.id !== planId || workspace.activePlan.status !== "active") return { claimed: false };
+    const currentReminder = workspace.activePlan.stages.flatMap((stage) => stage.tasks).find((task) => task.id === taskId)?.reminder;
+    if (!currentReminder || currentReminder.scheduledAtLocal !== input.reminder.scheduledAtLocal || currentReminder.timeZone !== input.reminder.timeZone || currentReminder.purpose !== input.reminder.purpose) return { claimed: false };
     const existing = this.database.prepare(`SELECT task_id, due_at, status, attempt_count, next_attempt_at
       FROM telegram_task_reminder_deliveries WHERE plan_id = ? AND reminder_key = ?`).get(planId, reminderKey) as TelegramTaskReminderDeliveryRow | undefined;
     const leaseUntil = new Date(nowMs + TASK_REMINDER_ATTEMPT_LEASE_MS).toISOString();
@@ -343,12 +347,13 @@ export class SqliteWorkspaceStore {
     return updated.changes === 1 ? { claimed: true, attemptNumber: nextAttemptNumber } : { claimed: false };
   }
 
-  recordTelegramTaskReminderDelivered(input: { planId: string; reminderKey: string; taskId: string; deliveredAt?: string }): void {
+  recordTelegramTaskReminderDelivered(input: { planId: string; reminderKey: string; taskId: string; taskTitle: string; reminder: TaskReminder; deliveredAt?: string }): void {
     const workspace = this.getWorkspace();
-    if (workspace.activePlan.id !== input.planId) throw new Error(`Plan ${input.planId} was not found.`);
-    if (workspace.activePlan.status !== "active") throw new Error("A Task reminder can be recorded only for an active Plan.");
-    const task = workspace.activePlan.stages.flatMap((stage) => stage.tasks).find((candidate) => candidate.id === input.taskId);
-    if (!task?.reminder) throw new Error("The delivered Task reminder was not found in the current Plan.");
+    const taskTitle = input.taskTitle.trim();
+    if (!taskTitle || !input.reminder.purpose.trim()) throw new Error("A delivered Task reminder needs its delivery-time Task context.");
+    const currentTask = workspace.activePlan.stages.flatMap((stage) => stage.tasks).find((candidate) => candidate.id === input.taskId);
+    const currentReminder = currentTask?.reminder;
+    const currentMatch = workspace.activePlan.id === input.planId && workspace.activePlan.status === "active" && currentReminder?.scheduledAtLocal === input.reminder.scheduledAtLocal && currentReminder.timeZone === input.reminder.timeZone && currentReminder.purpose === input.reminder.purpose;
     const deliveredAt = input.deliveredAt ?? new Date().toISOString();
     if (!Number.isFinite(Date.parse(deliveredAt))) throw new Error("A delivered Task reminder needs a valid delivery time.");
     this.database.exec("BEGIN");
@@ -358,10 +363,10 @@ export class SqliteWorkspaceStore {
         WHERE plan_id = ? AND reminder_key = ? AND task_id = ? AND status = 'attempting'`).run(deliveredAt, deliveredAt, input.planId, input.reminderKey, input.taskId);
       if (updated.changes !== 1) throw new Error("The Task reminder delivery attempt is not active.");
       this.addInbox({
-        id: `task-reminder-delivered-${input.planId}-${task.id}-${task.reminder.scheduledAtLocal}`,
-        tone: "ready",
-        title: `Reminder sent: ${task.title}`,
-        body: task.reminder.purpose,
+        id: `task-reminder-delivered-${input.planId}-${input.taskId}-${input.reminder.scheduledAtLocal}`,
+        tone: currentMatch ? "ready" : "attention",
+        title: currentMatch ? `Reminder sent: ${taskTitle}` : `Reminder sent before Plan change took effect: ${taskTitle}`,
+        body: currentMatch ? input.reminder.purpose : `${input.reminder.purpose} Telegram accepted this message before cancellation or Plan replacement could stop the in-flight request.`,
         timestamp: "Just now"
       });
       this.database.exec("COMMIT");
@@ -407,6 +412,31 @@ export class SqliteWorkspaceStore {
       throw error;
     }
     return { status: "failed" };
+  }
+
+  cancelTaskReminder(planId: string, taskId: string): WorkspaceSnapshot {
+    const workspace = this.getWorkspace();
+    if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
+    const task = workspace.activePlan.stages.flatMap((stage) => stage.tasks).find((candidate) => candidate.id === taskId);
+    if (!task) throw new Error("The Task was not found in the current Plan.");
+    if (!task.reminder) return workspace;
+    this.database.exec("BEGIN");
+    try {
+      this.database.prepare("UPDATE tasks SET reminder_json = NULL WHERE id = ?").run(taskId);
+      this.database.prepare("UPDATE plans SET version = version + 1 WHERE id = ?").run(planId);
+      this.addInbox({
+        id: `task-reminder-cancelled-${planId}-${taskId}-${Date.now()}`,
+        tone: "notice",
+        title: `Reminder cancelled: ${task.title}`,
+        body: "This reminder was removed from the current Plan. A message already accepted by Telegram cannot be recalled.",
+        timestamp: "Just now"
+      });
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getWorkspace();
   }
 
   recordTelegramArrivalCheckin(input: { planId: string; checkInSentAt: string }): void {
