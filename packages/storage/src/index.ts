@@ -150,6 +150,13 @@ interface TelegramArrivalCheckinRow {
   location_received_at: string | null;
 }
 
+export type TelegramProfileTextField = "displayName" | "preferredLanguage" | "nationality";
+
+interface TelegramProfileEditRow {
+  field: TelegramProfileTextField;
+  started_at: string;
+}
+
 interface TelegramTaskReminderDeliveryRow {
   task_id: string;
   due_at: string;
@@ -291,6 +298,7 @@ export class SqliteWorkspaceStore {
     this.database.exec("BEGIN");
     try {
       this.database.prepare("DELETE FROM telegram_binding WHERE id = 1").run();
+      this.database.prepare("DELETE FROM telegram_profile_edit_state WHERE id = 1").run();
       this.database.prepare("UPDATE telegram_pairing_requests SET consumed_at = ? WHERE consumed_at IS NULL").run(unpairedAt);
       this.addInbox({
         id: `telegram-unpaired-${unpairedAt}`,
@@ -616,25 +624,48 @@ export class SqliteWorkspaceStore {
     const preferredLanguage = input.preferredLanguage.trim();
     const nationality = input.nationality.trim();
     if (!displayName || !preferredLanguage || !nationality) throw new Error("Name, preferred language, and nationality are required.");
+    if (displayName.length > 80 || preferredLanguage.length > 80 || nationality.length > 100) throw new Error("Keep each Profile text field concise.");
     if (!["not_specified", "woman", "man", "nonbinary", "prefer_not_to_say"].includes(input.gender)) throw new Error("Choose a supported gender setting.");
     if (!["unknown", "short_term_visitor", "tourist_visa", "student_visa", "work_visa", "residence_permit", "other"].includes(input.immigrationStatus)) throw new Error("Choose a supported immigration status setting.");
 
-    this.database.prepare("UPDATE profiles SET display_name = ?, preferred_language = ?, nationality = ?, gender = ?, immigration_status = ?, status = 'ready', updated_at = ? WHERE id = 1").run(
+    const status = nationality.toLocaleLowerCase() !== "to be confirmed" && input.immigrationStatus !== "unknown" ? "ready" : "incomplete";
+    this.database.prepare("UPDATE profiles SET display_name = ?, preferred_language = ?, nationality = ?, gender = ?, immigration_status = ?, status = ?, updated_at = ? WHERE id = 1").run(
       displayName,
       preferredLanguage,
       nationality,
       input.gender,
       input.immigrationStatus,
+      status,
       new Date().toISOString()
     );
     this.addInbox({
       id: `profile-updated-${Date.now()}`,
-      tone: "ready",
+      tone: status === "ready" ? "ready" : "notice",
       title: "Profile saved locally",
       body: "Only confirmed long-term information is stored in the Profile.",
       timestamp: "Just now"
     });
     return this.getWorkspace();
+  }
+
+  startTelegramProfileTextEdit(field: TelegramProfileTextField, startedAt = new Date().toISOString()): void {
+    if (!["displayName", "preferredLanguage", "nationality"].includes(field)) throw new Error("Choose a supported Telegram Profile field.");
+    if (!Number.isFinite(Date.parse(startedAt))) throw new Error("Telegram Profile editing needs a valid start time.");
+    this.database.prepare("INSERT INTO telegram_profile_edit_state (id, field, started_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET field = excluded.field, started_at = excluded.started_at").run(field, startedAt);
+  }
+
+  getTelegramProfileTextEdit(now = new Date().toISOString()): TelegramProfileTextField | undefined {
+    const nowMs = Date.parse(now);
+    if (!Number.isFinite(nowMs)) throw new Error("Telegram Profile editing needs a valid current time.");
+    const row = this.database.prepare("SELECT field, started_at FROM telegram_profile_edit_state WHERE id = 1").get() as TelegramProfileEditRow | undefined;
+    if (!row) return undefined;
+    if (nowMs - Date.parse(row.started_at) <= 15 * 60_000) return row.field;
+    this.clearTelegramProfileTextEdit();
+    return undefined;
+  }
+
+  clearTelegramProfileTextEdit(): void {
+    this.database.prepare("DELETE FROM telegram_profile_edit_state WHERE id = 1").run();
   }
 
   updateRuntimeSelection(input: RuntimeSelectionUpdate): WorkspaceSnapshot {
@@ -1025,6 +1056,11 @@ export class SqliteWorkspaceStore {
       CREATE TABLE IF NOT EXISTS telegram_update_cursor (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         next_update_id INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS telegram_profile_edit_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        field TEXT NOT NULL CHECK (field IN ('displayName', 'preferredLanguage', 'nationality')),
+        started_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS telegram_processed_updates (
         update_id INTEGER PRIMARY KEY,

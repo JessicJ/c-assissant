@@ -5,14 +5,15 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-adapters";
-import { AmapConnector, OfficialSourceConnector, QWeatherConnector, TelegramConnector, type AmapPlace, type AmapRoute } from "@c-assistant/connectors";
+import { AmapConnector, OfficialSourceConnector, QWeatherConnector, TelegramConnector, type AmapPlace, type AmapRoute, type TelegramReplyMarkup } from "@c-assistant/connectors";
 import { assessPolicyPreparation, type AgentRuntimeKind, type CreatePlanInput, type GeneratedPlanDraft, type PlanAccommodationInput, type PlanArrivalInput, type PlanTransportPreferenceInput, type PlanTravelContextInput, type ProfileUpdate, type RuntimeSelectionUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue } from "./arrival-reminder.js";
 import { arrivalRouteDestination, formatArrivalRoute, selectArrivalTransport } from "./arrival-route.js";
 import { createOfficialSourceService, parseOfficialSourceRegistry } from "./official-sources.js";
 import { parseTelegramCommand } from "./telegram-commands.js";
-import { createTelegramPlan, formatTelegramPlanCreationPages, formatTelegramPlanPages, planDraftForRevision, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode, type TelegramPlanConfirmationMarkup } from "./telegram-plan.js";
+import { createTelegramPlan, formatTelegramPlanCreationPages, formatTelegramPlanPages, planDraftForRevision, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
+import { formatTelegramProfile, parseTelegramProfileCallback, telegramProfileChoiceMarkup, telegramProfileMarkup, telegramProfileTextPrompt, updateProfileText } from "./telegram-profile.js";
 import { dueTaskReminders, formatTaskReminder } from "./task-reminder.js";
 import { refreshTaskReminderWeather, taskReminderNeedsWeather, type TaskReminderWeatherContext } from "./task-reminder-weather.js";
 
@@ -286,7 +287,7 @@ server.post<{ Body: { code?: string } }>("/api/connectors/telegram/pairing/compl
       ...(startUpdate.username ? { username: startUpdate.username } : {})
     });
     store.advanceTelegramUpdateOffset(startUpdate.updateId + 1);
-    const receipt = await telegram.sendMessage({ chatId: startUpdate.chatId, text: "C-assistant is connected to this Telegram account. You will control future reminders and actions from your Plan." });
+    const receipt = await telegram.sendMessage({ chatId: startUpdate.chatId, text: "C-assistant is connected to this Telegram account. You will control future reminders and actions from your Plan. Send /profile whenever you want to complete or change your basic long-term settings." });
     return { ...paired, confirmationMessageSent: receipt.status === "available" };
   } catch (error) {
     return reply.code(400).send({ error: error instanceof Error ? error.message : "Telegram could not be paired." });
@@ -364,12 +365,32 @@ async function pollTelegram(): Promise<void> {
       if (update.chatType !== "private" || update.chatId !== pairing.binding.chatId || update.userId !== pairing.binding.userId) continue;
       if (!store.claimTelegramUpdate(update.updateId)) continue;
       if (update.kind === "callback") {
+        const profileAction = parseTelegramProfileCallback(update.callbackData);
+        if (profileAction.type !== "unknown" && update.callbackId) {
+          if (profileAction.type === "edit_text") {
+            store.startTelegramProfileTextEdit(profileAction.field);
+            await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: "Send the value as your next message." });
+            await telegram.sendMessage({ chatId: pairing.binding.chatId, text: telegramProfileTextPrompt(profileAction.field) });
+          } else if (profileAction.type === "choose") {
+            store.clearTelegramProfileTextEdit();
+            await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: "Choose the value you want to save." });
+            await telegram.sendMessage({ chatId: pairing.binding.chatId, text: profileAction.field === "gender" ? "Choose your gender setting. You may leave it unspecified." : "Choose the China visa or residence status you currently know. This is user-provided context, not a policy conclusion.", replyMarkup: telegramProfileChoiceMarkup(profileAction.field) });
+          } else {
+            store.clearTelegramProfileTextEdit();
+            const current = store.getWorkspace().profile;
+            const updated = store.updateProfile(profileAction.type === "set_gender" ? { ...current, gender: profileAction.value } : { ...current, immigrationStatus: profileAction.value });
+            await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: "Profile saved locally." });
+            await telegram.sendMessage({ chatId: pairing.binding.chatId, text: formatTelegramProfile(updated.profile), replyMarkup: telegramProfileMarkup() });
+          }
+          continue;
+        }
         const confirmation = telegramPlanConfirmationDecision(store.getWorkspace().activePlan, update.callbackData);
         if (confirmation !== "not_confirmation" && update.callbackId) {
           if (confirmation === "confirm") {
             const confirmed = store.confirmPlan(store.getWorkspace().activePlan.id);
             await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: "Plan activated." });
-            await telegram.sendMessage({ chatId: pairing.binding.chatId, text: `Plan activated\n${confirmed.activePlan.title}\n\nApproved reminders and read-only preparation are now eligible to run. No booking, payment, ride, or other external action was started.` });
+            const profileNext = confirmed.profile.status === "incomplete" ? "\n\nYour Plan is active, but some policy-routing basics are still missing. Send /profile when convenient; this does not block other Plan work." : "";
+            await telegram.sendMessage({ chatId: pairing.binding.chatId, text: `Plan activated\n${confirmed.activePlan.title}\n\nApproved reminders and read-only preparation are now eligible to run. No booking, payment, ride, or other external action was started.${profileNext}` });
           } else if (confirmation === "already_active") {
             await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: "This Plan is already active." });
           } else {
@@ -399,6 +420,17 @@ async function pollTelegram(): Promise<void> {
       }
       if (update.location) {
         await sendArrivalRouteFromSharedLocation(pairing.binding.chatId, update.location);
+        continue;
+      }
+      const pendingProfileField = store.getTelegramProfileTextEdit();
+      if (pendingProfileField && update.text && !update.text.startsWith("/")) {
+        try {
+          const updated = store.updateProfile(updateProfileText(store.getWorkspace().profile, pendingProfileField, update.text));
+          store.clearTelegramProfileTextEdit();
+          await telegram.sendMessage({ chatId: pairing.binding.chatId, text: formatTelegramProfile(updated.profile), replyMarkup: telegramProfileMarkup() });
+        } catch (error) {
+          await telegram.sendMessage({ chatId: pairing.binding.chatId, text: `${error instanceof Error ? error.message : "That Profile value could not be saved."}\n\n${telegramProfileTextPrompt(pendingProfileField)}` });
+        }
         continue;
       }
       const responses = await telegramCommandResponse(update.text);
@@ -594,7 +626,7 @@ async function requestTelegramArrivalLocation(chatId: string, intro: string): Pr
   }
 }
 
-type TelegramCommandReply = { text: string; replyMarkup?: TelegramPlanConfirmationMarkup };
+type TelegramCommandReply = { text: string; replyMarkup?: TelegramReplyMarkup };
 
 async function sendTelegramCommandReplies(chatId: string, replies: TelegramCommandReply[]): Promise<void> {
   for (const reply of replies) {
@@ -608,12 +640,16 @@ async function sendTelegramCommandReplies(chatId: string, replies: TelegramComma
 async function telegramCommandResponse(text: string | undefined): Promise<TelegramCommandReply[] | undefined> {
   const command = parseTelegramCommand(text);
   if (command.type === "empty") return undefined;
-  if (command.type === "help") return [{ text: "C-assistant is connected. Send a normal message to create a Plan draft with your selected local runtime, or use:\n/plan — show the current Plan and confirmation control\n/new <what you need to do> — create a Plan draft\n/help — show this help\n\nReview the complete Plan in Telegram or Web before confirming it. Bookings and payments are not enabled." }];
+  if (command.type === "help") return [{ text: "C-assistant is connected. Send a normal message to create or revise a Plan draft with your selected local runtime, or use:\n/plan — show the current Plan and confirmation control\n/new <what you need to do> — create a separate Plan draft\n/profile — review or change your basic Profile\n/help — show this help\n\nReview the complete Plan in Telegram or Web before confirming it. Bookings and payments are not enabled." }];
   if (command.type === "plan") {
     const plan = store.getWorkspace().activePlan;
     const replyMarkup = telegramPlanConfirmationMarkup(plan);
     const pages = formatTelegramPlanPages(plan);
     return pages.map((page, index) => ({ text: page, ...(index === pages.length - 1 && replyMarkup ? { replyMarkup } : {}) }));
+  }
+  if (command.type === "profile") {
+    store.clearTelegramProfileTextEdit();
+    return [{ text: formatTelegramProfile(store.getWorkspace().profile), replyMarkup: telegramProfileMarkup() }];
   }
   if (command.type === "create_plan") {
     if (command.request.length > 1_500) return [{ text: "Keep a new Plan request under 1,500 characters, then send it again." }];

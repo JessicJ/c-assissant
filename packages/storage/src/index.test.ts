@@ -22,6 +22,20 @@ test("SQLite persists a created Plan, a confirmation, and confirmed Profile data
   store.close();
 });
 
+test("SQLite keeps partial Telegram Profile setup incomplete and expires pending text edits", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const initial = store.getWorkspace().profile;
+  const nationalityOnly = store.updateProfile({ ...initial, nationality: "Canada" });
+  assert.equal(nationalityOnly.profile.status, "incomplete");
+  const ready = store.updateProfile({ ...nationalityOnly.profile, immigrationStatus: "student_visa" });
+  assert.equal(ready.profile.status, "ready");
+
+  store.startTelegramProfileTextEdit("nationality", "2026-08-07T00:00:00.000Z");
+  assert.equal(store.getTelegramProfileTextEdit("2026-08-07T00:14:59.000Z"), "nationality");
+  assert.equal(store.getTelegramProfileTextEdit("2026-08-07T00:15:01.000Z"), undefined);
+  store.close();
+});
+
 test("SQLite persists the selected Plan runtime without storing any credentials", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   assert.equal(store.getWorkspace().runtime.selectedKind, "codex");
@@ -250,10 +264,12 @@ test("SQLite disconnects only the Telegram binding and preserves the workspace",
   store.createTelegramPairingRequest({ code: "pairing_code_456", expiresAt });
   store.claimTelegramPairing({ code: "pairing_code_456", chatId: "1002", userId: "1002", firstName: "Avery" });
 
+  store.startTelegramProfileTextEdit("nationality");
   const disconnected = store.unpairTelegram();
 
   assert.equal(disconnected.state, "not_paired");
   assert.equal(store.getWorkspace().activePlan.id, planId);
+  assert.equal(store.getTelegramProfileTextEdit(), undefined);
   assert.equal(store.getWorkspace().inbox[0]?.title, "Telegram disconnected");
   assert.match(store.getWorkspace().inbox[0]?.body ?? "", /were not deleted/i);
   store.close();
