@@ -45,6 +45,7 @@
 - 完成一次本地高德真实验证：上海站地点搜索和上海市内驾车路线均成功返回结果。
 - 实现 Codex Runtime Adapter：检查 CLI 与登录状态，在隔离临时目录中运行 `codex exec`，使用 JSON Schema 约束 Plan 草案；仅传入已确认的语言、国籍、性别和来华签证/居留状态作为计划上下文，并剥离高德/Telegram 等 Connector 密钥。身份字段不得被当作政策资格结论。
 - 实现 Claude Code Runtime Adapter：用 `claude auth status` 进行无破坏登录检查；每次草案生成都在隔离临时目录中以 Print JSON 模式运行，禁用内建工具和 MCP，再按与 Codex 相同的 Plan 契约验证结果。它也会剥离 Connector 和运行时密钥，且不会读取或保存 Claude Code 登录凭据。
+- 为 Claude Code Adapter 增加模拟 CLI 集成测试：覆盖安装/登录检查、无工具 Print JSON 命令、临时目录清理、输出契约验证和 Connector 密钥剥离；测试不会实际调用 Claude 账号。
 - 实现实例级运行底座选择：Web Settings 可检查并选择 Codex 或 Claude Code，选择只保存类型，不保存登录凭据；Web 与 Telegram 的后续 Plan 草案都使用该选择，故障时不会静默切换。生成后的完整草案会写入 SQLite，仍需用户确认才会激活。
 - 完成一次真实 Codex 端到端验证：结构化草案已通过 Schema、保存为 4 个 Stage 和 16 个 Task；测试数据库随后已删除。
 - 实现 Telegram Connector 的本地配置状态与显式 Bot 身份验证；Token 仅停留在本地 Server 进程，不会传给 Web 或 Agent。

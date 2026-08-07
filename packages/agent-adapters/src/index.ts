@@ -26,6 +26,21 @@ export interface CodexPlanRequest {
 
 export type ClaudeCodePlanRequest = CodexPlanRequest;
 
+export interface RuntimeProcessResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+export type RuntimeProcess = (command: string, args: string[], options?: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number }) => Promise<RuntimeProcessResult>;
+
+export interface ClaudeCodeRuntimeAdapterOptions {
+  /** Test seam only; production uses the local Claude Code executable. */
+  run?: RuntimeProcess;
+  /** Test seam only; production uses the current process environment. */
+  environment?: NodeJS.ProcessEnv;
+}
+
 export class CodexRuntimeAdapter {
   async check(): Promise<RuntimeCheck> {
     const version = await runProcess("codex", ["--version"]);
@@ -84,11 +99,19 @@ export class CodexRuntimeAdapter {
  * and returns a structured Plan draft through stdout.
  */
 export class ClaudeCodeRuntimeAdapter {
+  private readonly run: RuntimeProcess;
+  private readonly environment: NodeJS.ProcessEnv;
+
+  constructor(options: ClaudeCodeRuntimeAdapterOptions = {}) {
+    this.run = options.run ?? runProcess;
+    this.environment = options.environment ?? process.env;
+  }
+
   async check(): Promise<RuntimeCheck> {
-    const version = await runProcess("claude", ["--version"]);
+    const version = await this.run("claude", ["--version"]);
     if (version.code !== 0) return { kind: "claude-code", installed: false, authenticated: false, message: "Claude Code CLI is not available on this machine." };
 
-    const login = await runProcess("claude", ["auth", "status"]);
+    const login = await this.run("claude", ["auth", "status"]);
     return {
       kind: "claude-code",
       installed: true,
@@ -106,7 +129,7 @@ export class ClaudeCodeRuntimeAdapter {
 
     const runDirectory = await mkdtemp(join(tmpdir(), "c-assistant-claude-"));
     try {
-      const command = await runProcess("claude", [
+      const command = await this.run("claude", [
         "-p",
         "--output-format",
         "json",
@@ -116,7 +139,7 @@ export class ClaudeCodeRuntimeAdapter {
         "",
         "--strict-mcp-config",
         buildPlanDraftPrompt(input)
-      ], { cwd: runDirectory, env: scrubbedEnvironment(process.env), timeoutMs: 120_000 });
+      ], { cwd: runDirectory, env: scrubbedEnvironment(this.environment), timeoutMs: 120_000 });
       if (command.code !== 0) throw new RuntimeAdapterError("run_failed", "Claude Code could not generate a Plan draft right now.");
 
       return parsePlanDraft(parseClaudePrintResult(command.stdout));
@@ -246,7 +269,7 @@ function scrubbedEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv 
   return Object.fromEntries(Object.entries(environment).filter(([key]) => !/(?:AMAP_API_KEY|QWEATHER_API_KEY|TELEGRAM_BOT_TOKEN|OPENAI_API_KEY|CODEX_API_KEY|CODEX_ACCESS_TOKEN|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN)$/i.test(key)));
 }
 
-function runProcess(command: string, args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {}): Promise<{ code: number; stdout: string; stderr: string }> {
+const runProcess: RuntimeProcess = (command, args, options = {}) => {
   return new Promise((resolve) => {
     const child = spawn(command, args, { cwd: options.cwd, env: options.env, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
@@ -260,4 +283,4 @@ function runProcess(command: string, args: string[], options: { cwd?: string; en
       resolve({ code: code ?? 1, stdout, stderr });
     });
   });
-}
+};
