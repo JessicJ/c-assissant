@@ -169,6 +169,18 @@ test("SQLite advances an explicitly tagged arrival task to ready without complet
   store.close();
 });
 
+test("SQLite completes a ready task only after an explicit user confirmation", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const planId = store.getWorkspace().activePlan.id;
+  store.confirmPlan(planId);
+  const ready = store.activateArrivalTask(planId);
+  assert.equal(store.completeReadyTask(planId, ready?.id ?? "" )?.status, "completed");
+  assert.equal(store.completeReadyTask(planId, ready?.id ?? ""), undefined);
+  assert.equal(store.getWorkspace().activePlan.stages.flatMap((stage) => stage.tasks).find((task) => task.id === ready?.id)?.status, "completed");
+  assert.match(store.getWorkspace().inbox[0]?.title ?? "", /Task completed by you/);
+  store.close();
+});
+
 test("SQLite stores arrival follow-up state without storing shared coordinates", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const planId = store.getWorkspace().activePlan.id;
