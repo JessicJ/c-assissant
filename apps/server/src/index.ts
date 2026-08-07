@@ -12,6 +12,7 @@ import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isAr
 import { arrivalRouteDestination, formatArrivalRoute, selectArrivalTransport } from "./arrival-route.js";
 import { createOfficialSourceService, parseOfficialSourceRegistry } from "./official-sources.js";
 import { parseTelegramCommand } from "./telegram-commands.js";
+import { formatTelegramNearbyFood, parseTelegramFoodPartyCallback, telegramFoodPartyMarkup } from "./telegram-food.js";
 import { createTelegramPlan, formatTelegramPlanCreationPages, formatTelegramPlanPages, planDraftForRevision, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
 import { formatTelegramProfile, parseTelegramProfileCallback, telegramProfileChoiceMarkup, telegramProfileMarkup, telegramProfileTextPrompt, updateProfileText } from "./telegram-profile.js";
 import { fetchTelegramPlanWeather, formatTelegramWeather } from "./telegram-weather.js";
@@ -37,6 +38,7 @@ let checkingArrivalReminder = false;
 let checkingTaskReminders = false;
 let checkingArrivalLocationPrompt = false;
 let requestingArrivalLocation = false;
+let requestingFoodLocation = false;
 
 await server.register(cors, { origin: true });
 
@@ -366,6 +368,18 @@ async function pollTelegram(): Promise<void> {
       if (update.chatType !== "private" || update.chatId !== pairing.binding.chatId || update.userId !== pairing.binding.userId) continue;
       if (!store.claimTelegramUpdate(update.updateId)) continue;
       if (update.kind === "callback") {
+        const foodParty = parseTelegramFoodPartyCallback(update.callbackData);
+        if (foodParty && update.callbackId) {
+          const plan = store.getWorkspace().activePlan;
+          if (plan.id !== foodParty.planId || plan.version !== foodParty.version) {
+            await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: "That Plan choice is out of date. Send /food again." });
+          } else {
+            store.updatePlanTravelContext(plan.id, { partySize: foodParty.partySize, luggage: plan.configuration.travelContext.luggage });
+            await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: `Party size saved: ${foodParty.partySize}.` });
+            await requestTelegramFoodLocation(pairing.binding.chatId);
+          }
+          continue;
+        }
         const profileAction = parseTelegramProfileCallback(update.callbackData);
         if (profileAction.type !== "unknown" && update.callbackId) {
           if (profileAction.type === "edit_text") {
@@ -420,7 +434,16 @@ async function pollTelegram(): Promise<void> {
         continue;
       }
       if (update.location) {
-        await sendArrivalRouteFromSharedLocation(pairing.binding.chatId, update.location);
+        const intent = store.getTelegramLocationIntent();
+        store.clearTelegramLocationIntent();
+        const currentPlan = store.getWorkspace().activePlan;
+        if (!intent || intent.planId !== currentPlan.id) {
+          await telegram.sendMessage({ chatId: pairing.binding.chatId, text: "There is no active location request for the current Plan. Send /food for nearby food, or use the arrival route action when it appears. These coordinates were not used or saved." });
+        } else if (intent.purpose === "nearby_food") {
+          await sendNearbyFoodFromSharedLocation(pairing.binding.chatId, update.location);
+        } else {
+          await sendArrivalRouteFromSharedLocation(pairing.binding.chatId, update.location);
+        }
         continue;
       }
       const pendingProfileField = store.getTelegramProfileTextEdit();
@@ -485,6 +508,26 @@ async function sendArrivalRouteFromSharedLocation(chatId: string, location: { la
   const selectedRoute = routeFacts.find((route) => route.mode === transport);
   const result = formatArrivalRoute({ origin, destination, transport, ...(selectedRoute ? { route: selectedRoute } : {}) });
   await telegram.sendMessage({ chatId, text: result.text, replyMarkup: { inline_keyboard: [[{ text: "Open route in Amap", url: result.handoffUrl }]] } });
+}
+
+async function sendNearbyFoodFromSharedLocation(chatId: string, location: { latitude: number; longitude: number }): Promise<void> {
+  const plan = store.getWorkspace().activePlan;
+  const partySize = plan.configuration.travelContext.partySize;
+  if (!partySize) {
+    await telegram.sendMessage({ chatId, text: "Party size is missing from this Plan. The shared coordinates were not used or saved. Send /food followed by the number of people, for example /food 2." });
+    return;
+  }
+  const converted = await amap.convertGpsCoordinate({ location: `${location.longitude},${location.latitude}` });
+  if (converted.status !== "available" || !converted.data) {
+    await telegram.sendMessage({ chatId, text: "Location received, but Amap could not convert it for nearby discovery right now. No location was saved and no restaurant facts were guessed." });
+    return;
+  }
+  const result = await amap.nearbyRestaurants({ location: converted.data.location, limit: 8 });
+  if (result.status !== "available" || !result.data) {
+    await telegram.sendMessage({ chatId, text: `Amap could not return nearby food right now. ${result.failure?.message ?? "The provider is unavailable."}\n\nNo location was saved, and no candidate, order, reservation, or payment was created.` });
+    return;
+  }
+  await telegram.sendMessage({ chatId, ...formatTelegramNearbyFood({ places: result.data, partySize }) });
 }
 
 async function arrivalTransitRoute(origin: AmapPlace, destination: AmapPlace): Promise<AmapRoute | undefined> {
@@ -616,23 +659,48 @@ async function requestTelegramArrivalLocation(chatId: string, intro: string): Pr
   if (requestingArrivalLocation) return;
   const planId = store.getWorkspace().activePlan.id;
   const existing = store.getTelegramArrivalCheckin(planId);
-  if (existing?.locationRequestedAt || existing?.locationReceivedAt) return;
+  const activeIntent = store.getTelegramLocationIntent();
+  if (existing?.locationReceivedAt || (activeIntent?.purpose === "arrival_route" && activeIntent.planId === planId)) return;
   requestingArrivalLocation = true;
   try {
     const receipt = await telegram.sendMessage({ chatId, text: `${intro} C-assistant will use it only for this interaction and will not save it to your Profile.`, replyMarkup: { keyboard: [[{ text: "Share current location", request_location: true }]], resize_keyboard: true, one_time_keyboard: true } });
-    if (receipt.status === "available") store.markTelegramArrivalLocationRequested(planId, new Date().toISOString());
+    if (receipt.status === "available") {
+      store.markTelegramArrivalLocationRequested(planId, new Date().toISOString());
+      store.startTelegramLocationIntent({ purpose: "arrival_route", planId });
+    }
     else server.log.warn({ status: receipt.status, code: receipt.failure?.code }, "Telegram arrival location request could not be delivered");
   } finally {
     requestingArrivalLocation = false;
   }
 }
 
-type TelegramCommandReply = { text: string; replyMarkup?: TelegramReplyMarkup };
+async function requestTelegramFoodLocation(chatId: string): Promise<void> {
+  if (requestingFoodLocation) return;
+  requestingFoodLocation = true;
+  const planId = store.getWorkspace().activePlan.id;
+  try {
+    const receipt = await telegram.sendMessage({
+      chatId,
+      text: "Tap below to share your current location for this nearby food check. It will be used once, expires after 15 minutes, and will not be saved to your Profile or database.",
+      replyMarkup: { keyboard: [[{ text: "Share current location", request_location: true }]], resize_keyboard: true, one_time_keyboard: true }
+    });
+    if (receipt.status === "available") store.startTelegramLocationIntent({ purpose: "nearby_food", planId });
+    else server.log.warn({ status: receipt.status, code: receipt.failure?.code }, "Telegram food location request could not be delivered");
+  } finally {
+    requestingFoodLocation = false;
+  }
+}
+
+type TelegramCommandReply = { text: string; replyMarkup?: TelegramReplyMarkup; locationIntent?: { purpose: "nearby_food"; planId: string } };
 
 async function sendTelegramCommandReplies(chatId: string, replies: TelegramCommandReply[]): Promise<void> {
   for (const reply of replies) {
-    const receipt = await telegram.sendMessage({ chatId, ...reply });
-    if (receipt.status === "available") continue;
+    const { locationIntent, ...message } = reply;
+    const receipt = await telegram.sendMessage({ chatId, ...message });
+    if (receipt.status === "available") {
+      if (locationIntent && store.getWorkspace().activePlan.id === locationIntent.planId) store.startTelegramLocationIntent(locationIntent);
+      continue;
+    }
     server.log.warn({ status: receipt.status, code: receipt.failure?.code }, "Telegram command response could not be delivered completely");
     return;
   }
@@ -641,7 +709,7 @@ async function sendTelegramCommandReplies(chatId: string, replies: TelegramComma
 async function telegramCommandResponse(text: string | undefined): Promise<TelegramCommandReply[] | undefined> {
   const command = parseTelegramCommand(text);
   if (command.type === "empty") return undefined;
-  if (command.type === "help") return [{ text: "C-assistant is connected. Send a normal message to create or revise a Plan draft with your selected local runtime, or use:\n/plan — show the current Plan and confirmation control\n/new <what you need to do> — create a separate Plan draft\n/profile — review or change your basic Profile\n/weather — check current weather for the Plan location\n/help — show this help\n\nReview the complete Plan in Telegram or Web before confirming it. Bookings and payments are not enabled." }];
+  if (command.type === "help") return [{ text: "C-assistant is connected. Send a normal message to create or revise a Plan draft with your selected local runtime, or use:\n/plan — show the current Plan and confirmation control\n/new <what you need to do> — create a separate Plan draft\n/profile — review or change your basic Profile\n/weather — check current weather for the Plan location\n/food — find nearby food after an explicit location share\n/help — show this help\n\nReview the complete Plan in Telegram or Web before confirming it. Bookings and payments are not enabled." }];
   if (command.type === "plan") {
     const plan = store.getWorkspace().activePlan;
     const replyMarkup = telegramPlanConfirmationMarkup(plan);
@@ -665,6 +733,18 @@ async function telegramCommandResponse(text: string | undefined): Promise<Telegr
       }
     });
     return [{ text: result.status === "available" ? formatTelegramWeather(result.data) : `Weather is unavailable for the current Plan. ${result.message}\nFailure stage: ${result.stage}${result.connectorStatus ? ` · status: ${result.connectorStatus}` : ""}\n\nNo weather was guessed, no reminder was created, and your Plan was not changed.` }];
+  }
+  if (command.type === "food") {
+    const plan = store.getWorkspace().activePlan;
+    if (command.partySize !== undefined) {
+      if (!Number.isInteger(command.partySize) || command.partySize < 1 || command.partySize > 20) return [{ text: "Party size must be a whole number from 1 to 20. For example: /food 2" }];
+      store.updatePlanTravelContext(plan.id, { partySize: command.partySize, luggage: plan.configuration.travelContext.luggage });
+      return [{ text: `Party size saved in this Plan: ${command.partySize}.\n\nTap below to share your current location for this one nearby food check. It expires after 15 minutes and will not be saved.`, replyMarkup: { keyboard: [[{ text: "Share current location", request_location: true }]], resize_keyboard: true, one_time_keyboard: true }, locationIntent: { purpose: "nearby_food", planId: plan.id } }];
+    }
+    if (!plan.configuration.travelContext.partySize) {
+      return [{ text: "How many people are eating? Choose 1–6 below, or send /food followed by any whole number up to 20, for example /food 8.", replyMarkup: telegramFoodPartyMarkup(plan.id, plan.version) }];
+    }
+    return [{ text: `This Plan currently has ${plan.configuration.travelContext.partySize} ${plan.configuration.travelContext.partySize === 1 ? "person" : "people"}.\n\nTap below to share your current location for this one nearby food check. It expires after 15 minutes and will not be saved.`, replyMarkup: { keyboard: [[{ text: "Share current location", request_location: true }]], resize_keyboard: true, one_time_keyboard: true }, locationIntent: { purpose: "nearby_food", planId: plan.id } }];
   }
   if (command.type === "create_plan") {
     if (command.request.length > 1_500) return [{ text: "Keep a new Plan request under 1,500 characters, then send it again." }];

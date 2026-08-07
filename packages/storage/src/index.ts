@@ -157,6 +157,14 @@ interface TelegramProfileEditRow {
   started_at: string;
 }
 
+export type TelegramLocationIntentPurpose = "arrival_route" | "nearby_food";
+
+interface TelegramLocationIntentRow {
+  purpose: TelegramLocationIntentPurpose;
+  plan_id: string;
+  started_at: string;
+}
+
 interface TelegramTaskReminderDeliveryRow {
   task_id: string;
   due_at: string;
@@ -299,6 +307,7 @@ export class SqliteWorkspaceStore {
     try {
       this.database.prepare("DELETE FROM telegram_binding WHERE id = 1").run();
       this.database.prepare("DELETE FROM telegram_profile_edit_state WHERE id = 1").run();
+      this.database.prepare("DELETE FROM telegram_location_intent WHERE id = 1").run();
       this.database.prepare("UPDATE telegram_pairing_requests SET consumed_at = ? WHERE consumed_at IS NULL").run(unpairedAt);
       this.addInbox({
         id: `telegram-unpaired-${unpairedAt}`,
@@ -666,6 +675,28 @@ export class SqliteWorkspaceStore {
 
   clearTelegramProfileTextEdit(): void {
     this.database.prepare("DELETE FROM telegram_profile_edit_state WHERE id = 1").run();
+  }
+
+  startTelegramLocationIntent(input: { purpose: TelegramLocationIntentPurpose; planId: string; startedAt?: string }): void {
+    if (!["arrival_route", "nearby_food"].includes(input.purpose)) throw new Error("Choose a supported Telegram location purpose.");
+    const startedAt = input.startedAt ?? new Date().toISOString();
+    if (!Number.isFinite(Date.parse(startedAt))) throw new Error("Telegram location use needs a valid start time.");
+    if (this.getWorkspace().activePlan.id !== input.planId) throw new Error(`Plan ${input.planId} was not found.`);
+    this.database.prepare("INSERT INTO telegram_location_intent (id, purpose, plan_id, started_at) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET purpose = excluded.purpose, plan_id = excluded.plan_id, started_at = excluded.started_at").run(input.purpose, input.planId, startedAt);
+  }
+
+  getTelegramLocationIntent(now = new Date().toISOString()): { purpose: TelegramLocationIntentPurpose; planId: string } | undefined {
+    const nowMs = Date.parse(now);
+    if (!Number.isFinite(nowMs)) throw new Error("Telegram location use needs a valid current time.");
+    const row = this.database.prepare("SELECT purpose, plan_id, started_at FROM telegram_location_intent WHERE id = 1").get() as TelegramLocationIntentRow | undefined;
+    if (!row) return undefined;
+    if (nowMs - Date.parse(row.started_at) <= 15 * 60_000) return { purpose: row.purpose, planId: row.plan_id };
+    this.clearTelegramLocationIntent();
+    return undefined;
+  }
+
+  clearTelegramLocationIntent(): void {
+    this.database.prepare("DELETE FROM telegram_location_intent WHERE id = 1").run();
   }
 
   updateRuntimeSelection(input: RuntimeSelectionUpdate): WorkspaceSnapshot {
@@ -1060,6 +1091,12 @@ export class SqliteWorkspaceStore {
       CREATE TABLE IF NOT EXISTS telegram_profile_edit_state (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         field TEXT NOT NULL CHECK (field IN ('displayName', 'preferredLanguage', 'nationality')),
+        started_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS telegram_location_intent (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        purpose TEXT NOT NULL CHECK (purpose IN ('arrival_route', 'nearby_food')),
+        plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
         started_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS telegram_processed_updates (

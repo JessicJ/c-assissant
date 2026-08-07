@@ -37,6 +37,8 @@ In the paired Telegram chat, complete Plans are paginated without omission and o
 
 `/weather` performs an explicit read-only weather check for the current Plan location through Amap and QWeather. It returns current and dated three-day facts with attribution, but creates no Reminder and stores no weather result in Profile or Plan.
 
+`/food` provides the first Telegram food-discovery loop. It uses the Plan's party size (or asks once), then displays Telegram's explicit location-share control. That location is accepted only for the current Plan and named purpose for 15 minutes, converted for Amap, used once to retrieve nearby restaurant and distance facts, and never persisted. Results preserve Amap's provider order and hand the user to an HTTPS Amap place page; C-assistant does not independently rank, order, reserve, or pay.
+
 ## Product shape
 
 - Web workspace: the full desktop-grade product interface.
