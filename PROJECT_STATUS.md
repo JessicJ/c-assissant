@@ -38,7 +38,8 @@
 - 建立 `apps/server`、`apps/telegram-bot`、`apps/web` 目录。
 - 建立 `packages/core`、`packages/skill-runtime`、`packages/agent-adapters`、`packages/connectors`、`packages/storage` 目录。
 - 建立 `country-packs/china` 及内部 Skills 目录约定。
-- 实现第一层通用 Skill Runtime：严格解析 manifest，拒绝重复 Skill ID、入口漂移和不受支持的状态，并在调用后校验 Skill ID/版本及完整结构化结果数组。China Pack 通过一个 Node 侧 Registry 加载五个内部 `skill.json` 并绑定实际入口；用户仍不能单独安装或运行 Skill。生产政策证据门槛已通过该 Registry 调用，为后续 `china-arrival-plan` 组合编排和 Skill Run 审计建立统一入口。
+- 实现第一层通用 Skill Runtime：严格解析 manifest，拒绝重复 Skill ID、入口漂移和不受支持的状态，并在调用后校验 Skill ID/版本及完整结构化结果数组。China Pack 通过一个 Node 侧 Registry 加载六个内部 `skill.json` 并绑定实际入口；用户仍不能单独安装或运行 Skill。生产政策证据门槛已通过该 Registry 调用，为后续 `china-arrival-plan` 组合编排和 Skill Run 审计建立统一入口。
+- 落地 `china-arrival-plan` `0.1.0` 第一层组合门槛并加入 China Registry：它绑定一个准确的 Plan ID/版本，按既定顺序保存 supporting Skill 的 ID、版本、状态、摘要、假设、建议、来源与警告；当前因 `local-food-guide`、`digital-life-setup`、`arrival-preparation` 尚未实现而明确返回 `blocked:composition_incomplete`。在 Core 编译和授权接通前，它不会提升任何 Plan 修改、Task、Reminder 或行动卡，因此不能被误称为完整可执行 Plan。
 - 提供中英文 README、环境变量示例和 Git 忽略规则。
 - 实现本地 SQLite 保存：Profile、当前 Plan、Stage、Task 和 Inbox 在重启后保留。
 - 实现 Web 中创建本地 Plan、确认 Plan 和保存 Profile 基础字段的流程。

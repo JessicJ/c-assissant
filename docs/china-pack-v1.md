@@ -12,6 +12,8 @@ The Pack helps foreigners prepare for and adapt to life in China. It is a region
 
 Composite entry point. Core orchestrates the supporting Skills and compiles one complete Plan. It is not one giant prompt.
 
+Implemented slice: `china-arrival-plan` `0.1.0` is a fail-closed composition gate in the China Skill Registry. It binds supporting results to an exact Plan ID/version, orders them according to this document, and preserves Skill versions, statuses, summaries, assumptions, recommendations, sources, and warnings. It remains `blocked:composition_incomplete` while `local-food-guide`, `digital-life-setup`, and `arrival-preparation` are absent. Until Core compilation and authorization are connected, it deliberately promotes no Plan changes, Tasks, Reminders, or action cards.
+
 ### `policy-applicability`
 
 Matches official requirements to nationality, passport or travel document, visa or permit, residence status, student status, purpose, date, and location. A missing requirement becomes a user-owned Task with a Reminder when appropriate; it does not automatically block unrelated parts of the Plan.

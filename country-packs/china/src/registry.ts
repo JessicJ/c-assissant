@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 
 import { createSkillRegistry, parseSkillManifest, type SkillHandler, type SkillRegistration } from "@c-assistant/skill-runtime";
-import { runFoodNearbySkill, runHousingAreaRecommendationSkill, runPolicyApplicabilitySkill, runTransportPlannerSkill, runWeatherAndPackingSkill } from "./index.js";
+import { runChinaArrivalPlanSkill, runFoodNearbySkill, runHousingAreaRecommendationSkill, runPolicyApplicabilitySkill, runTransportPlannerSkill, runWeatherAndPackingSkill } from "./index.js";
 
 function loadManifest(relativePath: string) {
   return parseSkillManifest(JSON.parse(readFileSync(new URL(relativePath, import.meta.url), "utf8")) as unknown);
@@ -13,6 +13,7 @@ function registration(relativePath: string, handler: SkillHandler): SkillRegistr
 }
 
 export const chinaSkillRegistry = createSkillRegistry([
+  registration("../skills/china-arrival-plan/skill.json", (input) => runChinaArrivalPlanSkill(input as Parameters<typeof runChinaArrivalPlanSkill>[0])),
   registration("../skills/food-nearby/skill.json", (input) => runFoodNearbySkill(input as Parameters<typeof runFoodNearbySkill>[0])),
   registration("../skills/housing-area-recommendation/skill.json", (input) => runHousingAreaRecommendationSkill(input as Parameters<typeof runHousingAreaRecommendationSkill>[0])),
   registration("../skills/policy-applicability/skill.json", (input) => runPolicyApplicabilitySkill(input as Parameters<typeof runPolicyApplicabilitySkill>[0])),
