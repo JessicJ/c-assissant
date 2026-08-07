@@ -65,6 +65,8 @@ The deterministic China arrival orchestrator now runs credential-free normalized
 
 Server now has a credential-free compilation service boundary around that orchestrator. It captures the exact current draft Plan/Profile, requests normalized facts from an injected collector, orchestrates the China proposal, and atomically saves only the matching next draft version. Provider failures, Country Pack gates, and Plan-version races return separate blocked outcomes without sending messages or exposing raw Connector errors. The production fact collector and user-facing trigger are not connected yet.
 
+The first production China fact collector is also implemented. It resolves the Plan destination through Amap, fetches QWeather facts and nearby accommodation candidates, and obtains driving, walking, and transit facts only when this Plan already contains a chosen accommodation coordinate. It includes only immutable official snapshots explicitly linked to the current Plan and accepts food/digital-life reference catalogs as injected Country Pack data. It does not invent a route origin, use a fixed nearby radius, read environment variables, or expose provider failure text. Server construction and the Web/Telegram trigger remain unconnected.
+
 ## Product shape
 
 - Web workspace: the full desktop-grade product interface.
