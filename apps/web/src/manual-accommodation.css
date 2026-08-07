@@ -88,6 +88,30 @@
   font-size: 13px;
 }
 
+.transport-recommendation {
+  display: grid;
+  gap: 7px;
+  padding: 12px;
+  border: 1px solid #d4e4b9;
+  border-radius: 10px;
+  background: #f7fbdf;
+  color: #31554f;
+}
+
+.transport-recommendation ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 20px;
+  color: #526a60;
+  font-size: 13px;
+}
+
+.transport-recommendation small {
+  color: #6b827d;
+  font-size: 12px;
+}
+
 .profile-prompt {
   display: flex;
   align-items: end;

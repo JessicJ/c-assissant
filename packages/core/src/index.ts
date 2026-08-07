@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+export { recommendPlanTransport, type TransportMode, type TransportRecommendation, type TransportRouteFact } from "./transport.js";
+
 export type PlanStatus = "draft" | "active" | "completed" | "cancelled";
 export type TaskStatus = "scheduled" | "ready" | "running" | "waiting_user" | "blocked" | "completed" | "skipped" | "failed" | "cancelled";
 export type ProfileGender = "not_specified" | "woman" | "man" | "nonbinary" | "prefer_not_to_say";
@@ -317,6 +319,7 @@ export function createPlanFromDraft(draft: GeneratedPlanDraft): Plan {
 export function createDefaultPlanConfiguration(): PlanConfiguration {
   return { accommodation: { status: "not_set" }, arrival: {}, transport: { preference: "plan_recommended" }, travelContext: { luggage: "unknown" } };
 }
+
 
 export function confirmPlan(snapshot: WorkspaceSnapshot, planId: string): WorkspaceSnapshot {
   if (snapshot.activePlan.id !== planId) {
