@@ -163,6 +163,28 @@ export interface AgentRun {
   failureCode?: string;
 }
 
+export type TaskReminderRunStatus = "running" | "retry_wait" | "succeeded" | "failed" | "cancelled";
+export type TaskReminderWeatherStatus = "not_attempted" | "available" | "unavailable";
+
+/** A minimized local audit record for one scheduled Reminder across all retry attempts. */
+export interface TaskReminderRun {
+  id: string;
+  kind: "task_reminder";
+  planId: string;
+  taskId: string;
+  reminderKey: string;
+  dueAt: string;
+  status: TaskReminderRunStatus;
+  attemptCount: number;
+  weatherStatus: TaskReminderWeatherStatus;
+  weatherStage?: "amap" | "qweather" | "pipeline";
+  weatherFailureCode?: string;
+  telegramFailureCode?: string;
+  startedAt: string;
+  finishedAt?: string;
+  updatedAt: string;
+}
+
 /** A Telegram account bound to this single-user local instance. */
 export interface TelegramBinding {
   chatId: string;

@@ -167,7 +167,7 @@ A Run is one actual system execution. It records:
 
 The Web shows user-friendly results and source evidence, not raw Agent logs. Technical details remain available through local diagnostics.
 
-Current implementation starts with Plan generation Runs. Each record stores only the runtime kind, Web or Telegram trigger, start/finish time, outcome (`succeeded`, `failed`, or `fallback`), an Agent-generated Plan id on success, and a short failure classification when needed. User requests, raw model output, error text, account state, and credentials are intentionally not retained in the Run record. Broader Task, Reminder, Event, Skill, Connector, and evidence linkage remains future work.
+Current implementation has two minimized Run forms. A Plan generation Run stores only the runtime kind, Web or Telegram trigger, start/finish time, outcome (`succeeded`, `failed`, or `fallback`), an Agent-generated Plan id on success, and a short failure classification when needed. A Task Reminder Run spans all delivery retries for one Plan/Task/Reminder key and stores the due/start/update/finish times, attempt count, weather status and failed stage/code when unavailable, Telegram failure code, and final state (`retry_wait`, `succeeded`, `failed`, or `cancelled`). Cancelling the reminder or replacing the current Plan terminates unfinished Reminder Runs; a Telegram success already in flight can still replace `cancelled` with the actual `succeeded` outcome. User requests, reminder message copy, raw weather or model output, coordinates, error text, account state, and credentials are intentionally not retained. Skill versions, richer Event linkage, evidence linkage, and retention controls remain future work.
 
 ## Confirmation
 
