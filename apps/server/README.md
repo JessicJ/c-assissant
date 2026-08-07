@@ -21,6 +21,8 @@ Current endpoints:
 - `GET /api/amap/nearby/restaurants?location=<longitude,latitude>`
 - `GET /api/amap/nearby/accommodation?location=<longitude,latitude>`
 - `GET /api/amap/routes/driving?origin=<longitude,latitude>&destination=<longitude,latitude>`
+- `GET /api/amap/routes/walking?origin=<longitude,latitude>&destination=<longitude,latitude>`
+- `GET /api/amap/routes/transit?origin=<longitude,latitude>&destination=<longitude,latitude>&originCityCode=<amap-city-code>&destinationCityCode=<amap-city-code>`
 - `GET /api/connectors/telegram`
 - `POST /api/connectors/telegram/verify`
 

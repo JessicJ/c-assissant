@@ -20,6 +20,8 @@ export interface AmapPlace {
   location: string;
   type: string;
   city: string;
+  /** Amap administrative city code, used only where a route endpoint requires it. */
+  cityCode?: string;
   district: string;
 }
 
@@ -29,13 +31,14 @@ export interface AmapNearbyPlace extends AmapPlace {
 }
 
 export interface AmapRoute {
-  mode: "driving";
+  mode: "driving" | "walking" | "transit";
   origin: string;
   destination: string;
   distanceMeters: number;
   durationSeconds?: number;
   taxiCostYuan?: number;
-  strategy: "amap_recommended";
+  transitCostYuan?: number;
+  strategy: "amap_recommended" | "public_transit_recommended";
 }
 
 export interface AmapGeocodedPlace {
@@ -71,6 +74,7 @@ interface AmapResponse {
     location?: string;
     type?: string;
     cityname?: string;
+    citycode?: string;
     adname?: string;
     distance?: string;
   }>;
@@ -81,6 +85,10 @@ interface AmapResponse {
     paths?: Array<{
       distance?: string;
       cost?: { duration?: string };
+    }>;
+    transits?: Array<{
+      distance?: string;
+      cost?: { duration?: string; transit_fee?: string };
     }>;
   };
   geocodes?: Array<{
@@ -141,6 +149,7 @@ export class AmapConnector {
           location: poi.location,
           type: poi.type ?? "Unspecified",
           city: poi.cityname ?? "",
+          ...(poi.citycode ? { cityCode: poi.citycode } : {}),
           district: poi.adname ?? ""
         }];
       })
@@ -196,6 +205,7 @@ export class AmapConnector {
           location: poi.location,
           type: poi.type ?? `${input.label} service`,
           city: poi.cityname ?? "",
+          ...(poi.citycode ? { cityCode: poi.citycode } : {}),
           district: poi.adname ?? "",
           distanceMeters
         }];
@@ -238,6 +248,96 @@ export class AmapConnector {
         ...(path.cost?.duration ? { durationSeconds: Number(path.cost.duration) } : {}),
         ...(payload.route?.taxi_cost ? { taxiCostYuan: Number(payload.route.taxi_cost) } : {}),
         strategy: "amap_recommended"
+      }
+    };
+  }
+
+  async walkingRoute(input: { origin: string; destination: string; originId?: string | undefined; destinationId?: string | undefined }): Promise<ConnectorResult<AmapRoute>> {
+    if (!isCoordinate(input.origin) || !isCoordinate(input.destination)) {
+      return this.failure("unsupported", "Amap route planning needs longitude,latitude coordinates for both places.", "invalid_coordinates", false);
+    }
+    if (!this.apiKey) return this.failure("not_configured", "Amap is not configured on this instance.", "not_configured", false);
+
+    const params = new URLSearchParams({
+      key: this.apiKey,
+      origin: input.origin,
+      destination: input.destination,
+      isindoor: "0",
+      show_fields: "cost"
+    });
+    if (input.originId) params.set("origin_id", input.originId);
+    if (input.destinationId) params.set("destination_id", input.destinationId);
+
+    const response = await this.request("/v5/direction/walking", params);
+    if (!response.ok) return response.failure;
+    const payload = response.payload;
+    if (payload.status !== "1") return this.fromAmapFailure(payload);
+    const path = payload.route?.paths?.[0];
+    if (!path?.distance) return this.failure("degraded", "Amap did not return a usable walking route.", "missing_route", true);
+
+    return this.routeFact({
+      mode: "walking",
+      origin: payload.route?.origin ?? input.origin,
+      destination: payload.route?.destination ?? input.destination,
+      distance: path.distance,
+      duration: path.cost?.duration,
+      strategy: "amap_recommended"
+    });
+  }
+
+  async transitRoute(input: { origin: string; destination: string; originCityCode?: string | undefined; destinationCityCode?: string | undefined }): Promise<ConnectorResult<AmapRoute>> {
+    if (!isCoordinate(input.origin) || !isCoordinate(input.destination)) {
+      return this.failure("unsupported", "Amap route planning needs longitude,latitude coordinates for both places.", "invalid_coordinates", false);
+    }
+    if (!input.originCityCode?.trim() || !input.destinationCityCode?.trim()) {
+      return this.failure("unsupported", "Amap public transit needs city codes for both selected places.", "missing_city_code", false);
+    }
+    if (!this.apiKey) return this.failure("not_configured", "Amap is not configured on this instance.", "not_configured", false);
+
+    const params = new URLSearchParams({
+      key: this.apiKey,
+      origin: input.origin,
+      destination: input.destination,
+      city1: input.originCityCode.trim(),
+      city2: input.destinationCityCode.trim(),
+      strategy: "0",
+      show_fields: "cost"
+    });
+    const response = await this.request("/v5/direction/transit/integrated", params);
+    if (!response.ok) return response.failure;
+    const payload = response.payload;
+    if (payload.status !== "1") return this.fromAmapFailure(payload);
+    const transit = payload.route?.transits?.[0];
+    if (!transit?.distance) return this.failure("degraded", "Amap did not return a usable public-transit route.", "missing_route", true);
+
+    return this.routeFact({
+      mode: "transit",
+      origin: payload.route?.origin ?? input.origin,
+      destination: payload.route?.destination ?? input.destination,
+      distance: transit.distance,
+      duration: transit.cost?.duration,
+      transitCost: transit.cost?.transit_fee,
+      strategy: "public_transit_recommended"
+    });
+  }
+
+  private routeFact(input: { mode: AmapRoute["mode"]; origin: string; destination: string; distance: string; duration?: string | undefined; transitCost?: string | undefined; strategy: AmapRoute["strategy"] }): ConnectorResult<AmapRoute> {
+    const distanceMeters = Number(input.distance);
+    if (!Number.isFinite(distanceMeters) || distanceMeters < 0) return this.failure("degraded", "Amap returned an invalid route distance.", "invalid_route", true);
+    const durationSeconds = optionalNonNegativeNumber(input.duration);
+    const transitCostYuan = optionalNonNegativeNumber(input.transitCost);
+    return {
+      status: "available",
+      provider: "amap",
+      observedAt: new Date().toISOString(),
+      data: {
+        mode: input.mode,
+        origin: input.origin,
+        destination: input.destination,
+        distanceMeters,
+        ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+        ...(transitCostYuan !== undefined ? { transitCostYuan } : {}),
+        strategy: input.strategy
       }
     };
   }
@@ -331,6 +431,12 @@ function isCoordinate(value: string): boolean {
   const lng = Number(longitude);
   const lat = Number(latitude);
   return Number.isFinite(lng) && Number.isFinite(lat) && lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90;
+}
+
+function optionalNonNegativeNumber(value: string | undefined): number | undefined {
+  if (value === undefined || value === "") return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : undefined;
 }
 
 function coordinateParts(value: string): [string, string] {
