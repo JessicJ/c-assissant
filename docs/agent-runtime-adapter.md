@@ -98,6 +98,6 @@ Runtime upgrades are never automatic in V1. The Web workspace tells the user whe
 
 ## Run audit
 
-The current Plan-generation Run record stores the runtime kind, trigger surface, start/finish time, outcome, resulting Plan id when applicable, and a sanitized failure classification. It intentionally stores no prompt, tool result, raw model output, account state, or credential. Future broader Runs may add purpose, Skill version, minimized input/output hashes, and allowed-tool metadata only after a clear retention policy exists.
+The current Plan-generation Run record stores the runtime kind, trigger surface, start/finish time, outcome, resulting Plan id when applicable, and a sanitized failure classification. A separate Core-owned Task Reminder Run records minimized scheduler, weather-availability, retry, and Telegram outcome metadata without invoking the Agent runtime. Neither form stores prompts, reminder copy, tool results, raw model or weather output, coordinates, account state, or credentials. Future broader Runs may add purpose, Skill version, minimized input/output hashes, and allowed-tool metadata only after a clear retention policy exists.
 
 The shared Plan draft schema also permits an optional Task reminder proposal. It must contain an exact local `YYYY-MM-DDTHH:mm` value, an IANA time zone, and a short purpose. The prompt forbids inventing missing dates or departure time zones. A proposal remains inert until the complete Plan is reviewed and confirmed; Core then owns the separate Telegram delivery decision.

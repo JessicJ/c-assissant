@@ -321,10 +321,14 @@ test("SQLite rejects a reminder attempt from a Plan that is no longer current", 
   const oldPlan = oldWorkspace.activePlan;
   const oldTask = oldPlan.stages[0]!.tasks[0]!;
   store.confirmPlan(oldPlan.id);
+  const dueAt = "2026-08-31T21:00:00.000Z";
+  const reminderKey = `task-reminder:${oldTask.id}:${dueAt}`;
+  assert.equal(store.claimTelegramTaskReminderAttempt({ planId: oldPlan.id, reminderKey, taskId: oldTask.id, dueAt, reminder: oldTask.reminder!, now: dueAt }).claimed, true);
+  const run = store.startTaskReminderRun({ planId: oldPlan.id, taskId: oldTask.id, reminderKey, dueAt, attemptNumber: 1, startedAt: dueAt });
   store.createPlan({ request: "Create a newer Plan for Hangzhou." });
 
-  const dueAt = "2026-08-31T21:00:00.000Z";
-  assert.equal(store.claimTelegramTaskReminderAttempt({ planId: oldPlan.id, reminderKey: `task-reminder:${oldTask.id}:${dueAt}`, taskId: oldTask.id, dueAt, reminder: oldTask.reminder!, now: dueAt }).claimed, false);
+  assert.equal(store.claimTelegramTaskReminderAttempt({ planId: oldPlan.id, reminderKey, taskId: oldTask.id, dueAt, reminder: oldTask.reminder!, now: dueAt }).claimed, false);
+  assert.equal(store.listRecentTaskReminderRuns().find((candidate) => candidate.id === run.id)?.status, "cancelled");
   store.close();
 });
 
@@ -346,13 +350,16 @@ test("SQLite records a Telegram success that raced with reminder cancellation", 
   const reminderKey = `task-reminder:${task.id}:${dueAt}`;
   store.confirmPlan(planId);
   assert.equal(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, reminder, now: dueAt }).claimed, true);
+  const run = store.startTaskReminderRun({ planId, taskId: task.id, reminderKey, dueAt, attemptNumber: 1, startedAt: dueAt });
 
   store.cancelTaskReminder(planId, task.id);
   store.recordTelegramTaskReminderDelivered({ planId, reminderKey, taskId: task.id, taskTitle: task.title, reminder, deliveredAt: "2026-08-31T21:00:01.000Z" });
+  store.recordTaskReminderRunDelivery({ runId: run.id, status: "succeeded", recordedAt: "2026-08-31T21:00:01.000Z" });
 
   assert.equal(store.getWorkspace().inbox[0]?.title, "Reminder sent before Plan change took effect: Check essentials");
   assert.match(store.getWorkspace().inbox[0]?.body ?? "", /before cancellation or Plan replacement/i);
   assert.equal(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, reminder, now: "2026-08-31T21:02:00.000Z" }).claimed, false);
+  assert.equal(store.listRecentTaskReminderRuns()[0]?.status, "succeeded");
   store.close();
 });
 
@@ -375,16 +382,40 @@ test("SQLite retries a transient Task reminder failure twice before recording a 
   store.confirmPlan(planId);
 
   assert.deepEqual(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, reminder, now: dueAt }), { claimed: true, attemptNumber: 1 });
-  assert.deepEqual(store.recordTelegramTaskReminderFailure({ planId, reminderKey, taskId: task.id, failureCode: "network_error", retryable: true, failedAt: "2026-08-31T21:00:01.000Z" }), { status: "retry_scheduled", nextAttemptAt: "2026-08-31T21:01:01.000Z" });
+  const run = store.startTaskReminderRun({ planId, taskId: task.id, reminderKey, dueAt, attemptNumber: 1, startedAt: dueAt });
+  store.recordTaskReminderRunWeather({ runId: run.id, status: "unavailable", stage: "qweather", failureCode: "network_error", recordedAt: "2026-08-31T21:00:00.500Z" });
+  assert.deepEqual(store.recordTelegramTaskReminderFailure({ planId, reminderKey, taskId: task.id, reminder, failureCode: "network_error", retryable: true, failedAt: "2026-08-31T21:00:01.000Z" }), { status: "retry_scheduled", nextAttemptAt: "2026-08-31T21:01:01.000Z" });
+  store.recordTaskReminderRunDelivery({ runId: run.id, status: "retry_wait", failureCode: "network_error", recordedAt: "2026-08-31T21:00:01.000Z" });
   assert.equal(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, reminder, now: "2026-08-31T21:01:00.000Z" }).claimed, false);
   assert.deepEqual(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, reminder, now: "2026-08-31T21:01:01.000Z" }), { claimed: true, attemptNumber: 2 });
-  assert.deepEqual(store.recordTelegramTaskReminderFailure({ planId, reminderKey, taskId: task.id, failureCode: "telegram_500", retryable: true, failedAt: "2026-08-31T21:01:02.000Z" }), { status: "retry_scheduled", nextAttemptAt: "2026-08-31T21:06:02.000Z" });
+  assert.equal(store.startTaskReminderRun({ planId, taskId: task.id, reminderKey, dueAt, attemptNumber: 2, startedAt: "2026-08-31T21:01:01.000Z" }).id, run.id);
+  store.recordTaskReminderRunWeather({ runId: run.id, status: "available", recordedAt: "2026-08-31T21:01:01.500Z" });
+  assert.deepEqual(store.recordTelegramTaskReminderFailure({ planId, reminderKey, taskId: task.id, reminder, failureCode: "telegram_500", retryable: true, failedAt: "2026-08-31T21:01:02.000Z" }), { status: "retry_scheduled", nextAttemptAt: "2026-08-31T21:06:02.000Z" });
+  store.recordTaskReminderRunDelivery({ runId: run.id, status: "retry_wait", failureCode: "telegram_500", recordedAt: "2026-08-31T21:01:02.000Z" });
   assert.deepEqual(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, reminder, now: "2026-08-31T21:06:02.000Z" }), { claimed: true, attemptNumber: 3 });
-  assert.deepEqual(store.recordTelegramTaskReminderFailure({ planId, reminderKey, taskId: task.id, failureCode: "timeout", retryable: true, failedAt: "2026-08-31T21:06:03.000Z" }), { status: "failed" });
+  store.startTaskReminderRun({ planId, taskId: task.id, reminderKey, dueAt, attemptNumber: 3, startedAt: "2026-08-31T21:06:02.000Z" });
+  store.recordTaskReminderRunWeather({ runId: run.id, status: "available", recordedAt: "2026-08-31T21:06:02.500Z" });
+  assert.deepEqual(store.recordTelegramTaskReminderFailure({ planId, reminderKey, taskId: task.id, reminder, failureCode: "timeout", retryable: true, failedAt: "2026-08-31T21:06:03.000Z" }), { status: "failed" });
+  store.recordTaskReminderRunDelivery({ runId: run.id, status: "failed", failureCode: "timeout", recordedAt: "2026-08-31T21:06:03.000Z" });
 
   assert.equal(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, reminder, now: "2026-08-31T21:10:00.000Z" }).claimed, false);
   assert.equal(store.getWorkspace().inbox[0]?.title, "Reminder could not be sent: Check essentials");
   assert.match(store.getWorkspace().inbox[0]?.body ?? "", /stopped after 3 delivery attempts/i);
+  assert.deepEqual(store.listRecentTaskReminderRuns()[0], {
+    id: run.id,
+    kind: "task_reminder",
+    planId,
+    taskId: task.id,
+    reminderKey,
+    dueAt,
+    status: "failed",
+    attemptCount: 3,
+    weatherStatus: "available",
+    telegramFailureCode: "timeout",
+    startedAt: dueAt,
+    finishedAt: "2026-08-31T21:06:03.000Z",
+    updatedAt: "2026-08-31T21:06:03.000Z"
+  });
   store.close();
 });
 

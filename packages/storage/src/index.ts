@@ -32,6 +32,8 @@ import {
   type Stage,
   type Task,
   type TaskReminder,
+  type TaskReminderRun,
+  type TaskReminderRunStatus,
   type TelegramBinding,
   type TelegramPairingStatus,
   type WorkspaceSnapshot
@@ -112,6 +114,23 @@ interface AgentRunRow {
   failure_code: string | null;
 }
 
+interface TaskReminderRunRow {
+  id: string;
+  plan_id: string;
+  task_id: string;
+  reminder_key: string;
+  due_at: string;
+  status: TaskReminderRunStatus;
+  attempt_count: number;
+  weather_status: TaskReminderRun["weatherStatus"];
+  weather_stage: "amap" | "qweather" | "pipeline" | null;
+  weather_failure_code: string | null;
+  telegram_failure_code: string | null;
+  started_at: string;
+  finished_at: string | null;
+  updated_at: string;
+}
+
 interface TelegramBindingRow {
   chat_id: string;
   user_id: string;
@@ -145,7 +164,7 @@ export interface TelegramTaskReminderAttempt {
 }
 
 export interface TelegramTaskReminderFailureResult {
-  status: "retry_scheduled" | "failed";
+  status: "retry_scheduled" | "failed" | "cancelled";
   nextAttemptAt?: string;
 }
 
@@ -376,7 +395,7 @@ export class SqliteWorkspaceStore {
     }
   }
 
-  recordTelegramTaskReminderFailure(input: { planId: string; reminderKey: string; taskId: string; failureCode: string; retryable: boolean; failedAt?: string }): TelegramTaskReminderFailureResult {
+  recordTelegramTaskReminderFailure(input: { planId: string; reminderKey: string; taskId: string; reminder: TaskReminder; failureCode: string; retryable: boolean; failedAt?: string }): TelegramTaskReminderFailureResult {
     const failedAt = input.failedAt ?? new Date().toISOString();
     const failedAtMs = Date.parse(failedAt);
     const failureCode = input.failureCode.trim().slice(0, 80) || "unknown_failure";
@@ -384,6 +403,15 @@ export class SqliteWorkspaceStore {
     const row = this.database.prepare(`SELECT task_id, due_at, status, attempt_count, next_attempt_at
       FROM telegram_task_reminder_deliveries WHERE plan_id = ? AND reminder_key = ?`).get(input.planId, input.reminderKey) as TelegramTaskReminderDeliveryRow | undefined;
     if (!row || row.task_id !== input.taskId || row.status !== "attempting") throw new Error("The Task reminder delivery attempt is not active.");
+    const workspace = this.getWorkspace();
+    const currentReminder = workspace.activePlan.id === input.planId ? workspace.activePlan.stages.flatMap((stage) => stage.tasks).find((task) => task.id === input.taskId)?.reminder : undefined;
+    const currentMatch = workspace.activePlan.status === "active" && currentReminder?.scheduledAtLocal === input.reminder.scheduledAtLocal && currentReminder.timeZone === input.reminder.timeZone && currentReminder.purpose === input.reminder.purpose;
+    if (!currentMatch) {
+      this.database.prepare(`UPDATE telegram_task_reminder_deliveries
+        SET status = 'failed', next_attempt_at = NULL, last_failure_code = 'reminder_cancelled', updated_at = ?
+        WHERE plan_id = ? AND reminder_key = ? AND status = 'attempting'`).run(failedAt, input.planId, input.reminderKey);
+      return { status: "cancelled" };
+    }
     const retryDelay = TASK_REMINDER_RETRY_DELAYS_MS[row.attempt_count - 1];
     const nextAttemptAt = retryDelay === undefined ? undefined : new Date(failedAtMs + retryDelay).toISOString();
     const retryWithinWindow = nextAttemptAt !== undefined && Date.parse(nextAttemptAt) <= Date.parse(row.due_at) + TASK_REMINDER_CATCH_UP_MS;
@@ -424,6 +452,9 @@ export class SqliteWorkspaceStore {
     try {
       this.database.prepare("UPDATE tasks SET reminder_json = NULL WHERE id = ?").run(taskId);
       this.database.prepare("UPDATE plans SET version = version + 1 WHERE id = ?").run(planId);
+      const cancelledAt = new Date().toISOString();
+      this.database.prepare(`UPDATE task_reminder_runs SET status = 'cancelled', finished_at = ?, updated_at = ?
+        WHERE plan_id = ? AND task_id = ? AND status IN ('running', 'retry_wait')`).run(cancelledAt, cancelledAt, planId, taskId);
       this.addInbox({
         id: `task-reminder-cancelled-${planId}-${taskId}-${Date.now()}`,
         tone: "notice",
@@ -641,6 +672,66 @@ export class SqliteWorkspaceStore {
     const safeLimit = Number.isInteger(limit) && limit > 0 && limit <= 50 ? limit : 12;
     return (this.database.prepare(`SELECT id, kind, runtime_kind, trigger, status, started_at, finished_at, output_plan_id, failure_code
       FROM agent_runs ORDER BY started_at DESC, rowid DESC LIMIT ?`).all(safeLimit) as unknown as AgentRunRow[]).map(agentRunFromRow);
+  }
+
+  startTaskReminderRun(input: { planId: string; taskId: string; reminderKey: string; dueAt: string; attemptNumber: number; startedAt?: string }): TaskReminderRun {
+    const planId = input.planId.trim();
+    const taskId = input.taskId.trim();
+    const reminderKey = input.reminderKey.trim();
+    const startedAt = input.startedAt ?? new Date().toISOString();
+    if (!planId || !taskId || !reminderKey || !Number.isFinite(Date.parse(input.dueAt)) || !Number.isFinite(Date.parse(startedAt))) throw new Error("A Task Reminder Run needs valid Plan, Task, Reminder, due, and start values.");
+    if (!Number.isInteger(input.attemptNumber) || input.attemptNumber < 1 || input.attemptNumber > 3) throw new Error("A Task Reminder Run attempt must be from 1 to 3.");
+    const id = `run-${randomUUID()}`;
+    this.database.prepare(`INSERT OR IGNORE INTO task_reminder_runs
+      (id, plan_id, task_id, reminder_key, due_at, status, attempt_count, weather_status, weather_stage, weather_failure_code, telegram_failure_code, started_at, finished_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'running', ?, 'not_attempted', NULL, NULL, NULL, ?, NULL, ?)`).run(id, planId, taskId, reminderKey, input.dueAt, input.attemptNumber, startedAt, startedAt);
+    this.database.prepare(`UPDATE task_reminder_runs SET status = 'running', attempt_count = MAX(attempt_count, ?), finished_at = NULL, updated_at = ?
+      WHERE plan_id = ? AND reminder_key = ? AND status IN ('running', 'retry_wait')`).run(input.attemptNumber, startedAt, planId, reminderKey);
+    const row = this.database.prepare(`SELECT id, plan_id, task_id, reminder_key, due_at, status, attempt_count, weather_status, weather_stage, weather_failure_code, telegram_failure_code, started_at, finished_at, updated_at
+      FROM task_reminder_runs WHERE plan_id = ? AND reminder_key = ?`).get(planId, reminderKey) as TaskReminderRunRow | undefined;
+    if (!row) throw new Error("The Task Reminder Run could not be started.");
+    if (row.task_id !== taskId || row.due_at !== input.dueAt) throw new Error("The Task Reminder Run key conflicts with different Task or due-time facts.");
+    return taskReminderRunFromRow(row);
+  }
+
+  recordTaskReminderRunWeather(input: { runId: string; status: "available" | "unavailable"; stage?: "amap" | "qweather" | "pipeline"; failureCode?: string; recordedAt?: string }): TaskReminderRun {
+    const recordedAt = input.recordedAt ?? new Date().toISOString();
+    if (!Number.isFinite(Date.parse(recordedAt))) throw new Error("A Task Reminder weather audit needs a valid time.");
+    if (input.status === "available" && (input.stage || input.failureCode)) throw new Error("Available weather cannot contain a failure classification.");
+    if (input.status === "unavailable" && !input.stage) throw new Error("Unavailable weather needs its failed stage.");
+    const failureCode = sanitizeRunFailureCode(input.failureCode);
+    const updated = this.database.prepare(`UPDATE task_reminder_runs
+      SET weather_status = ?, weather_stage = ?, weather_failure_code = ?, updated_at = ?
+      WHERE id = ? AND status = 'running'`).run(input.status, input.stage ?? null, failureCode ?? null, recordedAt, input.runId.trim());
+    if (updated.changes !== 1) throw new Error("The running Task Reminder Run was not found.");
+    return this.getTaskReminderRun(input.runId);
+  }
+
+  recordTaskReminderRunDelivery(input: { runId: string; status: "retry_wait" | "succeeded" | "failed" | "cancelled"; failureCode?: string; recordedAt?: string }): TaskReminderRun {
+    const recordedAt = input.recordedAt ?? new Date().toISOString();
+    if (!Number.isFinite(Date.parse(recordedAt))) throw new Error("A Task Reminder delivery audit needs a valid time.");
+    const failureCode = sanitizeRunFailureCode(input.failureCode);
+    if (input.status === "succeeded" && failureCode) throw new Error("A successful Task Reminder Run cannot contain a Telegram failure.");
+    const finishedAt = input.status === "retry_wait" ? null : recordedAt;
+    const allowedCurrent = input.status === "succeeded" || input.status === "cancelled" ? "('running', 'cancelled')" : "('running')";
+    const updated = this.database.prepare(`UPDATE task_reminder_runs
+      SET status = ?, telegram_failure_code = ?, finished_at = ?, updated_at = ?
+      WHERE id = ? AND status IN ${allowedCurrent}`).run(input.status, failureCode ?? null, finishedAt, recordedAt, input.runId.trim());
+    if (updated.changes !== 1) throw new Error("The active Task Reminder Run was not found.");
+    return this.getTaskReminderRun(input.runId);
+  }
+
+  listRecentTaskReminderRuns(limit = 20): TaskReminderRun[] {
+    const safeLimit = Number.isInteger(limit) && limit > 0 && limit <= 100 ? limit : 20;
+    return (this.database.prepare(`SELECT id, plan_id, task_id, reminder_key, due_at, status, attempt_count, weather_status, weather_stage, weather_failure_code, telegram_failure_code, started_at, finished_at, updated_at
+      FROM task_reminder_runs ORDER BY started_at DESC, rowid DESC LIMIT ?`).all(safeLimit) as unknown as TaskReminderRunRow[]).map(taskReminderRunFromRow);
+  }
+
+  private getTaskReminderRun(runId: string): TaskReminderRun {
+    const row = this.database.prepare(`SELECT id, plan_id, task_id, reminder_key, due_at, status, attempt_count, weather_status, weather_stage, weather_failure_code, telegram_failure_code, started_at, finished_at, updated_at
+      FROM task_reminder_runs WHERE id = ?`).get(runId.trim()) as TaskReminderRunRow | undefined;
+    if (!row) throw new Error("The Task Reminder Run was not found.");
+    return taskReminderRunFromRow(row);
   }
 
   /** Stores immutable official-source evidence and reports only byte-level content change. */
@@ -882,6 +973,23 @@ export class SqliteWorkspaceStore {
         output_plan_id TEXT,
         failure_code TEXT
       );
+      CREATE TABLE IF NOT EXISTS task_reminder_runs (
+        id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        reminder_key TEXT NOT NULL,
+        due_at TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('running', 'retry_wait', 'succeeded', 'failed', 'cancelled')),
+        attempt_count INTEGER NOT NULL CHECK (attempt_count BETWEEN 1 AND 3),
+        weather_status TEXT NOT NULL CHECK (weather_status IN ('not_attempted', 'available', 'unavailable')),
+        weather_stage TEXT CHECK (weather_stage IN ('amap', 'qweather', 'pipeline')),
+        weather_failure_code TEXT,
+        telegram_failure_code TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        updated_at TEXT NOT NULL,
+        UNIQUE (plan_id, reminder_key)
+      );
       CREATE TABLE IF NOT EXISTS telegram_binding (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         chat_id TEXT NOT NULL,
@@ -936,6 +1044,7 @@ export class SqliteWorkspaceStore {
       CREATE INDEX IF NOT EXISTS idx_inbox_created_at ON inbox_items(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_source_snapshots_latest ON source_snapshots(source_id, url, retrieved_at DESC);
       CREATE INDEX IF NOT EXISTS idx_agent_runs_recent ON agent_runs(started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_task_reminder_runs_recent ON task_reminder_runs(started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_telegram_pairing_requests_active ON telegram_pairing_requests(consumed_at, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_telegram_task_reminders_due ON telegram_task_reminder_deliveries(status, next_attempt_at);
       CREATE INDEX IF NOT EXISTS idx_telegram_arrival_checkins_follow_up ON telegram_arrival_checkins(location_requested_at, location_received_at, check_in_sent_at);
@@ -977,6 +1086,9 @@ export class SqliteWorkspaceStore {
   private savePlan(plan: Plan): void {
     this.database.exec("BEGIN");
     try {
+      const supersededAt = new Date().toISOString();
+      this.database.prepare(`UPDATE task_reminder_runs SET status = 'cancelled', finished_at = ?, updated_at = ?
+        WHERE plan_id IN (SELECT id FROM plans WHERE is_current = 1) AND status IN ('running', 'retry_wait')`).run(supersededAt, supersededAt);
       this.database.prepare("UPDATE plans SET is_current = 0 WHERE is_current = 1").run();
       this.database.prepare(`INSERT INTO plans (id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, is_current, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`).run(
@@ -1159,6 +1271,33 @@ function agentRunFromRow(row: AgentRunRow): AgentRun {
     ...(row.output_plan_id ? { outputPlanId: row.output_plan_id } : {}),
     ...(row.failure_code ? { failureCode: row.failure_code } : {})
   };
+}
+
+function taskReminderRunFromRow(row: TaskReminderRunRow): TaskReminderRun {
+  return {
+    id: row.id,
+    kind: "task_reminder",
+    planId: row.plan_id,
+    taskId: row.task_id,
+    reminderKey: row.reminder_key,
+    dueAt: row.due_at,
+    status: row.status,
+    attemptCount: row.attempt_count,
+    weatherStatus: row.weather_status,
+    ...(row.weather_stage ? { weatherStage: row.weather_stage } : {}),
+    ...(row.weather_failure_code ? { weatherFailureCode: row.weather_failure_code } : {}),
+    ...(row.telegram_failure_code ? { telegramFailureCode: row.telegram_failure_code } : {}),
+    startedAt: row.started_at,
+    ...(row.finished_at ? { finishedAt: row.finished_at } : {}),
+    updatedAt: row.updated_at
+  };
+}
+
+function sanitizeRunFailureCode(value: string | undefined): string | undefined {
+  const code = value?.trim();
+  if (!code) return undefined;
+  if (!/^[a-z0-9_:-]{1,80}$/i.test(code)) throw new Error("A Run failure code must be a short safe classification.");
+  return code;
 }
 
 function isAgentRuntimeKind(value: unknown): value is AgentRuntimeKind {

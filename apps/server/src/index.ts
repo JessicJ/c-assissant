@@ -46,6 +46,7 @@ server.get("/health", async () => ({
 
 server.get("/api/workspace", async () => store.getWorkspace());
 server.get("/api/runs", async () => store.listRecentAgentRuns());
+server.get("/api/runs/task-reminders", async () => store.listRecentTaskReminderRuns());
 
 server.get("/api/policy-applicability", async () => {
   const workspace = store.getWorkspace();
@@ -488,6 +489,7 @@ async function runTaskReminders(): Promise<void> {
     for (const item of due) {
       const attempt = store.claimTelegramTaskReminderAttempt({ planId: plan.id, reminderKey: item.reminderKey, taskId: item.task.id, dueAt: item.dueAt.toISOString(), reminder: item.reminder });
       if (!attempt.claimed) continue;
+      const run = store.startTaskReminderRun({ planId: plan.id, taskId: item.task.id, reminderKey: item.reminderKey, dueAt: item.dueAt.toISOString(), attemptNumber: attempt.attemptNumber ?? 1 });
       let weather: TaskReminderWeatherContext | undefined;
       try {
         const refreshed = await refreshTaskReminderWeather({
@@ -499,21 +501,34 @@ async function runTaskReminders(): Promise<void> {
             weather: (input) => qweather.weather(input)
           }
         });
-        if (refreshed.status === "available") weather = refreshed.data;
-        else server.log.warn({ stage: refreshed.stage, code: refreshed.code, taskId: item.task.id }, "Task reminder weather context was unavailable");
+        if (refreshed.status === "available") {
+          weather = refreshed.data;
+          store.recordTaskReminderRunWeather({ runId: run.id, status: "available" });
+        } else {
+          store.recordTaskReminderRunWeather({ runId: run.id, status: "unavailable", stage: refreshed.stage, failureCode: refreshed.code });
+          server.log.warn({ stage: refreshed.stage, code: refreshed.code, taskId: item.task.id }, "Task reminder weather context was unavailable");
+        }
       } catch (error) {
+        store.recordTaskReminderRunWeather({ runId: run.id, status: "unavailable", stage: "pipeline", failureCode: "unexpected_error" });
         server.log.warn({ error, taskId: item.task.id }, "Task reminder weather refresh failed unexpectedly");
       }
       const receipt = await telegram.sendMessage({ chatId: pairing.binding.chatId, text: formatTaskReminder(plan, item.task, weather) });
       if (receipt.status === "available") {
         store.recordTelegramTaskReminderDelivered({ planId: plan.id, reminderKey: item.reminderKey, taskId: item.task.id, taskTitle: item.task.title, reminder: item.reminder });
+        store.recordTaskReminderRunDelivery({ runId: run.id, status: "succeeded" });
       } else {
         const outcome = store.recordTelegramTaskReminderFailure({
           planId: plan.id,
           reminderKey: item.reminderKey,
           taskId: item.task.id,
+          reminder: item.reminder,
           failureCode: receipt.failure?.code ?? "unknown_failure",
           retryable: receipt.failure?.retryable ?? false
+        });
+        store.recordTaskReminderRunDelivery({
+          runId: run.id,
+          status: outcome.status === "retry_scheduled" ? "retry_wait" : outcome.status,
+          failureCode: outcome.status === "cancelled" ? "reminder_cancelled" : receipt.failure?.code ?? "unknown_failure"
         });
         server.log.warn({ status: receipt.status, code: receipt.failure?.code, taskId: item.task.id, attempt: attempt.attemptNumber, outcome: outcome.status }, "Telegram Task reminder could not be delivered");
       }
