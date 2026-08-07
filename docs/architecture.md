@@ -60,6 +60,8 @@ A Country Pack defines local workflows, official-source policy, provider mapping
 
 A Skill is a verifiable business capability. It receives a minimized context and approved tools, then returns a structured proposal or result. It cannot write Core state or send messages directly.
 
+The implemented Skill Runtime loads Country Pack manifests into a duplicate-safe registry, verifies entrypoint bindings, and validates the shared result envelope and Skill identity/version before a caller can consume it. Domain-specific input schemas, orchestration, repair, authorization, and durable Run recording remain later layers.
+
 ### Connector
 
 A Connector implements a capability against an external provider. It returns normalized facts or performs a narrowly defined channel/handoff operation. It does not make product decisions.

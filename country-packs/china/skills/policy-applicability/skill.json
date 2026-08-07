@@ -12,5 +12,5 @@
   "sources": { "provider": "official", "requiredSourceId": "nia-english", "freshnessDays": 7 },
   "risk": { "information": "regulated", "action": "read_only" },
   "executionPolicy": "automatic_with_notice",
-  "failure": { "missingFacts": "needs_input", "missingOrStaleEvidence": "needs_evidence", "malformedInput": "failed" }
+  "failure": { "missingFacts": "needs_input", "missingOrStaleEvidence": "blocked:needs_evidence", "malformedInput": "failed" }
 }

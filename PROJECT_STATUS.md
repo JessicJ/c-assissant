@@ -38,6 +38,7 @@
 - 建立 `apps/server`、`apps/telegram-bot`、`apps/web` 目录。
 - 建立 `packages/core`、`packages/skill-runtime`、`packages/agent-adapters`、`packages/connectors`、`packages/storage` 目录。
 - 建立 `country-packs/china` 及内部 Skills 目录约定。
+- 实现第一层通用 Skill Runtime：严格解析 manifest，拒绝重复 Skill ID、入口漂移和不受支持的状态，并在调用后校验 Skill ID/版本及完整结构化结果数组。China Pack 通过一个 Node 侧 Registry 加载五个内部 `skill.json` 并绑定实际入口；用户仍不能单独安装或运行 Skill。生产政策证据门槛已通过该 Registry 调用，为后续 `china-arrival-plan` 组合编排和 Skill Run 审计建立统一入口。
 - 提供中英文 README、环境变量示例和 Git 忽略规则。
 - 实现本地 SQLite 保存：Profile、当前 Plan、Stage、Task 和 Inbox 在重启后保留。
 - 实现 Web 中创建本地 Plan、确认 Plan 和保存 Profile 基础字段的流程。

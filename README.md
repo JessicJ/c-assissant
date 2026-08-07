@@ -59,6 +59,7 @@ The production policy evidence gate now runs through `policy-applicability` `0.1
 - Agent runtime: the user chooses Codex or Claude Code and signs in with their own account.
 - China Country Pack: internal modular Skills published externally as one complete pack.
 - Amap: V1 location facts, discovery, routing, and action handoff foundation.
+- Skill Runtime: validates internal manifests, binds stable entrypoints, rejects duplicate IDs and invalid SkillResult envelopes, and exposes each Country Pack through one registry.
 
 ```text
 Web / Telegram

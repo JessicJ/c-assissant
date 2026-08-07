@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { runFoodNearbySkill, runHousingAreaRecommendationSkill, runPolicyApplicabilitySkill, runTransportPlannerSkill, runWeatherAndPackingSkill } from "./index.js";
+import { chinaSkillRegistry } from "./registry.js";
 
 const candidates = [
   { id: "near", name: "Nearby Noodles", address: "1 Example Road", location: "121.47,31.23", type: "Chinese food", distanceMeters: 180 },
@@ -165,12 +166,21 @@ test("policy-applicability marks fresh approved evidence ready only for separate
 
 test("policy-applicability rejects stale, future, and unapproved evidence for current review without interpreting content", () => {
   const stale = runPolicyApplicabilitySkill({ nationality: "Canada", immigrationStatus: "tourist_visa", location: "Shanghai, China", dates: "September 2026", evidence: [{ ...policyEvidence, retrievedAt: "2026-07-01T00:00:00.000Z" }], now: "2026-08-07T00:00:00.000Z" });
-  assert.equal(stale.status, "needs_evidence");
+  assert.equal(stale.status, "blocked");
+  assert.equal(stale.reasonCode, "needs_evidence");
   assert.equal(stale.sources[0]?.id, "source-1");
   const future = runPolicyApplicabilitySkill({ nationality: "Canada", immigrationStatus: "tourist_visa", location: "Shanghai, China", dates: "September 2026", evidence: [{ ...policyEvidence, retrievedAt: "2026-08-08T00:00:00.000Z" }], now: "2026-08-07T00:00:00.000Z" });
-  assert.equal(future.status, "needs_evidence");
+  assert.equal(future.status, "blocked");
   const unapproved = runPolicyApplicabilitySkill({ nationality: "Canada", immigrationStatus: "tourist_visa", location: "Shanghai, China", dates: "September 2026", evidence: [{ ...policyEvidence, url: "https://example.com/policy" }], now: "2026-08-07T00:00:00.000Z" });
-  assert.equal(unapproved.status, "needs_evidence");
+  assert.equal(unapproved.status, "blocked");
   assert.equal(unapproved.sources.length, 0);
   assert.match(unapproved.warnings.join(" "), /omitted/);
+});
+
+test("China Skill Registry loads every internal manifest and validates invocation envelopes", async () => {
+  assert.deepEqual(chinaSkillRegistry.list().map((manifest) => manifest.id).sort(), ["food-nearby", "housing-area-recommendation", "policy-applicability", "transport-planner", "weather-and-packing"]);
+  const result = await chinaSkillRegistry.invoke("food-nearby", { partySize: 2, candidates, observedAt: "2026-08-07T00:00:00.000Z" });
+  assert.equal(result.skill.id, "food-nearby");
+  assert.equal(result.status, "success");
+  await assert.rejects(() => chinaSkillRegistry.invoke("unknown-skill", {}), /Unknown Skill/);
 });

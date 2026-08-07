@@ -85,6 +85,9 @@ importers:
       '@c-assistant/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@c-assistant/skill-runtime':
+        specifier: workspace:*
+        version: link:../../packages/skill-runtime
     devDependencies:
       '@types/node':
         specifier: ^22.10.2
@@ -116,6 +119,15 @@ importers:
         version: 4.23.7
 
   packages/core:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.7
+
+  packages/skill-runtime:
     devDependencies:
       '@types/node':
         specifier: ^22.10.2
