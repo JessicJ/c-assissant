@@ -32,6 +32,20 @@ test("SQLite persists the selected Plan runtime without storing any credentials"
   store.close();
 });
 
+test("SQLite records a privacy-preserving Plan generation run", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const started = store.startPlanGenerationRun({ runtimeKind: "claude-code", trigger: "web" });
+  const finished = store.finishPlanGenerationRun({ runId: started.id, status: "succeeded", outputPlanId: store.getWorkspace().activePlan.id });
+
+  assert.equal(started.status, "running");
+  assert.equal(finished.status, "succeeded");
+  assert.equal(finished.outputPlanId, store.getWorkspace().activePlan.id);
+  assert.equal(Object.hasOwn(finished, "prompt"), false);
+  assert.equal(store.listRecentAgentRuns()[0]?.id, started.id);
+  assert.throws(() => store.finishPlanGenerationRun({ runId: started.id, status: "failed", failureCode: "generation_failed" }));
+  store.close();
+});
+
 test("SQLite persists official-source snapshots, deduplicates equal content, and reports later content changes", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const first = store.saveSourceSnapshot({

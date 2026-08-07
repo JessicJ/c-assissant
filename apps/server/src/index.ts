@@ -42,6 +42,7 @@ server.get("/health", async () => ({
 }));
 
 server.get("/api/workspace", async () => store.getWorkspace());
+server.get("/api/runs", async () => store.listRecentAgentRuns());
 
 server.get("/api/policy-applicability", async () => {
   const workspace = store.getWorkspace();
@@ -159,8 +160,10 @@ server.put<{ Body: RuntimeSelectionUpdate }>("/api/runtime", async (request, rep
 server.post<{ Body: CreatePlanInput }>("/api/plans/generate", async (request, reply) => {
   if (generatingPlan) return reply.code(409).send({ error: "Another Plan generation is already running." });
   generatingPlan = true;
+  let runId: string | undefined;
   try {
     const workspace = store.getWorkspace();
+    runId = store.startPlanGenerationRun({ runtimeKind: workspace.runtime.selectedKind, trigger: "web" }).id;
     const runtime = selectedRuntimeAdapter(workspace.runtime.selectedKind);
     const draft = await runtime.generatePlanDraft({
       request: request.body.request,
@@ -171,8 +174,11 @@ server.post<{ Body: CreatePlanInput }>("/api/plans/generate", async (request, re
         immigrationStatus: workspace.profile.immigrationStatus
       }
     });
-    return store.createGeneratedPlan(draft, workspace.runtime.selectedKind);
+    const updated = store.createGeneratedPlan(draft, workspace.runtime.selectedKind);
+    store.finishPlanGenerationRun({ runId, status: "succeeded", outputPlanId: updated.activePlan.id });
+    return updated;
   } catch (error) {
+    if (runId) store.finishPlanGenerationRun({ runId, status: "failed", failureCode: planGenerationFailureCode(error) });
     return reply.code(error instanceof RuntimeAdapterError && (error.code === "not_installed" || error.code === "not_authenticated") ? 503 : 400).send({
       error: error instanceof Error ? error.message : "The selected runtime could not generate a Plan draft."
     });
@@ -500,15 +506,27 @@ async function telegramCommandResponse(text: string | undefined): Promise<string
     if (generatingPlan) return "A Plan draft is already being prepared. Please wait for it before sending another request.";
     generatingPlan = true;
     try {
-      const workspace = store.getWorkspace();
-      const runtime = selectedRuntimeAdapter(workspace.runtime.selectedKind);
+    const workspace = store.getWorkspace();
+    const runtime = selectedRuntimeAdapter(workspace.runtime.selectedKind);
+      const run = store.startPlanGenerationRun({ runtimeKind: workspace.runtime.selectedKind, trigger: "telegram" });
+      let runtimeFailureCode = "generation_failed";
       const result = await createTelegramPlan({
         request: command.request,
         runtime: workspace.runtime.selectedKind,
-        generate: () => runtime.generatePlanDraft({ request: command.request, profile: { preferredLanguage: workspace.profile.preferredLanguage, nationality: workspace.profile.nationality, gender: workspace.profile.gender, immigrationStatus: workspace.profile.immigrationStatus } }),
+        generate: async () => {
+          try {
+            return await runtime.generatePlanDraft({ request: command.request, profile: { preferredLanguage: workspace.profile.preferredLanguage, nationality: workspace.profile.nationality, gender: workspace.profile.gender, immigrationStatus: workspace.profile.immigrationStatus } });
+          } catch (error) {
+            runtimeFailureCode = planGenerationFailureCode(error);
+            throw error;
+          }
+        },
         saveGenerated: (draft) => store.createGeneratedPlan(draft, workspace.runtime.selectedKind),
         saveTemplate: () => store.createPlan({ request: command.request })
       });
+      store.finishPlanGenerationRun(result.source === "runtime"
+        ? { runId: run.id, status: "succeeded", outputPlanId: result.workspace.activePlan.id }
+        : { runId: run.id, status: "fallback", failureCode: runtimeFailureCode });
       return formatTelegramPlanCreation(result);
     } finally {
       generatingPlan = false;
@@ -520,6 +538,10 @@ async function telegramCommandResponse(text: string | undefined): Promise<string
 
 function selectedRuntimeAdapter(kind: AgentRuntimeKind): CodexRuntimeAdapter | ClaudeCodeRuntimeAdapter {
   return kind === "claude-code" ? claudeCode : codex;
+}
+
+function planGenerationFailureCode(error: unknown): string {
+  return error instanceof RuntimeAdapterError ? error.code : "generation_failed";
 }
 
 const port = Number(process.env.C_ASSISTANT_PORT ?? 8787);
