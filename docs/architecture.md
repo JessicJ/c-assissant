@@ -2,7 +2,7 @@
 
 ## Product definition
 
-C-assistant is a country-neutral regional assistant runtime. It turns a user's situation into a persistent plan, timed tasks, evidence-backed guidance, and low-friction action handoffs.
+Landi is a country-neutral regional assistant runtime. It turns a user's situation into a persistent plan, timed tasks, evidence-backed guidance, and low-friction action handoffs.
 
 The first public extension unit is the complete `china` Country Pack. Individual Skills remain internal modules in V1 and are not installed separately by normal users.
 

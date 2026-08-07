@@ -220,7 +220,7 @@ test("Amap nearby restaurant discovery keeps distance facts and uses the restaur
   assert.doesNotMatch(JSON.stringify(result), /test-key/);
 });
 
-test("Amap nearby accommodation discovery keeps booking outside C-assistant", async () => {
+test("Amap nearby accommodation discovery keeps booking outside Landi", async () => {
   let requestUrl = "";
   const connector = new AmapConnector({
     apiKey: "test-key",

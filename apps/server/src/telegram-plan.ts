@@ -59,13 +59,13 @@ export function telegramPlanRequestMode(workspace: WorkspaceSnapshot, explicitNe
 export function formatTelegramPlanCreation(result: TelegramPlanCreation): string {
   const plan = result.workspace.activePlan;
   const runtime = result.runtime === "claude-code" ? "Claude Code" : "Codex";
-  const origin = result.source === "runtime" ? `${runtime} created a complete Plan draft` : `${runtime} is unavailable, so C-assistant created a local template draft`;
+  const origin = result.source === "runtime" ? `${runtime} created a complete Plan draft` : `${runtime} is unavailable, so Landi created a local template draft`;
   return truncateTelegramText(`${origin}.\n\n${formatTelegramPlan(plan)}`);
 }
 
 export function formatTelegramPlanCreationPages(result: TelegramPlanCreation): string[] {
   const runtime = result.runtime === "claude-code" ? "Claude Code" : "Codex";
-  const origin = result.source === "runtime" ? `${runtime} created a complete Plan draft.` : `${runtime} is unavailable, so C-assistant created a local template draft.`;
+  const origin = result.source === "runtime" ? `${runtime} created a complete Plan draft.` : `${runtime} is unavailable, so Landi created a local template draft.`;
   return paginateTelegramText(`${origin}\n\n${telegramPlanText(result.workspace.activePlan)}`);
 }
 

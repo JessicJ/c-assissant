@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "China Country Pack for C-assistant",
+  "description": "China Country Pack for Landi",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
   "exports": {
