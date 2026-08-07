@@ -1,8 +1,48 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import { compilePlanProposal, type PlanCompilationProposal } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "./index.js";
+
+test("SQLite records its schema baseline and creates a verified private backup", () => {
+  const directory = mkdtempSync(join(tmpdir(), "c-assistant-storage-"));
+  try {
+    const databasePath = join(directory, "workspace.sqlite");
+    const store = new SqliteWorkspaceStore(databasePath);
+    store.updateProfile({ displayName: "Backup owner", preferredLanguage: "English", nationality: "Canada", gender: "not_specified", immigrationStatus: "tourist_visa" });
+    const maintenance = store.getDatabaseMaintenanceStatus();
+    assert.deepEqual({ schemaVersion: maintenance.schemaVersion, latest: maintenance.latestSchemaVersion, integrity: maintenance.integrity }, { schemaVersion: 1, latest: 1, integrity: "ok" });
+    assert.equal(maintenance.migrations[0]?.name, "v1-local-workspace-baseline");
+
+    const backup = store.createBackup(new Date("2026-08-07T12:34:56.000Z"));
+    assert.equal(backup.integrity, "ok");
+    assert.equal(statSync(backup.path).mode & 0o777, 0o600);
+    const restoredReadOnly = new DatabaseSync(backup.path, { readOnly: true });
+    assert.equal((restoredReadOnly.prepare("SELECT display_name FROM profiles WHERE id = 1").get() as { display_name: string }).display_name, "Backup owner");
+    restoredReadOnly.close();
+    assert.throws(() => store.createBackup(new Date("2026-08-07T12:34:56.000Z")), /already exists/i);
+    store.close();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("SQLite refuses to open a workspace created by a newer schema", () => {
+  const directory = mkdtempSync(join(tmpdir(), "c-assistant-future-schema-"));
+  try {
+    const databasePath = join(directory, "workspace.sqlite");
+    const future = new DatabaseSync(databasePath);
+    future.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, applied_at TEXT NOT NULL); INSERT INTO schema_migrations VALUES (999, 'future', '2026-08-07T00:00:00.000Z');");
+    future.close();
+    assert.throws(() => new SqliteWorkspaceStore(databasePath), /supports schema 1.*schema 999/i);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 function storageCompilationProposal(planId: string, planVersion: number): PlanCompilationProposal {
   return {

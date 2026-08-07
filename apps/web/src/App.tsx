@@ -34,6 +34,8 @@ type TelegramPairingView = {
 type ChinaPlanPreparationView =
   | { status: "saved"; message: string; workspace: WorkspaceSnapshot; taskCount: number; reminderCount: number; sources: Array<{ sourceId: string; status: "ready" | "unavailable" }> }
   | { status: "blocked"; stage: "source_preparation" | "compilation"; reasonCode: string; message: string; actionItems: string[]; sources: Array<{ sourceId: string; status: "ready" | "unavailable" }> };
+type DatabaseMaintenanceView = { schemaVersion: number; latestSchemaVersion: number; integrity: "ok" | "failed"; migrations: Array<{ version: number; name: string; appliedAt: string }> };
+type DatabaseBackupView = { path: string; fileName: string; createdAt: string; schemaVersion: number; integrity: "ok" };
 
 const navigation: View[] = ["Today", "Plans", "Inbox", "Settings"];
 
@@ -905,6 +907,7 @@ function SettingsView({ workspace, onSaveProfile, configuration, configurationFo
   return <section className="content-stack">
     <ProfileView workspace={workspace} onSave={onSaveProfile} />
     <LocalConfigurationView configuration={configuration} form={configurationForm} saving={savingConfiguration} onChange={onConfigurationFormChange} onSave={onSaveConfiguration} />
+    <DataMaintenanceCard />
     <section className="card settings-view">
       <p className="eyebrow">Plan runtime</p>
       <h2>Choose the account that creates Plan drafts</h2>
@@ -1101,6 +1104,39 @@ function ChinaPlanPreparationCard({ plan, result, preparing, onPrepare }: { plan
     {result?.status === "blocked" ? <div className="china-preparation-result blocked"><strong>{result.message}</strong><ul className="compact-list">{result.actionItems.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
     {plan.status === "draft" ? <button className="primary-button" disabled={preparing} onClick={() => void onPrepare()}>{preparing ? "Preparing with current sources…" : result?.status === "saved" ? "Prepare this updated draft again" : "Prepare with China Pack"}</button> : <p className="connector-message">This Plan is active. Create or revise a draft before preparing a new Country Pack proposal.</p>}
   </section>;
+}
+
+function DataMaintenanceCard() {
+  const [status, setStatus] = useState<DatabaseMaintenanceView | null>(null);
+  const [backup, setBackup] = useState<DatabaseBackupView | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  useEffect(() => {
+    void fetch("/api/maintenance").then(async (response) => {
+      if (response.ok) setStatus((await response.json()) as DatabaseMaintenanceView);
+    }).catch(() => setStatus(null));
+  }, []);
+
+  async function createBackup() {
+    try {
+      setBusy(true);
+      setFailure(null);
+      const response = await fetch("/api/backups", { method: "POST" });
+      const result = await response.json() as DatabaseBackupView | { error?: string };
+      if (!response.ok || !("fileName" in result)) throw new Error("error" in result ? result.error ?? "The local backup could not be created." : "The local backup could not be created.");
+      setBackup(result);
+      const maintenanceResponse = await fetch("/api/maintenance");
+      if (maintenanceResponse.ok) setStatus((await maintenanceResponse.json()) as DatabaseMaintenanceView);
+    } catch (caught) {
+      setFailure(caught instanceof Error ? caught.message : "The local backup could not be created.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const ready = status?.integrity === "ok" && status.schemaVersion === status.latestSchemaVersion;
+  return <section className="card data-maintenance-card"><div className="split-heading"><div><p className="eyebrow">Local data</p><h2>Keep a verified workspace backup</h2></div><span className={`configuration-state ${ready ? "ready" : ""}`}>{status ? `${status.integrity} · schema ${status.schemaVersion}` : "checking"}</span></div><p>A backup copies your local SQLite workspace into its private backups folder. It does not include Codex, Claude Code, Amap, QWeather, or Telegram credentials.</p><button className="secondary-button" disabled={busy || !ready} onClick={() => void createBackup()}>{busy ? "Creating and verifying…" : "Create local backup"}</button>{backup ? <div className="backup-result"><strong>Backup verified</strong><span>{backup.fileName}</span><small>{backup.path}</small></div> : null}{failure ? <p className="inline-error">{failure}</p> : null}</section>;
 }
 
 export default App;

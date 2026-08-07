@@ -1,6 +1,6 @@
-import { mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   confirmPlan,
@@ -218,6 +218,22 @@ export interface TelegramTaskReminderFailureResult {
 const TASK_REMINDER_CATCH_UP_MS = 30 * 60_000;
 const TASK_REMINDER_ATTEMPT_LEASE_MS = 60_000;
 const TASK_REMINDER_RETRY_DELAYS_MS = [60_000, 5 * 60_000] as const;
+const CURRENT_SCHEMA_VERSION = 1;
+
+export interface DatabaseMaintenanceStatus {
+  schemaVersion: number;
+  latestSchemaVersion: number;
+  integrity: "ok" | "failed";
+  migrations: Array<{ version: number; name: string; appliedAt: string }>;
+}
+
+export interface DatabaseBackupResult {
+  path: string;
+  fileName: string;
+  createdAt: string;
+  schemaVersion: number;
+  integrity: "ok";
+}
 
 /** Contains delivery state only. Coordinates are never stored here. */
 export interface TelegramArrivalCheckinState {
@@ -228,17 +244,65 @@ export interface TelegramArrivalCheckinState {
 
 export class SqliteWorkspaceStore {
   private readonly database: DatabaseSync;
+  private readonly databasePath: string;
 
   constructor(databasePath: string) {
     if (databasePath !== ":memory:") mkdirSync(dirname(databasePath), { recursive: true });
+    this.databasePath = databasePath;
     this.database = new DatabaseSync(databasePath);
-    this.database.exec("PRAGMA foreign_keys = ON;");
-    this.migrate();
-    this.seedIfEmpty();
+    try {
+      this.database.exec("PRAGMA foreign_keys = ON;");
+      this.migrate();
+      this.seedIfEmpty();
+    } catch (error) {
+      this.database.close();
+      throw error;
+    }
   }
 
   close(): void {
     this.database.close();
+  }
+
+  getDatabaseMaintenanceStatus(): DatabaseMaintenanceStatus {
+    const migrations = this.database.prepare("SELECT version, name, applied_at FROM schema_migrations ORDER BY version").all() as unknown as Array<{ version: number; name: string; applied_at: string }>;
+    const integrity = this.database.prepare("PRAGMA integrity_check").get() as Record<string, unknown> | undefined;
+    return {
+      schemaVersion: migrations.at(-1)?.version ?? 0,
+      latestSchemaVersion: CURRENT_SCHEMA_VERSION,
+      integrity: Object.values(integrity ?? {})[0] === "ok" ? "ok" : "failed",
+      migrations: migrations.map((migration) => ({ version: migration.version, name: migration.name, appliedAt: migration.applied_at }))
+    };
+  }
+
+  /** Creates a consistent SQLite snapshot without exposing it to Agent or Connector code. */
+  createBackup(now = new Date()): DatabaseBackupResult {
+    if (this.databasePath === ":memory:") throw new Error("An in-memory workspace cannot be backed up.");
+    if (!Number.isFinite(now.getTime())) throw new Error("A backup needs a valid creation time.");
+    const current = this.getDatabaseMaintenanceStatus();
+    if (current.integrity !== "ok" || current.schemaVersion !== CURRENT_SCHEMA_VERSION) throw new Error("The workspace must pass integrity and schema checks before backup.");
+    const createdAt = now.toISOString();
+    const fileName = `c-assistant-${createdAt.replaceAll(/[:.]/g, "-")}.sqlite`;
+    const backupDirectory = join(dirname(this.databasePath), "backups");
+    const path = join(backupDirectory, fileName);
+    mkdirSync(backupDirectory, { recursive: true });
+    if (existsSync(path)) throw new Error("A backup with this timestamp already exists.");
+    this.database.exec(`VACUUM INTO '${path.replaceAll("'", "''")}'`);
+    chmodSync(path, 0o600);
+
+    const backup = new DatabaseSync(path, { readOnly: true });
+    try {
+      const integrity = backup.prepare("PRAGMA integrity_check").get() as Record<string, unknown> | undefined;
+      const version = backup.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number | null } | undefined;
+      if (Object.values(integrity ?? {})[0] !== "ok" || version?.version !== CURRENT_SCHEMA_VERSION) throw new Error("The created backup did not pass verification.");
+    } catch (error) {
+      backup.close();
+      unlinkSync(path);
+      throw error;
+    } finally {
+      if (backup.isOpen) backup.close();
+    }
+    return { path, fileName, createdAt, schemaVersion: CURRENT_SCHEMA_VERSION, integrity: "ok" };
   }
 
   getWorkspace(): WorkspaceSnapshot {
@@ -1104,6 +1168,13 @@ export class SqliteWorkspaceStore {
   }
 
   private migrate(): void {
+    this.database.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      applied_at TEXT NOT NULL
+    );`);
+    const existingVersion = (this.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number | null } | undefined)?.version ?? 0;
+    if (existingVersion > CURRENT_SCHEMA_VERSION) throw new Error(`This C-assistant build supports schema ${CURRENT_SCHEMA_VERSION}, but the workspace uses schema ${existingVersion}.`);
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS profiles (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -1318,6 +1389,7 @@ export class SqliteWorkspaceStore {
     if (!profileColumns.some((column) => column.name === "gender")) this.database.exec("ALTER TABLE profiles ADD COLUMN gender TEXT NOT NULL DEFAULT 'not_specified'");
     if (!profileColumns.some((column) => column.name === "immigration_status")) this.database.exec("ALTER TABLE profiles ADD COLUMN immigration_status TEXT NOT NULL DEFAULT 'unknown'");
     this.database.prepare("INSERT OR IGNORE INTO runtime_settings (id, selected_runtime, updated_at) VALUES (1, 'codex', ?)").run(new Date().toISOString());
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)").run(CURRENT_SCHEMA_VERSION, "v1-local-workspace-baseline", new Date().toISOString());
   }
 
   private seedIfEmpty(): void {
