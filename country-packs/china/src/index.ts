@@ -217,3 +217,112 @@ export function runTransportPlannerSkill(input: {
 function transportModeName(mode: TransportMode): string {
   return mode === "driving" ? "driving / taxi" : mode === "transit" ? "public transit" : "walking";
 }
+
+export interface WeatherPackingCurrentFact {
+  condition: string;
+  temperatureC: number;
+  feelsLikeC: number;
+  precipitationMm: number;
+  observedAt: string;
+}
+
+export interface WeatherPackingDailyFact {
+  date: string;
+  conditionDay: string;
+  conditionNight: string;
+  highC: number;
+  lowC: number;
+  precipitationMm: number;
+  uvIndex: number;
+}
+
+export interface WeatherAndPackingSkillResult {
+  skill: { id: "weather-and-packing"; version: "0.1.0" };
+  status: "success" | "degraded" | "failed";
+  summary: string;
+  facts: Array<{ kind: "current" | "forecast"; date?: string; condition: string; lowC: number; highC: number; precipitationMm: number; uvIndex?: number }>;
+  assumptions: string[];
+  recommendations: Array<{ kind: "rain_protection" | "warm_layer" | "heat_hydration" | "sun_protection"; text: string; basis: string }>;
+  proposedPlanChanges: [];
+  proposedTasks: [];
+  proposedReminders: [];
+  actionCards: [];
+  sources: Array<{ provider: "qweather"; observedAt: string; url?: string }>;
+  warnings: string[];
+}
+
+/** Converts QWeather-normalized facts into cautious, source-bound packing prompts. */
+export function runWeatherAndPackingSkill(input: {
+  locationName: string;
+  current: WeatherPackingCurrentFact;
+  daily: WeatherPackingDailyFact[];
+  retrievedAt: string;
+  attributionUrl?: string;
+  targetDate?: string;
+}): WeatherAndPackingSkillResult {
+  const identity = { id: "weather-and-packing" as const, version: "0.1.0" as const };
+  const noChanges = { proposedPlanChanges: [] as [], proposedTasks: [] as [], proposedReminders: [] as [], actionCards: [] as [] };
+  const sourceUrl = approvedQWeatherUrl(input.attributionUrl);
+  if (!validWeatherPackingInput(input)) {
+    return { skill: identity, ...noChanges, status: "failed", summary: "The weather input did not pass the Skill contract.", facts: [], assumptions: [], recommendations: [], sources: [], warnings: ["No packing guidance was produced from malformed or untraceable weather context."] };
+  }
+
+  const matched = input.targetDate ? input.daily.find((day) => day.date === input.targetDate) : undefined;
+  const selectedDays = input.targetDate ? (matched ? [matched] : []) : input.daily.slice(0, 3);
+  const facts: WeatherAndPackingSkillResult["facts"] = input.targetDate && !matched
+    ? [{ kind: "current", condition: input.current.condition, lowC: input.current.temperatureC, highC: input.current.temperatureC, precipitationMm: input.current.precipitationMm }]
+    : selectedDays.length
+      ? selectedDays.map((day) => ({ kind: "forecast", date: day.date, condition: `${day.conditionDay} / ${day.conditionNight}`, lowC: day.lowC, highC: day.highC, precipitationMm: day.precipitationMm, uvIndex: day.uvIndex }))
+      : [{ kind: "current", condition: input.current.condition, lowC: input.current.temperatureC, highC: input.current.temperatureC, precipitationMm: input.current.precipitationMm }];
+  const recommendations = packingRecommendations(facts);
+  const warnings = ["Weather changes; refresh these facts near the relevant Task before relying on them."];
+  if (input.attributionUrl && !sourceUrl) warnings.push("An unapproved attribution URL was omitted.");
+  if (input.targetDate && !matched) warnings.push(`No forecast exactly matched ${input.targetDate}; current conditions are shown only as an observation, not as that date's forecast.`);
+  const summary = matched
+    ? `${input.locationName}: ${matched.conditionDay}, ${matched.lowC}–${matched.highC}°C, forecast precipitation ${matched.precipitationMm} mm.${recommendations.length ? ` ${recommendations.map((item) => item.text).join(" ")}` : ""} Forecast for ${matched.date}; conditions may change.`
+    : input.targetDate
+      ? `${input.locationName}: currently ${input.current.condition}, ${input.current.temperatureC}°C (feels like ${input.current.feelsLikeC}°C), precipitation ${input.current.precipitationMm} mm.${recommendations.length ? ` ${recommendations.map((item) => item.text).join(" ")}` : ""} This is a current observation, not a forecast for ${input.targetDate}.`
+      : `Weather and packing check for ${input.locationName}: ${facts.length} current or forecast ${facts.length === 1 ? "fact" : "facts"} reviewed.${recommendations.length ? ` ${recommendations.map((item) => item.text).join(" ")}` : " No rain, cold, heat, or high-UV packing prompt is indicated by these returned facts."}`;
+  return {
+    skill: identity,
+    ...noChanges,
+    status: input.targetDate && !matched ? "degraded" : "success",
+    summary,
+    facts,
+    assumptions: [],
+    recommendations,
+    sources: [{ provider: "qweather", observedAt: input.retrievedAt, ...(sourceUrl ? { url: sourceUrl } : {}) }],
+    warnings
+  };
+}
+
+function packingRecommendations(facts: WeatherAndPackingSkillResult["facts"]): WeatherAndPackingSkillResult["recommendations"] {
+  const result: WeatherAndPackingSkillResult["recommendations"] = [];
+  if (facts.some((fact) => fact.precipitationMm > 0 || /rain|storm|shower|snow|雨|雪|雷/i.test(fact.condition))) result.push({ kind: "rain_protection", text: "Consider rain or snow protection.", basis: "Returned conditions or precipitation indicate rain or snow." });
+  if (facts.some((fact) => fact.lowC <= 10)) result.push({ kind: "warm_layer", text: "Consider a warmer layer.", basis: "A returned low or current temperature is 10°C or below." });
+  if (facts.some((fact) => fact.highC >= 30)) result.push({ kind: "heat_hydration", text: "Consider water and heat protection.", basis: "A returned high or current temperature is 30°C or above." });
+  if (facts.some((fact) => (fact.uvIndex ?? 0) >= 6)) result.push({ kind: "sun_protection", text: "Consider sun protection.", basis: "A returned UV index is 6 or above." });
+  return result;
+}
+
+function validWeatherPackingInput(input: { locationName: string; current: WeatherPackingCurrentFact; daily: WeatherPackingDailyFact[]; retrievedAt: string; targetDate?: string }): boolean {
+  const current = input.current;
+  return input.locationName.trim().length > 0
+    && Number.isFinite(Date.parse(input.retrievedAt)) && Number.isFinite(Date.parse(current.observedAt))
+    && current.condition.trim().length > 0
+    && [current.temperatureC, current.feelsLikeC, current.precipitationMm].every(Number.isFinite)
+    && current.precipitationMm >= 0
+    && (input.targetDate === undefined || /^\d{4}-\d{2}-\d{2}$/.test(input.targetDate))
+    && input.daily.every((day) => /^\d{4}-\d{2}-\d{2}$/.test(day.date) && day.conditionDay.trim().length > 0 && day.conditionNight.trim().length > 0
+      && [day.highC, day.lowC, day.precipitationMm, day.uvIndex].every(Number.isFinite) && day.precipitationMm >= 0 && day.uvIndex >= 0);
+}
+
+function approvedQWeatherUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && (url.hostname === "qweather.com" || url.hostname.endsWith(".qweather.com")) ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}

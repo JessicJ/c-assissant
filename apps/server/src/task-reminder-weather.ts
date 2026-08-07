@@ -1,4 +1,5 @@
 import type { AmapGeocodedPlace, ConnectorResult, QWeatherWeatherSnapshot } from "@c-assistant/connectors";
+import { runWeatherAndPackingSkill } from "@c-assistant/china-country-pack";
 import type { Plan, TaskReminder } from "@c-assistant/core";
 
 interface ReminderWeatherDependencies {
@@ -36,30 +37,15 @@ export async function refreshTaskReminderWeather(input: { plan: Plan; reminder: 
 
   const snapshot = weatherResult.data;
   const reminderDate = input.reminder.scheduledAtLocal.slice(0, 10);
-  const forecast = snapshot.daily.find((day) => day.date === reminderDate);
-  const summary = forecast
-    ? `${snapshot.location.name}: ${forecast.conditionDay}, ${forecast.lowC}–${forecast.highC}°C, forecast precipitation ${forecast.precipitationMm} mm.${weatherAdvice(forecast.conditionDay, forecast.precipitationMm, forecast.lowC, forecast.highC, forecast.uvIndex)} Forecast for ${forecast.date}; conditions may change.`
-    : `${snapshot.location.name}: currently ${snapshot.current.condition}, ${snapshot.current.temperatureC}°C (feels like ${snapshot.current.feelsLikeC}°C), precipitation ${snapshot.current.precipitationMm} mm.${weatherAdvice(snapshot.current.condition, snapshot.current.precipitationMm, snapshot.current.temperatureC, snapshot.current.temperatureC, 0)} This is a current observation, not a forecast for the reminder date.`;
-  const attributionUrl = approvedQWeatherAttribution(snapshot.attributionUrl);
-  return { status: "available", data: { summary, retrievedAt: snapshot.retrievedAt, ...(attributionUrl ? { attributionUrl } : {}) } };
-}
-
-function weatherAdvice(condition: string, precipitationMm: number, lowC: number, highC: number, uvIndex: number): string {
-  const advice: string[] = [];
-  if (precipitationMm > 0 || /rain|storm|shower|snow|雨|雪|雷/i.test(condition)) advice.push(" Consider carrying rain or snow protection.");
-  if (lowC <= 8) advice.push(" Consider a warm layer.");
-  if (highC >= 30) advice.push(" Consider water and heat protection.");
-  if (uvIndex >= 7) advice.push(" Consider sun protection.");
-  return advice.join("");
-}
-
-function approvedQWeatherAttribution(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "https:" || (url.hostname !== "qweather.com" && !url.hostname.endsWith(".qweather.com"))) return undefined;
-    return url.toString();
-  } catch {
-    return undefined;
-  }
+  const skill = runWeatherAndPackingSkill({
+    locationName: snapshot.location.name,
+    current: snapshot.current,
+    daily: snapshot.daily,
+    retrievedAt: snapshot.retrievedAt,
+    ...(snapshot.attributionUrl ? { attributionUrl: snapshot.attributionUrl } : {}),
+    targetDate: reminderDate
+  });
+  if (skill.status === "failed") return { status: "unavailable", stage: "qweather", code: "weather_skill_invalid" };
+  const source = skill.sources[0];
+  return { status: "available", data: { summary: skill.summary, retrievedAt: source?.observedAt ?? snapshot.retrievedAt, ...(source?.url ? { attributionUrl: source.url } : {}) } };
 }

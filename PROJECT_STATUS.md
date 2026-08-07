@@ -66,6 +66,7 @@
 - 落地首个可执行的 China Pack 内部 Skill：`food-nearby` `0.1.0`。它以独立 manifest、instruction、TypeScript 入口和测试存在，只通过完整 China Pack 包供 Core/Server 调用；输入为 Plan 人数及高德已归一化事实，输出有版本的结构化 SkillResult、最多五个事实和外部交接提案。Telegram 只负责渲染和链接；Skill 不做虚假排名、桌位判断或完成推断。
 - 落地 `housing-area-recommendation` `0.1.0`：用户从 Plan 选择场馆、学校、工作地等中心点后，Server 将高德住宿 POI 事实交给 China Pack Skill；Web 展示最多三个基于高德附近距离的初步交通便利理由，并保留候选、地图查看和用户自行预订边界。当前不会把 POI 距离说成真实通勤，也不会猜测价格、库存、品质、预订状态或外国人接待资格；多中心路线和偏好驱动的完整区域选择仍待实现。
 - 落地 `transport-planner` `0.1.0`：Web 路线比较和 Telegram 到达路线均通过完整 China Pack 调用该内部 Skill。它尊重本次 Plan 偏好，并结合人数、行李、高德路线事实及与预计抵达日期匹配的 QWeather 事实给出可解释的初步交通方式；已移除固定 1.5 公里步行阈值，改用已比较路线的相对时长。输出保留来源时间和限制，打开高德不构成叫车、导航开始、预订、支付或 Task 完成。
+- 落地 `weather-and-packing` `0.1.0`：Web 天气卡、Telegram `/weather` 和 Task Reminder 到期天气刷新共用同一个 China Pack Skill。它只从可追溯的 QWeather 归一化事实生成雨雪防护、保暖、防暑补水和防晒提示，并统一阈值；提醒日期只有精确匹配预报时才按该日预报展示，否则降级为当前观测并明确说明。非 QWeather 来源链接会被移除，Skill 不直接修改 Plan、Task 或 Reminder。
 - 实现高德路线行动交接：选择高德地点后可检查驾车路线，并生成由用户自行打开的高德路线链接；不调用叫车、预订或支付。
 - 实现 QWeather Connector：经高德地理编码解析地点后，提供实况和三天预报；Key 与 Host 不会暴露给 Web 或 Agent。
 - 实现官方来源 Connector 的安全基础：仅从 Country Pack 注册表批准的 HTTPS 官方域名抓取，保留原始标题、规范链接、抓取时间、内容指纹和限长摘录；拒绝任意外部域名与跳转，且不生成个人政策适用性结论。China Pack 初始注册了国家移民管理局与国务院英文入口。

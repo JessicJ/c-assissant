@@ -1,0 +1,16 @@
+{
+  "id": "weather-and-packing",
+  "country": "china",
+  "version": "0.1.0",
+  "visibility": "internal",
+  "entrypoint": "runWeatherAndPackingSkill",
+  "requiredInputs": ["locationName", "current", "daily", "retrievedAt"],
+  "optionalInputs": ["attributionUrl", "targetDate"],
+  "permittedProfileFields": [],
+  "permittedPlanFields": ["location", "configuration.arrival", "stages.tasks.reminder"],
+  "capabilities": ["weather.read"],
+  "sources": { "provider": "qweather", "freshness": "request_time_or_exact_date_forecast" },
+  "risk": { "information": "ordinary", "action": "read_only" },
+  "executionPolicy": "automatic_with_notice",
+  "failure": { "missingExactForecast": "degraded", "malformedInput": "failed" }
+}

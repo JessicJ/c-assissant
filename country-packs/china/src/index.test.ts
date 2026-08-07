@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { runFoodNearbySkill, runHousingAreaRecommendationSkill, runTransportPlannerSkill } from "./index.js";
+import { runFoodNearbySkill, runHousingAreaRecommendationSkill, runTransportPlannerSkill, runWeatherAndPackingSkill } from "./index.js";
 
 const candidates = [
   { id: "near", name: "Nearby Noodles", address: "1 Example Road", location: "121.47,31.23", type: "Chinese food", distanceMeters: 180 },
@@ -101,4 +101,43 @@ test("transport-planner records matched weather provenance and fails closed on m
   assert.deepEqual(result.proposedPlanChanges, []);
   assert.equal(runTransportPlannerSkill({ preference: "plan_recommended", luggage: "light", routeFacts: [{ mode: "walking", distanceMeters: 900 }], routeObservedAt: "2026-08-07T00:00:00.000Z", weather: { condition: "Rain", precipitationMm: 2 } }).status, "failed");
   assert.equal(runTransportPlannerSkill({ preference: "plan_recommended", luggage: "light", routeFacts: [{ mode: "walking", distanceMeters: -1 }], routeObservedAt: "2026-08-07T00:00:00.000Z" }).status, "failed");
+});
+
+const weatherInput = {
+  locationName: "Shanghai",
+  current: { condition: "Cloudy", temperatureC: 24, feelsLikeC: 25, precipitationMm: 0, observedAt: "2026-08-07T00:00:00.000Z" },
+  daily: [
+    { date: "2026-08-08", conditionDay: "Rain", conditionNight: "Cloudy", highC: 31, lowC: 22, precipitationMm: 4, uvIndex: 7 },
+    { date: "2026-08-09", conditionDay: "Sunny", conditionNight: "Clear", highC: 28, lowC: 9, precipitationMm: 0, uvIndex: 5 }
+  ],
+  retrievedAt: "2026-08-07T00:05:00.000Z",
+  attributionUrl: "https://www.qweather.com/weather/shanghai.html"
+};
+
+test("weather-and-packing identity matches its internal manifest and derives bounded prompts", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../skills/weather-and-packing/skill.json", import.meta.url), "utf8")) as { id: string; version: string; visibility: string; entrypoint: string };
+  const result = runWeatherAndPackingSkill(weatherInput);
+  assert.deepEqual(result.skill, { id: manifest.id, version: manifest.version });
+  assert.equal(manifest.visibility, "internal");
+  assert.equal(manifest.entrypoint, "runWeatherAndPackingSkill");
+  assert.deepEqual(result.recommendations.map((item) => item.kind), ["rain_protection", "warm_layer", "heat_hydration", "sun_protection"]);
+  assert.equal(result.sources[0]?.url, weatherInput.attributionUrl);
+});
+
+test("weather-and-packing uses only an exact target-date forecast", () => {
+  const exact = runWeatherAndPackingSkill({ ...weatherInput, targetDate: "2026-08-08" });
+  assert.equal(exact.status, "success");
+  assert.equal(exact.facts[0]?.date, "2026-08-08");
+  assert.match(exact.summary, /Forecast for 2026-08-08/);
+  const missing = runWeatherAndPackingSkill({ ...weatherInput, targetDate: "2026-09-01" });
+  assert.equal(missing.status, "degraded");
+  assert.equal(missing.facts[0]?.kind, "current");
+  assert.match(missing.warnings.join(" "), /not as that date's forecast/);
+});
+
+test("weather-and-packing omits unapproved attribution and fails closed on malformed facts", () => {
+  const unapproved = runWeatherAndPackingSkill({ ...weatherInput, attributionUrl: "https://example.com/weather" });
+  assert.equal(unapproved.sources[0]?.url, undefined);
+  assert.match(unapproved.warnings.join(" "), /unapproved attribution/);
+  assert.equal(runWeatherAndPackingSkill({ ...weatherInput, retrievedAt: "not-a-date" }).status, "failed");
 });

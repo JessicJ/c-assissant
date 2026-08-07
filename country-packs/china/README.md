@@ -10,4 +10,6 @@ The first executable internal module is `food-nearby` `0.1.0`. Server invokes it
 
 `transport-planner` `0.1.0` turns current Amap route facts and this Plan's confirmed preference, party, luggage, and date-matched QWeather fact into an explainable preliminary mode. It uses relative route duration instead of a fixed walking-distance threshold and never starts travel.
 
+`weather-and-packing` `0.1.0` is the shared weather interpretation path for Web, Telegram `/weather`, and delivery-time reminder refresh. It emits only cautious packing prompts from traceable QWeather facts and never presents a non-matching observation as a dated forecast.
+
 See [China Country Pack V1](../../docs/china-pack-v1.md).

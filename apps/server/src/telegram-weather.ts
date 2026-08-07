@@ -1,4 +1,5 @@
 import type { AmapGeocodedPlace, ConnectorResult, ConnectorStatus, QWeatherWeatherSnapshot } from "@c-assistant/connectors";
+import { runWeatherAndPackingSkill } from "@c-assistant/china-country-pack";
 
 interface TelegramWeatherDependencies {
   geocodeAddress(input: { address: string }): Promise<ConnectorResult<AmapGeocodedPlace>>;
@@ -29,29 +30,10 @@ export async function fetchTelegramPlanWeather(input: { location: string; langua
 export function formatTelegramWeather(snapshot: QWeatherWeatherSnapshot): string {
   const current = snapshot.current;
   const forecasts = snapshot.daily.map((day) => `${day.date}: ${day.conditionDay} / ${day.conditionNight}, ${day.lowC}–${day.highC}°C, precipitation ${day.precipitationMm} mm, UV ${day.uvIndex}`).join("\n");
-  const advice = practicalAdvice(snapshot);
-  const attribution = approvedQWeatherAttribution(snapshot.attributionUrl);
+  const skill = runWeatherAndPackingSkill({ locationName: snapshot.location.name, current, daily: snapshot.daily, retrievedAt: snapshot.retrievedAt, ...(snapshot.attributionUrl ? { attributionUrl: snapshot.attributionUrl } : {}) });
+  const advice = skill.status === "failed" ? "No packing prompt was produced because the weather facts failed validation." : skill.recommendations.length ? skill.recommendations.map((item) => item.text).join(" ") : "No rain, cold, heat, or high-UV packing prompt is indicated by these returned facts.";
+  const attribution = skill.sources[0]?.url;
   return `Weather for ${snapshot.location.name}\nCurrent observation: ${current.condition}, ${current.temperatureC}°C (feels like ${current.feelsLikeC}°C)\nHumidity: ${current.humidityPercent}% · precipitation: ${current.precipitationMm} mm${current.windDirection ? ` · wind: ${current.windDirection}${current.windScale ? ` scale ${current.windScale}` : ""}` : ""}\nObserved: ${current.observedAt}\n\n3-day forecast\n${forecasts}\n\nPractical check: ${advice}\nRetrieved: ${snapshot.retrievedAt}\nSource: QWeather${attribution ? ` — ${attribution}` : ""}\n\nWeather changes. This check does not create a reminder or alter your Plan.`;
-}
-
-function practicalAdvice(snapshot: QWeatherWeatherSnapshot): string {
-  const days = snapshot.daily;
-  const rainOrSnow = snapshot.current.precipitationMm > 0 || days.some((day) => day.precipitationMm > 0 || /rain|snow|shower|storm/i.test(`${day.conditionDay} ${day.conditionNight}`));
-  const cold = days.some((day) => day.lowC <= 10);
-  const hot = days.some((day) => day.highC >= 30);
-  const strongUv = days.some((day) => day.uvIndex >= 6);
-  const items = [rainOrSnow ? "consider rain or snow protection" : "no precipitation protection is indicated by these returned facts", cold ? "bring a warmer layer" : undefined, hot ? "plan for heat and hydration" : undefined, strongUv ? "consider sun protection" : undefined].filter(Boolean);
-  return `${items.join("; ")}.`;
-}
-
-function approvedQWeatherAttribution(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && (url.hostname === "qweather.com" || url.hostname.endsWith(".qweather.com")) ? url.toString() : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function unavailable(stage: "amap" | "qweather", result: ConnectorResult<unknown>, fallback: string): TelegramPlanWeatherResult {
