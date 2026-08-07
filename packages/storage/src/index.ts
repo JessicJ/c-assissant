@@ -131,6 +131,28 @@ interface TelegramArrivalCheckinRow {
   location_received_at: string | null;
 }
 
+interface TelegramTaskReminderDeliveryRow {
+  task_id: string;
+  due_at: string;
+  status: "attempting" | "retry_wait" | "delivered" | "failed";
+  attempt_count: number;
+  next_attempt_at: string | null;
+}
+
+export interface TelegramTaskReminderAttempt {
+  claimed: boolean;
+  attemptNumber?: number;
+}
+
+export interface TelegramTaskReminderFailureResult {
+  status: "retry_scheduled" | "failed";
+  nextAttemptAt?: string;
+}
+
+const TASK_REMINDER_CATCH_UP_MS = 30 * 60_000;
+const TASK_REMINDER_ATTEMPT_LEASE_MS = 60_000;
+const TASK_REMINDER_RETRY_DELAYS_MS = [60_000, 5 * 60_000] as const;
+
 /** Contains delivery state only. Coordinates are never stored here. */
 export interface TelegramArrivalCheckinState {
   checkInSentAt: string;
@@ -294,19 +316,97 @@ export class SqliteWorkspaceStore {
     return true;
   }
 
-  recordTelegramTaskReminderDelivered(planId: string, taskId: string): void {
+  claimTelegramTaskReminderAttempt(input: { planId: string; reminderKey: string; taskId: string; dueAt: string; now?: string }): TelegramTaskReminderAttempt {
+    const planId = input.planId.trim();
+    const reminderKey = input.reminderKey.trim();
+    const taskId = input.taskId.trim();
+    const now = input.now ?? new Date().toISOString();
+    const dueAtMs = Date.parse(input.dueAt);
+    const nowMs = Date.parse(now);
+    if (!planId || !reminderKey || !taskId || !Number.isFinite(dueAtMs) || !Number.isFinite(nowMs)) throw new Error("A Task reminder attempt needs a Plan, key, Task, due time, and current time.");
+    if (nowMs < dueAtMs || nowMs > dueAtMs + TASK_REMINDER_CATCH_UP_MS) return { claimed: false };
+    const existing = this.database.prepare(`SELECT task_id, due_at, status, attempt_count, next_attempt_at
+      FROM telegram_task_reminder_deliveries WHERE plan_id = ? AND reminder_key = ?`).get(planId, reminderKey) as TelegramTaskReminderDeliveryRow | undefined;
+    const leaseUntil = new Date(nowMs + TASK_REMINDER_ATTEMPT_LEASE_MS).toISOString();
+    if (!existing) {
+      this.database.prepare(`INSERT INTO telegram_task_reminder_deliveries
+        (plan_id, reminder_key, task_id, due_at, status, attempt_count, next_attempt_at, last_failure_code, delivered_at, updated_at)
+        VALUES (?, ?, ?, ?, 'attempting', 1, ?, NULL, NULL, ?)`).run(planId, reminderKey, taskId, input.dueAt, leaseUntil, now);
+      return { claimed: true, attemptNumber: 1 };
+    }
+    if (existing.task_id !== taskId || existing.due_at !== input.dueAt || existing.status === "delivered" || existing.status === "failed" || existing.attempt_count >= 3) return { claimed: false };
+    if (existing.next_attempt_at && Date.parse(existing.next_attempt_at) > nowMs) return { claimed: false };
+    const nextAttemptNumber = existing.attempt_count + 1;
+    const updated = this.database.prepare(`UPDATE telegram_task_reminder_deliveries
+      SET status = 'attempting', attempt_count = ?, next_attempt_at = ?, updated_at = ?
+      WHERE plan_id = ? AND reminder_key = ? AND status IN ('attempting', 'retry_wait') AND attempt_count = ?`).run(nextAttemptNumber, leaseUntil, now, planId, reminderKey, existing.attempt_count);
+    return updated.changes === 1 ? { claimed: true, attemptNumber: nextAttemptNumber } : { claimed: false };
+  }
+
+  recordTelegramTaskReminderDelivered(input: { planId: string; reminderKey: string; taskId: string; deliveredAt?: string }): void {
     const workspace = this.getWorkspace();
-    if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
+    if (workspace.activePlan.id !== input.planId) throw new Error(`Plan ${input.planId} was not found.`);
     if (workspace.activePlan.status !== "active") throw new Error("A Task reminder can be recorded only for an active Plan.");
-    const task = workspace.activePlan.stages.flatMap((stage) => stage.tasks).find((candidate) => candidate.id === taskId);
+    const task = workspace.activePlan.stages.flatMap((stage) => stage.tasks).find((candidate) => candidate.id === input.taskId);
     if (!task?.reminder) throw new Error("The delivered Task reminder was not found in the current Plan.");
-    this.addInbox({
-      id: `task-reminder-delivered-${planId}-${task.id}-${task.reminder.scheduledAtLocal}`,
-      tone: "ready",
-      title: `Reminder sent: ${task.title}`,
-      body: task.reminder.purpose,
-      timestamp: "Just now"
-    });
+    const deliveredAt = input.deliveredAt ?? new Date().toISOString();
+    if (!Number.isFinite(Date.parse(deliveredAt))) throw new Error("A delivered Task reminder needs a valid delivery time.");
+    this.database.exec("BEGIN");
+    try {
+      const updated = this.database.prepare(`UPDATE telegram_task_reminder_deliveries
+        SET status = 'delivered', next_attempt_at = NULL, delivered_at = ?, updated_at = ?
+        WHERE plan_id = ? AND reminder_key = ? AND task_id = ? AND status = 'attempting'`).run(deliveredAt, deliveredAt, input.planId, input.reminderKey, input.taskId);
+      if (updated.changes !== 1) throw new Error("The Task reminder delivery attempt is not active.");
+      this.addInbox({
+        id: `task-reminder-delivered-${input.planId}-${task.id}-${task.reminder.scheduledAtLocal}`,
+        tone: "ready",
+        title: `Reminder sent: ${task.title}`,
+        body: task.reminder.purpose,
+        timestamp: "Just now"
+      });
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  recordTelegramTaskReminderFailure(input: { planId: string; reminderKey: string; taskId: string; failureCode: string; retryable: boolean; failedAt?: string }): TelegramTaskReminderFailureResult {
+    const failedAt = input.failedAt ?? new Date().toISOString();
+    const failedAtMs = Date.parse(failedAt);
+    const failureCode = input.failureCode.trim().slice(0, 80) || "unknown_failure";
+    if (!Number.isFinite(failedAtMs)) throw new Error("A failed Task reminder needs a valid failure time.");
+    const row = this.database.prepare(`SELECT task_id, due_at, status, attempt_count, next_attempt_at
+      FROM telegram_task_reminder_deliveries WHERE plan_id = ? AND reminder_key = ?`).get(input.planId, input.reminderKey) as TelegramTaskReminderDeliveryRow | undefined;
+    if (!row || row.task_id !== input.taskId || row.status !== "attempting") throw new Error("The Task reminder delivery attempt is not active.");
+    const retryDelay = TASK_REMINDER_RETRY_DELAYS_MS[row.attempt_count - 1];
+    const nextAttemptAt = retryDelay === undefined ? undefined : new Date(failedAtMs + retryDelay).toISOString();
+    const retryWithinWindow = nextAttemptAt !== undefined && Date.parse(nextAttemptAt) <= Date.parse(row.due_at) + TASK_REMINDER_CATCH_UP_MS;
+    if (input.retryable && row.attempt_count < 3 && retryWithinWindow) {
+      this.database.prepare(`UPDATE telegram_task_reminder_deliveries
+        SET status = 'retry_wait', next_attempt_at = ?, last_failure_code = ?, updated_at = ?
+        WHERE plan_id = ? AND reminder_key = ? AND status = 'attempting'`).run(nextAttemptAt, failureCode, failedAt, input.planId, input.reminderKey);
+      return { status: "retry_scheduled", nextAttemptAt };
+    }
+    this.database.exec("BEGIN");
+    try {
+      this.database.prepare(`UPDATE telegram_task_reminder_deliveries
+        SET status = 'failed', next_attempt_at = NULL, last_failure_code = ?, updated_at = ?
+        WHERE plan_id = ? AND reminder_key = ? AND status = 'attempting'`).run(failureCode, failedAt, input.planId, input.reminderKey);
+      const task = this.getWorkspace().activePlan.stages.flatMap((stage) => stage.tasks).find((candidate) => candidate.id === input.taskId);
+      this.addInbox({
+        id: `task-reminder-failed-${input.planId}-${input.reminderKey}`,
+        tone: "attention",
+        title: `Reminder could not be sent${task ? `: ${task.title}` : ""}`,
+        body: `C-assistant stopped after ${row.attempt_count} delivery attempt${row.attempt_count === 1 ? "" : "s"}. Review the current Plan; no external action was performed.`,
+        timestamp: "Just now"
+      });
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return { status: "failed" };
   }
 
   recordTelegramArrivalCheckin(input: { planId: string; checkInSentAt: string }): void {
@@ -781,6 +881,19 @@ export class SqliteWorkspaceStore {
         claimed_at TEXT NOT NULL,
         PRIMARY KEY (plan_id, reminder_key)
       );
+      CREATE TABLE IF NOT EXISTS telegram_task_reminder_deliveries (
+        plan_id TEXT NOT NULL,
+        reminder_key TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        due_at TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('attempting', 'retry_wait', 'delivered', 'failed')),
+        attempt_count INTEGER NOT NULL,
+        next_attempt_at TEXT,
+        last_failure_code TEXT,
+        delivered_at TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (plan_id, reminder_key)
+      );
       CREATE TABLE IF NOT EXISTS telegram_arrival_checkins (
         plan_id TEXT PRIMARY KEY REFERENCES plans(id) ON DELETE CASCADE,
         check_in_sent_at TEXT NOT NULL,
@@ -794,6 +907,7 @@ export class SqliteWorkspaceStore {
       CREATE INDEX IF NOT EXISTS idx_source_snapshots_latest ON source_snapshots(source_id, url, retrieved_at DESC);
       CREATE INDEX IF NOT EXISTS idx_agent_runs_recent ON agent_runs(started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_telegram_pairing_requests_active ON telegram_pairing_requests(consumed_at, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_telegram_task_reminders_due ON telegram_task_reminder_deliveries(status, next_attempt_at);
       CREATE INDEX IF NOT EXISTS idx_telegram_arrival_checkins_follow_up ON telegram_arrival_checkins(location_requested_at, location_received_at, check_in_sent_at);
       PRAGMA optimize;
     `);

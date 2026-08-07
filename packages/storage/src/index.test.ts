@@ -267,12 +267,46 @@ test("SQLite mirrors a delivered Task reminder into the Web Inbox", () => {
     stages: [{ title: "Departure", description: "Prepare.", tasks: [{ title: "Check essentials", owner: "user", dueLabel: "Two hours before departure", reminder: { scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Check passport and essential items." } }] }]
   });
   const task = workspace.activePlan.stages[0]!.tasks[0]!;
+  const reminderKey = `task-reminder:${task.id}:2026-08-31T21:00:00.000Z`;
 
   store.confirmPlan(workspace.activePlan.id);
-  store.recordTelegramTaskReminderDelivered(workspace.activePlan.id, task.id);
+  assert.deepEqual(store.claimTelegramTaskReminderAttempt({ planId: workspace.activePlan.id, reminderKey, taskId: task.id, dueAt: "2026-08-31T21:00:00.000Z", now: "2026-08-31T21:00:00.000Z" }), { claimed: true, attemptNumber: 1 });
+  store.recordTelegramTaskReminderDelivered({ planId: workspace.activePlan.id, reminderKey, taskId: task.id, deliveredAt: "2026-08-31T21:00:01.000Z" });
 
   assert.equal(store.getWorkspace().inbox[0]?.title, "Reminder sent: Check essentials");
   assert.equal(store.getWorkspace().inbox[0]?.body, "Check passport and essential items.");
+  assert.equal(store.claimTelegramTaskReminderAttempt({ planId: workspace.activePlan.id, reminderKey, taskId: task.id, dueAt: "2026-08-31T21:00:00.000Z", now: "2026-08-31T21:02:00.000Z" }).claimed, false);
+  store.close();
+});
+
+test("SQLite retries a transient Task reminder failure twice before recording a terminal failure", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const workspace = store.createGeneratedPlan({
+    title: "Prepare for departure",
+    location: "Shanghai, China",
+    dates: "September 1, 2026",
+    knownInformation: ["Departure at 07:00."],
+    assumptions: [],
+    nextAction: "Review the reminder.",
+    stages: [{ title: "Departure", description: "Prepare.", tasks: [{ title: "Check essentials", owner: "user", dueLabel: "Two hours before departure", reminder: { scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Check passport and essential items." } }] }]
+  });
+  const task = workspace.activePlan.stages[0]!.tasks[0]!;
+  const planId = workspace.activePlan.id;
+  const dueAt = "2026-08-31T21:00:00.000Z";
+  const reminderKey = `task-reminder:${task.id}:${dueAt}`;
+  store.confirmPlan(planId);
+
+  assert.deepEqual(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, now: dueAt }), { claimed: true, attemptNumber: 1 });
+  assert.deepEqual(store.recordTelegramTaskReminderFailure({ planId, reminderKey, taskId: task.id, failureCode: "network_error", retryable: true, failedAt: "2026-08-31T21:00:01.000Z" }), { status: "retry_scheduled", nextAttemptAt: "2026-08-31T21:01:01.000Z" });
+  assert.equal(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, now: "2026-08-31T21:01:00.000Z" }).claimed, false);
+  assert.deepEqual(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, now: "2026-08-31T21:01:01.000Z" }), { claimed: true, attemptNumber: 2 });
+  assert.deepEqual(store.recordTelegramTaskReminderFailure({ planId, reminderKey, taskId: task.id, failureCode: "telegram_500", retryable: true, failedAt: "2026-08-31T21:01:02.000Z" }), { status: "retry_scheduled", nextAttemptAt: "2026-08-31T21:06:02.000Z" });
+  assert.deepEqual(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, now: "2026-08-31T21:06:02.000Z" }), { claimed: true, attemptNumber: 3 });
+  assert.deepEqual(store.recordTelegramTaskReminderFailure({ planId, reminderKey, taskId: task.id, failureCode: "timeout", retryable: true, failedAt: "2026-08-31T21:06:03.000Z" }), { status: "failed" });
+
+  assert.equal(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, now: "2026-08-31T21:10:00.000Z" }).claimed, false);
+  assert.equal(store.getWorkspace().inbox[0]?.title, "Reminder could not be sent: Check essentials");
+  assert.match(store.getWorkspace().inbox[0]?.body ?? "", /stopped after 3 delivery attempts/i);
   store.close();
 });
 
