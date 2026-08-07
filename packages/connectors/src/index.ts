@@ -405,17 +405,17 @@ export function createAmapDrivingHandoff(input: { origin: AmapPlace; destination
   const [destinationLongitude, destinationLatitude] = coordinateParts(input.destination.location);
   const parameters = new URLSearchParams({
     sourceApplication: "C-assistant",
-    sid: input.origin.id,
     slat: originLatitude,
     slon: originLongitude,
     sname: input.origin.name.slice(0, 80),
-    did: input.destination.id,
     dlat: destinationLatitude,
     dlon: destinationLongitude,
     dname: input.destination.name.slice(0, 80),
     dev: "0",
     t: "0"
   });
+  if (input.origin.id) parameters.set("sid", input.origin.id);
+  if (input.destination.id) parameters.set("did", input.destination.id);
   return {
     provider: "amap",
     action: "route_planning",
