@@ -2,6 +2,7 @@ export type TelegramCommand =
   | { type: "empty" }
   | { type: "help" }
   | { type: "plan" }
+  | { type: "profile" }
   | { type: "start" }
   | { type: "create_plan"; request: string; explicit: boolean }
   | { type: "unknown_command" };
@@ -12,6 +13,7 @@ export function parseTelegramCommand(text: string | undefined): TelegramCommand 
   if (!normalized) return { type: "empty" };
   if (/^\/help(?:@[-_A-Za-z0-9]+)?$/i.test(normalized)) return { type: "help" };
   if (/^\/plan(?:@[-_A-Za-z0-9]+)?$/i.test(normalized)) return { type: "plan" };
+  if (/^\/profile(?:@[-_A-Za-z0-9]+)?$/i.test(normalized)) return { type: "profile" };
   if (/^\/start(?:@[-_A-Za-z0-9]+)?(?:\s|$)/i.test(normalized)) return { type: "start" };
   const explicit = normalized.match(/^\/new(?:@[-_A-Za-z0-9]+)?\s+(.+)$/is)?.[1]?.trim();
   if (explicit) return { type: "create_plan", request: explicit, explicit: true };

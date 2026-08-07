@@ -33,6 +33,8 @@ The local instance creates `data/c-assistant.sqlite` on first start. If `AMAP_AP
 
 In the paired Telegram chat, complete Plans are paginated without omission and only the final page carries the version-bound confirmation button. Ordinary text revises the current user-created draft; `/new <request>` starts a separate Plan. Revision failure leaves the existing draft unchanged, and stale Runtime results cannot overwrite a Plan that changed while they were running.
 
+`/profile` lets the paired user complete long-term basics without switching to Web. Text entry is captured only after the user chooses a specific field and expires after 15 minutes; enum fields use allowlisted buttons. Partial setup remains visibly incomplete and does not imply any policy eligibility.
+
 ## Product shape
 
 - Web workspace: the full desktop-grade product interface.

@@ -39,6 +39,8 @@ Profile does not store passport images or numbers, banking documents, exact GPS 
 - Expiring facts become stale and must be updated before high-risk use.
 - A Skill receives only the Profile fields declared in its contract.
 
+The current implementation lets the user review and edit these basics in either Web or the bound Telegram private chat. Telegram `/profile` shows the saved values; text fields use an explicit 15-minute “next message” edit state, while gender and China visa/residence status use allowlisted buttons. Commands and location messages are never consumed as Profile values. The edit state stores only the selected field and start time, not unsaved input, and is cleared when Telegram is disconnected. Profile remains `incomplete` until both nationality and a known China status are recorded; this status is preparation metadata, not a policy eligibility conclusion.
+
 ### Context priority
 
 ```text
