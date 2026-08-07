@@ -69,7 +69,7 @@
 
 ## 未完成内容
 
-- 已完成 Telegram Bot 身份验证、一次性私聊配对，以及已绑定账号的最小输入入口：普通文本和 `/new` 都会创建待确认 Plan，另有 `/help` 和 `/plan`；尚未实现基于 Codex/Claude Code 的自然语言理解、提醒调度、Claude Code Adapter、官方来源 Connector、完整的数据库迁移体系。
+- 已完成 Telegram Bot 身份验证、一次性私聊配对，以及已绑定账号的最小输入入口：普通文本和 `/new` 都会优先调用本机已登录 Codex 生成待确认 Plan；Codex 不可用时会明确降级为本地模板草案，另有 `/help` 和 `/plan`。尚未实现 Claude Code 自然语言理解、官方来源 Connector、完整的数据库迁移体系。
 - 尚未实现 Claude Code Runtime Adapter；Codex Adapter 已实现，但没有 Run 审计、取消和优先级队列。
 - 尚未实现本地 MCP Tool Gateway。
 - 尚未实现天气兜底、餐饮与住宿的第三方应用行动交接、地图深链接真机验证和限额/配额可视化。
