@@ -5,10 +5,11 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-adapters";
-import { AmapConnector, QWeatherConnector, TelegramConnector } from "@c-assistant/connectors";
+import { AmapConnector, QWeatherConnector, TelegramConnector, type AmapPlace, type AmapRoute } from "@c-assistant/connectors";
 import type { CreatePlanInput, PlanAccommodationInput, PlanArrivalInput, PlanTransportPreferenceInput, PlanTravelContextInput, ProfileUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue } from "./arrival-reminder.js";
+import { arrivalRouteDestination, formatArrivalRoute, selectArrivalTransport } from "./arrival-route.js";
 import { parseTelegramCommand } from "./telegram-commands.js";
 
 const server = Fastify({ logger: true });
@@ -308,8 +309,7 @@ async function pollTelegram(): Promise<void> {
         continue;
       }
       if (update.location) {
-        store.markTelegramArrivalLocationReceived(store.getWorkspace().activePlan.id, new Date().toISOString());
-        await telegram.sendMessage({ chatId: pairing.binding.chatId, text: "Location received for this interaction. It has not been added to your long-term Profile, and no ride or route has been started yet." });
+        await sendArrivalRouteFromSharedLocation(pairing.binding.chatId, update.location);
         continue;
       }
       const response = telegramCommandResponse(update.text);
@@ -321,6 +321,43 @@ async function pollTelegram(): Promise<void> {
   } finally {
     pollingTelegram = false;
   }
+}
+
+async function sendArrivalRouteFromSharedLocation(chatId: string, location: { latitude: number; longitude: number }): Promise<void> {
+  const plan = store.getWorkspace().activePlan;
+  store.markTelegramArrivalLocationReceived(plan.id, new Date().toISOString());
+  const destination = arrivalRouteDestination(plan);
+  if (!destination) {
+    await telegram.sendMessage({ chatId, text: "Location received for this interaction, but this Plan does not yet contain a specific accommodation or destination. Add the hotel or destination in the Web workspace, then request route help again. The shared coordinates were not saved to your Profile or database." });
+    return;
+  }
+  const gpsLocation = `${location.longitude},${location.latitude}`;
+  const converted = await amap.convertGpsCoordinate({ location: gpsLocation });
+  if (converted.status !== "available" || !converted.data) {
+    await telegram.sendMessage({ chatId, text: "Location received, but Amap could not prepare a route from it right now. No location has been saved. You can still open your Plan and use the saved destination in Amap." });
+    return;
+  }
+  const origin: AmapPlace = { id: "", name: "Shared current location", address: "", location: converted.data.location, type: "Temporary location", city: "", district: "" };
+  const routeFacts: AmapRoute[] = [];
+  const preference = plan.configuration.transport.preference;
+  if (preference === "taxi") {
+    const route = await amap.drivingRoute({ origin: origin.location, destination: destination.location, destinationId: destination.id || undefined });
+    if (route.status === "available" && route.data) routeFacts.push(route.data);
+  } else if (preference === "walking") {
+    const route = await amap.walkingRoute({ origin: origin.location, destination: destination.location, destinationId: destination.id || undefined });
+    if (route.status === "available" && route.data) routeFacts.push(route.data);
+  } else if (preference === "plan_recommended") {
+    const [driving, walking] = await Promise.all([
+      amap.drivingRoute({ origin: origin.location, destination: destination.location, destinationId: destination.id || undefined }),
+      amap.walkingRoute({ origin: origin.location, destination: destination.location, destinationId: destination.id || undefined })
+    ]);
+    if (driving.status === "available" && driving.data) routeFacts.push(driving.data);
+    if (walking.status === "available" && walking.data) routeFacts.push(walking.data);
+  }
+  const transport = selectArrivalTransport(plan, routeFacts);
+  const selectedRoute = routeFacts.find((route) => route.mode === transport);
+  const result = formatArrivalRoute({ origin, destination, transport, ...(selectedRoute ? { route: selectedRoute } : {}) });
+  await telegram.sendMessage({ chatId, text: result.text, replyMarkup: { inline_keyboard: [[{ text: "Open route in Amap", url: result.handoffUrl }]] } });
 }
 
 async function runArrivalReminder(): Promise<void> {

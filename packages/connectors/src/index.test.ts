@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { AmapConnector, createAmapDrivingHandoff, createAmapPlaceHandoff, QWeatherConnector, TelegramConnector } from "./index.js";
+import { AmapConnector, createAmapDrivingHandoff, createAmapNavigationHandoff, createAmapPlaceHandoff, QWeatherConnector, TelegramConnector } from "./index.js";
 
 test("Amap place search normalizes official response fields without exposing the key", async () => {
   const connector = new AmapConnector({
@@ -82,6 +82,24 @@ test("Amap geocoding resolves a city fact without exposing the key", async () =>
   assert.equal(result.data?.location, "121.4737,31.2304");
 });
 
+test("Amap converts a GPS coordinate before using it as an Amap route point", async () => {
+  let requestUrl = "";
+  const connector = new AmapConnector({
+    apiKey: "test-key",
+    fetcher: async (input) => {
+      requestUrl = String(input);
+      return new Response(JSON.stringify({ status: "1", locations: "121.476,31.228" }));
+    }
+  });
+
+  const result = await connector.convertGpsCoordinate({ location: "121.4700001,31.2300001" });
+  const url = new URL(requestUrl);
+  assert.equal(result.data?.location, "121.476,31.228");
+  assert.equal(url.pathname, "/v3/assistant/coordinate/convert");
+  assert.equal(url.searchParams.get("coordsys"), "gps");
+  assert.equal(url.searchParams.get("locations"), "121.470000,31.230000");
+});
+
 test("Amap nearby restaurant discovery keeps distance facts and uses the restaurant category", async () => {
   let requestUrl = "";
   const connector = new AmapConnector({
@@ -150,6 +168,20 @@ test("Amap route handoff can use a saved Plan place without inventing a POI id",
   const url = new URL(handoff.url);
   assert.equal(url.searchParams.has("sid"), false);
   assert.equal(url.searchParams.get("did"), "destination-poi");
+});
+
+test("Amap navigation handoff uses a portable HTTPS route link", () => {
+  const handoff = createAmapNavigationHandoff({
+    origin: { id: "", name: "Shared current location", address: "", location: "121.455,31.249", type: "Current location", city: "", district: "" },
+    destination: { id: "stay-1", name: "Riverside Hotel", address: "1 River Road", location: "121.456,31.250", type: "Accommodation", city: "Shanghai", district: "Jing'an" },
+    transport: "transit"
+  });
+  const url = new URL(handoff.url);
+  assert.equal(url.origin, "https://uri.amap.com");
+  assert.equal(url.pathname, "/navigation");
+  assert.equal(url.searchParams.get("mode"), "bus");
+  assert.equal(url.searchParams.get("callnative"), "1");
+  assert.equal(handoff.requiresUserAction, true);
 });
 
 test("Amap place handoff opens a known POI without creating an external transaction", () => {
@@ -283,8 +315,10 @@ test("Telegram supports an arrival callback and an explicit shared location with
   assert.deepEqual(updates.data?.updates[1]?.location, { latitude: 31.23, longitude: 121.47 });
   await connector.answerCallbackQuery({ callbackId: "callback-1", text: "Share location" });
   await connector.sendMessage({ chatId: "1001", text: "Share location", replyMarkup: { keyboard: [[{ text: "Share current location", request_location: true }]], resize_keyboard: true, one_time_keyboard: true } });
+  await connector.sendMessage({ chatId: "1001", text: "Open Amap", replyMarkup: { inline_keyboard: [[{ text: "Open route in Amap", url: "https://uri.amap.com/navigation?mode=car" }]] } });
   assert.ok(bodies.some((body) => /callback_query_id/.test(body)));
   assert.ok(bodies.some((body) => /request_location/.test(body)));
+  assert.ok(bodies.some((body) => /uri\.amap\.com\/navigation/.test(body)));
   assert.doesNotMatch(JSON.stringify({ bodies }), /test-token/);
 });
 
