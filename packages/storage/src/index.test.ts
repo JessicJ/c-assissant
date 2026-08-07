@@ -36,6 +36,16 @@ test("SQLite keeps partial Telegram Profile setup incomplete and expires pending
   store.close();
 });
 
+test("SQLite binds temporary Telegram location use to a Plan and expires it", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const planId = store.getWorkspace().activePlan.id;
+  store.startTelegramLocationIntent({ purpose: "nearby_food", planId, startedAt: "2026-08-07T00:00:00.000Z" });
+
+  assert.deepEqual(store.getTelegramLocationIntent("2026-08-07T00:14:59.000Z"), { purpose: "nearby_food", planId });
+  assert.equal(store.getTelegramLocationIntent("2026-08-07T00:15:01.000Z"), undefined);
+  store.close();
+});
+
 test("SQLite persists the selected Plan runtime without storing any credentials", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   assert.equal(store.getWorkspace().runtime.selectedKind, "codex");
@@ -265,11 +275,13 @@ test("SQLite disconnects only the Telegram binding and preserves the workspace",
   store.claimTelegramPairing({ code: "pairing_code_456", chatId: "1002", userId: "1002", firstName: "Avery" });
 
   store.startTelegramProfileTextEdit("nationality");
+  store.startTelegramLocationIntent({ purpose: "nearby_food", planId });
   const disconnected = store.unpairTelegram();
 
   assert.equal(disconnected.state, "not_paired");
   assert.equal(store.getWorkspace().activePlan.id, planId);
   assert.equal(store.getTelegramProfileTextEdit(), undefined);
+  assert.equal(store.getTelegramLocationIntent(), undefined);
   assert.equal(store.getWorkspace().inbox[0]?.title, "Telegram disconnected");
   assert.match(store.getWorkspace().inbox[0]?.body ?? "", /were not deleted/i);
   store.close();

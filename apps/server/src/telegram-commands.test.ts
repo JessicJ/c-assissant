@@ -23,6 +23,8 @@ test("control commands do not create a Plan", () => {
   assert.equal(parseTelegramCommand("/plan").type, "plan");
   assert.equal(parseTelegramCommand("/profile").type, "profile");
   assert.equal(parseTelegramCommand("/weather").type, "weather");
+  assert.deepEqual(parseTelegramCommand("/food"), { type: "food" });
+  assert.deepEqual(parseTelegramCommand("/food@landi_life_bot 12"), { type: "food", partySize: 12 });
   assert.equal(parseTelegramCommand("/help@landi_life_bot").type, "help");
   assert.equal(parseTelegramCommand("/other").type, "unknown_command");
 });
