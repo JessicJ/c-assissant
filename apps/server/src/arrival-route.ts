@@ -1,5 +1,6 @@
 import { createAmapNavigationHandoff, type AmapPlace, type AmapRoute } from "@c-assistant/connectors";
-import { recommendPlanTransport, type TransportMode } from "@c-assistant/core";
+import { runTransportPlannerSkill } from "@c-assistant/china-country-pack";
+import type { TransportMode } from "@c-assistant/core";
 import type { Plan } from "@c-assistant/core";
 
 export function arrivalRouteDestination(plan: Plan): AmapPlace | undefined {
@@ -10,13 +11,14 @@ export function arrivalRouteDestination(plan: Plan): AmapPlace | undefined {
 
 export function selectArrivalTransport(plan: Plan, routeFacts: AmapRoute[]): TransportMode {
   const fallback = plan.configuration.transport.preference === "public_transit" ? "transit" : plan.configuration.transport.preference === "walking" ? "walking" : "driving";
-  const recommendation = recommendPlanTransport({
+  const result = runTransportPlannerSkill({
     preference: plan.configuration.transport.preference,
     ...(plan.configuration.travelContext.partySize !== undefined ? { partySize: plan.configuration.travelContext.partySize } : {}),
     luggage: plan.configuration.travelContext.luggage,
-    routeFacts: routeFacts.map((route) => ({ mode: route.mode, distanceMeters: route.distanceMeters, ...(route.durationSeconds !== undefined ? { durationSeconds: route.durationSeconds } : {}) }))
+    routeFacts: routeFacts.map((route) => ({ mode: route.mode, distanceMeters: route.distanceMeters, ...(route.durationSeconds !== undefined ? { durationSeconds: route.durationSeconds } : {}) })),
+    routeObservedAt: new Date().toISOString()
   });
-  return recommendation.mode ?? fallback;
+  return result.recommendations[0]?.mode ?? fallback;
 }
 
 export function formatArrivalRoute(input: { origin: AmapPlace; destination: AmapPlace; transport: TransportMode; route?: AmapRoute }): { text: string; handoffUrl: string } {

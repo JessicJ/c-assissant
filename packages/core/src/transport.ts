@@ -43,8 +43,10 @@ export function recommendPlanTransport(input: { preference: TransportPreference;
   }
 
   const walking = byMode.get("walking");
-  if (walking && walking.distanceMeters <= 1_500 && (walking.durationSeconds === undefined || walking.durationSeconds <= 25 * 60) && input.luggage !== "heavy" && !rainExpected) {
-    return { mode: "walking", reasons: ["The walking route is within 1.5 km and about 25 minutes when a duration is available.", "This Plan does not record heavy luggage."], limitations };
+  const timedRoutes = input.routeFacts.filter((fact) => fact.durationSeconds !== undefined);
+  const shortestDuration = timedRoutes.length >= 2 ? Math.min(...timedRoutes.map((fact) => fact.durationSeconds!)) : undefined;
+  if (walking?.durationSeconds !== undefined && shortestDuration !== undefined && walking.durationSeconds === shortestDuration && input.luggage !== "heavy" && !rainExpected) {
+    return { mode: "walking", reasons: ["Walking has the shortest available duration among the compared route facts.", "This Plan does not record heavy luggage."], limitations };
   }
 
   if (byMode.has("transit")) return { mode: "transit", reasons: ["Public-transit route facts are available and no stronger Plan preference is recorded.", ...(rainExpected ? ["Rain or snow is forecast for the expected arrival date, so walking is not selected automatically."] : [])], limitations };
