@@ -66,6 +66,8 @@ Uses seasonal guidance when the trip is too far away for a reliable forecast and
 
 The paired user may also send `/weather` for an immediate read-only check of the current Plan destination. This path returns current observation and dated three-day facts with QWeather attribution and cautious packing notes. It neither activates the Plan nor creates a Reminder.
 
+Implemented slice: `weather-and-packing` `0.1.0` is invoked by Web weather cards, Telegram `/weather`, and Task Reminder weather refresh. It validates normalized QWeather facts and provenance, applies one consistent set of conservative rain, cold, heat, and UV prompts, and omits non-QWeather attribution links. A Reminder target date uses only an exact matching forecast; otherwise the Skill returns a degraded current observation with an explicit warning. It proposes no Plan, Task, or Reminder mutation.
+
 ## Composition order
 
 Core runs the composite workflow in this order:
