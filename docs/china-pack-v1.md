@@ -14,7 +14,7 @@ Composite entry point. Core orchestrates the supporting Skills and compiles one 
 
 Implemented slice: `china-arrival-plan` `0.1.0` is a fail-closed composition gate in the China Skill Registry. All seven supporting modules now exist. The gate binds supplied results to an exact Plan ID/version, orders them according to this document, preserves Skill versions, statuses, summaries, assumptions, recommendations, sources, and warnings, and remains `blocked:composition_incomplete` whenever a particular run omits a required result. Until Core compilation and authorization are connected, it deliberately promotes no Plan changes, Tasks, Reminders, or action cards.
 
-Compilation boundary: a China-specific adapter now requires the exact `arrival-preparation` version and status recorded by a ready composite before producing the country-neutral Core proposal. Core independently verifies the target draft Plan ID/version and proposal structure, then creates a new draft version with inert Tasks and Reminders. This boundary is tested in memory; orchestration, SQLite persistence, user presentation, confirmation, and activation are not connected yet.
+Compilation boundary: a China-specific adapter now requires the exact `arrival-preparation` version and status recorded by a ready composite before producing the country-neutral Core proposal. Core independently verifies the target draft Plan ID/version and proposal structure, then creates a new draft version with inert Tasks and Reminders. SQLite can atomically save that exact version transition with provenance and a minimized compilation audit. Orchestration, user presentation, confirmation, and activation are not connected yet.
 
 ### `policy-applicability`
 

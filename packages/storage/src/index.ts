@@ -17,6 +17,9 @@ import {
   type Plan,
   type PlanAccommodationInput,
   type PlanArrivalInput,
+  type PlanCompilationAudit,
+  type PlanCompilationOrigin,
+  type PlanCompilationRun,
   type PlanConfiguration,
   type PlanTravelContextInput,
   type PlanTransportPreferenceInput,
@@ -71,16 +74,33 @@ interface StageRow {
   id: string;
   title: string;
   description: string;
+  origin_json?: string | null;
 }
 
 interface TaskRow {
   id: string;
   title: string;
+  description?: string | null;
   owner: Task["owner"];
   status: Task["status"];
   due_label: string;
   activation_trigger: "arrival" | null;
   reminder_json: string | null;
+  origin_json?: string | null;
+}
+
+interface PlanCompilationRunRow {
+  id: string;
+  plan_id: string;
+  country_pack_id: string;
+  country_pack_version: string;
+  composition_skill_id: string;
+  composition_skill_version: string;
+  source_plan_version: number;
+  compiled_plan_version: number;
+  task_count: number;
+  reminder_count: number;
+  compiled_at: string;
 }
 
 interface InboxRow {
@@ -616,6 +636,81 @@ export class SqliteWorkspaceStore {
     return this.getWorkspace();
   }
 
+  /** Atomically applies an already authorized Core compilation to the exact current draft version. */
+  saveCompiledPlan(input: { plan: Plan; expectedPlanId: string; expectedVersion: number; audit: PlanCompilationAudit; compiledAt?: string }): WorkspaceSnapshot {
+    const compiledAt = input.compiledAt ?? new Date().toISOString();
+    validateCompiledPlanWrite(input, compiledAt);
+    const run: PlanCompilationRun = {
+      id: `run-${randomUUID()}`,
+      kind: "plan_compilation",
+      planId: input.plan.id,
+      countryPackId: input.audit.countryPackId,
+      countryPackVersion: input.audit.countryPackVersion,
+      compositionSkillId: input.audit.compositionSkillId,
+      compositionSkillVersion: input.audit.compositionSkillVersion,
+      sourcePlanVersion: input.audit.sourcePlanVersion,
+      compiledPlanVersion: input.audit.compiledPlanVersion,
+      taskCount: input.audit.taskCount,
+      reminderCount: input.audit.reminderCount,
+      compiledAt
+    };
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const updated = this.database.prepare(`UPDATE plans SET version = ?, title = ?, location = ?, dates = ?, status = ?, known_information_json = ?, assumptions_json = ?, next_action = ?, configuration_json = ?, sources_json = ?
+        WHERE id = ? AND version = ? AND status = 'draft' AND is_current = 1`).run(
+        input.plan.version,
+        input.plan.title,
+        input.plan.location,
+        input.plan.dates,
+        input.plan.status,
+        JSON.stringify(input.plan.knownInformation),
+        JSON.stringify(input.plan.assumptions),
+        input.plan.nextAction,
+        JSON.stringify(input.plan.configuration),
+        JSON.stringify(input.plan.sources),
+        input.expectedPlanId,
+        input.expectedVersion
+      ) as { changes: number | bigint };
+      if (Number(updated.changes) !== 1) throw new Error("The Plan changed before its compiled proposal could be saved.");
+      this.database.prepare("DELETE FROM stages WHERE plan_id = ?").run(input.plan.id);
+      this.insertPlanStages(input.plan);
+      this.database.prepare(`INSERT INTO plan_compilation_runs
+        (id, plan_id, country_pack_id, country_pack_version, composition_skill_id, composition_skill_version, source_plan_version, compiled_plan_version, task_count, reminder_count, compiled_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        run.id,
+        run.planId,
+        run.countryPackId,
+        run.countryPackVersion,
+        run.compositionSkillId,
+        run.compositionSkillVersion,
+        run.sourcePlanVersion,
+        run.compiledPlanVersion,
+        run.taskCount,
+        run.reminderCount,
+        run.compiledAt
+      );
+      this.addInbox({
+        id: `plan-compiled-${input.plan.id}-${input.plan.version}`,
+        tone: "notice",
+        title: "Country Pack proposal compiled",
+        body: "A new draft Plan version is ready for complete review. No Task, Reminder, or external action was activated.",
+        timestamp: "Just now"
+      });
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getWorkspace();
+  }
+
+  listRecentPlanCompilationRuns(limit = 20): PlanCompilationRun[] {
+    const safeLimit = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), 100) : 20;
+    return (this.database.prepare(`SELECT id, plan_id, country_pack_id, country_pack_version, composition_skill_id, composition_skill_version,
+      source_plan_version, compiled_plan_version, task_count, reminder_count, compiled_at
+      FROM plan_compilation_runs ORDER BY compiled_at DESC, rowid DESC LIMIT ?`).all(safeLimit) as unknown as PlanCompilationRunRow[]).map(planCompilationRunFromRow);
+  }
+
   confirmPlan(planId: string): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
     const confirmed = confirmPlan(workspace, planId);
@@ -1009,17 +1104,20 @@ export class SqliteWorkspaceStore {
         plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
         title TEXT NOT NULL,
         description TEXT NOT NULL,
+        origin_json TEXT,
         sort_order INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,
         stage_id TEXT NOT NULL REFERENCES stages(id) ON DELETE CASCADE,
         title TEXT NOT NULL,
+        description TEXT,
         owner TEXT NOT NULL,
         status TEXT NOT NULL,
         due_label TEXT NOT NULL,
         activation_trigger TEXT,
         reminder_json TEXT,
+        origin_json TEXT,
         sort_order INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS inbox_items (
@@ -1069,6 +1167,20 @@ export class SqliteWorkspaceStore {
         finished_at TEXT,
         updated_at TEXT NOT NULL,
         UNIQUE (plan_id, reminder_key)
+      );
+      CREATE TABLE IF NOT EXISTS plan_compilation_runs (
+        id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+        country_pack_id TEXT NOT NULL,
+        country_pack_version TEXT NOT NULL,
+        composition_skill_id TEXT NOT NULL,
+        composition_skill_version TEXT NOT NULL,
+        source_plan_version INTEGER NOT NULL,
+        compiled_plan_version INTEGER NOT NULL,
+        task_count INTEGER NOT NULL,
+        reminder_count INTEGER NOT NULL,
+        compiled_at TEXT NOT NULL,
+        UNIQUE (plan_id, compiled_plan_version)
       );
       CREATE TABLE IF NOT EXISTS telegram_binding (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -1136,6 +1248,7 @@ export class SqliteWorkspaceStore {
       CREATE INDEX IF NOT EXISTS idx_source_snapshots_latest ON source_snapshots(source_id, url, retrieved_at DESC);
       CREATE INDEX IF NOT EXISTS idx_agent_runs_recent ON agent_runs(started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_task_reminder_runs_recent ON task_reminder_runs(started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_plan_compilation_runs_recent ON plan_compilation_runs(compiled_at DESC);
       CREATE INDEX IF NOT EXISTS idx_telegram_pairing_requests_active ON telegram_pairing_requests(consumed_at, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_telegram_task_reminders_due ON telegram_task_reminder_deliveries(status, next_attempt_at);
       CREATE INDEX IF NOT EXISTS idx_telegram_arrival_checkins_follow_up ON telegram_arrival_checkins(location_requested_at, location_received_at, check_in_sent_at);
@@ -1148,6 +1261,10 @@ export class SqliteWorkspaceStore {
     const taskColumns = this.database.prepare("PRAGMA table_info(tasks)").all() as unknown as Array<{ name: string }>;
     if (!taskColumns.some((column) => column.name === "activation_trigger")) this.database.exec("ALTER TABLE tasks ADD COLUMN activation_trigger TEXT");
     if (!taskColumns.some((column) => column.name === "reminder_json")) this.database.exec("ALTER TABLE tasks ADD COLUMN reminder_json TEXT");
+    if (!taskColumns.some((column) => column.name === "description")) this.database.exec("ALTER TABLE tasks ADD COLUMN description TEXT");
+    if (!taskColumns.some((column) => column.name === "origin_json")) this.database.exec("ALTER TABLE tasks ADD COLUMN origin_json TEXT");
+    const stageColumns = this.database.prepare("PRAGMA table_info(stages)").all() as unknown as Array<{ name: string }>;
+    if (!stageColumns.some((column) => column.name === "origin_json")) this.database.exec("ALTER TABLE stages ADD COLUMN origin_json TEXT");
     this.database.exec("CREATE INDEX IF NOT EXISTS idx_tasks_arrival_trigger ON tasks(activation_trigger, status) WHERE activation_trigger = 'arrival' AND status = 'scheduled'; PRAGMA optimize;");
     const profileColumns = this.database.prepare("PRAGMA table_info(profiles)").all() as unknown as Array<{ name: string }>;
     if (!profileColumns.some((column) => column.name === "gender")) this.database.exec("ALTER TABLE profiles ADD COLUMN gender TEXT NOT NULL DEFAULT 'not_specified'");
@@ -1196,28 +1313,7 @@ export class SqliteWorkspaceStore {
         JSON.stringify(plan.sources),
         plan.createdAt
       );
-      plan.stages.forEach((stage, stageIndex) => {
-        this.database.prepare("INSERT INTO stages (id, plan_id, title, description, sort_order) VALUES (?, ?, ?, ?, ?)").run(
-          stage.id,
-          plan.id,
-          stage.title,
-          stage.description,
-          stageIndex
-        );
-        stage.tasks.forEach((task, taskIndex) => {
-          this.database.prepare("INSERT INTO tasks (id, stage_id, title, owner, status, due_label, activation_trigger, reminder_json, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
-            task.id,
-            stage.id,
-            task.title,
-            task.owner,
-            task.status,
-            task.dueLabel,
-            task.activationTrigger ?? null,
-            task.reminder ? JSON.stringify(task.reminder) : null,
-            taskIndex
-          );
-        });
-      });
+      this.insertPlanStages(plan);
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -1225,29 +1321,64 @@ export class SqliteWorkspaceStore {
     }
   }
 
+  private insertPlanStages(plan: Plan): void {
+    plan.stages.forEach((stage, stageIndex) => {
+      this.database.prepare("INSERT INTO stages (id, plan_id, title, description, origin_json, sort_order) VALUES (?, ?, ?, ?, ?, ?)").run(
+        stage.id,
+        plan.id,
+        stage.title,
+        stage.description,
+        stage.origin ? JSON.stringify(stage.origin) : null,
+        stageIndex
+      );
+      stage.tasks.forEach((task, taskIndex) => {
+        this.database.prepare("INSERT INTO tasks (id, stage_id, title, description, owner, status, due_label, activation_trigger, reminder_json, origin_json, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+          task.id,
+          stage.id,
+          task.title,
+          task.description ?? null,
+          task.owner,
+          task.status,
+          task.dueLabel,
+          task.activationTrigger ?? null,
+          task.reminder ? JSON.stringify(task.reminder) : null,
+          task.origin ? JSON.stringify(task.origin) : null,
+          taskIndex
+        );
+      });
+    });
+  }
+
   private getCurrentPlan(): Plan | undefined {
     const plan = this.database.prepare(`SELECT id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, created_at
       FROM plans WHERE is_current = 1 ORDER BY created_at DESC LIMIT 1`).get() as PlanRow | undefined;
     if (!plan) return undefined;
 
-    const stageRows = this.database.prepare("SELECT id, title, description FROM stages WHERE plan_id = ? ORDER BY sort_order").all(plan.id) as unknown as StageRow[];
-    const stages: Stage[] = stageRows.map((stage) => ({
+    const stageRows = this.database.prepare("SELECT id, title, description, origin_json FROM stages WHERE plan_id = ? ORDER BY sort_order").all(plan.id) as unknown as StageRow[];
+    const stages: Stage[] = stageRows.map((stage) => {
+      const origin = parsePlanCompilationOrigin(stage.origin_json);
+      return {
       id: stage.id,
       title: stage.title,
       description: stage.description,
-      tasks: (this.database.prepare("SELECT id, title, owner, status, due_label, activation_trigger, reminder_json FROM tasks WHERE stage_id = ? ORDER BY sort_order").all(stage.id) as unknown as TaskRow[]).map((task) => {
+      tasks: (this.database.prepare("SELECT id, title, description, owner, status, due_label, activation_trigger, reminder_json, origin_json FROM tasks WHERE stage_id = ? ORDER BY sort_order").all(stage.id) as unknown as TaskRow[]).map((task) => {
         const reminder = parseTaskReminder(task.reminder_json);
+        const taskOrigin = parsePlanCompilationOrigin(task.origin_json);
         return {
           id: task.id,
           title: task.title,
+          ...(task.description ? { description: task.description } : {}),
           owner: task.owner,
           status: task.status,
           dueLabel: task.due_label,
           ...(task.activation_trigger === "arrival" ? { activationTrigger: "arrival" as const } : {}),
-          ...(reminder ? { reminder } : {})
+          ...(reminder ? { reminder } : {}),
+          ...(taskOrigin ? { origin: taskOrigin } : {})
         };
-      })
-    }));
+      }),
+      ...(origin ? { origin } : {})
+    };
+    });
 
     return {
       id: plan.id,
@@ -1313,6 +1444,86 @@ function parseTaskReminder(value: string | null): TaskReminder | undefined {
   }
 }
 
+function validateCompiledPlanWrite(input: { plan: Plan; expectedPlanId: string; expectedVersion: number; audit: PlanCompilationAudit }, compiledAt: string): void {
+  if (!input.expectedPlanId.trim() || !Number.isInteger(input.expectedVersion) || input.expectedVersion < 1) throw new Error("A compiled Plan write needs an exact expected Plan version.");
+  if (input.plan.id !== input.expectedPlanId || input.plan.version !== input.expectedVersion + 1 || input.plan.status !== "draft") throw new Error("The compiled Plan must be the next draft version of the expected Plan.");
+  if (!Number.isFinite(Date.parse(compiledAt))) throw new Error("A compiled Plan write needs a valid audit time.");
+  if (input.audit.sourcePlanVersion !== input.expectedVersion || input.audit.compiledPlanVersion !== input.plan.version) throw new Error("The compilation audit does not match the Plan version transition.");
+  if (!isStableId(input.audit.countryPackId) || !isSemver(input.audit.countryPackVersion) || !isStableId(input.audit.compositionSkillId) || !isSemver(input.audit.compositionSkillVersion)) throw new Error("The compilation audit has invalid Country Pack or Skill identity.");
+  const generatedStages = input.plan.stages.filter((stage) => stage.origin?.kind === "country_pack_compilation");
+  if (generatedStages.length !== 1) throw new Error("A compiled Plan write needs exactly one generated Stage.");
+  const generatedStage = generatedStages[0]!;
+  const expectedOrigin = {
+    countryPackId: input.audit.countryPackId,
+    countryPackVersion: input.audit.countryPackVersion,
+    compositionSkillId: input.audit.compositionSkillId,
+    compositionSkillVersion: input.audit.compositionSkillVersion,
+    sourcePlanVersion: input.expectedVersion
+  };
+  if (!originMatchesAudit(generatedStage.origin, expectedOrigin)) throw new Error("The generated Stage provenance does not match the compilation audit.");
+  if (generatedStage.tasks.some((task) => !originMatchesAudit(task.origin, expectedOrigin))) throw new Error("Every generated Task needs provenance matching the compilation audit.");
+  const reminderCount = generatedStage.tasks.filter((task) => task.reminder).length;
+  if (input.audit.taskCount !== generatedStage.tasks.length || input.audit.reminderCount !== reminderCount) throw new Error("The compilation audit counts do not match the generated Plan content.");
+}
+
+function parsePlanCompilationOrigin(value: string | null | undefined): PlanCompilationOrigin | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isPlanCompilationOrigin(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isPlanCompilationOrigin(value: unknown): value is PlanCompilationOrigin {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<PlanCompilationOrigin>;
+  return candidate.kind === "country_pack_compilation"
+    && typeof candidate.countryPackId === "string" && isStableId(candidate.countryPackId)
+    && typeof candidate.countryPackVersion === "string" && isSemver(candidate.countryPackVersion)
+    && typeof candidate.compositionSkillId === "string" && isStableId(candidate.compositionSkillId)
+    && typeof candidate.compositionSkillVersion === "string" && isSemver(candidate.compositionSkillVersion)
+    && typeof candidate.compilationKey === "string" && isStableId(candidate.compilationKey)
+    && Number.isInteger(candidate.sourcePlanVersion) && candidate.sourcePlanVersion! >= 1
+    && Array.isArray(candidate.sourceSkills) && candidate.sourceSkills.every((source) => typeof source === "object" && source !== null
+      && typeof source.id === "string" && isStableId(source.id) && typeof source.version === "string" && isSemver(source.version));
+}
+
+function originMatchesAudit(origin: PlanCompilationOrigin | undefined, audit: { countryPackId: string; countryPackVersion: string; compositionSkillId: string; compositionSkillVersion: string; sourcePlanVersion: number }): boolean {
+  return Boolean(origin && isPlanCompilationOrigin(origin)
+    && origin.countryPackId === audit.countryPackId
+    && origin.countryPackVersion === audit.countryPackVersion
+    && origin.compositionSkillId === audit.compositionSkillId
+    && origin.compositionSkillVersion === audit.compositionSkillVersion
+    && origin.sourcePlanVersion === audit.sourcePlanVersion);
+}
+
+function planCompilationRunFromRow(row: PlanCompilationRunRow): PlanCompilationRun {
+  return {
+    id: row.id,
+    kind: "plan_compilation",
+    planId: row.plan_id,
+    countryPackId: row.country_pack_id,
+    countryPackVersion: row.country_pack_version,
+    compositionSkillId: row.composition_skill_id,
+    compositionSkillVersion: row.composition_skill_version,
+    sourcePlanVersion: row.source_plan_version,
+    compiledPlanVersion: row.compiled_plan_version,
+    taskCount: row.task_count,
+    reminderCount: row.reminder_count,
+    compiledAt: row.compiled_at
+  };
+}
+
+function isStableId(value: string): boolean {
+  return /^[a-z0-9]+(?:[-:][a-z0-9]+)*$/.test(value);
+}
+
+function isSemver(value: string): boolean {
+  return /^\d+\.\d+\.\d+$/.test(value);
+}
+
 function taskRemindersEqual(left: TaskReminder, right: TaskReminder): boolean {
   return left.scheduledAtLocal === right.scheduledAtLocal
     && left.timeZone === right.timeZone
@@ -1325,6 +1536,7 @@ function isLocalDateTime(value: string): boolean {
 }
 
 function isTimeZoneName(value: string): boolean {
+  if (value === "UTC") return true;
   if (!/^[A-Za-z_]+(?:\/[A-Za-z_+-]+)+$/.test(value)) return false;
   try {
     new Intl.DateTimeFormat("en", { timeZone: value }).format();

@@ -196,6 +196,22 @@ export interface TaskReminderRun {
   updatedAt: string;
 }
 
+/** Minimized audit for one atomic Country Pack compilation into a new draft Plan version. */
+export interface PlanCompilationRun {
+  id: string;
+  kind: "plan_compilation";
+  planId: string;
+  countryPackId: string;
+  countryPackVersion: string;
+  compositionSkillId: string;
+  compositionSkillVersion: string;
+  sourcePlanVersion: number;
+  compiledPlanVersion: number;
+  taskCount: number;
+  reminderCount: number;
+  compiledAt: string;
+}
+
 /** A Telegram account bound to this single-user local instance. */
 export interface TelegramBinding {
   chatId: string;
