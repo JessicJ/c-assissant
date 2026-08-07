@@ -32,12 +32,13 @@ test("a validated Agent draft becomes a draft Plan with user-owned follow-up Tas
     knownInformation: ["Purpose: study"],
     assumptions: ["Accommodation is not confirmed."],
     nextAction: "Review the complete Plan.",
-    stages: [{ title: "Before departure", description: "Prepare essentials.", tasks: [{ title: "Check documents", owner: "user", dueLabel: "Two hours before departure", reminder: { scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Check passport and essential items." } }] }]
+    stages: [{ title: "Before departure", description: "Prepare essentials.", tasks: [{ title: "Check documents", owner: "user", dueLabel: "Two hours before departure", reminder: { scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Check passport and essential items.", refreshFacts: ["weather"] } }] }]
   });
 
   assert.equal(plan.status, "draft");
   assert.equal(plan.stages[0]?.tasks[0]?.status, "waiting_user");
   assert.equal(plan.stages[0]?.tasks[0]?.reminder?.timeZone, "Asia/Shanghai");
+  assert.deepEqual(plan.stages[0]?.tasks[0]?.reminder?.refreshFacts, ["weather"]);
 });
 
 test("a Plan preference takes precedence in an explainable transport suggestion", () => {

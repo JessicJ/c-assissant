@@ -52,6 +52,7 @@
 - 实现确认后 Task Reminder 的最小 Telegram 调度：仅激活 Plan、已配对账号、未结束且非 arrival 专用的 Task 可触发；到期或服务重启后 30 分钟补发窗口内执行。暂时性故障按 1 分钟、5 分钟退避，最多尝试 3 次；成功或最终失败都会同步 Web Inbox。发送文案读取当前 Task 和提醒目的，不执行任何外部行动。
 - 实现 Task Reminder 显式取消和旧计划失效保护：用户可在 Web 完整 Plan 的 Task 旁直接取消，Core 移除提醒并递增 Plan 版本、写入 Inbox。每次投递前都会重新核对当前激活 Plan 与提醒的时间、时区和目的；旧 Plan、已取消或已变化的提醒不能开始新的发送尝试。
 - 实现 Task Reminder 到期天气刷新：投递尝试确认后，以当前 Plan 地点调用高德地理编码和 QWeather；仅把与提醒当地日期精确匹配的三天预报作为预报展示，并附抓取时间、来源链接和保守的雨具、保暖、防暑、防晒建议。高德或天气不可用时仍发送原提醒，不猜测天气；这次天气上下文不写入 Profile 或 Plan。
+- 实现 Reminder 动态事实显式策略：Agent 必须为新提醒声明 `refreshFacts`，仅在天气会实质影响眼前任务时选择天气，其余提醒不调用天气服务；旧 Plan 缺少该字段时兼容为不刷新。Web 与 Telegram 完整计划会显示该策略，策略变化也会使旧的待发送尝试失效。
 - 实现 Task Reminder 到期 Run 审计：同一 Plan/Task/Reminder 的最多三次投递共用一条本地 Run，记录到期与起止时间、尝试次数、天气是否可用及安全失败分类、Telegram 安全失败分类和最终状态。取消提醒或替换当前 Plan 会终止未完成 Run；已在途且最终成功的消息仍记录实际成功。不保存提醒正文、天气原始响应、坐标、账号身份或凭据，并提供只读本地接口 `/api/runs/task-reminders`。
 - 完成一次真实 Codex 端到端验证：结构化草案已通过 Schema、保存为 4 个 Stage 和 16 个 Task；测试数据库随后已删除。
 - 实现 Telegram Connector 的本地配置状态与显式 Bot 身份验证；Token 仅停留在本地 Server 进程，不会传给 Web 或 Agent。

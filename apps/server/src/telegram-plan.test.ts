@@ -60,11 +60,13 @@ test("Telegram Plan summary shows a proposed structured reminder", () => {
   workspace.activePlan.stages[0]!.tasks[0]!.reminder = {
     scheduledAtLocal: "2026-09-01T05:00",
     timeZone: "Asia/Shanghai",
-    purpose: "Check your passport and essential items."
+    purpose: "Check your passport and essential items.",
+    refreshFacts: ["weather"]
   };
 
   const summary = formatTelegramPlan(workspace.activePlan);
 
   assert.match(summary, /Proposed reminder: 2026-09-01 05:00 \(Asia\/Shanghai\)/);
   assert.match(summary, /Check your passport and essential items/);
+  assert.match(summary, /refresh at delivery: destination weather/);
 });

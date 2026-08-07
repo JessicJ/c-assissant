@@ -50,7 +50,10 @@ export function formatTelegramPlan(plan: Plan): string {
     lines.push(`${index + 1}. ${oneLine(stage.title)}`);
     stage.tasks.forEach((task) => {
       lines.push(`   [${task.status.replaceAll("_", " ")}] ${oneLine(task.title)} — ${oneLine(task.dueLabel, 100)}`);
-      if (task.reminder) lines.push(`      Proposed reminder: ${task.reminder.scheduledAtLocal.replace("T", " ")} (${task.reminder.timeZone}) — ${oneLine(task.reminder.purpose, 180)}`);
+      if (task.reminder) {
+        const refresh = task.reminder.refreshFacts?.includes("weather") ? " · refresh at delivery: destination weather" : " · dynamic facts: none";
+        lines.push(`      Proposed reminder: ${task.reminder.scheduledAtLocal.replace("T", " ")} (${task.reminder.timeZone}) — ${oneLine(task.reminder.purpose, 180)}${refresh}`);
+      }
     });
   });
   lines.push("", `Next: ${oneLine(plan.nextAction)}`, "", "Use the Web workspace to review every field and confirm or revise this Plan.");

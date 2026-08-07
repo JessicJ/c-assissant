@@ -3,7 +3,7 @@ import test from "node:test";
 
 import type { ConnectorResult, AmapGeocodedPlace, QWeatherWeatherSnapshot } from "@c-assistant/connectors";
 import { createPlanFromDraft } from "@c-assistant/core";
-import { refreshTaskReminderWeather } from "./task-reminder-weather.js";
+import { refreshTaskReminderWeather, taskReminderNeedsWeather } from "./task-reminder-weather.js";
 
 function planAndReminder() {
   const plan = createPlanFromDraft({
@@ -13,10 +13,16 @@ function planAndReminder() {
     knownInformation: [],
     assumptions: [],
     nextAction: "Review.",
-    stages: [{ title: "Departure", description: "Prepare.", tasks: [{ title: "Pack", owner: "user", dueLabel: "Morning", reminder: { scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Check essentials." } }] }]
+    stages: [{ title: "Departure", description: "Prepare.", tasks: [{ title: "Pack", owner: "user", dueLabel: "Morning", reminder: { scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Check essentials.", refreshFacts: ["weather"] } }] }]
   });
   return { plan, reminder: plan.stages[0]!.tasks[0]!.reminder! };
 }
+
+test("weather refresh is opt-in and old reminders default to no dynamic facts", () => {
+  assert.equal(taskReminderNeedsWeather({ scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Check documents." }), false);
+  assert.equal(taskReminderNeedsWeather({ scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Check documents.", refreshFacts: [] }), false);
+  assert.equal(taskReminderNeedsWeather({ scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Prepare for rain.", refreshFacts: ["weather"] }), true);
+});
 
 test("a Task reminder weather refresh uses only the exact forecast date and includes cautious advice", async () => {
   const { plan, reminder } = planAndReminder();

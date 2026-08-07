@@ -13,6 +13,7 @@ export type RunStatus = "running" | "succeeded" | "failed" | "fallback";
 export type RunTrigger = "web" | "telegram";
 export type TransportPreference = "plan_recommended" | "taxi" | "public_transit" | "walking";
 export type LuggageLevel = "unknown" | "light" | "standard" | "heavy";
+export type TaskReminderDynamicFact = "weather";
 
 export interface TaskReminder {
   /** Local wall-clock time in YYYY-MM-DDTHH:mm form. */
@@ -21,6 +22,8 @@ export interface TaskReminder {
   timeZone: string;
   /** Why this reminder should run; final delivery copy is generated from current facts. */
   purpose: string;
+  /** Explicit delivery-time facts to refresh. Missing means none for backward compatibility. */
+  refreshFacts?: TaskReminderDynamicFact[];
 }
 
 export interface Task {

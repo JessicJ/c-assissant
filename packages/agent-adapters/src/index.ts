@@ -220,11 +220,12 @@ const planDraftSchema = {
                 reminder: {
                   type: "object",
                   additionalProperties: false,
-                  required: ["scheduledAtLocal", "timeZone", "purpose"],
+                  required: ["scheduledAtLocal", "timeZone", "purpose", "refreshFacts"],
                   properties: {
                     scheduledAtLocal: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}$" },
                     timeZone: { type: "string", minLength: 3, maxLength: 80 },
-                    purpose: { type: "string", minLength: 1, maxLength: 500 }
+                    purpose: { type: "string", minLength: 1, maxLength: 500 },
+                    refreshFacts: { type: "array", maxItems: 1, uniqueItems: true, items: { type: "string", enum: ["weather"] } }
                   }
                 }
               }
@@ -255,6 +256,7 @@ Rules:
 - Include user-owned Tasks for real-world choices and external-owned Tasks for actions inside another application.
 - When one task is specifically intended to begin at the expected arrival time, set its activationTrigger to "arrival". Do not add that marker to any other task.
 - Add a reminder only when the user supplied enough facts for a concrete local date, time, and IANA time zone, or when that moment follows safely from an explicit dated event. Never invent a date, time, or departure time zone. Use YYYY-MM-DDTHH:mm and a short English purpose that explains why the reminder should run; do not freeze final notification copy.
+- Every reminder must include refreshFacts. Use ["weather"] only when current destination weather can materially change this Task's immediate packing, departure, outdoor, or transport decision. Use [] for documents, apps, payments, policy checks, and all other Tasks. Do not infer or request unsupported dynamic facts.
 - A reminder in the draft is only a proposal. It will not run until the user reviews and confirms the complete Plan.
 - Do not say that C-assistant has booked, paid, hailed a ride, or completed any action.
 - The Plan must be readable as a complete draft before a user confirms it.`;
@@ -273,7 +275,10 @@ function isTaskReminder(value: unknown): boolean {
     && typeof value.timeZone === "string"
     && isIanaTimeZone(value.timeZone)
     && isString(value.purpose)
-    && value.purpose.length <= 500;
+    && value.purpose.length <= 500
+    && Array.isArray(value.refreshFacts)
+    && value.refreshFacts.length <= 1
+    && value.refreshFacts.every((fact) => fact === "weather");
 }
 
 function isIanaTimeZone(value: string): boolean {
