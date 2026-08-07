@@ -32,6 +32,39 @@ test("SQLite persists the selected Plan runtime without storing any credentials"
   store.close();
 });
 
+test("SQLite persists official-source snapshots, deduplicates equal content, and reports later content changes", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const first = store.saveSourceSnapshot({
+    sourceId: "nia-english",
+    authority: "National Immigration Administration",
+    titleOriginal: "Guidelines for Foreigners",
+    url: "https://en.nia.gov.cn/guide",
+    retrievedAt: "2026-08-07T08:00:00.000Z",
+    contentHash: "a".repeat(64),
+    excerpt: "First official evidence."
+  });
+  const duplicate = store.saveSourceSnapshot({ ...first.snapshot, contentHash: "a".repeat(64) });
+  const changed = store.saveSourceSnapshot({
+    sourceId: "nia-english",
+    authority: "National Immigration Administration",
+    titleOriginal: "Guidelines for Foreigners",
+    url: "https://en.nia.gov.cn/guide",
+    retrievedAt: "2026-08-08T08:00:00.000Z",
+    contentHash: "b".repeat(64),
+    excerpt: "Updated official evidence."
+  });
+
+  assert.equal(first.duplicate, false);
+  assert.equal(first.contentChanged, false);
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(duplicate.snapshot.id, first.snapshot.id);
+  assert.equal(changed.contentChanged, true);
+  assert.equal(changed.previousSnapshot?.id, first.snapshot.id);
+  assert.equal(store.getWorkspace().sourceSnapshots.length, 2);
+  assert.equal(store.getWorkspace().sourceSnapshots[0]?.contentHash, "b".repeat(64));
+  store.close();
+});
+
 test("SQLite persists a validated Agent-generated Plan", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const workspace = store.createGeneratedPlan({
