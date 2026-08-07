@@ -309,6 +309,12 @@ async function pollTelegram(): Promise<void> {
           await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: "Share your location only if you want route help." });
           await requestTelegramArrivalLocation(pairing.binding.chatId, "If you want route help for this arrival, tap the button below to share your current location.");
         }
+        const completedTaskId = update.callbackData?.match(/^arrival_task_complete:(task-[0-9a-f-]{36})$/)?.[1];
+        if (completedTaskId && update.callbackId) {
+          const completed = store.completeReadyTask(store.getWorkspace().activePlan.id, completedTaskId);
+          await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: completed ? "Task marked complete." : "That task is not ready to complete." });
+          if (completed) await telegram.sendMessage({ chatId: pairing.binding.chatId, text: `Completed by your confirmation: ${completed.title}\n\nNo external completion was inferred by C-assistant.` });
+        }
         continue;
       }
       if (update.location) {
@@ -400,7 +406,9 @@ async function runArrivalReminder(): Promise<void> {
     if (!claimed) return;
     const arrivalTask = store.activateArrivalTask(plan.id);
     const updatedPlan = store.getWorkspace().activePlan;
-    const receipt = await telegram.sendMessage({ chatId: pairing.binding.chatId, text: formatArrivalReminder(updatedPlan, arrivalTask), replyMarkup: { inline_keyboard: [[{ text: "I haven't arrived", callback_data: "arrival_not_here" }]] } });
+    const buttons: Array<{ text: string; callback_data: string }> = [{ text: "I haven't arrived", callback_data: "arrival_not_here" }];
+    if (arrivalTask) buttons.push({ text: "I completed this step", callback_data: `arrival_task_complete:${arrivalTask.id}` });
+    const receipt = await telegram.sendMessage({ chatId: pairing.binding.chatId, text: formatArrivalReminder(updatedPlan, arrivalTask), replyMarkup: { inline_keyboard: [buttons] } });
     if (receipt.status !== "available") server.log.warn({ status: receipt.status, code: receipt.failure?.code }, "Telegram arrival reminder could not be delivered");
     else store.recordTelegramArrivalCheckin({ planId: plan.id, checkInSentAt: new Date().toISOString() });
   } catch (error) {
