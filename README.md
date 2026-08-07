@@ -63,6 +63,8 @@ The first Core compilation boundary is now implemented. China Pack accepts only 
 
 The deterministic China arrival orchestrator now runs credential-free normalized inputs through the seven supporting Skills in the declared order, derives preparation items, invokes the composite, creates the China-to-Core proposal, and returns an inert compiled draft. It fails closed when a critical supporting Skill needs input. Connector fact collection, production source catalogs, SQLite save invocation, and Server/Web/Telegram entry points remain separate.
 
+Server now has a credential-free compilation service boundary around that orchestrator. It captures the exact current draft Plan/Profile, requests normalized facts from an injected collector, orchestrates the China proposal, and atomically saves only the matching next draft version. Provider failures, Country Pack gates, and Plan-version races return separate blocked outcomes without sending messages or exposing raw Connector errors. The production fact collector and user-facing trigger are not connected yet.
+
 ## Product shape
 
 - Web workspace: the full desktop-grade product interface.
