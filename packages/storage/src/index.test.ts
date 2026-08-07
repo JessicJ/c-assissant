@@ -116,3 +116,16 @@ test("SQLite keeps and clears expected arrival timing inside the current Plan", 
   assert.equal(cleared.activePlan.configuration.arrival.expectedAtLocal, undefined);
   store.close();
 });
+
+test("SQLite stores one explicit Telegram pairing and records it in the Inbox", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
+  const pending = store.createTelegramPairingRequest({ code: "pairing_code_123", expiresAt });
+
+  assert.equal(pending.state, "waiting_for_start");
+  const paired = store.claimTelegramPairing({ code: "pairing_code_123", chatId: "1001", userId: "1001", firstName: "Avery", username: "avery" });
+  assert.equal(paired.state, "paired");
+  assert.equal(paired.binding?.chatId, "1001");
+  assert.equal(store.getWorkspace().inbox[0]?.title, "Telegram paired");
+  store.close();
+});

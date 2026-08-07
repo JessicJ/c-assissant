@@ -719,6 +719,17 @@ export interface TelegramMessageReceipt {
   messageId: number;
 }
 
+/** A deliberately small, normalized subset of a Telegram update. */
+export interface TelegramIncomingUpdate {
+  updateId: number;
+  chatId: string;
+  chatType: "private";
+  userId: string;
+  firstName: string;
+  username?: string;
+  text?: string;
+}
+
 export interface TelegramConnectorOptions {
   botToken?: string | undefined;
   fetcher?: typeof fetch;
@@ -742,6 +753,15 @@ interface TelegramBotPayload {
 interface TelegramMessagePayload {
   message_id?: number;
   chat?: { id?: number | string };
+}
+
+interface TelegramUpdatePayload {
+  update_id?: number;
+  message?: {
+    text?: string;
+    chat?: { id?: number | string; type?: string };
+    from?: { id?: number | string; first_name?: string; username?: string };
+  };
 }
 
 /**
@@ -812,7 +832,31 @@ export class TelegramConnector {
     };
   }
 
-  private async request<T>(method: "getMe" | "sendMessage", body?: Record<string, string>): Promise<{ ok: true; payload: TelegramApiResponse<T> } | { ok: false; failure: ConnectorResult<never> }> {
+  async getUpdates(input: { offset?: number } = {}): Promise<ConnectorResult<TelegramIncomingUpdate[]>> {
+    if (!this.botToken) return this.failure("not_configured", "Telegram is not configured on this instance.", "not_configured", false);
+    if (input.offset !== undefined && (!Number.isInteger(input.offset) || input.offset < 0)) return this.failure("unsupported", "Telegram update offset must be a non-negative whole number.", "invalid_offset", false);
+    const response = await this.request<TelegramUpdatePayload[]>("getUpdates", { timeout: 0, ...(input.offset === undefined ? {} : { offset: input.offset }), allowed_updates: ["message"] });
+    if (!response.ok) return response.failure;
+    const updates = (response.payload.result ?? []).flatMap((update): TelegramIncomingUpdate[] => {
+      const updateId = update.update_id;
+      const message = update.message;
+      const chatId = message?.chat?.id;
+      const from = message?.from;
+      if (typeof updateId !== "number" || !Number.isInteger(updateId) || message?.chat?.type !== "private" || chatId === undefined || from?.id === undefined || !from.first_name?.trim()) return [];
+      return [{
+        updateId,
+        chatId: String(chatId),
+        chatType: "private",
+        userId: String(from.id),
+        firstName: from.first_name.trim(),
+        ...(from.username?.trim() ? { username: from.username.trim() } : {}),
+        ...(message.text?.trim() ? { text: message.text.trim() } : {})
+      }];
+    });
+    return { status: "available", provider: "telegram", observedAt: new Date().toISOString(), data: updates };
+  }
+
+  private async request<T>(method: "getMe" | "sendMessage" | "getUpdates", body?: Record<string, unknown>): Promise<{ ok: true; payload: TelegramApiResponse<T> } | { ok: false; failure: ConnectorResult<never> }> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
     try {

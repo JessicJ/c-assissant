@@ -22,6 +22,8 @@ import {
   type SourceReference,
   type Stage,
   type Task,
+  type TelegramBinding,
+  type TelegramPairingStatus,
   type WorkspaceSnapshot
 } from "@c-assistant/core";
 
@@ -71,6 +73,19 @@ interface InboxRow {
   timestamp: string;
 }
 
+interface TelegramBindingRow {
+  chat_id: string;
+  user_id: string;
+  first_name: string;
+  username: string | null;
+  paired_at: string;
+}
+
+interface TelegramPairingRequestRow {
+  code: string;
+  expires_at: string;
+}
+
 export class SqliteWorkspaceStore {
   private readonly database: DatabaseSync;
 
@@ -116,6 +131,60 @@ export class SqliteWorkspaceStore {
         amap: "not_configured"
       }
     };
+  }
+
+  getTelegramPairingStatus(): TelegramPairingStatus {
+    const binding = this.database.prepare("SELECT chat_id, user_id, first_name, username, paired_at FROM telegram_binding WHERE id = 1").get() as TelegramBindingRow | undefined;
+    if (binding) return {
+      state: "paired",
+      binding: {
+        chatId: binding.chat_id,
+        userId: binding.user_id,
+        firstName: binding.first_name,
+        ...(binding.username ? { username: binding.username } : {}),
+        pairedAt: binding.paired_at
+      }
+    };
+    const request = this.database.prepare("SELECT code, expires_at FROM telegram_pairing_requests WHERE consumed_at IS NULL ORDER BY created_at DESC LIMIT 1").get() as TelegramPairingRequestRow | undefined;
+    if (request && Date.parse(request.expires_at) > Date.now()) return { state: "waiting_for_start", expiresAt: request.expires_at };
+    return { state: "not_paired" };
+  }
+
+  createTelegramPairingRequest(input: { code: string; expiresAt: string }): TelegramPairingStatus {
+    const code = input.code.trim();
+    if (!/^[A-Za-z0-9_-]{12,96}$/.test(code)) throw new Error("The Telegram pairing code is invalid.");
+    if (!Number.isFinite(Date.parse(input.expiresAt)) || Date.parse(input.expiresAt) <= Date.now()) throw new Error("The Telegram pairing code must expire in the future.");
+    if (this.getTelegramPairingStatus().state === "paired") return this.getTelegramPairingStatus();
+    const now = new Date().toISOString();
+    this.database.prepare("UPDATE telegram_pairing_requests SET consumed_at = ? WHERE consumed_at IS NULL").run(now);
+    this.database.prepare("INSERT INTO telegram_pairing_requests (code, expires_at, created_at, consumed_at) VALUES (?, ?, ?, NULL)").run(code, input.expiresAt, now);
+    return { state: "waiting_for_start", expiresAt: input.expiresAt };
+  }
+
+  claimTelegramPairing(input: { code: string; chatId: string; userId: string; firstName: string; username?: string }): TelegramPairingStatus {
+    const code = input.code.trim();
+    const chatId = input.chatId.trim();
+    const userId = input.userId.trim();
+    const firstName = input.firstName.trim();
+    if (!code || !chatId || !userId || !firstName) throw new Error("Telegram pairing needs a valid private-chat identity.");
+    const existing = this.getTelegramPairingStatus();
+    if (existing.state === "paired") {
+      if (existing.binding?.chatId !== chatId) throw new Error("This instance is already paired to a different Telegram account.");
+      return existing;
+    }
+    const request = this.database.prepare("SELECT code, expires_at FROM telegram_pairing_requests WHERE code = ? AND consumed_at IS NULL").get(code) as TelegramPairingRequestRow | undefined;
+    if (!request || Date.parse(request.expires_at) <= Date.now()) throw new Error("This Telegram pairing instruction has expired. Start a new pairing from the Web workspace.");
+    const pairedAt = new Date().toISOString();
+    this.database.prepare("INSERT INTO telegram_binding (id, chat_id, user_id, first_name, username, paired_at) VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET chat_id = excluded.chat_id, user_id = excluded.user_id, first_name = excluded.first_name, username = excluded.username, paired_at = excluded.paired_at").run(chatId, userId, firstName, input.username?.trim() || null, pairedAt);
+    this.database.prepare("UPDATE telegram_pairing_requests SET consumed_at = ? WHERE code = ?").run(pairedAt, code);
+    this.addInbox({
+      id: `telegram-paired-${pairedAt}`,
+      tone: "ready",
+      title: "Telegram paired",
+      body: `Telegram is paired with ${input.username?.trim() ? `@${input.username.trim()}` : input.firstName}. Future Telegram actions still require their own explicit implementation and confirmation.`,
+      timestamp: "Just now"
+    });
+    return this.getTelegramPairingStatus();
   }
 
   createPlan(input: CreatePlanInput): WorkspaceSnapshot {
@@ -333,10 +402,25 @@ export class SqliteWorkspaceStore {
         timestamp TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS telegram_binding (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        chat_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        first_name TEXT NOT NULL,
+        username TEXT,
+        paired_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS telegram_pairing_requests (
+        code TEXT PRIMARY KEY,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        consumed_at TEXT
+      );
       CREATE INDEX IF NOT EXISTS idx_plans_current ON plans(is_current, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_stages_plan_order ON stages(plan_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_tasks_stage_order ON tasks(stage_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_inbox_created_at ON inbox_items(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_telegram_pairing_requests_active ON telegram_pairing_requests(consumed_at, created_at DESC);
       PRAGMA optimize;
     `);
     const planColumns = this.database.prepare("PRAGMA table_info(plans)").all() as unknown as Array<{ name: string }>;

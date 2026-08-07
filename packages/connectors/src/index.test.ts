@@ -235,6 +235,29 @@ test("Telegram bot verification normalizes identity and keeps the token out of r
   assert.doesNotMatch(JSON.stringify(result), /test-bot-token/);
 });
 
+test("Telegram update polling normalizes only a usable private-chat message", async () => {
+  let requestBody = "";
+  const connector = new TelegramConnector({
+    botToken: "test-token",
+    fetcher: async (_input, init) => {
+      requestBody = String(init?.body);
+      return new Response(JSON.stringify({ ok: true, result: [
+        { update_id: 11, message: { text: "/start pair_code_123", chat: { id: 1001, type: "private" }, from: { id: 1001, first_name: "Avery", username: "avery" } } },
+        { update_id: 12, message: { chat: { id: 1002 }, from: { id: 1002 } } }
+      ] }));
+    }
+  });
+
+  const result = await connector.getUpdates({ offset: 10 });
+  assert.equal(result.status, "available");
+  assert.equal(result.data?.length, 1);
+  assert.equal(result.data?.[0]?.chatId, "1001");
+  assert.equal(result.data?.[0]?.chatType, "private");
+  assert.equal(result.data?.[0]?.text, "/start pair_code_123");
+  assert.match(requestBody, /"offset":10/);
+  assert.doesNotMatch(JSON.stringify(result), /test-token/);
+});
+
 test("Telegram does not make a request when no bot token is configured", async () => {
   let requests = 0;
   const connector = new TelegramConnector({
