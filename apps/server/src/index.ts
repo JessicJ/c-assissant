@@ -13,6 +13,7 @@ import { arrivalRouteDestination, formatArrivalRoute, selectArrivalTransport } f
 import { createOfficialSourceService, parseOfficialSourceRegistry } from "./official-sources.js";
 import { parseTelegramCommand } from "./telegram-commands.js";
 import { createTelegramPlan, formatTelegramPlan, formatTelegramPlanCreation } from "./telegram-plan.js";
+import { dueTaskReminders, formatTaskReminder } from "./task-reminder.js";
 
 const server = Fastify({ logger: true });
 const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -30,6 +31,7 @@ const claudeCode = new ClaudeCodeRuntimeAdapter();
 let generatingPlan = false;
 let pollingTelegram = false;
 let checkingArrivalReminder = false;
+let checkingTaskReminders = false;
 let checkingArrivalLocationPrompt = false;
 let requestingArrivalLocation = false;
 
@@ -465,6 +467,29 @@ async function runArrivalReminder(): Promise<void> {
   }
 }
 
+async function runTaskReminders(): Promise<void> {
+  if (checkingTaskReminders) return;
+  const pairing = store.getTelegramPairingStatus();
+  if (pairing.state !== "paired" || !pairing.binding) return;
+  const plan = store.getWorkspace().activePlan;
+  const due = dueTaskReminders(plan);
+  if (!due.length) return;
+  checkingTaskReminders = true;
+  try {
+    for (const item of due) {
+      const claimed = store.claimTelegramReminder({ planId: plan.id, reminderKey: item.reminderKey, dueAt: item.dueAt.toISOString() });
+      if (!claimed) continue;
+      const receipt = await telegram.sendMessage({ chatId: pairing.binding.chatId, text: formatTaskReminder(plan, item.task) });
+      if (receipt.status === "available") store.recordTelegramTaskReminderDelivered(plan.id, item.task.id);
+      else server.log.warn({ status: receipt.status, code: receipt.failure?.code, taskId: item.task.id }, "Telegram Task reminder could not be delivered");
+    }
+  } catch (error) {
+    server.log.warn({ error }, "Telegram Task reminder failed");
+  } finally {
+    checkingTaskReminders = false;
+  }
+}
+
 async function runArrivalLocationPrompt(): Promise<void> {
   if (checkingArrivalLocationPrompt) return;
   const pairing = store.getTelegramPairingStatus();
@@ -508,8 +533,8 @@ async function telegramCommandResponse(text: string | undefined): Promise<string
     if (generatingPlan) return "A Plan draft is already being prepared. Please wait for it before sending another request.";
     generatingPlan = true;
     try {
-    const workspace = store.getWorkspace();
-    const runtime = selectedRuntimeAdapter(workspace.runtime.selectedKind);
+      const workspace = store.getWorkspace();
+      const runtime = selectedRuntimeAdapter(workspace.runtime.selectedKind);
       const run = store.startPlanGenerationRun({ runtimeKind: workspace.runtime.selectedKind, trigger: "telegram" });
       let runtimeFailureCode = "generation_failed";
       const result = await createTelegramPlan({
@@ -552,15 +577,18 @@ const host = process.env.C_ASSISTANT_HOST ?? "127.0.0.1";
 await server.listen({ port, host });
 const telegramPollTimer = setInterval(() => void pollTelegram(), 1_000);
 const arrivalReminderTimer = setInterval(() => void runArrivalReminder(), 15_000);
+const taskReminderTimer = setInterval(() => void runTaskReminders(), 15_000);
 const arrivalLocationPromptTimer = setInterval(() => void runArrivalLocationPrompt(), 15_000);
 void pollTelegram();
 void runArrivalReminder();
+void runTaskReminders();
 void runArrivalLocationPrompt();
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     clearInterval(telegramPollTimer);
     clearInterval(arrivalReminderTimer);
+    clearInterval(taskReminderTimer);
     clearInterval(arrivalLocationPromptTimer);
     store.close();
     void server.close().finally(() => process.exit(0));

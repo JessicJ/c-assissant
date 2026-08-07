@@ -255,6 +255,27 @@ test("SQLite records an arrival reminder delivery attempt only once per Plan", (
   store.close();
 });
 
+test("SQLite mirrors a delivered Task reminder into the Web Inbox", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const workspace = store.createGeneratedPlan({
+    title: "Prepare for departure",
+    location: "Shanghai, China",
+    dates: "September 1, 2026",
+    knownInformation: ["Departure at 07:00."],
+    assumptions: [],
+    nextAction: "Review the reminder.",
+    stages: [{ title: "Departure", description: "Prepare.", tasks: [{ title: "Check essentials", owner: "user", dueLabel: "Two hours before departure", reminder: { scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Check passport and essential items." } }] }]
+  });
+  const task = workspace.activePlan.stages[0]!.tasks[0]!;
+
+  store.confirmPlan(workspace.activePlan.id);
+  store.recordTelegramTaskReminderDelivered(workspace.activePlan.id, task.id);
+
+  assert.equal(store.getWorkspace().inbox[0]?.title, "Reminder sent: Check essentials");
+  assert.equal(store.getWorkspace().inbox[0]?.body, "Check passport and essential items.");
+  store.close();
+});
+
 test("SQLite advances an explicitly tagged arrival task to ready without completing it", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const planId = store.getWorkspace().activePlan.id;

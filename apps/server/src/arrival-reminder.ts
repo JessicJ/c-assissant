@@ -3,8 +3,8 @@ import type { Plan, Task } from "@c-assistant/core";
 const LOCAL_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
 export const ARRIVAL_LOCATION_FOLLOW_UP_DELAY_MS = 5 * 60_000;
 
-/** Converts a Plan-local arrival time to an instant using its declared IANA zone. */
-export function arrivalInstant(expectedAtLocal: string, timeZone: string): Date | undefined {
+/** Converts a local wall-clock time to an instant using its declared IANA zone. */
+export function localDateTimeInstant(expectedAtLocal: string, timeZone: string): Date | undefined {
   const match = expectedAtLocal.match(LOCAL_DATE_TIME);
   if (!match) return undefined;
   const [, year, month, day, hour, minute] = match;
@@ -19,6 +19,11 @@ export function arrivalInstant(expectedAtLocal: string, timeZone: string): Date 
   } catch {
     return undefined;
   }
+}
+
+/** Compatibility name for the Plan arrival workflow. */
+export function arrivalInstant(expectedAtLocal: string, timeZone: string): Date | undefined {
+  return localDateTimeInstant(expectedAtLocal, timeZone);
 }
 
 export function isArrivalReminderDue(dueAt: Date, now = new Date()): boolean {
