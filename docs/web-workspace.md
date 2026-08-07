@@ -27,7 +27,7 @@ The initial generation should present a complete Plan, not a questionnaire. It b
 
 Before activation, the user sees the complete final Plan in normal presentation. One confirmation activates that exact Plan version and its declared automation scope. Later material changes create a new version that must be confirmed when they exceed the existing scope.
 
-The current Plan view lists every Stage and Task. When an Agent draft contains a valid structured reminder proposal, Web shows its local time, time zone, and purpose next to the Task. It is inert while the Plan remains a draft. After Plan activation it becomes eligible for Telegram delivery at the proposed time. Successful delivery and terminal failure are copied to Web Inbox; transient failures can be retried at most twice inside the 30-minute delivery window.
+The current Plan view lists every Stage and Task. When an Agent draft contains a valid structured reminder proposal, Web shows its local time, time zone, and purpose next to the Task. It is inert while the Plan remains a draft. After Plan activation it becomes eligible for Telegram delivery at the proposed time. The user can cancel that reminder directly beside the Task; Web removes it from the current Plan and shows the resulting Inbox receipt. Successful delivery and terminal failure are also copied to Web Inbox; transient failures can be retried at most twice inside the 30-minute delivery window.
 
 ## Interaction rules
 

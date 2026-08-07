@@ -73,6 +73,14 @@ server.post<{ Params: { planId: string } }>("/api/plans/:planId/confirm", async 
   }
 });
 
+server.post<{ Params: { planId: string; taskId: string } }>("/api/plans/:planId/tasks/:taskId/reminder/cancel", async (request, reply) => {
+  try {
+    return store.cancelTaskReminder(request.params.planId, request.params.taskId);
+  } catch (error) {
+    return reply.code(400).send({ error: error instanceof Error ? error.message : "The Task reminder could not be cancelled." });
+  }
+});
+
 server.put<{ Params: { planId: string }; Body: PlanAccommodationInput }>("/api/plans/:planId/accommodation", async (request, reply) => {
   try {
     return store.updatePlanAccommodation(request.params.planId, request.body);
@@ -477,11 +485,11 @@ async function runTaskReminders(): Promise<void> {
   checkingTaskReminders = true;
   try {
     for (const item of due) {
-      const attempt = store.claimTelegramTaskReminderAttempt({ planId: plan.id, reminderKey: item.reminderKey, taskId: item.task.id, dueAt: item.dueAt.toISOString() });
+      const attempt = store.claimTelegramTaskReminderAttempt({ planId: plan.id, reminderKey: item.reminderKey, taskId: item.task.id, dueAt: item.dueAt.toISOString(), reminder: item.reminder });
       if (!attempt.claimed) continue;
       const receipt = await telegram.sendMessage({ chatId: pairing.binding.chatId, text: formatTaskReminder(plan, item.task) });
       if (receipt.status === "available") {
-        store.recordTelegramTaskReminderDelivered({ planId: plan.id, reminderKey: item.reminderKey, taskId: item.task.id });
+        store.recordTelegramTaskReminderDelivered({ planId: plan.id, reminderKey: item.reminderKey, taskId: item.task.id, taskTitle: item.task.title, reminder: item.reminder });
       } else {
         const outcome = store.recordTelegramTaskReminderFailure({
           planId: plan.id,
