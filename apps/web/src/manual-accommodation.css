@@ -44,6 +44,50 @@
   font-size: 14px;
 }
 
+.route-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.route-actions .secondary-button {
+  margin-top: 0;
+}
+
+.route-comparisons {
+  display: grid;
+  gap: 7px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #f7faf5;
+  color: #31554f;
+}
+
+.route-comparisons > span,
+.route-comparisons small {
+  color: #6b827d;
+  font-size: 13px;
+}
+
+.route-comparisons > div {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.route-comparisons article {
+  display: grid;
+  gap: 4px;
+  padding: 9px;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.route-comparisons article span {
+  color: #56706b;
+  font-size: 13px;
+}
+
 .profile-prompt {
   display: flex;
   align-items: end;
@@ -69,5 +113,9 @@
   .profile-prompt {
     align-items: start;
     flex-direction: column;
+  }
+
+  .route-comparisons > div {
+    grid-template-columns: 1fr;
   }
 }
