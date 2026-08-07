@@ -1,0 +1,15 @@
+{
+  "id": "local-food-guide",
+  "country": "china",
+  "version": "0.1.0",
+  "visibility": "internal",
+  "entrypoint": "runLocalFoodGuideSkill",
+  "requiredInputs": ["locationName", "facts", "sources", "approvedSourceIds", "now"],
+  "permittedProfileFields": [],
+  "permittedPlanFields": ["location"],
+  "capabilities": ["official-source.snapshot.read"],
+  "sources": { "provider": "official", "freshnessDays": 30 },
+  "risk": { "information": "ordinary", "action": "read_only" },
+  "executionPolicy": "automatic_with_notice",
+  "failure": { "missingLocation": "needs_input", "missingTraceableFacts": "degraded", "malformedInput": "failed" }
+}
