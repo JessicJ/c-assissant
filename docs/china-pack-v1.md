@@ -58,6 +58,8 @@ On arrival or request, recommends nearby places using Amap facts and current con
 
 Uses seasonal guidance when the trip is too far away for a reliable forecast and schedules a later refresh. Near the relevant date, it uses current weather facts to update packing guidance and reminders. A reminder must explicitly declare that destination weather materially affects its immediate Task; only then does the current delivery path resolve the Plan destination with Amap and refresh QWeather. Only an exact-date forecast is presented as a forecast, provider attribution is retained in the message, and failure falls back to the original reminder without invented weather.
 
+The paired user may also send `/weather` for an immediate read-only check of the current Plan destination. This path returns current observation and dated three-day facts with QWeather attribution and cautious packing notes. It neither activates the Plan nor creates a Reminder.
+
 ## Composition order
 
 Core runs the composite workflow in this order:
