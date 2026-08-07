@@ -169,6 +169,26 @@ server.get<{ Querystring: { origin?: string; destination?: string; originId?: st
   return reply.code(result.status === "available" ? 200 : result.status === "not_configured" ? 503 : 400).send(result);
 });
 
+server.get<{ Querystring: { origin?: string; destination?: string; originId?: string; destinationId?: string } }>("/api/amap/routes/walking", async (request, reply) => {
+  const result = await amap.walkingRoute({
+    origin: request.query.origin ?? "",
+    destination: request.query.destination ?? "",
+    originId: request.query.originId,
+    destinationId: request.query.destinationId
+  });
+  return reply.code(connectorResponseStatus(result.status)).send(result);
+});
+
+server.get<{ Querystring: { origin?: string; destination?: string; originCityCode?: string; destinationCityCode?: string } }>("/api/amap/routes/transit", async (request, reply) => {
+  const result = await amap.transitRoute({
+    origin: request.query.origin ?? "",
+    destination: request.query.destination ?? "",
+    originCityCode: request.query.originCityCode,
+    destinationCityCode: request.query.destinationCityCode
+  });
+  return reply.code(connectorResponseStatus(result.status)).send(result);
+});
+
 function connectorResponseStatus(status: "available" | "degraded" | "not_configured" | "unauthorized" | "rate_limited" | "unavailable" | "unsupported"): number {
   if (status === "available") return 200;
   if (status === "not_configured" || status === "unavailable") return 503;

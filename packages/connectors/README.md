@@ -6,7 +6,7 @@ It currently supports:
 
 - keyword place search;
 - address and city geocoding;
-- driving-route distance and duration facts;
+- driving, walking, and public-transit route distance and duration facts (with transit fare where Amap provides it);
 - user-controlled Amap app route handoff built from Amap POI IDs and coordinates;
 - explicit configuration and provider-failure states.
 

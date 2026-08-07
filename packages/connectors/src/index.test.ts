@@ -8,19 +8,65 @@ test("Amap place search normalizes official response fields without exposing the
     apiKey: "test-key",
     fetcher: async () => new Response(JSON.stringify({
       status: "1",
-      pois: [{ id: "poi-1", name: "Shanghai Railway Station", address: "Jing'an", location: "121.455,31.249", type: "Transport", cityname: "Shanghai", adname: "Jing'an" }]
+      pois: [{ id: "poi-1", name: "Shanghai Railway Station", address: "Jing'an", location: "121.455,31.249", type: "Transport", cityname: "Shanghai", citycode: "021", adname: "Jing'an" }]
     }))
   });
 
   const result = await connector.searchPlaces({ query: "Shanghai Railway Station", region: "Shanghai" });
   assert.equal(result.status, "available");
   assert.equal(result.data?.[0]?.location, "121.455,31.249");
+  assert.equal(result.data?.[0]?.cityCode, "021");
 });
 
 test("Amap connector reports an unconfigured key without making a request", async () => {
   const connector = new AmapConnector({ apiKey: "" });
   const result = await connector.drivingRoute({ origin: "121.4,31.2", destination: "121.5,31.3" });
   assert.equal(result.status, "not_configured");
+});
+
+test("Amap walking route returns distance and duration facts", async () => {
+  let requestUrl = "";
+  const connector = new AmapConnector({
+    apiKey: "test-key",
+    fetcher: async (input) => {
+      requestUrl = String(input);
+      return new Response(JSON.stringify({ status: "1", route: { origin: "121.455,31.249", destination: "121.475,31.230", paths: [{ distance: "2650", cost: { duration: "1900" } }] } }));
+    }
+  });
+
+  const result = await connector.walkingRoute({ origin: "121.455,31.249", destination: "121.475,31.230", originId: "origin-poi", destinationId: "destination-poi" });
+  const url = new URL(requestUrl);
+  assert.equal(result.status, "available");
+  assert.equal(result.data?.mode, "walking");
+  assert.equal(result.data?.distanceMeters, 2650);
+  assert.equal(result.data?.durationSeconds, 1900);
+  assert.equal(url.pathname, "/v5/direction/walking");
+  assert.equal(url.searchParams.get("show_fields"), "cost");
+});
+
+test("Amap public transit requires city codes and returns fare facts", async () => {
+  let requestUrl = "";
+  const connector = new AmapConnector({
+    apiKey: "test-key",
+    fetcher: async (input) => {
+      requestUrl = String(input);
+      return new Response(JSON.stringify({ status: "1", route: { transits: [{ distance: "5100", cost: { duration: "2100", transit_fee: "4" } }] } }));
+    }
+  });
+
+  const missingCityCode = await connector.transitRoute({ origin: "121.455,31.249", destination: "121.475,31.230" });
+  assert.equal(missingCityCode.status, "unsupported");
+  assert.equal(missingCityCode.failure?.code, "missing_city_code");
+
+  const result = await connector.transitRoute({ origin: "121.455,31.249", destination: "121.475,31.230", originCityCode: "021", destinationCityCode: "021" });
+  const url = new URL(requestUrl);
+  assert.equal(result.status, "available");
+  assert.equal(result.data?.mode, "transit");
+  assert.equal(result.data?.durationSeconds, 2100);
+  assert.equal(result.data?.transitCostYuan, 4);
+  assert.equal(url.pathname, "/v5/direction/transit/integrated");
+  assert.equal(url.searchParams.get("city1"), "021");
+  assert.equal(url.searchParams.get("city2"), "021");
 });
 
 test("Amap geocoding resolves a city fact without exposing the key", async () => {
