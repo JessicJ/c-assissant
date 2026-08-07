@@ -67,6 +67,8 @@ Server now has a credential-free compilation service boundary around that orches
 
 The first production China fact collector is also implemented. It resolves the Plan destination through Amap, fetches QWeather facts and nearby accommodation candidates, and obtains driving, walking, and transit facts only when this Plan already contains a chosen accommodation coordinate. It includes only immutable official snapshots explicitly linked to the current Plan and accepts food/digital-life reference catalogs as injected Country Pack data. It does not invent a route origin, use a fixed nearby radius, read environment variables, or expose provider failure text. Server construction and the Web/Telegram trigger remain unconnected.
 
+China Pack now supplies the first source-backed digital-life reference catalog. It covers China Mobile SIM setup, WeChat, Amap, and Alipay across connectivity, communication, navigation, and payment preparation. Catalog text is inert: the runtime loader emits an item only when an approved current snapshot exists, chooses the newest snapshot per source, and strips retained page excerpts before Skill invocation.
+
 ## Product shape
 
 - Web workspace: the full desktop-grade product interface.

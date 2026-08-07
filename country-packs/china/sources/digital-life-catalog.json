@@ -1,0 +1,68 @@
+{
+  "version": "0.1.0",
+  "approvedSourceIds": [
+    "china-working-living-guide-2025",
+    "china-mobile-foreign-sim",
+    "amap-mobile-official",
+    "wechat-official"
+  ],
+  "items": [
+    {
+      "id": "china-mobile-sim",
+      "nameOriginal": "中国移动 SIM 卡",
+      "nameEnglish": "China Mobile SIM card",
+      "category": "mobile_connectivity",
+      "reasonEnglish": "Prepare local mobile data and calling through an official foreign-customer process.",
+      "stepsEnglish": [
+        "Open the official bilingual SIM Card Guide.",
+        "Review the available number and service-plan choices.",
+        "Prepare the accepted identity document and follow the official identity-verification steps.",
+        "Read the service terms and the Chinese-language agreement before signing.",
+        "Complete the activation test; do not treat the SIM as active until the test succeeds."
+      ],
+      "sourceId": "china-mobile-foreign-sim"
+    },
+    {
+      "id": "wechat",
+      "nameOriginal": "微信",
+      "nameEnglish": "WeChat",
+      "category": "communication",
+      "reasonEnglish": "Prepare chats, calls, and life-service access through WeChat's official app.",
+      "stepsEnglish": [
+        "Open the official WeChat English website.",
+        "Choose the official download option for your phone platform.",
+        "Register by following the current instructions shown in the official app.",
+        "Complete only the verification steps shown in the official app, and never share a verification code with C-assistant."
+      ],
+      "sourceId": "wechat-official"
+    },
+    {
+      "id": "amap",
+      "nameOriginal": "高德地图",
+      "nameEnglish": "Amap",
+      "category": "map_navigation",
+      "reasonEnglish": "Open the Plan's verified China places and route handoffs in a local map app.",
+      "stepsEnglish": [
+        "Open the official Amap mobile download page.",
+        "Choose the official iOS, Android, Google Play, or HarmonyOS option for your device.",
+        "Install Amap and use C-assistant links only as handoffs; opening a link does not start navigation or a ride."
+      ],
+      "sourceId": "amap-mobile-official"
+    },
+    {
+      "id": "alipay",
+      "nameOriginal": "支付宝",
+      "nameEnglish": "Alipay",
+      "category": "local_payments",
+      "reasonEnglish": "Prepare one official mobile-payment option while retaining bank-card and cash alternatives.",
+      "stepsEnglish": [
+        "Download and install Alipay through an official app distribution channel.",
+        "Register with a supported foreign or Chinese mobile number by following the in-app instructions.",
+        "Follow the app prompts to bind an eligible international bank card; the issuer may require verification.",
+        "Review the product page and service agreement for current card brands, limits, and fees.",
+        "Keep a bank card or RMB cash as a fallback; C-assistant does not verify or perform payment setup."
+      ],
+      "sourceId": "china-working-living-guide-2025"
+    }
+  ]
+}
