@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-adapters";
 import { AmapConnector, OfficialSourceConnector, QWeatherConnector, TelegramConnector, type AmapPlace, type AmapRoute, type TelegramReplyMarkup } from "@c-assistant/connectors";
+import { runFoodNearbySkill } from "@c-assistant/china-country-pack";
 import { assessPolicyPreparation, type AgentRuntimeKind, type CreatePlanInput, type GeneratedPlanDraft, type PlanAccommodationInput, type PlanArrivalInput, type PlanTransportPreferenceInput, type PlanTravelContextInput, type ProfileUpdate, type RuntimeSelectionUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue } from "./arrival-reminder.js";
@@ -575,7 +576,8 @@ async function sendNearbyFoodFromSharedLocation(chatId: string, location: { lati
     await telegram.sendMessage({ chatId, text: `Amap could not return nearby food right now. ${result.failure?.message ?? "The provider is unavailable."}\n\nNo location was saved, and no candidate, order, reservation, or payment was created.` });
     return;
   }
-  await telegram.sendMessage({ chatId, ...formatTelegramNearbyFood({ places: result.data, partySize }) });
+  const skillResult = runFoodNearbySkill({ partySize, candidates: result.data, observedAt: result.observedAt });
+  await telegram.sendMessage({ chatId, ...formatTelegramNearbyFood({ result: skillResult, places: result.data, partySize }) });
 }
 
 async function arrivalTransitRoute(origin: AmapPlace, destination: AmapPlace): Promise<AmapRoute | undefined> {

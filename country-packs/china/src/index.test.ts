@@ -1,0 +1,44 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+import { runFoodNearbySkill } from "./index.js";
+
+const candidates = [
+  { id: "near", name: "Nearby Noodles", address: "1 Example Road", location: "121.47,31.23", type: "Chinese food", distanceMeters: 180 },
+  { id: "far", name: "Farther Dumplings", address: "2 Example Road", location: "121.48,31.24", type: "Chinese food", distanceMeters: 920 }
+];
+
+test("food-nearby runtime identity matches its internal-only manifest", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../skills/food-nearby/skill.json", import.meta.url), "utf8")) as { id: string; version: string; visibility: string; entrypoint: string };
+  const result = runFoodNearbySkill({ partySize: 1, candidates: [], observedAt: "2026-08-07T00:00:00.000Z" });
+  assert.deepEqual(result.skill, { id: manifest.id, version: manifest.version });
+  assert.equal(manifest.visibility, "internal");
+  assert.equal(manifest.entrypoint, "runFoodNearbySkill");
+});
+
+test("food-nearby asks only for missing party size", () => {
+  const result = runFoodNearbySkill({ candidates, observedAt: "2026-08-07T00:00:00.000Z" });
+  assert.equal(result.status, "needs_input");
+  assert.equal(result.needsInput?.field, "partySize");
+  assert.equal(result.facts.length, 0);
+});
+
+test("food-nearby preserves Amap order and creates bounded handoff proposals", () => {
+  const providerOrder = [...candidates].reverse();
+  const result = runFoodNearbySkill({ partySize: 2, candidates: [...providerOrder, ...Array.from({ length: 5 }, (_, index) => ({ ...candidates[0]!, id: `extra-${index}` }))], observedAt: "2026-08-07T00:00:00.000Z" });
+  assert.equal(result.status, "success");
+  assert.deepEqual(result.facts.map((fact) => fact.id), ["far", "near", "extra-0", "extra-1", "extra-2"]);
+  assert.deepEqual(result.facts.map((fact) => fact.position), [1, 2, 3, 4, 5]);
+  assert.equal(result.recommendations.length, 0);
+  assert.ok(result.actionCards.every((card) => card.completion === "unknown_until_user_confirms"));
+  assert.match(result.warnings.join(" "), /not independently ranked/);
+});
+
+test("food-nearby fails closed on malformed context and omits malformed provider facts", () => {
+  assert.equal(runFoodNearbySkill({ partySize: 0, candidates, observedAt: "2026-08-07T00:00:00.000Z" }).status, "failed");
+  const result = runFoodNearbySkill({ partySize: 1, candidates: [...candidates, { ...candidates[0]!, id: "", distanceMeters: -1 }], observedAt: "2026-08-07T00:00:00.000Z" });
+  assert.equal(result.status, "success");
+  assert.equal(result.facts.length, 2);
+  assert.match(result.warnings.join(" "), /omitted/);
+});
