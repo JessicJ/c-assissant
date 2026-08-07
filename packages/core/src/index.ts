@@ -35,6 +35,35 @@ export interface SourceReference {
   retrievedAt: string;
 }
 
+/** Immutable evidence retained after an allowlisted official-source fetch. */
+export interface SourceSnapshot {
+  id: string;
+  sourceId: string;
+  authority: string;
+  titleOriginal: string;
+  url: string;
+  retrievedAt: string;
+  contentHash: string;
+  excerpt: string;
+}
+
+export interface SourceSnapshotInput {
+  sourceId: string;
+  authority: string;
+  titleOriginal: string;
+  url: string;
+  retrievedAt: string;
+  contentHash: string;
+  excerpt: string;
+}
+
+export interface SourceSnapshotWriteResult {
+  snapshot: SourceSnapshot;
+  previousSnapshot?: SourceSnapshot;
+  duplicate: boolean;
+  contentChanged: boolean;
+}
+
 export interface PlanAccommodation {
   status: "not_set" | "candidate" | "confirmed";
   id?: string;
@@ -122,6 +151,7 @@ export interface WorkspaceSnapshot {
   runtime: RuntimeSelection;
   activePlan: Plan;
   inbox: InboxItem[];
+  sourceSnapshots: SourceSnapshot[];
   system: {
     core: "ready";
     storage: "local";
@@ -233,6 +263,7 @@ export function createInitialWorkspace(): WorkspaceSnapshot {
         timestamp: "Before plan activation"
       }
     ],
+    sourceSnapshots: [],
     system: {
       core: "ready",
       storage: "local",

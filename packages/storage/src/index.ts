@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -22,6 +23,9 @@ import {
   type ProfileUpdate,
   type RuntimeSelectionUpdate,
   type SourceReference,
+  type SourceSnapshot,
+  type SourceSnapshotInput,
+  type SourceSnapshotWriteResult,
   type Stage,
   type Task,
   type TelegramBinding,
@@ -78,6 +82,17 @@ interface InboxRow {
   title: string;
   body: string;
   timestamp: string;
+}
+
+interface SourceSnapshotRow {
+  id: string;
+  source_id: string;
+  authority: string;
+  title_original: string;
+  url: string;
+  retrieved_at: string;
+  content_hash: string;
+  excerpt: string;
 }
 
 interface TelegramBindingRow {
@@ -145,6 +160,7 @@ export class SqliteWorkspaceStore {
         body: row.body,
         timestamp: row.timestamp
       })),
+      sourceSnapshots: this.listSourceSnapshots(),
       system: {
         core: "ready",
         storage: "local",
@@ -401,6 +417,33 @@ export class SqliteWorkspaceStore {
     return this.getWorkspace();
   }
 
+  /** Stores immutable official-source evidence and reports only byte-level content change. */
+  saveSourceSnapshot(input: SourceSnapshotInput): SourceSnapshotWriteResult {
+    const normalized = normalizeSourceSnapshotInput(input);
+    const existing = this.database.prepare(`SELECT id, source_id, authority, title_original, url, retrieved_at, content_hash, excerpt
+      FROM source_snapshots WHERE source_id = ? AND url = ? AND content_hash = ?`).get(normalized.sourceId, normalized.url, normalized.contentHash) as SourceSnapshotRow | undefined;
+    if (existing) return { snapshot: sourceSnapshotFromRow(existing), duplicate: true, contentChanged: false };
+
+    const previous = this.database.prepare(`SELECT id, source_id, authority, title_original, url, retrieved_at, content_hash, excerpt
+      FROM source_snapshots WHERE source_id = ? AND url = ?
+      ORDER BY retrieved_at DESC, rowid DESC LIMIT 1`).get(normalized.sourceId, normalized.url) as SourceSnapshotRow | undefined;
+    const snapshot: SourceSnapshot = { id: `source-${randomUUID()}`, ...normalized };
+    this.database.prepare(`INSERT INTO source_snapshots (id, source_id, authority, title_original, url, retrieved_at, content_hash, excerpt, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      snapshot.id,
+      snapshot.sourceId,
+      snapshot.authority,
+      snapshot.titleOriginal,
+      snapshot.url,
+      snapshot.retrievedAt,
+      snapshot.contentHash,
+      snapshot.excerpt,
+      new Date().toISOString()
+    );
+    const previousSnapshot = previous ? sourceSnapshotFromRow(previous) : undefined;
+    return { snapshot, ...(previousSnapshot ? { previousSnapshot } : {}), duplicate: false, contentChanged: Boolean(previousSnapshot && previousSnapshot.contentHash !== snapshot.contentHash) };
+  }
+
   updatePlanAccommodation(planId: string, input: PlanAccommodationInput): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
     if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
@@ -558,6 +601,18 @@ export class SqliteWorkspaceStore {
         timestamp TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS source_snapshots (
+        id TEXT PRIMARY KEY,
+        source_id TEXT NOT NULL,
+        authority TEXT NOT NULL,
+        title_original TEXT NOT NULL,
+        url TEXT NOT NULL,
+        retrieved_at TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        excerpt TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (source_id, url, content_hash)
+      );
       CREATE TABLE IF NOT EXISTS telegram_binding (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         chat_id TEXT NOT NULL,
@@ -597,6 +652,7 @@ export class SqliteWorkspaceStore {
       CREATE INDEX IF NOT EXISTS idx_stages_plan_order ON stages(plan_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_tasks_stage_order ON tasks(stage_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_inbox_created_at ON inbox_items(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_source_snapshots_latest ON source_snapshots(source_id, url, retrieved_at DESC);
       CREATE INDEX IF NOT EXISTS idx_telegram_pairing_requests_active ON telegram_pairing_requests(consumed_at, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_telegram_arrival_checkins_follow_up ON telegram_arrival_checkins(location_requested_at, location_received_at, check_in_sent_at);
       PRAGMA optimize;
@@ -717,6 +773,11 @@ export class SqliteWorkspaceStore {
     };
   }
 
+  private listSourceSnapshots(limit = 30): SourceSnapshot[] {
+    return (this.database.prepare(`SELECT id, source_id, authority, title_original, url, retrieved_at, content_hash, excerpt
+      FROM source_snapshots ORDER BY retrieved_at DESC, rowid DESC LIMIT ?`).all(limit) as unknown as SourceSnapshotRow[]).map(sourceSnapshotFromRow);
+  }
+
   private addInbox(item: InboxItem): void {
     this.database.prepare("INSERT OR IGNORE INTO inbox_items (id, tone, title, body, timestamp, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(
       item.id,
@@ -750,6 +811,31 @@ function isLocalDateTime(value: string): boolean {
 
 function isTimeZoneName(value: string): boolean {
   return /^[A-Za-z_]+(?:\/[A-Za-z_+-]+)+$/.test(value);
+}
+
+function normalizeSourceSnapshotInput(input: SourceSnapshotInput): Omit<SourceSnapshot, "id"> {
+  const sourceId = input.sourceId.trim();
+  const authority = input.authority.trim();
+  const titleOriginal = input.titleOriginal.trim();
+  const url = input.url.trim();
+  const retrievedAt = input.retrievedAt.trim();
+  const contentHash = input.contentHash.trim().toLowerCase();
+  const excerpt = input.excerpt.trim();
+  if (!/^[a-z0-9][a-z0-9_-]{0,119}$/i.test(sourceId)) throw new Error("A source snapshot needs a stable source id.");
+  if (!authority || authority.length > 300 || !titleOriginal || titleOriginal.length > 500) throw new Error("A source snapshot needs a bounded authority and original title.");
+  try {
+    if (new URL(url).protocol !== "https:") throw new Error();
+  } catch {
+    throw new Error("A source snapshot needs an HTTPS canonical URL.");
+  }
+  if (!Number.isFinite(Date.parse(retrievedAt))) throw new Error("A source snapshot needs a valid retrieval time.");
+  if (!/^[a-f0-9]{64}$/.test(contentHash)) throw new Error("A source snapshot needs a SHA-256 content hash.");
+  if (!excerpt || excerpt.length > 12_000) throw new Error("A source snapshot needs a bounded readable excerpt.");
+  return { sourceId, authority, titleOriginal, url, retrievedAt, contentHash, excerpt };
+}
+
+function sourceSnapshotFromRow(row: SourceSnapshotRow): SourceSnapshot {
+  return { id: row.id, sourceId: row.source_id, authority: row.authority, titleOriginal: row.title_original, url: row.url, retrievedAt: row.retrieved_at, contentHash: row.content_hash, excerpt: row.excerpt };
 }
 
 function isAgentRuntimeKind(value: unknown): value is AgentRuntimeKind {

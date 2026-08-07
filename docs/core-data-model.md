@@ -184,3 +184,5 @@ A SourceSnapshot stores the minimum evidence needed to verify a conclusion or de
 - linked Plans, Tasks, and Runs.
 
 It is not an unrestricted archive of entire websites or raw location histories.
+
+Current implementation persists allowlisted official-source snapshots in local SQLite with the source id, authority, original title, HTTPS canonical URL, retrieval time, SHA-256 content fingerprint, and a bounded excerpt. Equal source/url/hash records are deduplicated; a later differing hash reports a content change but does not itself claim that a policy changed or applies to the user. Plan, Task, and Run linkage remains the next step.
