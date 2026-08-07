@@ -141,6 +141,17 @@ test("Amap route handoff keeps route planning in the user's map app", () => {
   assert.equal(handoff.requiresUserAction, true);
 });
 
+test("Amap route handoff can use a saved Plan place without inventing a POI id", () => {
+  const handoff = createAmapDrivingHandoff({
+    origin: { id: "", name: "Saved stay", address: "Shanghai", location: "121.455,31.249", type: "Plan accommodation", city: "", district: "" },
+    destination: { id: "destination-poi", name: "Shanghai Museum", address: "Huangpu", location: "121.475,31.230", type: "Museum", city: "Shanghai", district: "Huangpu" }
+  });
+
+  const url = new URL(handoff.url);
+  assert.equal(url.searchParams.has("sid"), false);
+  assert.equal(url.searchParams.get("did"), "destination-poi");
+});
+
 test("QWeather combines current facts and a daily forecast from country-pack coordinates without exposing its key", async () => {
   const requests: Array<{ url: string; key: string | null }> = [];
   const connector = new QWeatherConnector({

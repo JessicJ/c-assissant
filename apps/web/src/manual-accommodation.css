@@ -34,6 +34,16 @@
   margin: 0;
 }
 
+.saved-route-place {
+  display: grid;
+  gap: 5px;
+  padding: 10px 11px;
+  border-radius: 10px;
+  background: #fbf8e9;
+  color: #49625d;
+  font-size: 14px;
+}
+
 @media (max-width: 760px) {
   .manual-accommodation-form > div {
     grid-template-columns: 1fr;
