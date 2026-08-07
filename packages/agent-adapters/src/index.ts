@@ -216,7 +216,17 @@ const planDraftSchema = {
                 title: { type: "string", minLength: 1, maxLength: 200 },
                 owner: { type: "string", enum: ["assistant", "user", "external"] },
                 dueLabel: { type: "string", minLength: 1, maxLength: 160 },
-                activationTrigger: { type: "string", enum: ["arrival"] }
+                activationTrigger: { type: "string", enum: ["arrival"] },
+                reminder: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["scheduledAtLocal", "timeZone", "purpose"],
+                  properties: {
+                    scheduledAtLocal: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}$" },
+                    timeZone: { type: "string", minLength: 3, maxLength: 80 },
+                    purpose: { type: "string", minLength: 1, maxLength: 500 }
+                  }
+                }
               }
             }
           }
@@ -244,13 +254,36 @@ Rules:
 - Do not claim a policy requirement or cite an unofficial source. Official-source research happens in another Skill.
 - Include user-owned Tasks for real-world choices and external-owned Tasks for actions inside another application.
 - When one task is specifically intended to begin at the expected arrival time, set its activationTrigger to "arrival". Do not add that marker to any other task.
+- Add a reminder only when the user supplied enough facts for a concrete local date, time, and IANA time zone, or when that moment follows safely from an explicit dated event. Never invent a date, time, or departure time zone. Use YYYY-MM-DDTHH:mm and a short English purpose that explains why the reminder should run; do not freeze final notification copy.
+- A reminder in the draft is only a proposal. It will not run until the user reviews and confirms the complete Plan.
 - Do not say that C-assistant has booked, paid, hailed a ride, or completed any action.
 - The Plan must be readable as a complete draft before a user confirms it.`;
 }
 
 function isPlanDraft(value: unknown): value is GeneratedPlanDraft {
   if (!isRecord(value) || !isString(value.title) || !isString(value.location) || !isString(value.dates) || !isString(value.nextAction) || !isStringArray(value.knownInformation) || !isStringArray(value.assumptions) || !Array.isArray(value.stages) || value.stages.length === 0) return false;
-  return value.stages.every((stage) => isRecord(stage) && isString(stage.title) && isString(stage.description) && Array.isArray(stage.tasks) && stage.tasks.length > 0 && stage.tasks.every((task) => isRecord(task) && isString(task.title) && isString(task.dueLabel) && (task.owner === "assistant" || task.owner === "user" || task.owner === "external") && (task.activationTrigger === undefined || task.activationTrigger === "arrival")));
+  return value.stages.every((stage) => isRecord(stage) && isString(stage.title) && isString(stage.description) && Array.isArray(stage.tasks) && stage.tasks.length > 0 && stage.tasks.every((task) => isRecord(task) && isString(task.title) && isString(task.dueLabel) && (task.owner === "assistant" || task.owner === "user" || task.owner === "external") && (task.activationTrigger === undefined || task.activationTrigger === "arrival") && (task.reminder === undefined || isTaskReminder(task.reminder))));
+}
+
+function isTaskReminder(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.scheduledAtLocal === "string"
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value.scheduledAtLocal)
+    && Number.isFinite(Date.parse(`${value.scheduledAtLocal}:00Z`))
+    && typeof value.timeZone === "string"
+    && isIanaTimeZone(value.timeZone)
+    && isString(value.purpose)
+    && value.purpose.length <= 500;
+}
+
+function isIanaTimeZone(value: string): boolean {
+  if (!/^[A-Za-z_]+(?:\/[A-Za-z_+-]+)+$/.test(value)) return false;
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: value }).format();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -54,3 +54,17 @@ test("Telegram Plan summary includes task state and safely shortens an oversized
   assert.match(summary, /Plan preview shortened for Telegram/);
   assert.ok(summary.length <= 3_800);
 });
+
+test("Telegram Plan summary shows a proposed structured reminder", () => {
+  const workspace = createInitialWorkspace();
+  workspace.activePlan.stages[0]!.tasks[0]!.reminder = {
+    scheduledAtLocal: "2026-09-01T05:00",
+    timeZone: "Asia/Shanghai",
+    purpose: "Check your passport and essential items."
+  };
+
+  const summary = formatTelegramPlan(workspace.activePlan);
+
+  assert.match(summary, /Proposed reminder: 2026-09-01 05:00 \(Asia\/Shanghai\)/);
+  assert.match(summary, /Check your passport and essential items/);
+});

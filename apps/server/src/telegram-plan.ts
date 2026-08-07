@@ -48,7 +48,10 @@ export function formatTelegramPlan(plan: Plan): string {
   ];
   plan.stages.forEach((stage, index) => {
     lines.push(`${index + 1}. ${oneLine(stage.title)}`);
-    stage.tasks.forEach((task) => lines.push(`   [${task.status.replaceAll("_", " ")}] ${oneLine(task.title)} — ${oneLine(task.dueLabel, 100)}`));
+    stage.tasks.forEach((task) => {
+      lines.push(`   [${task.status.replaceAll("_", " ")}] ${oneLine(task.title)} — ${oneLine(task.dueLabel, 100)}`);
+      if (task.reminder) lines.push(`      Proposed reminder: ${task.reminder.scheduledAtLocal.replace("T", " ")} (${task.reminder.timeZone}) — ${oneLine(task.reminder.purpose, 180)}`);
+    });
   });
   lines.push("", `Next: ${oneLine(plan.nextAction)}`, "", "Use the Web workspace to review every field and confirm or revise this Plan.");
   return truncateTelegramText(lines.join("\n"));

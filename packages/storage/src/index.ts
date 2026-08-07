@@ -31,6 +31,7 @@ import {
   type SourceSnapshotWriteResult,
   type Stage,
   type Task,
+  type TaskReminder,
   type TelegramBinding,
   type TelegramPairingStatus,
   type WorkspaceSnapshot
@@ -77,6 +78,7 @@ interface TaskRow {
   status: Task["status"];
   due_label: string;
   activation_trigger: "arrival" | null;
+  reminder_json: string | null;
 }
 
 interface InboxRow {
@@ -701,6 +703,7 @@ export class SqliteWorkspaceStore {
         status TEXT NOT NULL,
         due_label TEXT NOT NULL,
         activation_trigger TEXT,
+        reminder_json TEXT,
         sort_order INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS inbox_items (
@@ -785,6 +788,7 @@ export class SqliteWorkspaceStore {
     }
     const taskColumns = this.database.prepare("PRAGMA table_info(tasks)").all() as unknown as Array<{ name: string }>;
     if (!taskColumns.some((column) => column.name === "activation_trigger")) this.database.exec("ALTER TABLE tasks ADD COLUMN activation_trigger TEXT");
+    if (!taskColumns.some((column) => column.name === "reminder_json")) this.database.exec("ALTER TABLE tasks ADD COLUMN reminder_json TEXT");
     this.database.exec("CREATE INDEX IF NOT EXISTS idx_tasks_arrival_trigger ON tasks(activation_trigger, status) WHERE activation_trigger = 'arrival' AND status = 'scheduled'; PRAGMA optimize;");
     const profileColumns = this.database.prepare("PRAGMA table_info(profiles)").all() as unknown as Array<{ name: string }>;
     if (!profileColumns.some((column) => column.name === "gender")) this.database.exec("ALTER TABLE profiles ADD COLUMN gender TEXT NOT NULL DEFAULT 'not_specified'");
@@ -839,7 +843,7 @@ export class SqliteWorkspaceStore {
           stageIndex
         );
         stage.tasks.forEach((task, taskIndex) => {
-          this.database.prepare("INSERT INTO tasks (id, stage_id, title, owner, status, due_label, activation_trigger, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(
+          this.database.prepare("INSERT INTO tasks (id, stage_id, title, owner, status, due_label, activation_trigger, reminder_json, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
             task.id,
             stage.id,
             task.title,
@@ -847,6 +851,7 @@ export class SqliteWorkspaceStore {
             task.status,
             task.dueLabel,
             task.activationTrigger ?? null,
+            task.reminder ? JSON.stringify(task.reminder) : null,
             taskIndex
           );
         });
@@ -868,14 +873,18 @@ export class SqliteWorkspaceStore {
       id: stage.id,
       title: stage.title,
       description: stage.description,
-      tasks: (this.database.prepare("SELECT id, title, owner, status, due_label, activation_trigger FROM tasks WHERE stage_id = ? ORDER BY sort_order").all(stage.id) as unknown as TaskRow[]).map((task) => ({
-        id: task.id,
-        title: task.title,
-        owner: task.owner,
-        status: task.status,
-        dueLabel: task.due_label,
-        ...(task.activation_trigger === "arrival" ? { activationTrigger: "arrival" as const } : {})
-      }))
+      tasks: (this.database.prepare("SELECT id, title, owner, status, due_label, activation_trigger, reminder_json FROM tasks WHERE stage_id = ? ORDER BY sort_order").all(stage.id) as unknown as TaskRow[]).map((task) => {
+        const reminder = parseTaskReminder(task.reminder_json);
+        return {
+          id: task.id,
+          title: task.title,
+          owner: task.owner,
+          status: task.status,
+          dueLabel: task.due_label,
+          ...(task.activation_trigger === "arrival" ? { activationTrigger: "arrival" as const } : {}),
+          ...(reminder ? { reminder } : {})
+        };
+      })
     }));
 
     return {
@@ -927,12 +936,31 @@ function parsePlanConfiguration(value: string): PlanConfiguration {
   return defaults;
 }
 
+function parseTaskReminder(value: string | null): TaskReminder | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as Partial<TaskReminder>;
+    if (typeof parsed.scheduledAtLocal !== "string" || !isLocalDateTime(parsed.scheduledAtLocal)) return undefined;
+    if (typeof parsed.timeZone !== "string" || !isTimeZoneName(parsed.timeZone)) return undefined;
+    if (typeof parsed.purpose !== "string" || !parsed.purpose.trim() || parsed.purpose.length > 500) return undefined;
+    return { scheduledAtLocal: parsed.scheduledAtLocal, timeZone: parsed.timeZone, purpose: parsed.purpose.trim() };
+  } catch {
+    return undefined;
+  }
+}
+
 function isLocalDateTime(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}:00Z`));
 }
 
 function isTimeZoneName(value: string): boolean {
-  return /^[A-Za-z_]+(?:\/[A-Za-z_+-]+)+$/.test(value);
+  if (!/^[A-Za-z_]+(?:\/[A-Za-z_+-]+)+$/.test(value)) return false;
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: value }).format();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function normalizeSourceSnapshotInput(input: SourceSnapshotInput): Omit<SourceSnapshot, "id"> {

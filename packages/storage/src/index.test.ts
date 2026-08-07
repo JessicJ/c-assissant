@@ -114,10 +114,11 @@ test("SQLite persists a validated Agent-generated Plan", () => {
     knownInformation: ["Purpose: exhibition"],
     assumptions: ["Accommodation is unconfirmed."],
     nextAction: "Review the complete Plan.",
-    stages: [{ title: "Arrival", description: "Reach accommodation.", tasks: [{ title: "Open route", owner: "external", dueLabel: "At arrival" }] }]
+    stages: [{ title: "Arrival", description: "Reach accommodation.", tasks: [{ title: "Open route", owner: "external", dueLabel: "At arrival", reminder: { scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Prepare your passport and essential items." } }] }]
   });
 
   assert.equal(workspace.activePlan.title, "Attend a Shanghai exhibition");
+  assert.equal(workspace.activePlan.stages[0]?.tasks[0]?.reminder?.scheduledAtLocal, "2026-09-01T05:00");
   assert.equal(workspace.inbox[0]?.title, "Codex Plan draft saved locally");
   store.close();
 });

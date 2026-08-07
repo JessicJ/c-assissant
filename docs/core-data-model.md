@@ -139,6 +139,8 @@ When due, it creates a Run that reads the latest confirmed Plan, refreshes requi
 
 Reminder times use the Event location's local timezone. Plan updates recalculate affected Reminders and cancel obsolete ones.
 
+Current implementation supports a first inert Task-level reminder proposal with a concrete local wall-clock time, IANA time zone, and purpose. Codex or Claude Code may include it only when the request contains enough dated facts; it is persisted with the Plan and shown in Web and Telegram previews. It does not send anything yet, and its purpose is not treated as frozen delivery copy. Telegram scheduling and due-time Runs remain the next step.
+
 ## Event
 
 An Event records what is expected or what actually occurred.

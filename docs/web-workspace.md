@@ -27,6 +27,8 @@ The initial generation should present a complete Plan, not a questionnaire. It b
 
 Before activation, the user sees the complete final Plan in normal presentation. One confirmation activates that exact Plan version and its declared automation scope. Later material changes create a new version that must be confirmed when they exceed the existing scope.
 
+The current Plan view lists every Stage and Task. When an Agent draft contains a valid structured reminder proposal, Web shows its local time, time zone, and purpose next to the Task. This display does not mean the reminder has been scheduled or sent.
+
 ## Interaction rules
 
 - Ask only for information required to produce a reliable Plan or execute the current action.

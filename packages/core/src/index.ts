@@ -14,6 +14,15 @@ export type RunTrigger = "web" | "telegram";
 export type TransportPreference = "plan_recommended" | "taxi" | "public_transit" | "walking";
 export type LuggageLevel = "unknown" | "light" | "standard" | "heavy";
 
+export interface TaskReminder {
+  /** Local wall-clock time in YYYY-MM-DDTHH:mm form. */
+  scheduledAtLocal: string;
+  /** IANA time zone for the local wall-clock time. */
+  timeZone: string;
+  /** Why this reminder should run; final delivery copy is generated from current facts. */
+  purpose: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -22,6 +31,8 @@ export interface Task {
   dueLabel: string;
   /** An explicit event marker; Core must never infer this from a task title. */
   activationTrigger?: TaskActivationTrigger;
+  /** A proposed reminder remains inert until this exact Plan version is confirmed. */
+  reminder?: TaskReminder;
 }
 
 export interface Stage {
@@ -236,6 +247,7 @@ export interface GeneratedPlanDraft {
         owner: Task["owner"];
         dueLabel: string;
         activationTrigger?: TaskActivationTrigger;
+        reminder?: TaskReminder;
     }>;
   }>;
 }
@@ -393,7 +405,8 @@ export function createPlanFromDraft(draft: GeneratedPlanDraft): Plan {
         owner: task.owner,
         status: task.owner === "user" ? "waiting_user" : "scheduled",
         dueLabel: task.dueLabel,
-        ...(task.activationTrigger ? { activationTrigger: task.activationTrigger } : {})
+        ...(task.activationTrigger ? { activationTrigger: task.activationTrigger } : {}),
+        ...(task.reminder ? { reminder: task.reminder } : {})
       }))
     })),
     sources: [],
