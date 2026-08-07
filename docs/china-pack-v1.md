@@ -12,7 +12,7 @@ The Pack helps foreigners prepare for and adapt to life in China. It is a region
 
 Composite entry point. Core orchestrates the supporting Skills and compiles one complete Plan. It is not one giant prompt.
 
-Implemented slice: `china-arrival-plan` `0.1.0` is a fail-closed composition gate in the China Skill Registry. It binds supporting results to an exact Plan ID/version, orders them according to this document, and preserves Skill versions, statuses, summaries, assumptions, recommendations, sources, and warnings. It remains `blocked:composition_incomplete` while `digital-life-setup` and `arrival-preparation` are absent. Until Core compilation and authorization are connected, it deliberately promotes no Plan changes, Tasks, Reminders, or action cards.
+Implemented slice: `china-arrival-plan` `0.1.0` is a fail-closed composition gate in the China Skill Registry. It binds supporting results to an exact Plan ID/version, orders them according to this document, and preserves Skill versions, statuses, summaries, assumptions, recommendations, sources, and warnings. It remains `blocked:composition_incomplete` while `arrival-preparation` is absent. Until Core compilation and authorization are connected, it deliberately promotes no Plan changes, Tasks, Reminders, or action cards.
 
 ### `policy-applicability`
 
@@ -27,6 +27,8 @@ Builds the preparation checklist and timing for entry documents, communications,
 ### `digital-life-setup`
 
 Explains the local apps and account setup needed by the active Plan. It provides English steps and links to original official material when available.
+
+Implemented slice: `digital-life-setup` `0.1.0` receives capability needs already derived from the current Plan rather than asking the user to select apps first. It accepts only normalized setup material linked to a Country Pack-approved first-party source snapshot inside a 30-day freshness window, preserves the Chinese original name, and returns an English reason and up to eight English steps. User-confirmed completed items remain visible as facts but are omitted from recommendations and links. The Skill does not install apps, register accounts, handle credentials, create Tasks or Reminders, or infer completion from opening an official link.
 
 ### `housing-area-recommendation`
 

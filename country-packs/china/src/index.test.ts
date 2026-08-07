@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { chinaArrivalPlanSupportingSkillOrder, runChinaArrivalPlanSkill, runFoodNearbySkill, runHousingAreaRecommendationSkill, runLocalFoodGuideSkill, runPolicyApplicabilitySkill, runTransportPlannerSkill, runWeatherAndPackingSkill, type ChinaArrivalPlanSupportingResult, type ChinaArrivalPlanSupportingSkillId } from "./index.js";
+import { chinaArrivalPlanSupportingSkillOrder, runChinaArrivalPlanSkill, runDigitalLifeSetupSkill, runFoodNearbySkill, runHousingAreaRecommendationSkill, runLocalFoodGuideSkill, runPolicyApplicabilitySkill, runTransportPlannerSkill, runWeatherAndPackingSkill, type ChinaArrivalPlanSupportingResult, type ChinaArrivalPlanSupportingSkillId } from "./index.js";
 import { chinaSkillRegistry } from "./registry.js";
 
 const candidates = [
@@ -216,8 +216,51 @@ test("local-food-guide degrades without traceable facts and omits malformed or d
   assert.equal(stale.status, "degraded");
 });
 
+const digitalSource = { id: "amap-user-guide", authority: "Amap", titleOriginal: "高德地图用户指南", url: "https://lbs.amap.com/", retrievedAt: "2026-08-07T00:00:00.000Z", contentHash: "c".repeat(64) };
+const digitalItems = [
+  { id: "amap", nameOriginal: "高德地图", nameEnglish: "Amap", category: "map_navigation" as const, reasonEnglish: "Use the Plan's verified places and route handoffs.", stepsEnglish: ["Open the official link.", "Install Amap from the official store for your device."], sourceId: digitalSource.id },
+  { id: "unused-pay", nameOriginal: "示例支付", nameEnglish: "Example payment app", category: "local_payments" as const, reasonEnglish: "Payment context.", stepsEnglish: ["Review the official setup guide."], sourceId: digitalSource.id }
+];
+
+test("digital-life-setup identity matches its internal manifest and derives needs from this Plan", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../skills/digital-life-setup/skill.json", import.meta.url), "utf8")) as { id: string; version: string; visibility: string; entrypoint: string };
+  const result = runDigitalLifeSetupSkill({ requiredCapabilities: [], completedItemIds: [], items: digitalItems, sources: [digitalSource], approvedSourceIds: [digitalSource.id], now: "2026-08-07T01:00:00.000Z" });
+  assert.deepEqual(result.skill, { id: manifest.id, version: manifest.version });
+  assert.equal(manifest.visibility, "internal");
+  assert.equal(manifest.entrypoint, "runDigitalLifeSetupSkill");
+  assert.equal(result.status, "degraded");
+  assert.match(result.warnings.join(" "), /derive digital needs from the Plan/);
+});
+
+test("digital-life-setup gives English steps, preserves the Chinese name, and skips confirmed work", () => {
+  const needed = runDigitalLifeSetupSkill({ requiredCapabilities: ["map_navigation"], completedItemIds: [], items: digitalItems, sources: [digitalSource], approvedSourceIds: [digitalSource.id], now: "2026-08-07T01:00:00.000Z" });
+  assert.equal(needed.status, "success");
+  assert.equal(needed.facts[0]?.nameOriginal, "高德地图");
+  assert.equal(needed.facts[0]?.nameEnglish, "Amap");
+  assert.deepEqual(needed.recommendations[0]?.stepsEnglish, digitalItems[0]?.stepsEnglish);
+  assert.equal(needed.actionCards[0]?.url, digitalSource.url);
+  assert.equal(needed.actionCards[0]?.completion, "unknown_until_user_confirms");
+  assert.deepEqual(needed.proposedTasks, []);
+  const completed = runDigitalLifeSetupSkill({ requiredCapabilities: ["map_navigation"], completedItemIds: ["amap"], items: digitalItems, sources: [digitalSource], approvedSourceIds: [digitalSource.id], now: "2026-08-07T01:00:00.000Z" });
+  assert.equal(completed.facts[0]?.setupState, "confirmed_completed");
+  assert.equal(completed.recommendations.length, 0);
+  assert.equal(completed.actionCards.length, 0);
+});
+
+test("digital-life-setup degrades on missing or stale approved guidance and fails malformed input", () => {
+  const missing = runDigitalLifeSetupSkill({ requiredCapabilities: ["communication", "map_navigation"], completedItemIds: [], items: digitalItems, sources: [digitalSource], approvedSourceIds: [digitalSource.id], now: "2026-08-07T01:00:00.000Z" });
+  assert.equal(missing.status, "degraded");
+  assert.deepEqual(missing.unresolvedCapabilities, ["communication"]);
+  const stale = runDigitalLifeSetupSkill({ requiredCapabilities: ["map_navigation"], completedItemIds: [], items: digitalItems, sources: [{ ...digitalSource, retrievedAt: "2026-01-01T00:00:00.000Z" }], approvedSourceIds: [digitalSource.id], now: "2026-08-07T01:00:00.000Z" });
+  assert.equal(stale.status, "degraded");
+  assert.equal(stale.facts.length, 0);
+  const malformedItem = runDigitalLifeSetupSkill({ requiredCapabilities: ["map_navigation"], completedItemIds: [], items: [{ id: "broken" } as never], sources: [digitalSource], approvedSourceIds: [digitalSource.id], now: "2026-08-07T01:00:00.000Z" });
+  assert.equal(malformedItem.status, "degraded");
+  assert.equal(runDigitalLifeSetupSkill({ requiredCapabilities: ["unknown" as never], completedItemIds: [], items: [], sources: [], approvedSourceIds: [], now: "not-a-date" }).status, "failed");
+});
+
 test("China Skill Registry loads every internal manifest and validates invocation envelopes", async () => {
-  assert.deepEqual(chinaSkillRegistry.list().map((manifest) => manifest.id).sort(), ["china-arrival-plan", "food-nearby", "housing-area-recommendation", "local-food-guide", "policy-applicability", "transport-planner", "weather-and-packing"]);
+  assert.deepEqual(chinaSkillRegistry.list().map((manifest) => manifest.id).sort(), ["china-arrival-plan", "digital-life-setup", "food-nearby", "housing-area-recommendation", "local-food-guide", "policy-applicability", "transport-planner", "weather-and-packing"]);
   const result = await chinaSkillRegistry.invoke("food-nearby", { partySize: 2, candidates, observedAt: "2026-08-07T00:00:00.000Z" });
   assert.equal(result.skill.id, "food-nearby");
   assert.equal(result.status, "success");

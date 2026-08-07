@@ -38,8 +38,8 @@
 - 建立 `apps/server`、`apps/telegram-bot`、`apps/web` 目录。
 - 建立 `packages/core`、`packages/skill-runtime`、`packages/agent-adapters`、`packages/connectors`、`packages/storage` 目录。
 - 建立 `country-packs/china` 及内部 Skills 目录约定。
-- 实现第一层通用 Skill Runtime：严格解析 manifest，拒绝重复 Skill ID、入口漂移和不受支持的状态，并在调用后校验 Skill ID/版本及完整结构化结果数组。China Pack 通过一个 Node 侧 Registry 加载七个内部 `skill.json` 并绑定实际入口；用户仍不能单独安装或运行 Skill。生产政策证据门槛已通过该 Registry 调用，为后续 `china-arrival-plan` 组合编排和 Skill Run 审计建立统一入口。
-- 落地 `china-arrival-plan` `0.1.0` 第一层组合门槛并加入 China Registry：它绑定一个准确的 Plan ID/版本，按既定顺序保存 supporting Skill 的 ID、版本、状态、摘要、假设、建议、来源与警告；当前因 `digital-life-setup`、`arrival-preparation` 尚未实现而明确返回 `blocked:composition_incomplete`。在 Core 编译和授权接通前，它不会提升任何 Plan 修改、Task、Reminder 或行动卡，因此不能被误称为完整可执行 Plan。
+- 实现第一层通用 Skill Runtime：严格解析 manifest，拒绝重复 Skill ID、入口漂移和不受支持的状态，并在调用后校验 Skill ID/版本及完整结构化结果数组。China Pack 通过一个 Node 侧 Registry 加载八个内部 `skill.json` 并绑定实际入口；用户仍不能单独安装或运行 Skill。生产政策证据门槛已通过该 Registry 调用，为后续 `china-arrival-plan` 组合编排和 Skill Run 审计建立统一入口。
+- 落地 `china-arrival-plan` `0.1.0` 第一层组合门槛并加入 China Registry：它绑定一个准确的 Plan ID/版本，按既定顺序保存 supporting Skill 的 ID、版本、状态、摘要、假设、建议、来源与警告；当前因 `arrival-preparation` 尚未实现而明确返回 `blocked:composition_incomplete`。在 Core 编译和授权接通前，它不会提升任何 Plan 修改、Task、Reminder 或行动卡，因此不能被误称为完整可执行 Plan。
 - 提供中英文 README、环境变量示例和 Git 忽略规则。
 - 实现本地 SQLite 保存：Profile、当前 Plan、Stage、Task 和 Inbox 在重启后保留。
 - 实现 Web 中创建本地 Plan、确认 Plan 和保存 Profile 基础字段的流程。
@@ -71,6 +71,7 @@
 - 落地 `weather-and-packing` `0.1.0`：Web 天气卡、Telegram `/weather` 和 Task Reminder 到期天气刷新共用同一个 China Pack Skill。它只从可追溯的 QWeather 归一化事实生成雨雪防护、保暖、防暑补水和防晒提示，并统一阈值；提醒日期只有精确匹配预报时才按该日预报展示，否则降级为当前观测并明确说明。非 QWeather 来源链接会被移除，Skill 不直接修改 Plan、Task 或 Reminder。
 - 落地 `policy-applicability` `0.1.0`：生产环境的政策证据准备接口已改由 China Pack Skill 执行。Server 只传国籍、来华签证/居留状态、Plan 地点/日期和官方快照元数据，不传完整 Profile、完整 Plan、聊天记录或政策正文。Skill 要求七天新鲜度内、域名和指纹均合法的国家移民管理局英文快照；`success` 只表示可以进入独立的来源支撑审查，不表示签证、居留、入境或政策资格成立。
 - 落地 `local-food-guide` `0.1.0`：制定 Plan 时只转换已归一化、来源 ID 属于 Country Pack 白名单且官方快照在 30 天新鲜度窗口内的目的地饮食事实，保留中文原名、英文名称、英文解释和来源；最多展示五项并去重。没有可追溯事实时明确降级，不凭模型常识声称“当地特色”，也不提前选择餐厅、创建行动卡或推断预订、点餐、支付和到店完成。具体店仍由抵达后或用户主动要求时的 `food-nearby` 处理。
+- 落地 `digital-life-setup` `0.1.0`：由 Core 根据本次 Plan 传入联网、通讯、地图导航和本地支付能力需求，Skill 从 Country Pack 白名单且 30 天内刷新的第一方资料中选择设置项；保留中文原名并输出英文原因和步骤。用户已明确完成的项目不再进入待办建议；打开官方链接不等于安装、注册、实名、支付就绪或任务完成，Skill 不接收密码、验证码、支付凭据或账号会话，也不直接创建 Task/Reminder。
 - 实现高德路线行动交接：选择高德地点后可检查驾车路线，并生成由用户自行打开的高德路线链接；不调用叫车、预订或支付。
 - 实现 QWeather Connector：经高德地理编码解析地点后，提供实况和三天预报；Key 与 Host 不会暴露给 Web 或 Agent。
 - 实现官方来源 Connector 的安全基础：仅从 Country Pack 注册表批准的 HTTPS 官方域名抓取，保留原始标题、规范链接、抓取时间、内容指纹和限长摘录；拒绝任意外部域名与跳转，且不生成个人政策适用性结论。China Pack 初始注册了国家移民管理局与国务院英文入口。

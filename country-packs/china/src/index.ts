@@ -561,6 +561,152 @@ function isValidLocalFoodFact(fact: LocalFoodGuideFactInput): boolean {
   return Boolean(fact.id.trim() && fact.nameOriginal.trim() && fact.nameEnglish.trim() && fact.descriptionEnglish.trim() && fact.sourceId.trim());
 }
 
+export type DigitalLifeCapability = "mobile_connectivity" | "communication" | "map_navigation" | "local_payments";
+
+export interface DigitalLifeSetupSourceInput {
+  id: string;
+  authority: string;
+  titleOriginal: string;
+  url: string;
+  retrievedAt: string;
+  contentHash: string;
+}
+
+export interface DigitalLifeSetupItemInput {
+  id: string;
+  nameOriginal: string;
+  nameEnglish: string;
+  category: DigitalLifeCapability;
+  reasonEnglish: string;
+  stepsEnglish: string[];
+  sourceId: string;
+}
+
+export interface DigitalLifeSetupSkillResult {
+  skill: { id: "digital-life-setup"; version: "0.1.0" };
+  status: "success" | "degraded" | "failed";
+  summary: string;
+  facts: Array<DigitalLifeSetupItemInput & { setupState: "needed" | "confirmed_completed" }>;
+  assumptions: [];
+  recommendations: Array<{ itemId: string; text: string; stepsEnglish: string[]; sourceId: string }>;
+  proposedPlanChanges: [];
+  proposedTasks: [];
+  proposedReminders: [];
+  actionCards: Array<{ kind: "official_setup_link"; itemId: string; url: string; completion: "unknown_until_user_confirms" }>;
+  sources: DigitalLifeSetupSourceInput[];
+  warnings: string[];
+  unresolvedCapabilities: DigitalLifeCapability[];
+}
+
+const digitalLifeCapabilities: DigitalLifeCapability[] = ["mobile_connectivity", "communication", "map_navigation", "local_payments"];
+const DIGITAL_LIFE_SOURCE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1_000;
+
+/** Selects source-backed setup guidance for this Plan; it never installs or registers anything. */
+export function runDigitalLifeSetupSkill(input: {
+  requiredCapabilities: DigitalLifeCapability[];
+  completedItemIds: string[];
+  items: DigitalLifeSetupItemInput[];
+  sources: DigitalLifeSetupSourceInput[];
+  approvedSourceIds: string[];
+  now: string;
+}): DigitalLifeSetupSkillResult {
+  const identity = { id: "digital-life-setup" as const, version: "0.1.0" as const };
+  const noChanges = { assumptions: [] as [], proposedPlanChanges: [] as [], proposedTasks: [] as [], proposedReminders: [] as [] };
+  const nowMs = Date.parse(input.now);
+  const validArrays = [input.requiredCapabilities, input.completedItemIds, input.items, input.sources, input.approvedSourceIds].every(Array.isArray);
+  const validCapabilities = validArrays && input.requiredCapabilities.every((capability) => digitalLifeCapabilities.includes(capability));
+  const validIds = validArrays && [...input.completedItemIds, ...input.approvedSourceIds].every((id) => typeof id === "string" && Boolean(id.trim()));
+  if (!Number.isFinite(nowMs) || !validArrays || !validCapabilities || !validIds) {
+    return { skill: identity, ...noChanges, status: "failed", summary: "The digital-life setup input did not pass the Skill contract.", facts: [], recommendations: [], actionCards: [], sources: [], warnings: ["No setup guidance was produced from malformed context."], unresolvedCapabilities: [] };
+  }
+
+  const requiredCapabilities = [...new Set(input.requiredCapabilities)];
+  if (!requiredCapabilities.length) {
+    return { skill: identity, ...noChanges, status: "degraded", summary: "No digital capability requirement has been resolved from this Plan yet.", facts: [], recommendations: [], actionCards: [], sources: [], warnings: ["Core should derive digital needs from the Plan before asking the user to configure individual apps."], unresolvedCapabilities: [] };
+  }
+  const completedItemIds = new Set(input.completedItemIds);
+  const approvedSourceIds = new Set(input.approvedSourceIds);
+  const sourceById = new Map(input.sources.filter((source) => isValidDigitalLifeSource(source, nowMs) && approvedSourceIds.has(source.id)).map((source) => [source.id, source]));
+  const seenItems = new Set<string>();
+  const facts = input.items.filter((item) => {
+    if (!isValidDigitalLifeItem(item) || !requiredCapabilities.includes(item.category) || !sourceById.has(item.sourceId) || seenItems.has(item.id)) return false;
+    seenItems.add(item.id);
+    return true;
+  }).slice(0, 8).map((item) => ({
+    id: item.id.trim(),
+    nameOriginal: item.nameOriginal.trim(),
+    nameEnglish: item.nameEnglish.trim(),
+    category: item.category,
+    reasonEnglish: item.reasonEnglish.trim(),
+    stepsEnglish: item.stepsEnglish.map((step) => step.trim()),
+    sourceId: item.sourceId,
+    setupState: completedItemIds.has(item.id) ? "confirmed_completed" as const : "needed" as const
+  }));
+  const resolvedCapabilities = new Set(facts.map((fact) => fact.category));
+  const unresolvedCapabilities = requiredCapabilities.filter((capability) => !resolvedCapabilities.has(capability));
+  const recommendations = facts.filter((fact) => fact.setupState === "needed").map((fact) => ({ itemId: fact.id, sourceId: fact.sourceId, text: `${fact.nameEnglish} (${fact.nameOriginal}): ${fact.reasonEnglish}`, stepsEnglish: fact.stepsEnglish }));
+  const usedSourceIds = new Set(facts.map((fact) => fact.sourceId));
+  const sources = [...usedSourceIds].flatMap((id) => {
+    const source = sourceById.get(id);
+    return source ? [source] : [];
+  });
+  const actionCards = recommendations.flatMap((recommendation) => {
+    const source = sourceById.get(recommendation.sourceId);
+    return source ? [{ kind: "official_setup_link" as const, itemId: recommendation.itemId, url: source.url, completion: "unknown_until_user_confirms" as const }] : [];
+  });
+  const warnings = [
+    "Opening an official link does not prove installation, registration, identity verification, payment readiness, or Task completion.",
+    "C-assistant does not receive passwords, verification codes, payment credentials, or account sessions."
+  ];
+  if (facts.length !== input.items.length || sourceById.size !== input.sources.length) warnings.push("Malformed, duplicate, stale, unapproved, irrelevant, or untraceable setup material was omitted.");
+  if (unresolvedCapabilities.length) warnings.push(`No current approved setup guidance is available for: ${unresolvedCapabilities.join(", ")}.`);
+  const status = unresolvedCapabilities.length ? "degraded" : "success";
+  const completedCount = facts.length - recommendations.length;
+  return {
+    skill: identity,
+    ...noChanges,
+    status,
+    summary: `${recommendations.length} digital setup ${recommendations.length === 1 ? "item remains" : "items remain"} for this Plan; ${completedCount} ${completedCount === 1 ? "item is" : "items are"} already user-confirmed.`,
+    facts,
+    recommendations,
+    actionCards,
+    sources,
+    warnings,
+    unresolvedCapabilities
+  };
+}
+
+function isValidDigitalLifeSource(source: unknown, nowMs: number): source is DigitalLifeSetupSourceInput {
+  if (typeof source !== "object" || source === null) return false;
+  const candidate = source as Partial<DigitalLifeSetupSourceInput>;
+  if (typeof candidate.id !== "string" || !candidate.id.trim()
+    || typeof candidate.authority !== "string" || !candidate.authority.trim()
+    || typeof candidate.titleOriginal !== "string" || !candidate.titleOriginal.trim()
+    || typeof candidate.url !== "string"
+    || typeof candidate.retrievedAt !== "string"
+    || typeof candidate.contentHash !== "string" || !/^[a-f0-9]{64}$/i.test(candidate.contentHash)) return false;
+  const retrievedAt = Date.parse(candidate.retrievedAt);
+  if (!Number.isFinite(retrievedAt) || retrievedAt > nowMs + 5 * 60 * 1_000 || retrievedAt < nowMs - DIGITAL_LIFE_SOURCE_MAX_AGE_MS) return false;
+  try {
+    return new URL(candidate.url).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function isValidDigitalLifeItem(item: unknown): item is DigitalLifeSetupItemInput {
+  if (typeof item !== "object" || item === null) return false;
+  const candidate = item as Partial<DigitalLifeSetupItemInput>;
+  return typeof candidate.id === "string" && Boolean(candidate.id.trim())
+    && typeof candidate.nameOriginal === "string" && Boolean(candidate.nameOriginal.trim())
+    && typeof candidate.nameEnglish === "string" && Boolean(candidate.nameEnglish.trim())
+    && typeof candidate.reasonEnglish === "string" && Boolean(candidate.reasonEnglish.trim())
+    && typeof candidate.sourceId === "string" && Boolean(candidate.sourceId.trim())
+    && typeof candidate.category === "string" && digitalLifeCapabilities.includes(candidate.category as DigitalLifeCapability)
+    && Array.isArray(candidate.stepsEnglish) && candidate.stepsEnglish.length > 0 && candidate.stepsEnglish.length <= 8
+    && candidate.stepsEnglish.every((step) => typeof step === "string" && Boolean(step.trim()));
+}
+
 export const chinaArrivalPlanSupportingSkillOrder = [
   "policy-applicability",
   "weather-and-packing",

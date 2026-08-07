@@ -1,0 +1,15 @@
+{
+  "id": "digital-life-setup",
+  "country": "china",
+  "version": "0.1.0",
+  "visibility": "internal",
+  "entrypoint": "runDigitalLifeSetupSkill",
+  "requiredInputs": ["requiredCapabilities", "completedItemIds", "items", "sources", "approvedSourceIds", "now"],
+  "permittedProfileFields": ["countryPackState.china.digitalLife.completedItemIds"],
+  "permittedPlanFields": ["stages.tasks", "location"],
+  "capabilities": ["official-source.snapshot.read", "handoff.official-link"],
+  "sources": { "provider": "official", "freshnessDays": 30 },
+  "risk": { "information": "ordinary", "action": "external_handoff" },
+  "executionPolicy": "external_handoff",
+  "failure": { "unresolvedPlanNeeds": "degraded", "missingApprovedGuidance": "degraded", "malformedInput": "failed" }
+}
