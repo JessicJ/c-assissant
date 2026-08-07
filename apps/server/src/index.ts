@@ -1,27 +1,30 @@
 import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-adapters";
-import { AmapConnector, QWeatherConnector, TelegramConnector, type AmapPlace, type AmapRoute } from "@c-assistant/connectors";
+import { AmapConnector, OfficialSourceConnector, QWeatherConnector, TelegramConnector, type AmapPlace, type AmapRoute } from "@c-assistant/connectors";
 import type { AgentRuntimeKind, CreatePlanInput, PlanAccommodationInput, PlanArrivalInput, PlanTransportPreferenceInput, PlanTravelContextInput, ProfileUpdate, RuntimeSelectionUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue } from "./arrival-reminder.js";
 import { arrivalRouteDestination, formatArrivalRoute, selectArrivalTransport } from "./arrival-route.js";
+import { createOfficialSourceService, parseOfficialSourceRegistry } from "./official-sources.js";
 import { parseTelegramCommand } from "./telegram-commands.js";
 import { createTelegramPlan, formatTelegramPlan, formatTelegramPlanCreation } from "./telegram-plan.js";
 
 const server = Fastify({ logger: true });
 const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const envPath = fileURLToPath(new URL("../../../.env", import.meta.url));
+const officialSourceRegistryPath = resolve(projectRoot, "country-packs", "china", "sources", "official-source-registry.json");
 if (existsSync(envPath)) process.loadEnvFile(envPath);
 const databasePath = process.env.C_ASSISTANT_DATA_PATH || resolve(projectRoot, "data", "c-assistant.sqlite");
 const store = new SqliteWorkspaceStore(databasePath);
 const amap = new AmapConnector({ apiKey: process.env.AMAP_API_KEY });
 const qweather = new QWeatherConnector({ apiKey: process.env.QWEATHER_API_KEY, apiHost: process.env.QWEATHER_API_HOST });
 const telegram = new TelegramConnector({ botToken: process.env.TELEGRAM_BOT_TOKEN });
+const officialSources = createOfficialSourceService(new OfficialSourceConnector({ sources: parseOfficialSourceRegistry(JSON.parse(readFileSync(officialSourceRegistryPath, "utf8")) as unknown) }), store);
 const codex = new CodexRuntimeAdapter();
 const claudeCode = new ClaudeCodeRuntimeAdapter();
 let generatingPlan = false;
@@ -174,6 +177,13 @@ server.put<{ Body: ProfileUpdate }>("/api/profile", async (request, reply) => {
 server.get("/api/connectors/amap", async () => amap.configurationStatus());
 
 server.get("/api/connectors/qweather", async () => qweather.configurationStatus());
+
+server.get<{ Querystring: { topic?: string } }>("/api/official-sources", async (request) => officialSources.discover(request.query.topic));
+
+server.post<{ Params: { sourceId: string }; Body: { url?: string } }>("/api/official-sources/:sourceId/refresh", async (request, reply) => {
+  const result = await officialSources.refresh({ sourceId: request.params.sourceId, url: request.body?.url });
+  return reply.code(connectorResponseStatus(result.status)).send(result);
+});
 
 server.get<{ Querystring: { location?: string; language?: string } }>("/api/weather", async (request, reply) => {
   const configuration = qweather.configurationStatus();

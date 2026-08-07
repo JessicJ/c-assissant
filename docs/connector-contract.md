@@ -117,6 +117,8 @@ The Connector fetches source facts. The `policy-applicability` Skill determines 
 
 Current implementation: the generic Connector accepts only a Country Pack-owned HTTPS domain allowlist and produces a bounded snapshot with original title, canonical URL, retrieval time, and content hash. China Pack starts with the English National Immigration Administration and State Council entry points. Core persists snapshots locally, deduplicates equal source/url/hash records, and reports a later differing hash as a content change. Linking snapshots to Plans/Runs and applying them remains Skill work; a registry entry or content change alone never supports a policy conclusion.
 
+Core exposes the registry as a read-only endpoint. Refreshing a single source is an explicit request and uses the registered source id; Core does not schedule background crawling in V1.
+
 User-facing guidance is written in English. The source's original title should be retained alongside an English explanation and a direct link.
 
 ## External action handoff
