@@ -50,6 +50,30 @@ server.put<{ Params: { planId: string }; Body: PlanAccommodationInput }>("/api/p
   }
 });
 
+server.post<{ Params: { planId: string }; Body: { name?: string; address?: string; status?: "candidate" | "confirmed" } }>("/api/plans/:planId/accommodation/manual", async (request, reply) => {
+  const name = request.body?.name?.trim() ?? "";
+  const address = request.body?.address?.trim() ?? "";
+  if (!name || !address) return reply.code(400).send({ error: "Enter both the accommodation name and its address or area." });
+
+  const resolved = await amap.geocodeAddress({ address });
+  if (resolved.status !== "available") return reply.code(connectorResponseStatus(resolved.status)).send(resolved);
+  if (!resolved.data) return reply.code(404).send({ error: "Amap could not resolve that accommodation address." });
+
+  try {
+    return store.updatePlanAccommodation(request.params.planId, {
+      status: request.body.status === "confirmed" ? "confirmed" : "candidate",
+      name,
+      address: resolved.data.formattedAddress,
+      location: resolved.data.location,
+      source: "user"
+    });
+  } catch (error) {
+    return reply.code(400).send({
+      error: error instanceof Error ? error.message : "The accommodation could not be saved."
+    });
+  }
+});
+
 server.put<{ Params: { planId: string }; Body: PlanTransportPreferenceInput }>("/api/plans/:planId/transport-preference", async (request, reply) => {
   try {
     return store.updatePlanTransportPreference(request.params.planId, request.body);

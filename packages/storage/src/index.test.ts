@@ -67,6 +67,24 @@ test("SQLite keeps an Amap accommodation candidate inside the current Plan", () 
   store.close();
 });
 
+test("SQLite keeps a user-entered accommodation inside the current Plan", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const plan = store.getWorkspace().activePlan;
+
+  const updated = store.updatePlanAccommodation(plan.id, {
+    name: "Harbour Hotel",
+    address: "8 Riverside Road, Shanghai",
+    location: "121.490,31.230",
+    source: "user",
+    status: "confirmed"
+  });
+
+  assert.equal(updated.activePlan.configuration.accommodation.status, "confirmed");
+  assert.equal(updated.activePlan.configuration.accommodation.source, "user");
+  assert.equal(updated.activePlan.configuration.accommodation.location, "121.490,31.230");
+  store.close();
+});
+
 test("SQLite keeps a transport preference inside the current Plan", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const plan = store.getWorkspace().activePlan;

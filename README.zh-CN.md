@@ -62,4 +62,4 @@ pnpm typecheck
 pnpm test
 ```
 
-首次启动会在 `data/c-assistant.sqlite` 创建本地数据库。如果 `.env` 中配置了 `AMAP_API_KEY`，可在 Plan 中验证高德地点、查看选定地点周边的餐饮和住宿 POI 与距离事实，并比较驾车、步行和公共交通路线事实；驾车路线可交接到用户自行打开的高德，步行和公共交通先作为事实比较，待真机验证后再增加行动交接。住宿候选可保存到当前 Plan，只有用户明确表示已完成第三方预订后才会标记为已确认。餐饮与住宿结果只是事实候选，不做排序推荐，也不会点餐、预订或支付。如果配置了 `QWEATHER_API_KEY` 和 `QWEATHER_API_HOST`，可查看城市实况和三天预报，凭据不会显示在 Web 工作台。如果配置了 `TELEGRAM_BOT_TOKEN`，可在 Settings 中主动验证 Bot 身份，Token 不会显示在 Web 工作台；如果本机 Codex CLI 已登录，用户可在计划输入框中主动点击按钮，让 Codex 按 Schema 生成 Plan 草案。它不会发送 Telegram 消息。下一阶段应接入 Telegram 用户配对与交通卡片闭环。
+首次启动会在 `data/c-assistant.sqlite` 创建本地数据库。如果 `.env` 中配置了 `AMAP_API_KEY`，可在 Plan 中验证高德地点、查看选定地点周边的餐饮和住宿 POI 与距离事实，并比较驾车、步行和公共交通路线事实；也可直接录入已选住宿的名称和地址，由高德先解析位置后写入当前 Plan。驾车路线可交接到用户自行打开的高德，步行和公共交通先作为事实比较，待真机验证后再增加行动交接。住宿只有在用户明确表示已完成第三方预订后才会标记为已确认。餐饮与住宿结果只是事实候选，不做排序推荐，也不会点餐、预订或支付。如果配置了 `QWEATHER_API_KEY` 和 `QWEATHER_API_HOST`，可查看城市实况和三天预报，凭据不会显示在 Web 工作台。如果配置了 `TELEGRAM_BOT_TOKEN`，可在 Settings 中主动验证 Bot 身份，Token 不会显示在 Web 工作台；如果本机 Codex CLI 已登录，用户可在计划输入框中主动点击按钮，让 Codex 按 Schema 生成 Plan 草案。它不会发送 Telegram 消息。下一阶段应接入 Telegram 用户配对与交通卡片闭环。

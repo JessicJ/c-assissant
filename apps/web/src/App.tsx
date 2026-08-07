@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import "./manual-accommodation.css";
 import type { RuntimeCheck } from "@c-assistant/agent-adapters";
 import { createAmapDrivingHandoff } from "@c-assistant/connectors";
 import type { AmapNearbyPlace, AmapPlace, AmapRoute, ConnectorResult, QWeatherWeatherSnapshot, TelegramBotIdentity, TelegramConfiguration } from "@c-assistant/connectors";
@@ -245,6 +246,25 @@ function App() {
     }
   }
 
+  async function saveManualAccommodation(input: { name: string; address: string; status: "candidate" | "confirmed" }) {
+    if (!workspace) return;
+    try {
+      setSavingAccommodation(true);
+      const response = await fetch(`/api/plans/${workspace.activePlan.id}/accommodation/manual`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input)
+      });
+      const payload = await response.json() as WorkspaceSnapshot | { error?: string; failure?: { message?: string } };
+      if (!response.ok) throw new Error("error" in payload ? payload.error ?? payload.failure?.message ?? "The accommodation could not be saved." : "The accommodation could not be saved.");
+      setWorkspace(payload as WorkspaceSnapshot);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The accommodation could not be saved.");
+    } finally {
+      setSavingAccommodation(false);
+    }
+  }
+
   async function confirmAccommodationBooking() {
     if (!workspace) return;
     const accommodation = workspace.activePlan.configuration.accommodation;
@@ -431,7 +451,7 @@ function App() {
           </>
         ) : null}
 
-        {view === "Plans" ? <PlanView plan={plan} onActivate={activatePlan} confirming={confirming} amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={searchAmap} routeOrigin={routeOrigin} routeDestination={routeDestination} routeMode={routeMode} routeResult={routeResult} routing={routing} foodCentre={foodCentre} foodResult={foodResult} findingFood={findingFood} stayCentre={stayCentre} stayResult={stayResult} findingStay={findingStay} savingAccommodation={savingAccommodation} confirmingAccommodation={confirmingAccommodation} savingTransportPreference={savingTransportPreference} savingTravelContext={savingTravelContext} onChooseRouteOrigin={setRouteOrigin} onChooseRouteDestination={setRouteDestination} onRouteModeChange={(mode) => { setRouteMode(mode); setRouteResult(null); }} onFindNearbyFood={findNearbyFood} onFindNearbyAccommodation={findNearbyAccommodation} onSaveAccommodationCandidate={saveAccommodationCandidate} onConfirmAccommodation={confirmAccommodationBooking} onSaveTransportPreference={saveTransportPreference} onSaveTravelContext={saveTravelContext} onPlanRoute={planAmapRoute} /> : null}
+        {view === "Plans" ? <PlanView plan={plan} onActivate={activatePlan} confirming={confirming} amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={searchAmap} routeOrigin={routeOrigin} routeDestination={routeDestination} routeMode={routeMode} routeResult={routeResult} routing={routing} foodCentre={foodCentre} foodResult={foodResult} findingFood={findingFood} stayCentre={stayCentre} stayResult={stayResult} findingStay={findingStay} savingAccommodation={savingAccommodation} confirmingAccommodation={confirmingAccommodation} savingTransportPreference={savingTransportPreference} savingTravelContext={savingTravelContext} onChooseRouteOrigin={setRouteOrigin} onChooseRouteDestination={setRouteDestination} onRouteModeChange={(mode) => { setRouteMode(mode); setRouteResult(null); }} onFindNearbyFood={findNearbyFood} onFindNearbyAccommodation={findNearbyAccommodation} onSaveAccommodationCandidate={saveAccommodationCandidate} onSaveManualAccommodation={saveManualAccommodation} onConfirmAccommodation={confirmAccommodationBooking} onSaveTransportPreference={saveTransportPreference} onSaveTravelContext={saveTravelContext} onPlanRoute={planAmapRoute} /> : null}
         {view === "Inbox" ? <InboxView workspace={workspace} /> : null}
         {view === "Profile" ? <ProfileView workspace={workspace} onSave={saveProfile} /> : null}
         {view === "Settings" ? <SettingsView workspace={workspace} codexRuntime={codexRuntime} telegramStatus={telegramStatus} telegramVerification={telegramVerification} verifyingTelegram={verifyingTelegram} onVerifyTelegram={verifyTelegram} weatherLocation={weatherLocation} setWeatherLocation={setWeatherLocation} weatherResult={weatherResult} checkingWeather={checkingWeather} onCheckWeather={checkWeather} /> : null}
@@ -440,12 +460,13 @@ function App() {
   );
 }
 
-function PlanView({ plan, onActivate, confirming, amapQuery, setAmapQuery, amapResult, searchingAmap, onSearch, routeOrigin, routeDestination, routeMode, routeResult, routing, foodCentre, foodResult, findingFood, stayCentre, stayResult, findingStay, savingAccommodation, confirmingAccommodation, savingTransportPreference, savingTravelContext, onChooseRouteOrigin, onChooseRouteDestination, onRouteModeChange, onFindNearbyFood, onFindNearbyAccommodation, onSaveAccommodationCandidate, onConfirmAccommodation, onSaveTransportPreference, onSaveTravelContext, onPlanRoute }: { plan: WorkspaceSnapshot["activePlan"]; onActivate: () => Promise<void>; confirming: boolean; amapQuery: string; setAmapQuery: (value: string) => void; amapResult: ConnectorResult<AmapPlace[]> | null; searchingAmap: boolean; onSearch: () => Promise<void>; routeOrigin: AmapPlace | null; routeDestination: AmapPlace | null; routeMode: RouteMode; routeResult: ConnectorResult<AmapRoute> | null; routing: boolean; foodCentre: AmapPlace | null; foodResult: ConnectorResult<AmapNearbyPlace[]> | null; findingFood: boolean; stayCentre: AmapPlace | null; stayResult: ConnectorResult<AmapNearbyPlace[]> | null; findingStay: boolean; savingAccommodation: boolean; confirmingAccommodation: boolean; savingTransportPreference: boolean; savingTravelContext: boolean; onChooseRouteOrigin: (place: AmapPlace) => void; onChooseRouteDestination: (place: AmapPlace) => void; onRouteModeChange: (mode: RouteMode) => void; onFindNearbyFood: (place: AmapPlace) => Promise<void>; onFindNearbyAccommodation: (place: AmapPlace) => Promise<void>; onSaveAccommodationCandidate: (place: AmapNearbyPlace) => Promise<void>; onConfirmAccommodation: () => Promise<void>; onSaveTransportPreference: (preference: WorkspaceSnapshot["activePlan"]["configuration"]["transport"]["preference"]) => Promise<void>; onSaveTravelContext: (context: WorkspaceSnapshot["activePlan"]["configuration"]["travelContext"]) => Promise<void>; onPlanRoute: () => Promise<void> }) {
+function PlanView({ plan, onActivate, confirming, amapQuery, setAmapQuery, amapResult, searchingAmap, onSearch, routeOrigin, routeDestination, routeMode, routeResult, routing, foodCentre, foodResult, findingFood, stayCentre, stayResult, findingStay, savingAccommodation, confirmingAccommodation, savingTransportPreference, savingTravelContext, onChooseRouteOrigin, onChooseRouteDestination, onRouteModeChange, onFindNearbyFood, onFindNearbyAccommodation, onSaveAccommodationCandidate, onSaveManualAccommodation, onConfirmAccommodation, onSaveTransportPreference, onSaveTravelContext, onPlanRoute }: { plan: WorkspaceSnapshot["activePlan"]; onActivate: () => Promise<void>; confirming: boolean; amapQuery: string; setAmapQuery: (value: string) => void; amapResult: ConnectorResult<AmapPlace[]> | null; searchingAmap: boolean; onSearch: () => Promise<void>; routeOrigin: AmapPlace | null; routeDestination: AmapPlace | null; routeMode: RouteMode; routeResult: ConnectorResult<AmapRoute> | null; routing: boolean; foodCentre: AmapPlace | null; foodResult: ConnectorResult<AmapNearbyPlace[]> | null; findingFood: boolean; stayCentre: AmapPlace | null; stayResult: ConnectorResult<AmapNearbyPlace[]> | null; findingStay: boolean; savingAccommodation: boolean; confirmingAccommodation: boolean; savingTransportPreference: boolean; savingTravelContext: boolean; onChooseRouteOrigin: (place: AmapPlace) => void; onChooseRouteDestination: (place: AmapPlace) => void; onRouteModeChange: (mode: RouteMode) => void; onFindNearbyFood: (place: AmapPlace) => Promise<void>; onFindNearbyAccommodation: (place: AmapPlace) => Promise<void>; onSaveAccommodationCandidate: (place: AmapNearbyPlace) => Promise<void>; onSaveManualAccommodation: (input: { name: string; address: string; status: "candidate" | "confirmed" }) => Promise<void>; onConfirmAccommodation: () => Promise<void>; onSaveTransportPreference: (preference: WorkspaceSnapshot["activePlan"]["configuration"]["transport"]["preference"]) => Promise<void>; onSaveTravelContext: (context: WorkspaceSnapshot["activePlan"]["configuration"]["travelContext"]) => Promise<void>; onPlanRoute: () => Promise<void> }) {
   return <div className="content-stack">
     <section className="card plan-detail-card">
       <div className="split-heading"><div><p className="eyebrow">Plan v{plan.version}</p><h2>{plan.title}</h2></div><span className="plan-state">{plan.status}</span></div>
       <p className="location-copy">{plan.location} · {plan.dates}</p>
       <AccommodationSummary accommodation={plan.configuration.accommodation} confirming={confirmingAccommodation} onConfirm={onConfirmAccommodation} />
+      <ManualAccommodation saving={savingAccommodation} onSave={onSaveManualAccommodation} />
       <TransportPreference preference={plan.configuration.transport.preference} saving={savingTransportPreference} onSave={onSaveTransportPreference} />
       <TravelContext context={plan.configuration.travelContext} saving={savingTravelContext} onSave={onSaveTravelContext} />
       <h3>Assumptions to correct if needed</h3>
@@ -499,6 +520,20 @@ function AccommodationSummary({ accommodation, confirming, onConfirm }: { accomm
   if (accommodation.status === "not_set") return <p className="plan-accommodation"><strong>Accommodation</strong><span>Not saved yet. Compare nearby stays below when you know the area that matters for this Plan.</span></p>;
   if (accommodation.status === "confirmed") return <p className="plan-accommodation"><strong>Accommodation confirmed</strong><span>{accommodation.name} · {accommodation.address}</span><small>You confirmed that this stay is booked. It remains inside this Plan only.</small></p>;
   return <div className="plan-accommodation"><strong>Accommodation candidate</strong><span>{accommodation.name} · {accommodation.address}</span><small>Saved for this Plan only. It is not marked as booked.</small><button className="secondary-button" disabled={confirming} onClick={() => void onConfirm()}>{confirming ? "Confirming…" : "I have booked this stay"}</button></div>;
+}
+
+function ManualAccommodation({ saving, onSave }: { saving: boolean; onSave: (input: { name: string; address: string; status: "candidate" | "confirmed" }) => Promise<void> }) {
+  const [name, setName] = useState("");
+  const [address, setAddress] = useState("");
+  const [alreadyBooked, setAlreadyBooked] = useState(false);
+
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!name.trim() || !address.trim()) return;
+    void onSave({ name: name.trim(), address: address.trim(), status: alreadyBooked ? "confirmed" : "candidate" });
+  }
+
+  return <form className="plan-accommodation manual-accommodation-form" onSubmit={submit}><strong>Already chose a stay?</strong><span>Enter its name and address. C-assistant will use Amap only to verify a location for this Plan.</span><div><label>Stay name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Hotel, apartment, or residence" /></label><label>Address or area<input value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Street address, district, or city" /></label></div><label className="checkbox-label"><input type="checkbox" checked={alreadyBooked} onChange={(event) => setAlreadyBooked(event.target.checked)} />I have already completed the booking elsewhere</label><button className="secondary-button" disabled={saving || !name.trim() || !address.trim()}>{saving ? "Saving…" : alreadyBooked ? "Save confirmed accommodation" : "Save accommodation candidate"}</button></form>;
 }
 
 function TransportPreference({ preference, saving, onSave }: { preference: WorkspaceSnapshot["activePlan"]["configuration"]["transport"]["preference"]; saving: boolean; onSave: (preference: WorkspaceSnapshot["activePlan"]["configuration"]["transport"]["preference"]) => Promise<void> }) {

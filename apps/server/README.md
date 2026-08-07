@@ -23,6 +23,7 @@ Current endpoints:
 - `GET /api/amap/routes/driving?origin=<longitude,latitude>&destination=<longitude,latitude>`
 - `GET /api/amap/routes/walking?origin=<longitude,latitude>&destination=<longitude,latitude>`
 - `GET /api/amap/routes/transit?origin=<longitude,latitude>&destination=<longitude,latitude>&originCityCode=<amap-city-code>&destinationCityCode=<amap-city-code>`
+- `POST /api/plans/:planId/accommodation/manual` with `{ name, address, status }` to resolve a user-entered stay address before saving it to that Plan
 - `GET /api/connectors/telegram`
 - `POST /api/connectors/telegram/verify`
 
