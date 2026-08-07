@@ -58,6 +58,13 @@ export interface AmapRouteHandoff {
   requiresUserAction: true;
 }
 
+export interface AmapPlaceHandoff {
+  provider: "amap";
+  action: "place_view";
+  url: string;
+  requiresUserAction: true;
+}
+
 export interface AmapConnectorOptions {
   apiKey?: string | undefined;
   fetcher?: typeof fetch;
@@ -421,6 +428,32 @@ export function createAmapDrivingHandoff(input: { origin: AmapPlace; destination
     action: "route_planning",
     transport: "driving",
     url: `amapuri://route/plan/?${parameters.toString()}`,
+    requiresUserAction: true
+  };
+}
+
+/**
+ * Creates a cross-device Amap place handoff. On a phone, Amap may open its
+ * native place view; on a desktop, the H5 map shows the same place. This is a
+ * view-only handoff and never begins a booking, order, payment, or trip.
+ */
+export function createAmapPlaceHandoff(input: { place: AmapPlace }): AmapPlaceHandoff {
+  const parameters = new URLSearchParams({
+    src: "C-assistant",
+    callnative: "1"
+  });
+  if (input.place.id) {
+    parameters.set("poiid", input.place.id);
+  } else {
+    const [longitude, latitude] = coordinateParts(input.place.location);
+    parameters.set("position", `${longitude},${latitude}`);
+    parameters.set("name", input.place.name.slice(0, 80));
+    parameters.set("coordinate", "gaode");
+  }
+  return {
+    provider: "amap",
+    action: "place_view",
+    url: `https://uri.amap.com/marker?${parameters.toString()}`,
     requiresUserAction: true
   };
 }

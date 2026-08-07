@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { AmapConnector, createAmapDrivingHandoff, QWeatherConnector, TelegramConnector } from "./index.js";
+import { AmapConnector, createAmapDrivingHandoff, createAmapPlaceHandoff, QWeatherConnector, TelegramConnector } from "./index.js";
 
 test("Amap place search normalizes official response fields without exposing the key", async () => {
   const connector = new AmapConnector({
@@ -150,6 +150,31 @@ test("Amap route handoff can use a saved Plan place without inventing a POI id",
   const url = new URL(handoff.url);
   assert.equal(url.searchParams.has("sid"), false);
   assert.equal(url.searchParams.get("did"), "destination-poi");
+});
+
+test("Amap place handoff opens a known POI without creating an external transaction", () => {
+  const handoff = createAmapPlaceHandoff({
+    place: { id: "restaurant-poi", name: "Noodle House", address: "Market Street", location: "121.456,31.250", type: "Food", city: "Shanghai", district: "Jing'an" }
+  });
+
+  const url = new URL(handoff.url);
+  assert.equal(url.origin, "https://uri.amap.com");
+  assert.equal(url.pathname, "/marker");
+  assert.equal(url.searchParams.get("poiid"), "restaurant-poi");
+  assert.equal(url.searchParams.get("callnative"), "1");
+  assert.equal(handoff.requiresUserAction, true);
+});
+
+test("Amap place handoff uses verified coordinates for a saved Plan place without a POI id", () => {
+  const handoff = createAmapPlaceHandoff({
+    place: { id: "", name: "Saved stay", address: "Shanghai", location: "121.455,31.249", type: "Plan accommodation", city: "", district: "" }
+  });
+
+  const url = new URL(handoff.url);
+  assert.equal(url.searchParams.has("poiid"), false);
+  assert.equal(url.searchParams.get("position"), "121.455,31.249");
+  assert.equal(url.searchParams.get("name"), "Saved stay");
+  assert.equal(url.searchParams.get("coordinate"), "gaode");
 });
 
 test("QWeather combines current facts and a daily forecast from country-pack coordinates without exposing its key", async () => {
