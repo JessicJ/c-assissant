@@ -14,6 +14,8 @@ skill-name/
 
 V1 does not expose these Skills for separate installation or direct execution.
 
+All implemented manifests are loaded by one China Pack registry. Duplicate IDs, entrypoint drift, unsupported statuses, version mismatch, and incomplete result envelopes fail before Core can consume a result.
+
 Implemented slice:
 
 - `food-nearby` `0.1.0`: deterministic, bounded transformation of current Amap nearby-place facts into a structured Skill result and external-handoff proposals. Runtime code is exported only through the complete `@c-assistant/china-country-pack` package.

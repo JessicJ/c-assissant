@@ -99,6 +99,9 @@ export interface HousingAreaSkillResult {
   facts: FoodNearbyFact[];
   assumptions: string[];
   recommendations: HousingAreaRecommendation[];
+  proposedPlanChanges: [];
+  proposedTasks: [];
+  proposedReminders: [];
   actionCards: Array<{ kind: "external_handoff"; provider: "amap"; candidateId: string; completion: "unknown_until_user_confirms" }>;
   sources: Array<{ provider: "amap"; observedAt: string }>;
   warnings: string[];
@@ -108,12 +111,13 @@ export interface HousingAreaSkillResult {
 /** First access-oriented slice; area-level judgment waits for multi-anchor route facts. */
 export function runHousingAreaRecommendationSkill(input: { centreName?: string; candidates: FoodNearbyCandidateInput[]; observedAt: string }): HousingAreaSkillResult {
   const identity = { id: "housing-area-recommendation" as const, version: "0.1.0" as const };
+  const noChanges = { proposedPlanChanges: [] as [], proposedTasks: [] as [], proposedReminders: [] as [] };
   const centreName = input.centreName?.trim();
   if (!centreName) {
-    return { skill: identity, status: "needs_input", summary: "Choose the Plan place that accommodation access should be compared with.", facts: [], assumptions: [], recommendations: [], actionCards: [], sources: [], warnings: [], needsInput: { field: "centreName", reason: "A stay location needs a venue, workplace, school, or other Plan anchor for an explainable comparison." } };
+    return { skill: identity, ...noChanges, status: "needs_input", summary: "Choose the Plan place that accommodation access should be compared with.", facts: [], assumptions: [], recommendations: [], actionCards: [], sources: [], warnings: [], needsInput: { field: "centreName", reason: "A stay location needs a venue, workplace, school, or other Plan anchor for an explainable comparison." } };
   }
   if (!Number.isFinite(Date.parse(input.observedAt))) {
-    return { skill: identity, status: "failed", summary: "The accommodation input did not pass the Skill contract.", facts: [], assumptions: [], recommendations: [], actionCards: [], sources: [], warnings: ["No accommodation conclusion was produced from malformed context."] };
+    return { skill: identity, ...noChanges, status: "failed", summary: "The accommodation input did not pass the Skill contract.", facts: [], assumptions: [], recommendations: [], actionCards: [], sources: [], warnings: ["No accommodation conclusion was produced from malformed context."] };
   }
   const valid = input.candidates.filter(isValidCandidate);
   const facts = valid.slice(0, 5).map((candidate, index) => ({ ...candidate, position: index + 1 }));
@@ -122,9 +126,10 @@ export function runHousingAreaRecommendationSkill(input: { centreName?: string; 
     "Live price, inventory, booking, payment, and foreign-guest eligibility have not been verified."
   ];
   if (valid.length !== input.candidates.length) warnings.push("Malformed provider candidates were omitted.");
-  if (facts.length === 0) return { skill: identity, status: "degraded", summary: `Amap returned no usable accommodation candidates near ${centreName}.`, facts, assumptions: [], recommendations: [], actionCards: [], sources: [{ provider: "amap", observedAt: input.observedAt }], warnings };
+  if (facts.length === 0) return { skill: identity, ...noChanges, status: "degraded", summary: `Amap returned no usable accommodation candidates near ${centreName}.`, facts, assumptions: [], recommendations: [], actionCards: [], sources: [{ provider: "amap", observedAt: input.observedAt }], warnings };
   return {
     skill: identity,
+    ...noChanges,
     status: "success",
     summary: `Preliminary access comparison for accommodation near ${centreName}.`,
     facts,
@@ -339,7 +344,8 @@ export interface PolicyEvidenceInput {
 
 export interface PolicyApplicabilitySkillResult {
   skill: { id: "policy-applicability"; version: "0.1.0" };
-  status: "success" | "needs_input" | "needs_evidence" | "failed";
+  status: "success" | "needs_input" | "blocked" | "failed";
+  reasonCode?: "needs_evidence";
   summary: string;
   facts: string[];
   assumptions: string[];
@@ -389,20 +395,21 @@ export function runPolicyApplicabilitySkill(input: {
   if (!fresh) needsInput.push({ field: "official_source.nia-english", label: "Current National Immigration Administration evidence", reason: latest ? "The saved official snapshot is outside the seven-day freshness window. Refresh it before review." : "Refresh the approved National Immigration Administration source before review." });
 
   const missingUserFacts = needsInput.some((item) => item.field.startsWith("profile.") || item.field.startsWith("plan."));
-  const status = missingUserFacts ? "needs_input" : fresh ? "success" : "needs_evidence";
+  const status = missingUserFacts ? "needs_input" : fresh ? "success" : "blocked";
   const warnings = ["This evidence-preparation check does not determine visa, residence, entry, or policy eligibility."];
   if (approvedEvidence.length !== input.evidence.length) warnings.push("Malformed or unapproved evidence metadata was omitted.");
   return {
     skill: identity,
     ...noChanges,
     status,
+    ...(status === "blocked" ? { reasonCode: "needs_evidence" as const } : {}),
     summary: status === "success" ? "Basic information and current official evidence are ready for a separate policy review." : status === "needs_input" ? "Confirmed Profile or Plan facts are still needed before policy review." : "Current approved official evidence is still needed before policy review.",
     facts,
     assumptions: [],
     sources: latest ? [latest] : [],
     warnings,
     needsInput,
-    nextAction: status === "needs_input" ? "Save the missing Profile or Plan details, then refresh the approved official source." : status === "needs_evidence" ? "Refresh the approved National Immigration Administration source in Settings before review." : "Continue to a separate source-backed policy review; do not treat this gate as an eligibility result."
+    nextAction: status === "needs_input" ? "Save the missing Profile or Plan details, then refresh the approved official source." : status === "blocked" ? "Refresh the approved National Immigration Administration source in Settings before review." : "Continue to a separate source-backed policy review; do not treat this gate as an eligibility result."
   };
 }
 

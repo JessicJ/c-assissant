@@ -143,6 +143,8 @@ Core retries transient failures and applies declared fallbacks before interrupti
 
 Agent output is parsed and validated against the SkillResult Schema, risk rules, authorization scope, and source requirements.
 
+The first implemented runtime layer validates manifest shape, unique IDs, semantic versions, entrypoint bindings, supported statuses, result identity/version, and required result arrays. Country Pack handlers are registered internally; individual Skill installation remains disabled.
+
 On validation failure, the same Run receives the validation errors and may repair its output once. A second failure stops the Run. Core never guesses executable actions from malformed prose.
 
 ## Versioning and tests

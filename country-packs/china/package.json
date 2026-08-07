@@ -10,6 +10,10 @@
     ".": {
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
+    },
+    "./registry": {
+      "types": "./lib/registry.d.ts",
+      "default": "./lib/registry.js"
     }
   },
   "scripts": {
@@ -18,7 +22,8 @@
     "test": "tsx --test src/index.test.ts"
   },
   "dependencies": {
-    "@c-assistant/core": "workspace:*"
+    "@c-assistant/core": "workspace:*",
+    "@c-assistant/skill-runtime": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

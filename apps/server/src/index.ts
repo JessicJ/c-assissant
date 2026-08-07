@@ -6,7 +6,8 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-adapters";
 import { AmapConnector, OfficialSourceConnector, QWeatherConnector, TelegramConnector, type AmapPlace, type AmapRoute, type TelegramReplyMarkup } from "@c-assistant/connectors";
-import { runFoodNearbySkill, runHousingAreaRecommendationSkill, runPolicyApplicabilitySkill } from "@c-assistant/china-country-pack";
+import { runFoodNearbySkill, runHousingAreaRecommendationSkill, type PolicyApplicabilitySkillResult } from "@c-assistant/china-country-pack";
+import { chinaSkillRegistry } from "@c-assistant/china-country-pack/registry";
 import { type AgentRuntimeKind, type CreatePlanInput, type GeneratedPlanDraft, type PlanAccommodationInput, type PlanArrivalInput, type PlanTransportPreferenceInput, type PlanTravelContextInput, type ProfileUpdate, type RuntimeSelectionUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue } from "./arrival-reminder.js";
@@ -56,16 +57,16 @@ server.get("/api/runs/task-reminders", async () => store.listRecentTaskReminderR
 
 server.get("/api/policy-applicability", async () => {
   const workspace = store.getWorkspace();
-  const result = runPolicyApplicabilitySkill({
+  const result = await chinaSkillRegistry.invoke("policy-applicability", {
     ...(workspace.profile.nationality ? { nationality: workspace.profile.nationality } : {}),
     immigrationStatus: workspace.profile.immigrationStatus,
     location: workspace.activePlan.location,
     dates: workspace.activePlan.dates,
     evidence: workspace.sourceSnapshots.map((snapshot) => ({ id: snapshot.id, sourceId: snapshot.sourceId, authority: snapshot.authority, titleOriginal: snapshot.titleOriginal, url: snapshot.url, retrievedAt: snapshot.retrievedAt, contentHash: snapshot.contentHash })),
     now: new Date().toISOString()
-  });
+  }) as PolicyApplicabilitySkillResult;
   return {
-    status: result.status === "success" ? "ready_for_review" : result.status,
+    status: result.status === "success" ? "ready_for_review" : result.status === "blocked" && result.reasonCode === "needs_evidence" ? "needs_evidence" : result.status,
     knownInformation: result.facts,
     missingInformation: result.needsInput,
     evidence: result.sources,
