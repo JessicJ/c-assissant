@@ -83,6 +83,8 @@ test("SQLite links selected official evidence to the current Plan without making
 
   assert.equal(linked.activePlan.sources.length, 1);
   assert.equal(linked.activePlan.sources[0]?.url, snapshot.url);
+  assert.equal(linked.activePlan.sources[0]?.sourceSnapshotId, snapshot.id);
+  assert.equal(linked.activePlan.sources[0]?.contentHash, snapshot.contentHash);
   assert.equal(linked.activePlan.version, plan.version + 1);
   assert.equal(repeated.activePlan.sources.length, 1);
   assert.match(linked.inbox[0]?.body ?? "", /does not determine/i);

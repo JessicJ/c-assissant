@@ -34,6 +34,10 @@ export interface SourceReference {
   authority: string;
   url: string;
   retrievedAt: string;
+  /** Present only when this reference came from an immutable saved SourceSnapshot. */
+  sourceSnapshotId?: string;
+  /** SHA-256 fingerprint of the exact saved evidence version, when available. */
+  contentHash?: string;
 }
 
 /** Immutable evidence retained after an allowlisted official-source fetch. */

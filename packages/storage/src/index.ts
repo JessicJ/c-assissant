@@ -460,7 +460,9 @@ export class SqliteWorkspaceStore {
       title: source.titleOriginal,
       authority: source.authority,
       url: source.url,
-      retrievedAt: source.retrievedAt
+      retrievedAt: source.retrievedAt,
+      sourceSnapshotId: source.id,
+      contentHash: source.contentHash
     }];
     this.database.prepare("UPDATE plans SET sources_json = ?, version = version + 1 WHERE id = ?").run(JSON.stringify(sources), planId);
     this.addInbox({
