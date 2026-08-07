@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { runFoodNearbySkill, runHousingAreaRecommendationSkill, runPolicyApplicabilitySkill, runTransportPlannerSkill, runWeatherAndPackingSkill } from "./index.js";
+import { chinaArrivalPlanSupportingSkillOrder, runChinaArrivalPlanSkill, runFoodNearbySkill, runHousingAreaRecommendationSkill, runPolicyApplicabilitySkill, runTransportPlannerSkill, runWeatherAndPackingSkill, type ChinaArrivalPlanSupportingResult, type ChinaArrivalPlanSupportingSkillId } from "./index.js";
 import { chinaSkillRegistry } from "./registry.js";
 
 const candidates = [
@@ -178,9 +178,44 @@ test("policy-applicability rejects stale, future, and unapproved evidence for cu
 });
 
 test("China Skill Registry loads every internal manifest and validates invocation envelopes", async () => {
-  assert.deepEqual(chinaSkillRegistry.list().map((manifest) => manifest.id).sort(), ["food-nearby", "housing-area-recommendation", "policy-applicability", "transport-planner", "weather-and-packing"]);
+  assert.deepEqual(chinaSkillRegistry.list().map((manifest) => manifest.id).sort(), ["china-arrival-plan", "food-nearby", "housing-area-recommendation", "policy-applicability", "transport-planner", "weather-and-packing"]);
   const result = await chinaSkillRegistry.invoke("food-nearby", { partySize: 2, candidates, observedAt: "2026-08-07T00:00:00.000Z" });
   assert.equal(result.skill.id, "food-nearby");
   assert.equal(result.status, "success");
   await assert.rejects(() => chinaSkillRegistry.invoke("unknown-skill", {}), /Unknown Skill/);
+});
+
+function supportingResult(id: ChinaArrivalPlanSupportingSkillId, status: ChinaArrivalPlanSupportingResult["status"] = "success"): ChinaArrivalPlanSupportingResult {
+  return { skill: { id, version: "0.1.0" }, status, summary: `${id} result.`, facts: [], assumptions: [], recommendations: [{ id }], proposedPlanChanges: [], proposedTasks: [], proposedReminders: [], actionCards: [], sources: [{ id }], warnings: [] };
+}
+
+test("china-arrival-plan manifest and runtime block incomplete composition honestly", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../skills/china-arrival-plan/skill.json", import.meta.url), "utf8")) as { id: string; version: string; visibility: string; entrypoint: string };
+  const result = runChinaArrivalPlanSkill({ planId: "plan-1", planVersion: 3, supportingResults: [supportingResult("policy-applicability")] });
+  assert.deepEqual(result.skill, { id: manifest.id, version: manifest.version });
+  assert.equal(manifest.visibility, "internal");
+  assert.equal(manifest.entrypoint, "runChinaArrivalPlanSkill");
+  assert.equal(result.status, "blocked");
+  assert.equal(result.reasonCode, "composition_incomplete");
+  assert.deepEqual(result.missingSkills, chinaArrivalPlanSupportingSkillOrder.filter((id) => id !== "policy-applicability"));
+  assert.deepEqual(result.proposedPlanChanges, []);
+});
+
+test("china-arrival-plan preserves declared order and supporting provenance without promoting actions", () => {
+  const reversed = [...chinaArrivalPlanSupportingSkillOrder].reverse().map((id) => supportingResult(id));
+  const result = runChinaArrivalPlanSkill({ planId: "plan-1", planVersion: 3, supportingResults: reversed });
+  assert.equal(result.status, "success");
+  assert.deepEqual(result.facts.map((fact) => fact.skillId), chinaArrivalPlanSupportingSkillOrder);
+  assert.deepEqual(result.sources.map((source) => source.skillId), chinaArrivalPlanSupportingSkillOrder);
+  assert.equal(result.actionCards.length, 0);
+  assert.match(result.warnings.at(-1) ?? "", /not promoted/);
+});
+
+test("china-arrival-plan fails duplicate results and propagates supporting gates", () => {
+  const duplicate = runChinaArrivalPlanSkill({ planId: "plan-1", planVersion: 1, supportingResults: [supportingResult("policy-applicability"), supportingResult("policy-applicability")] });
+  assert.equal(duplicate.status, "failed");
+  const needsInput = chinaArrivalPlanSupportingSkillOrder.map((id) => supportingResult(id, id === "housing-area-recommendation" ? "needs_input" : "success"));
+  assert.equal(runChinaArrivalPlanSkill({ planId: "plan-1", planVersion: 1, supportingResults: needsInput }).status, "needs_input");
+  const blocked = chinaArrivalPlanSupportingSkillOrder.map((id) => supportingResult(id, id === "policy-applicability" ? "blocked" : "success"));
+  assert.equal(runChinaArrivalPlanSkill({ planId: "plan-1", planVersion: 1, supportingResults: blocked }).reasonCode, "supporting_skill_blocked");
 });

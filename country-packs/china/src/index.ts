@@ -1,6 +1,7 @@
 import { recommendPlanTransport } from "@c-assistant/core/transport";
 import type { LuggageLevel, TransportPreference } from "@c-assistant/core";
 import type { TransportMode, TransportRouteFact, TransportWeatherFact } from "@c-assistant/core/transport";
+import type { SkillStatus } from "@c-assistant/skill-runtime";
 
 export type FoodNearbySkillStatus = "success" | "needs_input" | "degraded" | "failed";
 
@@ -426,4 +427,108 @@ function isValidNiaEvidence(evidence: PolicyEvidenceInput): boolean {
 function isConfirmedPolicyValue(value: string | undefined): boolean {
   const normalized = value?.trim().toLocaleLowerCase() ?? "";
   return Boolean(normalized) && !normalized.includes("to be confirmed") && !normalized.includes("not sure");
+}
+
+export const chinaArrivalPlanSupportingSkillOrder = [
+  "policy-applicability",
+  "weather-and-packing",
+  "housing-area-recommendation",
+  "transport-planner",
+  "local-food-guide",
+  "digital-life-setup",
+  "arrival-preparation"
+] as const;
+
+export type ChinaArrivalPlanSupportingSkillId = typeof chinaArrivalPlanSupportingSkillOrder[number];
+
+export interface ChinaArrivalPlanSupportingResult {
+  skill: { id: ChinaArrivalPlanSupportingSkillId; version: string };
+  status: SkillStatus;
+  summary: string;
+  facts: unknown[];
+  assumptions: unknown[];
+  recommendations: unknown[];
+  proposedPlanChanges: unknown[];
+  proposedTasks: unknown[];
+  proposedReminders: unknown[];
+  actionCards: unknown[];
+  sources: unknown[];
+  warnings: unknown[];
+}
+
+export interface ChinaArrivalPlanSkillResult {
+  skill: { id: "china-arrival-plan"; version: "0.1.0" };
+  status: SkillStatus;
+  reasonCode?: "composition_incomplete" | "supporting_skill_blocked";
+  summary: string;
+  facts: Array<{ skillId: ChinaArrivalPlanSupportingSkillId; version: string; status: SkillStatus; summary: string }>;
+  assumptions: Array<{ skillId: ChinaArrivalPlanSupportingSkillId; value: unknown }>;
+  recommendations: Array<{ skillId: ChinaArrivalPlanSupportingSkillId; value: unknown }>;
+  proposedPlanChanges: [];
+  proposedTasks: [];
+  proposedReminders: [];
+  actionCards: [];
+  sources: Array<{ skillId: ChinaArrivalPlanSupportingSkillId; value: unknown }>;
+  warnings: string[];
+  planRef: { id: string; version: number };
+  missingSkills: ChinaArrivalPlanSupportingSkillId[];
+}
+
+/**
+ * First composite gate. It orders validated supporting results but deliberately
+ * does not promote state changes or action cards until Core authorization and
+ * a real Plan compiler are connected.
+ */
+export function runChinaArrivalPlanSkill(input: { planId: string; planVersion: number; supportingResults: ChinaArrivalPlanSupportingResult[] }): ChinaArrivalPlanSkillResult {
+  const identity = { id: "china-arrival-plan" as const, version: "0.1.0" as const };
+  const planRef = { id: input.planId, version: input.planVersion };
+  const empty = { proposedPlanChanges: [] as [], proposedTasks: [] as [], proposedReminders: [] as [], actionCards: [] as [] };
+  const malformed = !input.planId.trim() || !Number.isInteger(input.planVersion) || input.planVersion < 1
+    || input.supportingResults.some((result) => !isValidSupportingResult(result));
+  const ids = input.supportingResults.map((result) => result.skill.id);
+  if (malformed || new Set(ids).size !== ids.length) {
+    return { skill: identity, ...empty, status: "failed", summary: "The China arrival composition input did not pass the Skill contract.", facts: [], assumptions: [], recommendations: [], sources: [], warnings: ["No Plan proposal was produced from malformed, duplicate, or unknown supporting results."], planRef, missingSkills: [...chinaArrivalPlanSupportingSkillOrder] };
+  }
+
+  const byId = new Map(input.supportingResults.map((result) => [result.skill.id, result]));
+  const ordered = chinaArrivalPlanSupportingSkillOrder.flatMap((id) => {
+    const result = byId.get(id);
+    return result ? [result] : [];
+  });
+  const missingSkills = chinaArrivalPlanSupportingSkillOrder.filter((id) => !byId.has(id));
+  const facts = ordered.map((result) => ({ skillId: result.skill.id, version: result.skill.version, status: result.status, summary: result.summary }));
+  const assumptions = ordered.flatMap((result) => result.assumptions.map((value) => ({ skillId: result.skill.id, value })));
+  const recommendations = ordered.flatMap((result) => result.recommendations.map((value) => ({ skillId: result.skill.id, value })));
+  const sources = ordered.flatMap((result) => result.sources.map((value) => ({ skillId: result.skill.id, value })));
+  const supportingWarnings = ordered.flatMap((result) => result.warnings.filter((warning): warning is string => typeof warning === "string"));
+  const boundaryWarning = "Supporting Plan changes, Tasks, Reminders, and action cards are not promoted until the Core compiler and authorization layer are connected.";
+  if (missingSkills.length) {
+    return { skill: identity, ...empty, status: "blocked", reasonCode: "composition_incomplete", summary: `China arrival composition is incomplete; ${missingSkills.length} required supporting Skills are not available.`, facts, assumptions, recommendations, sources, warnings: [...supportingWarnings, boundaryWarning], planRef, missingSkills };
+  }
+  const blocked = ordered.some((result) => result.status === "blocked" || result.status === "failed");
+  const needsInput = ordered.some((result) => result.status === "needs_input");
+  const degraded = ordered.some((result) => result.status === "degraded" || result.status === "not_supported");
+  const status: SkillStatus = blocked ? "blocked" : needsInput ? "needs_input" : degraded ? "degraded" : "success";
+  return {
+    skill: identity,
+    ...empty,
+    status,
+    ...(blocked ? { reasonCode: "supporting_skill_blocked" as const } : {}),
+    summary: status === "success" ? "All required China arrival supporting results are ready for a future Core Plan compiler." : status === "needs_input" ? "A supporting Skill needs critical user input before composition can continue." : status === "degraded" ? "Composition is available with explicit supporting limitations." : "A supporting Skill blocked the China arrival composition.",
+    facts,
+    assumptions,
+    recommendations,
+    sources,
+    warnings: [...supportingWarnings, boundaryWarning],
+    planRef,
+    missingSkills
+  };
+}
+
+function isValidSupportingResult(result: ChinaArrivalPlanSupportingResult): boolean {
+  return chinaArrivalPlanSupportingSkillOrder.includes(result.skill.id)
+    && /^\d+\.\d+\.\d+$/.test(result.skill.version)
+    && ["success", "needs_input", "degraded", "not_supported", "blocked", "failed"].includes(result.status)
+    && Boolean(result.summary.trim())
+    && [result.facts, result.assumptions, result.recommendations, result.proposedPlanChanges, result.proposedTasks, result.proposedReminders, result.actionCards, result.sources, result.warnings].every(Array.isArray);
 }

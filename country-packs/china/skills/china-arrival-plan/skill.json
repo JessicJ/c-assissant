@@ -1,0 +1,15 @@
+{
+  "id": "china-arrival-plan",
+  "country": "china",
+  "version": "0.1.0",
+  "visibility": "internal",
+  "entrypoint": "runChinaArrivalPlanSkill",
+  "requiredInputs": ["planId", "planVersion", "supportingResults"],
+  "permittedProfileFields": [],
+  "permittedPlanFields": ["id", "version"],
+  "capabilities": ["skill.compose"],
+  "sources": { "provider": "supporting_skills", "freshness": "preserve_each_result" },
+  "risk": { "information": "regulated", "action": "read_only" },
+  "executionPolicy": "automatic_with_notice",
+  "failure": { "missingSkills": "blocked:composition_incomplete", "supportingFailure": "blocked:supporting_skill_blocked", "malformedInput": "failed" }
+}

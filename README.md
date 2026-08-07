@@ -51,6 +51,8 @@ Weather interpretation is centralized in `weather-and-packing` `0.1.0` for Web, 
 
 The production policy evidence gate now runs through `policy-applicability` `0.1.0`. It sees only minimized Profile/Plan facts and official snapshot metadata, and reports readiness for separate review without interpreting policy or deciding eligibility.
 
+The registered `china-arrival-plan` `0.1.0` composite gate now preserves ordered supporting Skill provenance for one exact Plan version. It deliberately reports incomplete composition until the remaining preparation, digital-life, and local-food Skills are implemented, and does not yet mutate Core state.
+
 ## Product shape
 
 - Web workspace: the full desktop-grade product interface.
