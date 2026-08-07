@@ -93,6 +93,21 @@ export interface Profile {
   status: "incomplete" | "ready";
 }
 
+/** A Telegram account bound to this single-user local instance. */
+export interface TelegramBinding {
+  chatId: string;
+  userId: string;
+  firstName: string;
+  username?: string;
+  pairedAt: string;
+}
+
+export interface TelegramPairingStatus {
+  state: "not_paired" | "waiting_for_start" | "paired";
+  expiresAt?: string;
+  binding?: TelegramBinding;
+}
+
 export interface WorkspaceSnapshot {
   profile: Profile;
   activePlan: Plan;

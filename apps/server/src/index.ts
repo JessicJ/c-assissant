@@ -1,5 +1,6 @@
 import cors from "@fastify/cors";
 import Fastify from "fastify";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -178,6 +179,50 @@ server.post("/api/connectors/telegram/verify", async (_request, reply) => {
   return reply.code(connectorResponseStatus(result.status)).send(result);
 });
 
+server.get("/api/connectors/telegram/pairing", async () => store.getTelegramPairingStatus());
+
+server.post("/api/connectors/telegram/pairing/start", async (_request, reply) => {
+  const identity = await telegram.getMe();
+  if (identity.status !== "available" || !identity.data?.username) return reply.code(connectorResponseStatus(identity.status)).send(identity);
+  const pairing = store.getTelegramPairingStatus();
+  if (pairing.state === "paired") return pairing;
+  const code = `pair_${randomUUID().replaceAll("-", "")}`;
+  const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
+  const pending = store.createTelegramPairingRequest({ code, expiresAt });
+  return {
+    state: pending.state,
+    code,
+    expiresAt,
+    botUsername: identity.data.username,
+    deepLink: `https://t.me/${identity.data.username}?start=${code}`
+  };
+});
+
+server.post<{ Body: { code?: string } }>("/api/connectors/telegram/pairing/complete", async (request, reply) => {
+  const code = request.body?.code?.trim() ?? "";
+  if (!code) return reply.code(400).send({ error: "A Telegram pairing code is required." });
+  const pending = store.getTelegramPairingStatus();
+  if (pending.state === "paired") return pending;
+  if (pending.state !== "waiting_for_start") return reply.code(400).send({ error: "Start a new Telegram pairing from the Web workspace." });
+  const updates = await telegram.getUpdates();
+  if (updates.status !== "available") return reply.code(connectorResponseStatus(updates.status)).send(updates);
+  const startUpdate = updates.data?.find((update) => pairingCodeFromStart(update.text) === code);
+  if (!startUpdate) return { state: "waiting_for_start", expiresAt: pending.expiresAt, foundStart: false };
+  try {
+    const paired = store.claimTelegramPairing({
+      code,
+      chatId: startUpdate.chatId,
+      userId: startUpdate.userId,
+      firstName: startUpdate.firstName,
+      ...(startUpdate.username ? { username: startUpdate.username } : {})
+    });
+    const receipt = await telegram.sendMessage({ chatId: startUpdate.chatId, text: "C-assistant is connected to this Telegram account. You will control future reminders and actions from your Plan." });
+    return { ...paired, confirmationMessageSent: receipt.status === "available" };
+  } catch (error) {
+    return reply.code(400).send({ error: error instanceof Error ? error.message : "Telegram could not be paired." });
+  }
+});
+
 server.get<{ Querystring: { query?: string; region?: string } }>("/api/amap/places", async (request, reply) => {
   const result = await amap.searchPlaces({ query: request.query.query ?? "", region: request.query.region });
   return reply.code(result.status === "available" ? 200 : result.status === "not_configured" ? 503 : 400).send(result);
@@ -229,6 +274,11 @@ function connectorResponseStatus(status: "available" | "degraded" | "not_configu
   if (status === "unauthorized") return 401;
   if (status === "rate_limited") return 429;
   return 400;
+}
+
+function pairingCodeFromStart(value: string | undefined): string | undefined {
+  const match = value?.trim().match(/^\/start(?:@[-_A-Za-z0-9]+)?\s+([A-Za-z0-9_-]{12,96})$/);
+  return match?.[1];
 }
 
 const port = Number(process.env.C_ASSISTANT_PORT ?? 8787);

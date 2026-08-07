@@ -9,6 +9,16 @@ import { recommendPlanTransport, type TransportWeatherFact } from "@c-assistant/
 type View = "Today" | "Plans" | "Inbox" | "Profile" | "Settings";
 type RouteMode = AmapRoute["mode"];
 type RouteComparisons = Partial<Record<RouteMode, ConnectorResult<AmapRoute>>>;
+type TelegramPairingView = {
+  state: "not_paired" | "waiting_for_start" | "paired";
+  code?: string;
+  expiresAt?: string;
+  botUsername?: string;
+  deepLink?: string;
+  foundStart?: boolean;
+  confirmationMessageSent?: boolean;
+  binding?: { firstName: string; username?: string; pairedAt: string };
+};
 
 const navigation: View[] = ["Today", "Plans", "Inbox", "Profile", "Settings"];
 
@@ -50,12 +60,15 @@ function App() {
   const [telegramStatus, setTelegramStatus] = useState<ConnectorResult<TelegramConfiguration> | null>(null);
   const [telegramVerification, setTelegramVerification] = useState<ConnectorResult<TelegramBotIdentity> | null>(null);
   const [verifyingTelegram, setVerifyingTelegram] = useState(false);
+  const [telegramPairing, setTelegramPairing] = useState<TelegramPairingView | null>(null);
+  const [pairingTelegram, setPairingTelegram] = useState(false);
   const [generating, setGenerating] = useState(false);
 
   useEffect(() => {
     void loadWorkspace();
     void loadCodexRuntime();
     void loadTelegramStatus();
+    void loadTelegramPairing();
   }, []);
 
   async function loadWorkspace() {
@@ -98,6 +111,47 @@ function App() {
       setTelegramVerification({ status: "unavailable", provider: "telegram", observedAt: new Date().toISOString(), failure: { code: "network_error", message: "Telegram could not be reached right now.", retryable: true } });
     } finally {
       setVerifyingTelegram(false);
+    }
+  }
+
+  async function loadTelegramPairing() {
+    try {
+      const response = await fetch("/api/connectors/telegram/pairing");
+      if (response.ok) setTelegramPairing((await response.json()) as TelegramPairingView);
+    } catch {
+      setTelegramPairing(null);
+    }
+  }
+
+  async function startTelegramPairing() {
+    try {
+      setPairingTelegram(true);
+      const response = await fetch("/api/connectors/telegram/pairing/start", { method: "POST" });
+      if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "Telegram pairing could not start.");
+      setTelegramPairing((await response.json()) as TelegramPairingView);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Telegram pairing could not start.");
+    } finally {
+      setPairingTelegram(false);
+    }
+  }
+
+  async function completeTelegramPairing() {
+    if (!telegramPairing?.code) return;
+    try {
+      setPairingTelegram(true);
+      const response = await fetch("/api/connectors/telegram/pairing/complete", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: telegramPairing.code })
+      });
+      if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "Telegram pairing could not be completed.");
+      setTelegramPairing((await response.json()) as TelegramPairingView);
+      await loadWorkspace();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Telegram pairing could not be completed.");
+    } finally {
+      setPairingTelegram(false);
     }
   }
 
@@ -511,7 +565,7 @@ function App() {
         {view === "Plans" ? <PlanView plan={plan} onActivate={activatePlan} confirming={confirming} amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={searchAmap} routeOrigin={routeOrigin} routeDestination={routeDestination} routeMode={routeMode} routeResult={routeResult} routing={routing} routeComparisons={routeComparisons} comparingRoutes={comparingRoutes} planWeatherResult={planWeather?.planId === plan.id ? planWeather.result : null} checkingPlanWeather={checkingPlanWeather} foodCentre={foodCentre} foodResult={foodResult} findingFood={findingFood} stayCentre={stayCentre} stayResult={stayResult} findingStay={findingStay} savingAccommodation={savingAccommodation} confirmingAccommodation={confirmingAccommodation} savingTransportPreference={savingTransportPreference} savingTravelContext={savingTravelContext} savingArrival={savingArrival} onChooseRouteOrigin={(place) => { setRouteOrigin(place); setRouteResult(null); setRouteComparisons(null); }} onChooseRouteDestination={(place) => { setRouteDestination(place); setRouteResult(null); setRouteComparisons(null); }} onRouteModeChange={(mode) => { setRouteMode(mode); setRouteResult(null); }} onFindNearbyFood={findNearbyFood} onFindNearbyAccommodation={findNearbyAccommodation} onSaveAccommodationCandidate={saveAccommodationCandidate} onSaveManualAccommodation={saveManualAccommodation} onConfirmAccommodation={confirmAccommodationBooking} onSaveTransportPreference={saveTransportPreference} onSaveTravelContext={saveTravelContext} onSaveArrival={saveArrival} onPlanRoute={planAmapRoute} onCompareRoutes={compareAmapRoutes} onCheckPlanWeather={checkPlanWeather} /> : null}
         {view === "Inbox" ? <InboxView workspace={workspace} /> : null}
         {view === "Profile" ? <ProfileView workspace={workspace} onSave={saveProfile} /> : null}
-        {view === "Settings" ? <SettingsView workspace={workspace} codexRuntime={codexRuntime} telegramStatus={telegramStatus} telegramVerification={telegramVerification} verifyingTelegram={verifyingTelegram} onVerifyTelegram={verifyTelegram} weatherLocation={weatherLocation} setWeatherLocation={setWeatherLocation} weatherResult={weatherResult} checkingWeather={checkingWeather} onCheckWeather={checkWeather} /> : null}
+        {view === "Settings" ? <SettingsView workspace={workspace} codexRuntime={codexRuntime} telegramStatus={telegramStatus} telegramVerification={telegramVerification} verifyingTelegram={verifyingTelegram} telegramPairing={telegramPairing} pairingTelegram={pairingTelegram} onVerifyTelegram={verifyTelegram} onStartTelegramPairing={startTelegramPairing} onCompleteTelegramPairing={completeTelegramPairing} weatherLocation={weatherLocation} setWeatherLocation={setWeatherLocation} weatherResult={weatherResult} checkingWeather={checkingWeather} onCheckWeather={checkWeather} /> : null}
       </section>
     </main>
   );
@@ -559,9 +613,16 @@ function ProfileView({ workspace, onSave }: { workspace: WorkspaceSnapshot; onSa
   return <section className="card profile-view"><p className="eyebrow">Long-term information</p><h2>Save only the basics you confirm</h2><form onSubmit={(event) => void submit(event)} className="profile-form"><label>Name<input value={profile.displayName} onChange={(event) => setProfile({ ...profile, displayName: event.target.value })} /></label><label>Preferred language<input value={profile.preferredLanguage} onChange={(event) => setProfile({ ...profile, preferredLanguage: event.target.value })} /></label><label>Nationality<input value={profile.nationality} onChange={(event) => setProfile({ ...profile, nationality: event.target.value })} /></label><label>Gender<select value={profile.gender} onChange={(event) => setProfile({ ...profile, gender: event.target.value as typeof profile.gender })}><option value="not_specified">Not specified</option><option value="woman">Woman</option><option value="man">Man</option><option value="nonbinary">Nonbinary</option><option value="prefer_not_to_say">Prefer not to say</option></select></label><label>China visa / residence status<select value={profile.immigrationStatus} onChange={(event) => setProfile({ ...profile, immigrationStatus: event.target.value as typeof profile.immigrationStatus })}><option value="unknown">Not sure yet</option><option value="short_term_visitor">Short-term visitor</option><option value="tourist_visa">Tourist visa</option><option value="student_visa">Student visa</option><option value="work_visa">Work visa</option><option value="residence_permit">Residence permit</option><option value="other">Other</option></select></label><p>These details help C-assistant later find the right policy route. Travel dates, companions, accommodation, and precise location remain inside a Plan, not this long-term Profile.</p><button className="primary-button" disabled={saving}>{saving ? "Saving…" : "Save confirmed Profile"}</button></form></section>;
 }
 
-function SettingsView({ workspace, codexRuntime, telegramStatus, telegramVerification, verifyingTelegram, onVerifyTelegram, weatherLocation, setWeatherLocation, weatherResult, checkingWeather, onCheckWeather }: { workspace: WorkspaceSnapshot; codexRuntime: RuntimeCheck | null; telegramStatus: ConnectorResult<TelegramConfiguration> | null; telegramVerification: ConnectorResult<TelegramBotIdentity> | null; verifyingTelegram: boolean; onVerifyTelegram: () => Promise<void>; weatherLocation: string; setWeatherLocation: (value: string) => void; weatherResult: ConnectorResult<QWeatherWeatherSnapshot> | null; checkingWeather: boolean; onCheckWeather: () => Promise<void> }) {
+function SettingsView({ workspace, codexRuntime, telegramStatus, telegramVerification, verifyingTelegram, telegramPairing, pairingTelegram, onVerifyTelegram, onStartTelegramPairing, onCompleteTelegramPairing, weatherLocation, setWeatherLocation, weatherResult, checkingWeather, onCheckWeather }: { workspace: WorkspaceSnapshot; codexRuntime: RuntimeCheck | null; telegramStatus: ConnectorResult<TelegramConfiguration> | null; telegramVerification: ConnectorResult<TelegramBotIdentity> | null; verifyingTelegram: boolean; telegramPairing: TelegramPairingView | null; pairingTelegram: boolean; onVerifyTelegram: () => Promise<void>; onStartTelegramPairing: () => Promise<void>; onCompleteTelegramPairing: () => Promise<void>; weatherLocation: string; setWeatherLocation: (value: string) => void; weatherResult: ConnectorResult<QWeatherWeatherSnapshot> | null; checkingWeather: boolean; onCheckWeather: () => Promise<void> }) {
   const telegramConfigured = telegramStatus?.status === "available";
-  return <section className="content-stack"><section className="card settings-view"><p className="eyebrow">Connection status</p><h2>Services are separated from the product UI</h2><div className="status-grid">{Object.entries(workspace.system).map(([name, status]) => <div key={name}><span>{name}</span><strong>{status.replaceAll("_", " ")}</strong></div>)}<div><span>Codex</span><strong>{codexRuntime?.installed && codexRuntime.authenticated ? "ready" : codexRuntime?.installed ? "login needed" : "not installed"}</strong></div><div><span>Telegram</span><strong>{telegramConfigured ? "configured" : telegramStatus?.status === "not_configured" ? "token needed" : telegramStatus?.status ?? "checking"}</strong></div></div><p>Codex creates a draft only after you press the explicit generation button. Telegram remains inactive until you configure and explicitly verify your own bot.</p></section><section className="card weather-card"><p className="eyebrow">QWeather facts</p><h2>Check what the destination weather reports.</h2><div className="amap-search"><input value={weatherLocation} onChange={(event) => setWeatherLocation(event.target.value)} aria-label="Check destination weather" placeholder="City or region" /><button className="primary-button" disabled={checkingWeather || !weatherLocation.trim()} onClick={() => void onCheckWeather()}>{checkingWeather ? "Checking…" : "Check weather"}</button></div>{weatherResult ? <WeatherResults result={weatherResult} /> : <p>Weather is a changing fact, not a promise. C-assistant will use it for cautious packing and route suggestions after a Plan is confirmed.</p>}</section><section className="card telegram-card"><p className="eyebrow">Telegram bot</p><h2>Verify the local bot without revealing its token.</h2>{telegramConfigured ? <><p>Verification makes one safe identity request. It does not pair a user, read messages, or send a notification.</p><button className="primary-button" disabled={verifyingTelegram} onClick={() => void onVerifyTelegram()}>{verifyingTelegram ? "Verifying…" : "Verify Telegram bot"}</button></> : <p>Add <code>TELEGRAM_BOT_TOKEN</code> to the local <code>.env</code> file, then restart the local service. The token is not shown in this workspace.</p>}{telegramVerification ? <TelegramVerification result={telegramVerification} /> : null}</section></section>;
+  return <section className="content-stack"><section className="card settings-view"><p className="eyebrow">Connection status</p><h2>Services are separated from the product UI</h2><div className="status-grid">{Object.entries(workspace.system).map(([name, status]) => <div key={name}><span>{name}</span><strong>{status.replaceAll("_", " ")}</strong></div>)}<div><span>Codex</span><strong>{codexRuntime?.installed && codexRuntime.authenticated ? "ready" : codexRuntime?.installed ? "login needed" : "not installed"}</strong></div><div><span>Telegram</span><strong>{telegramPairing?.state === "paired" ? "paired" : telegramConfigured ? "configured" : telegramStatus?.status === "not_configured" ? "token needed" : telegramStatus?.status ?? "checking"}</strong></div></div><p>Codex creates a draft only after you press the explicit generation button. Telegram starts with a private, user-owned pairing step.</p></section><section className="card weather-card"><p className="eyebrow">QWeather facts</p><h2>Check what the destination weather reports.</h2><div className="amap-search"><input value={weatherLocation} onChange={(event) => setWeatherLocation(event.target.value)} aria-label="Check destination weather" placeholder="City or region" /><button className="primary-button" disabled={checkingWeather || !weatherLocation.trim()} onClick={() => void onCheckWeather()}>{checkingWeather ? "Checking…" : "Check weather"}</button></div>{weatherResult ? <WeatherResults result={weatherResult} /> : <p>Weather is a changing fact, not a promise. C-assistant will use it for cautious packing and route suggestions after a Plan is confirmed.</p>}</section><section className="card telegram-card"><p className="eyebrow">Telegram bot</p><h2>Connect your private Telegram account</h2>{telegramConfigured ? <><p>Verification makes one safe identity request. It does not read messages or send a notification.</p><button className="secondary-button" disabled={verifyingTelegram} onClick={() => void onVerifyTelegram()}>{verifyingTelegram ? "Verifying…" : "Verify Telegram bot"}</button><TelegramPairing pairing={telegramPairing} busy={pairingTelegram} onStart={onStartTelegramPairing} onComplete={onCompleteTelegramPairing} /></> : <p>Add <code>TELEGRAM_BOT_TOKEN</code> to the local <code>.env</code> file, then restart the local service. The token is not shown in this workspace.</p>}{telegramVerification ? <TelegramVerification result={telegramVerification} /> : null}</section></section>;
+}
+
+function TelegramPairing({ pairing, busy, onStart, onComplete }: { pairing: TelegramPairingView | null; busy: boolean; onStart: () => Promise<void>; onComplete: () => Promise<void> }) {
+  if (pairing?.state === "paired") return <p className="success-copy">Connected to {pairing.binding?.username ? `@${pairing.binding.username}` : pairing.binding?.firstName ?? "your Telegram account"}. No reminders or automatic messages are enabled yet.</p>;
+  if (pairing?.state === "waiting_for_start" && pairing.deepLink && pairing.code) return <div className="telegram-pairing"><p>1. Open {pairing.botUsername ? `@${pairing.botUsername}` : "your bot"} and send the secure start message.</p><a className="primary-button" href={pairing.deepLink} target="_blank" rel="noreferrer">Open bot and send /start</a><p>2. Return here and confirm after Telegram opens.</p><button className="secondary-button" disabled={busy} onClick={() => void onComplete()}>{busy ? "Checking…" : "I sent /start"}</button>{pairing.foundStart === false ? <p className="connector-message">The start message is not visible yet. Send it in the bot's private chat, then try again.</p> : null}<small>This one-time instruction expires at {pairing.expiresAt}.</small></div>;
+  if (pairing?.state === "waiting_for_start") return <div className="telegram-pairing"><p>A pairing instruction is already waiting. Start a fresh one if this browser no longer has its secure link.</p><button className="secondary-button" disabled={busy} onClick={() => void onStart()}>{busy ? "Preparing…" : "Start a fresh pairing"}</button></div>;
+  return <div className="telegram-pairing"><p>Generate a short-lived instruction, then approve the connection from your bot's private chat. This instance accepts one Telegram account only.</p><button className="primary-button" disabled={busy} onClick={() => void onStart()}>{busy ? "Preparing…" : "Pair this Telegram account"}</button></div>;
 }
 
 function TelegramVerification({ result }: { result: ConnectorResult<TelegramBotIdentity> }) {
