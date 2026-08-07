@@ -129,3 +129,19 @@ test("SQLite stores one explicit Telegram pairing and records it in the Inbox", 
   assert.equal(store.getWorkspace().inbox[0]?.title, "Telegram paired");
   store.close();
 });
+
+test("SQLite keeps the Telegram update cursor across reads", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  assert.equal(store.getTelegramUpdateOffset(), undefined);
+  store.advanceTelegramUpdateOffset(41);
+  store.advanceTelegramUpdateOffset(40);
+  assert.equal(store.getTelegramUpdateOffset(), 41);
+  store.close();
+});
+
+test("SQLite only claims one Telegram update once", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  assert.equal(store.claimTelegramUpdate(41), true);
+  assert.equal(store.claimTelegramUpdate(41), false);
+  store.close();
+});

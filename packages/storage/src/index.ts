@@ -187,6 +187,24 @@ export class SqliteWorkspaceStore {
     return this.getTelegramPairingStatus();
   }
 
+  getTelegramUpdateOffset(): number | undefined {
+    const row = this.database.prepare("SELECT next_update_id FROM telegram_update_cursor WHERE id = 1").get() as { next_update_id: number } | undefined;
+    return row?.next_update_id;
+  }
+
+  advanceTelegramUpdateOffset(nextUpdateId: number): void {
+    if (!Number.isInteger(nextUpdateId) || nextUpdateId < 1) throw new Error("Telegram update offset must be a positive whole number.");
+    this.database.prepare("INSERT INTO telegram_update_cursor (id, next_update_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET next_update_id = MAX(telegram_update_cursor.next_update_id, excluded.next_update_id)").run(nextUpdateId);
+  }
+
+  claimTelegramUpdate(updateId: number): boolean {
+    if (!Number.isInteger(updateId) || updateId < 1) throw new Error("Telegram update id must be a positive whole number.");
+    const existing = this.database.prepare("SELECT update_id FROM telegram_processed_updates WHERE update_id = ?").get(updateId);
+    if (existing) return false;
+    this.database.prepare("INSERT INTO telegram_processed_updates (update_id, processed_at) VALUES (?, ?)").run(updateId, new Date().toISOString());
+    return true;
+  }
+
   createPlan(input: CreatePlanInput): WorkspaceSnapshot {
     const plan = createPlanFromRequest(input);
     this.savePlan(plan);
@@ -415,6 +433,14 @@ export class SqliteWorkspaceStore {
         expires_at TEXT NOT NULL,
         created_at TEXT NOT NULL,
         consumed_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS telegram_update_cursor (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        next_update_id INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS telegram_processed_updates (
+        update_id INTEGER PRIMARY KEY,
+        processed_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_plans_current ON plans(is_current, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_stages_plan_order ON stages(plan_id, sort_order);
