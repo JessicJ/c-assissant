@@ -175,6 +175,8 @@ A Confirmation records the exact object, version, scope, channel, and time appro
 
 A Confirmation for Plan V3 cannot authorize a materially different Plan V4. Real-time adjustments inside the already approved scope do not require a new confirmation.
 
+Web and the bound Telegram private chat can both create this Confirmation. Telegram callback data includes the reviewed Plan id and version, and Core accepts it only while that exact version remains the current draft. Long mobile Plans are paginated in full, with the confirmation control attached only to the last page.
+
 ## SourceSnapshot
 
 A SourceSnapshot stores the minimum evidence needed to verify a conclusion or detect a later change:

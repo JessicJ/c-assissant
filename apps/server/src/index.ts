@@ -12,7 +12,7 @@ import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isAr
 import { arrivalRouteDestination, formatArrivalRoute, selectArrivalTransport } from "./arrival-route.js";
 import { createOfficialSourceService, parseOfficialSourceRegistry } from "./official-sources.js";
 import { parseTelegramCommand } from "./telegram-commands.js";
-import { createTelegramPlan, formatTelegramPlan, formatTelegramPlanCreation } from "./telegram-plan.js";
+import { createTelegramPlan, formatTelegramPlanCreationPages, formatTelegramPlanPages, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, type TelegramPlanConfirmationMarkup } from "./telegram-plan.js";
 import { dueTaskReminders, formatTaskReminder } from "./task-reminder.js";
 import { refreshTaskReminderWeather, taskReminderNeedsWeather, type TaskReminderWeatherContext } from "./task-reminder-weather.js";
 
@@ -364,6 +364,27 @@ async function pollTelegram(): Promise<void> {
       if (update.chatType !== "private" || update.chatId !== pairing.binding.chatId || update.userId !== pairing.binding.userId) continue;
       if (!store.claimTelegramUpdate(update.updateId)) continue;
       if (update.kind === "callback") {
+        const confirmation = telegramPlanConfirmationDecision(store.getWorkspace().activePlan, update.callbackData);
+        if (confirmation !== "not_confirmation" && update.callbackId) {
+          if (confirmation === "confirm") {
+            const confirmed = store.confirmPlan(store.getWorkspace().activePlan.id);
+            await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: "Plan activated." });
+            await telegram.sendMessage({ chatId: pairing.binding.chatId, text: `Plan activated\n${confirmed.activePlan.title}\n\nApproved reminders and read-only preparation are now eligible to run. No booking, payment, ride, or other external action was started.` });
+          } else if (confirmation === "already_active") {
+            await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: "This Plan is already active." });
+          } else {
+            const currentPlan = store.getWorkspace().activePlan;
+            const replyMarkup = telegramPlanConfirmationMarkup(currentPlan);
+            await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: "That Plan version is no longer current." });
+            const pages = formatTelegramPlanPages(currentPlan);
+            const replies = pages.map((page, index): TelegramCommandReply => {
+              const isLastPage = index === pages.length - 1;
+              return { text: index === 0 ? `That confirmation button is out of date. Review the current Plan below.\n\n${page}` : page, ...(isLastPage && replyMarkup ? { replyMarkup } : {}) };
+            });
+            await sendTelegramCommandReplies(pairing.binding.chatId, replies);
+          }
+          continue;
+        }
         if (update.callbackData === "arrival_not_here" && update.callbackId) {
           await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: "Share your location only if you want route help." });
           await requestTelegramArrivalLocation(pairing.binding.chatId, "If you want route help for this arrival, tap the button below to share your current location.");
@@ -380,8 +401,8 @@ async function pollTelegram(): Promise<void> {
         await sendArrivalRouteFromSharedLocation(pairing.binding.chatId, update.location);
         continue;
       }
-      const response = await telegramCommandResponse(update.text);
-      if (response) await telegram.sendMessage({ chatId: pairing.binding.chatId, text: response });
+      const responses = await telegramCommandResponse(update.text);
+      if (responses) await sendTelegramCommandReplies(pairing.binding.chatId, responses);
     }
     if (updates.data.nextOffset !== undefined) store.advanceTelegramUpdateOffset(updates.data.nextOffset);
   } catch (error) {
@@ -573,16 +594,30 @@ async function requestTelegramArrivalLocation(chatId: string, intro: string): Pr
   }
 }
 
-async function telegramCommandResponse(text: string | undefined): Promise<string | undefined> {
+type TelegramCommandReply = { text: string; replyMarkup?: TelegramPlanConfirmationMarkup };
+
+async function sendTelegramCommandReplies(chatId: string, replies: TelegramCommandReply[]): Promise<void> {
+  for (const reply of replies) {
+    const receipt = await telegram.sendMessage({ chatId, ...reply });
+    if (receipt.status === "available") continue;
+    server.log.warn({ status: receipt.status, code: receipt.failure?.code }, "Telegram command response could not be delivered completely");
+    return;
+  }
+}
+
+async function telegramCommandResponse(text: string | undefined): Promise<TelegramCommandReply[] | undefined> {
   const command = parseTelegramCommand(text);
   if (command.type === "empty") return undefined;
-  if (command.type === "help") return "C-assistant is connected. Send a normal message to create a Plan draft with your selected local runtime, or use:\n/plan — show the current Plan\n/new <what you need to do> — create a Plan draft\n/help — show this help\n\nEvery Plan still needs Web review and confirmation. Bookings and payments are not enabled.";
+  if (command.type === "help") return [{ text: "C-assistant is connected. Send a normal message to create a Plan draft with your selected local runtime, or use:\n/plan — show the current Plan and confirmation control\n/new <what you need to do> — create a Plan draft\n/help — show this help\n\nReview the complete Plan in Telegram or Web before confirming it. Bookings and payments are not enabled." }];
   if (command.type === "plan") {
-    return formatTelegramPlan(store.getWorkspace().activePlan);
+    const plan = store.getWorkspace().activePlan;
+    const replyMarkup = telegramPlanConfirmationMarkup(plan);
+    const pages = formatTelegramPlanPages(plan);
+    return pages.map((page, index) => ({ text: page, ...(index === pages.length - 1 && replyMarkup ? { replyMarkup } : {}) }));
   }
   if (command.type === "create_plan") {
-    if (command.request.length > 1_500) return "Keep a new Plan request under 1,500 characters, then send it again.";
-    if (generatingPlan) return "A Plan draft is already being prepared. Please wait for it before sending another request.";
+    if (command.request.length > 1_500) return [{ text: "Keep a new Plan request under 1,500 characters, then send it again." }];
+    if (generatingPlan) return [{ text: "A Plan draft is already being prepared. Please wait for it before sending another request." }];
     generatingPlan = true;
     try {
       const workspace = store.getWorkspace();
@@ -606,13 +641,15 @@ async function telegramCommandResponse(text: string | undefined): Promise<string
       store.finishPlanGenerationRun(result.source === "runtime"
         ? { runId: run.id, status: "succeeded", outputPlanId: result.workspace.activePlan.id }
         : { runId: run.id, status: "fallback", failureCode: runtimeFailureCode });
-      return formatTelegramPlanCreation(result);
+      const replyMarkup = telegramPlanConfirmationMarkup(result.workspace.activePlan);
+      const pages = formatTelegramPlanCreationPages(result);
+      return pages.map((page, index) => ({ text: page, ...(index === pages.length - 1 && replyMarkup ? { replyMarkup } : {}) }));
     } finally {
       generatingPlan = false;
     }
   }
-  if (command.type === "start") return "This Telegram account is already connected to C-assistant. Send /help to see available commands.";
-  return "That command is not available yet. Send /help to see what C-assistant can do.";
+  if (command.type === "start") return [{ text: "This Telegram account is already connected to C-assistant. Send /help to see available commands." }];
+  return [{ text: "That command is not available yet. Send /help to see what C-assistant can do." }];
 }
 
 function selectedRuntimeAdapter(kind: AgentRuntimeKind): CodexRuntimeAdapter | ClaudeCodeRuntimeAdapter {
