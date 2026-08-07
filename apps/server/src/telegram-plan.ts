@@ -2,6 +2,7 @@ import type { AgentRuntimeKind, GeneratedPlanDraft, Plan, WorkspaceSnapshot } fr
 
 export type TelegramPlanConfirmationDecision = "confirm" | "already_active" | "stale" | "not_confirmation";
 export type TelegramPlanConfirmationMarkup = { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+export type TelegramPlanRequestMode = "create" | "revise";
 
 export interface TelegramPlanCreation {
   source: "runtime" | "template";
@@ -24,6 +25,35 @@ export async function createTelegramPlan(input: {
     return { source: "template", runtime: input.runtime, workspace: input.saveTemplate() };
   }
   return { source: "runtime", runtime: input.runtime, workspace: input.saveGenerated(draft) };
+}
+
+export function planDraftForRevision(plan: Plan): GeneratedPlanDraft {
+  return {
+    title: plan.title,
+    location: plan.location,
+    dates: plan.dates,
+    knownInformation: [...plan.knownInformation],
+    assumptions: [...plan.assumptions],
+    nextAction: plan.nextAction,
+    stages: plan.stages.map((stage) => ({
+      title: stage.title,
+      description: stage.description,
+      tasks: stage.tasks.map((task) => ({
+        title: task.title,
+        owner: task.owner,
+        dueLabel: task.dueLabel,
+        ...(task.activationTrigger ? { activationTrigger: task.activationTrigger } : {}),
+        ...(task.reminder ? { reminder: task.reminder } : {})
+      }))
+    }))
+  };
+}
+
+export function telegramPlanRequestMode(workspace: WorkspaceSnapshot, explicitNew: boolean): TelegramPlanRequestMode {
+  if (explicitNew || workspace.activePlan.status !== "draft") return "create";
+  const id = workspace.activePlan.id;
+  const currentDraftWasUserCreated = workspace.inbox.some((item) => item.id === `plan-generated-${id}` || item.id === `plan-created-${id}` || item.id === `plan-revised-${id}`);
+  return currentDraftWasUserCreated ? "revise" : "create";
 }
 
 export function formatTelegramPlanCreation(result: TelegramPlanCreation): string {

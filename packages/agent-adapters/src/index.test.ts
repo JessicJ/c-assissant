@@ -73,3 +73,18 @@ test("Codex Plan context includes confirmed Profile identity without claiming po
   assert.match(prompt, /Never invent a date, time, or departure time zone/i);
   assert.match(prompt, /Use \["weather"\] only when current destination weather/i);
 });
+
+test("Plan revision context is complete but excludes Core and Connector state", () => {
+  const currentPlan = JSON.parse(validDraft);
+  const prompt = buildPlanDraftPrompt({
+    request: "Move the arrival date to September 2.",
+    currentPlan,
+    profile: { preferredLanguage: "English", nationality: "Canada", gender: "woman", immigrationStatus: "tourist_visa" }
+  });
+
+  assert.match(prompt, /Current draft to revise/);
+  assert.match(prompt, /Move the arrival date to September 2/);
+  assert.match(prompt, /Attend an exhibition in Shanghai/);
+  assert.match(prompt, /Preserve every unaffected known fact/);
+  assert.doesNotMatch(prompt, /sourceSnapshots|AMAP_API_KEY|TELEGRAM_BOT_TOKEN|plan-[0-9a-f-]{36}/);
+});

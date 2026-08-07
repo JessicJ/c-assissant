@@ -6,13 +6,13 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-adapters";
 import { AmapConnector, OfficialSourceConnector, QWeatherConnector, TelegramConnector, type AmapPlace, type AmapRoute } from "@c-assistant/connectors";
-import { assessPolicyPreparation, type AgentRuntimeKind, type CreatePlanInput, type PlanAccommodationInput, type PlanArrivalInput, type PlanTransportPreferenceInput, type PlanTravelContextInput, type ProfileUpdate, type RuntimeSelectionUpdate } from "@c-assistant/core";
+import { assessPolicyPreparation, type AgentRuntimeKind, type CreatePlanInput, type GeneratedPlanDraft, type PlanAccommodationInput, type PlanArrivalInput, type PlanTransportPreferenceInput, type PlanTravelContextInput, type ProfileUpdate, type RuntimeSelectionUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue } from "./arrival-reminder.js";
 import { arrivalRouteDestination, formatArrivalRoute, selectArrivalTransport } from "./arrival-route.js";
 import { createOfficialSourceService, parseOfficialSourceRegistry } from "./official-sources.js";
 import { parseTelegramCommand } from "./telegram-commands.js";
-import { createTelegramPlan, formatTelegramPlanCreationPages, formatTelegramPlanPages, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, type TelegramPlanConfirmationMarkup } from "./telegram-plan.js";
+import { createTelegramPlan, formatTelegramPlanCreationPages, formatTelegramPlanPages, planDraftForRevision, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode, type TelegramPlanConfirmationMarkup } from "./telegram-plan.js";
 import { dueTaskReminders, formatTaskReminder } from "./task-reminder.js";
 import { refreshTaskReminderWeather, taskReminderNeedsWeather, type TaskReminderWeatherContext } from "./task-reminder-weather.js";
 
@@ -624,6 +624,33 @@ async function telegramCommandResponse(text: string | undefined): Promise<Telegr
       const runtime = selectedRuntimeAdapter(workspace.runtime.selectedKind);
       const run = store.startPlanGenerationRun({ runtimeKind: workspace.runtime.selectedKind, trigger: "telegram" });
       let runtimeFailureCode = "generation_failed";
+      const revising = telegramPlanRequestMode(workspace, command.explicit) === "revise";
+      if (revising) {
+        let draft: GeneratedPlanDraft;
+        try {
+          draft = await runtime.generatePlanDraft({
+            request: command.request,
+            currentPlan: planDraftForRevision(workspace.activePlan),
+            profile: { preferredLanguage: workspace.profile.preferredLanguage, nationality: workspace.profile.nationality, gender: workspace.profile.gender, immigrationStatus: workspace.profile.immigrationStatus }
+          });
+        } catch (error) {
+          runtimeFailureCode = planGenerationFailureCode(error);
+          store.finishPlanGenerationRun({ runId: run.id, status: "failed", failureCode: runtimeFailureCode });
+          const currentPlan = store.getWorkspace().activePlan;
+          return telegramPlanReplies(currentPlan, `${runtimeName(workspace.runtime.selectedKind)} could not revise the Plan, so the current draft was left unchanged. Retry your correction or use /new for a separate Plan.`);
+        }
+        let revised;
+        try {
+          revised = store.reviseGeneratedPlan({ draft, runtime: workspace.runtime.selectedKind, expectedPlanId: workspace.activePlan.id, expectedVersion: workspace.activePlan.version });
+        } catch (error) {
+          runtimeFailureCode = planGenerationFailureCode(error);
+          store.finishPlanGenerationRun({ runId: run.id, status: "failed", failureCode: runtimeFailureCode });
+          const currentPlan = store.getWorkspace().activePlan;
+          return telegramPlanReplies(currentPlan, "The Plan changed while the revision was being prepared, so the older result was not saved. Review the current Plan below.");
+        }
+        store.finishPlanGenerationRun({ runId: run.id, status: "succeeded", outputPlanId: revised.activePlan.id });
+        return telegramPlanReplies(revised.activePlan, `${runtimeName(workspace.runtime.selectedKind)} revised the current Plan from your correction.`);
+      }
       const result = await createTelegramPlan({
         request: command.request,
         runtime: workspace.runtime.selectedKind,
@@ -650,6 +677,19 @@ async function telegramCommandResponse(text: string | undefined): Promise<Telegr
   }
   if (command.type === "start") return [{ text: "This Telegram account is already connected to C-assistant. Send /help to see available commands." }];
   return [{ text: "That command is not available yet. Send /help to see what C-assistant can do." }];
+}
+
+function telegramPlanReplies(plan: ReturnType<SqliteWorkspaceStore["getWorkspace"]>["activePlan"], intro?: string): TelegramCommandReply[] {
+  const replyMarkup = telegramPlanConfirmationMarkup(plan);
+  const pages = formatTelegramPlanPages(plan);
+  return pages.map((page, index) => ({
+    text: index === 0 && intro ? `${intro}\n\n${page}` : page,
+    ...(index === pages.length - 1 && replyMarkup ? { replyMarkup } : {})
+  }));
+}
+
+function runtimeName(kind: AgentRuntimeKind): string {
+  return kind === "claude-code" ? "Claude Code" : "Codex";
 }
 
 function selectedRuntimeAdapter(kind: AgentRuntimeKind): CodexRuntimeAdapter | ClaudeCodeRuntimeAdapter {

@@ -41,6 +41,8 @@ The current Plan view lists every Stage and Task. When an Agent draft contains a
 
 Both surfaces read and write through the same Core. A direct response returns to its originating surface. Proactive reminders are delivered to Telegram and copied to the Web Inbox. Telegram sends every page of a long Plan without omission and places the confirmation button only on the final page. That callback is bound to the current Plan id and version; a replaced or edited draft must be reviewed again and cannot be activated by an old button.
 
+Before confirmation, a normal Telegram message is treated as a correction to the current user-created draft; `/new` is the explicit way to start a separate objective. A successful correction creates a complete replacement draft, preserves Plan-scoped configuration such as party size and luggage, and requires review again. Official evidence links are not silently copied to the replacement. The initial example Plan is not considered user-created, so the user's first ordinary message starts their own Plan.
+
 Conflicting edits are resolved by Plan version. The client must refresh before confirming or changing an outdated version.
 
 ## Login and recovery
