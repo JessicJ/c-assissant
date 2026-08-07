@@ -65,6 +65,30 @@ test("SQLite persists official-source snapshots, deduplicates equal content, and
   store.close();
 });
 
+test("SQLite links selected official evidence to the current Plan without making a policy conclusion", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const plan = store.getWorkspace().activePlan;
+  const snapshot = store.saveSourceSnapshot({
+    sourceId: "nia-english",
+    authority: "National Immigration Administration",
+    titleOriginal: "Guidelines for Foreigners",
+    url: "https://en.nia.gov.cn/guide",
+    retrievedAt: "2026-08-07T08:00:00.000Z",
+    contentHash: "a".repeat(64),
+    excerpt: "Official evidence only."
+  }).snapshot;
+
+  const linked = store.linkSourceSnapshotToPlan(plan.id, snapshot.id);
+  const repeated = store.linkSourceSnapshotToPlan(plan.id, snapshot.id);
+
+  assert.equal(linked.activePlan.sources.length, 1);
+  assert.equal(linked.activePlan.sources[0]?.url, snapshot.url);
+  assert.equal(linked.activePlan.version, plan.version + 1);
+  assert.equal(repeated.activePlan.sources.length, 1);
+  assert.match(linked.inbox[0]?.body ?? "", /does not determine/i);
+  store.close();
+});
+
 test("SQLite persists a validated Agent-generated Plan", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const workspace = store.createGeneratedPlan({

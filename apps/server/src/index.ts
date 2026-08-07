@@ -52,6 +52,14 @@ server.get("/api/policy-applicability", async () => {
   });
 });
 
+server.post<{ Params: { planId: string; snapshotId: string } }>("/api/plans/:planId/sources/:snapshotId", async (request, reply) => {
+  try {
+    return store.linkSourceSnapshotToPlan(request.params.planId, request.params.snapshotId);
+  } catch (error) {
+    return reply.code(400).send({ error: error instanceof Error ? error.message : "The official evidence could not be linked to this Plan." });
+  }
+});
+
 server.post<{ Params: { planId: string } }>("/api/plans/:planId/confirm", async (request, reply) => {
   try {
     return store.confirmPlan(request.params.planId);

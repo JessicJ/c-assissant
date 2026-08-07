@@ -444,6 +444,35 @@ export class SqliteWorkspaceStore {
     return { snapshot, ...(previousSnapshot ? { previousSnapshot } : {}), duplicate: false, contentChanged: Boolean(previousSnapshot && previousSnapshot.contentHash !== snapshot.contentHash) };
   }
 
+  /** Adds a saved immutable official snapshot to the current Plan only after an explicit user action. */
+  linkSourceSnapshotToPlan(planId: string, sourceSnapshotId: string): WorkspaceSnapshot {
+    const workspace = this.getWorkspace();
+    if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
+    const snapshot = this.database.prepare(`SELECT id, source_id, authority, title_original, url, retrieved_at, content_hash, excerpt
+      FROM source_snapshots WHERE id = ?`).get(sourceSnapshotId.trim()) as SourceSnapshotRow | undefined;
+    if (!snapshot) throw new Error("The saved official evidence was not found.");
+
+    const source = sourceSnapshotFromRow(snapshot);
+    const alreadyLinked = workspace.activePlan.sources.some((candidate) => candidate.url === source.url && candidate.authority === source.authority && candidate.retrievedAt === source.retrievedAt);
+    if (alreadyLinked) return workspace;
+
+    const sources: SourceReference[] = [...workspace.activePlan.sources, {
+      title: source.titleOriginal,
+      authority: source.authority,
+      url: source.url,
+      retrievedAt: source.retrievedAt
+    }];
+    this.database.prepare("UPDATE plans SET sources_json = ?, version = version + 1 WHERE id = ?").run(JSON.stringify(sources), planId);
+    this.addInbox({
+      id: `source-linked-${planId}-${source.id}`,
+      tone: "notice",
+      title: "Official evidence linked to this Plan",
+      body: `${source.titleOriginal} is retained as a source reference for this Plan. Linking evidence does not determine whether a policy applies to you.`,
+      timestamp: "Just now"
+    });
+    return this.getWorkspace();
+  }
+
   updatePlanAccommodation(planId: string, input: PlanAccommodationInput): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
     if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
