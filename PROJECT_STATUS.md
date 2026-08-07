@@ -43,7 +43,7 @@
 - 实现 Web 中创建本地 Plan、确认 Plan 和保存 Profile 基础字段的流程。
 - 实现高德 Connector：关键词地点搜索与驾车路线的距离、时长、出租车费用事实。
 - 完成一次本地高德真实验证：上海站地点搜索和上海市内驾车路线均成功返回结果。
-- 实现 Codex Runtime Adapter：检查 CLI 与登录状态，在隔离临时目录中运行 `codex exec`，使用 JSON Schema 约束 Plan 草案，并剥离高德/Telegram 等 Connector 密钥。
+- 实现 Codex Runtime Adapter：检查 CLI 与登录状态，在隔离临时目录中运行 `codex exec`，使用 JSON Schema 约束 Plan 草案；仅传入已确认的语言、国籍、性别和来华签证/居留状态作为计划上下文，并剥离高德/Telegram 等 Connector 密钥。身份字段不得被当作政策资格结论。
 - 实现 Web 中的显式 Codex Plan 草案生成按钮；生成后的完整草案会写入 SQLite，仍需用户确认才会激活。
 - 完成一次真实 Codex 端到端验证：结构化草案已通过 Schema、保存为 4 个 Stage 和 16 个 Task；测试数据库随后已删除。
 - 实现 Telegram Connector 的本地配置状态与显式 Bot 身份验证；Token 仅停留在本地 Server 进程，不会传给 Web 或 Agent。

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { RuntimeAdapterError, parsePlanDraft } from "./index.js";
+import { RuntimeAdapterError, buildPlanDraftPrompt, parsePlanDraft } from "./index.js";
 
 const validDraft = JSON.stringify({
   title: "Attend an exhibition in Shanghai",
@@ -19,4 +19,15 @@ test("Codex Adapter accepts a schema-compatible Plan draft", () => {
 
 test("Codex Adapter rejects malformed Plan output", () => {
   assert.throws(() => parsePlanDraft("not json"), RuntimeAdapterError);
+});
+
+test("Codex Plan context includes confirmed Profile identity without claiming policy eligibility", () => {
+  const prompt = buildPlanDraftPrompt({
+    request: "I will attend an exhibition in Shanghai.",
+    profile: { preferredLanguage: "English", nationality: "Canada", gender: "woman", immigrationStatus: "tourist_visa" }
+  });
+  assert.match(prompt, /nationality: Canada/);
+  assert.match(prompt, /gender: woman/);
+  assert.match(prompt, /China entry or residence status: tourist_visa/);
+  assert.match(prompt, /not as proof of a policy entitlement/i);
 });

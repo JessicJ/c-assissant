@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { GeneratedPlanDraft } from "@c-assistant/core";
+import type { GeneratedPlanDraft, ImmigrationStatus, ProfileGender } from "@c-assistant/core";
 
 export interface RuntimeCheck {
   kind: "codex";
@@ -17,6 +17,8 @@ export interface CodexPlanRequest {
   profile: {
     preferredLanguage: string;
     nationality: string;
+    gender: ProfileGender;
+    immigrationStatus: ImmigrationStatus;
   };
 }
 
@@ -57,7 +59,7 @@ export class CodexRuntimeAdapter {
         schemaPath,
         "--output-last-message",
         outputPath,
-        planDraftPrompt(input)
+        buildPlanDraftPrompt(input)
       ], { cwd: runDirectory, env: scrubbedEnvironment(process.env), timeoutMs: 120_000 });
       if (command.code !== 0) throw new RuntimeAdapterError("run_failed", "Codex could not generate a Plan draft right now.");
 
@@ -132,18 +134,21 @@ const planDraftSchema = {
   }
 } as const;
 
-function planDraftPrompt(input: CodexPlanRequest): string {
+export function buildPlanDraftPrompt(input: CodexPlanRequest): string {
   return `You create a complete first-draft C-assistant Plan for a foreigner adapting to China. Return only data that matches the requested JSON Schema.
 
 User request: ${input.request.trim()}
 Confirmed Profile fields:
 - preferred language: ${input.profile.preferredLanguage}
 - nationality: ${input.profile.nationality}
+- gender: ${input.profile.gender}
+- China entry or residence status: ${input.profile.immigrationStatus}
 
 Rules:
 - Use English because the end user reads English.
 - Make a useful but conservative Plan with 2-4 stages.
 - Place every unknown that could materially change execution in assumptions; do not invent visa, policy, booking, location, dates, prices, or provider availability.
+- Treat Profile identity fields as user-provided planning context, not as proof of a policy entitlement or requirement.
 - Do not claim a policy requirement or cite an unofficial source. Official-source research happens in another Skill.
 - Include user-owned Tasks for real-world choices and external-owned Tasks for actions inside another application.
 - Do not say that C-assistant has booked, paid, hailed a ride, or completed any action.
