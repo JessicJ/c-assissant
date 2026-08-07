@@ -145,3 +145,12 @@ test("SQLite only claims one Telegram update once", () => {
   assert.equal(store.claimTelegramUpdate(41), false);
   store.close();
 });
+
+test("SQLite records an arrival reminder delivery attempt only once per Plan", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const planId = store.getWorkspace().activePlan.id;
+  const reminder = { planId, reminderKey: "arrival-check-in", dueAt: "2026-09-01T00:00:00.000Z" };
+  assert.equal(store.claimTelegramReminder(reminder), true);
+  assert.equal(store.claimTelegramReminder(reminder), false);
+  store.close();
+});

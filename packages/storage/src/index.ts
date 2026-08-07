@@ -205,6 +205,16 @@ export class SqliteWorkspaceStore {
     return true;
   }
 
+  claimTelegramReminder(input: { planId: string; reminderKey: string; dueAt: string }): boolean {
+    const planId = input.planId.trim();
+    const reminderKey = input.reminderKey.trim();
+    if (!planId || !reminderKey || !Number.isFinite(Date.parse(input.dueAt))) throw new Error("Telegram reminder needs a Plan, key, and due time.");
+    const existing = this.database.prepare("SELECT plan_id FROM telegram_reminder_deliveries WHERE plan_id = ? AND reminder_key = ?").get(planId, reminderKey);
+    if (existing) return false;
+    this.database.prepare("INSERT INTO telegram_reminder_deliveries (plan_id, reminder_key, due_at, claimed_at) VALUES (?, ?, ?, ?)").run(planId, reminderKey, input.dueAt, new Date().toISOString());
+    return true;
+  }
+
   createPlan(input: CreatePlanInput): WorkspaceSnapshot {
     const plan = createPlanFromRequest(input);
     this.savePlan(plan);
@@ -441,6 +451,13 @@ export class SqliteWorkspaceStore {
       CREATE TABLE IF NOT EXISTS telegram_processed_updates (
         update_id INTEGER PRIMARY KEY,
         processed_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS telegram_reminder_deliveries (
+        plan_id TEXT NOT NULL,
+        reminder_key TEXT NOT NULL,
+        due_at TEXT NOT NULL,
+        claimed_at TEXT NOT NULL,
+        PRIMARY KEY (plan_id, reminder_key)
       );
       CREATE INDEX IF NOT EXISTS idx_plans_current ON plans(is_current, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_stages_plan_order ON stages(plan_id, sort_order);

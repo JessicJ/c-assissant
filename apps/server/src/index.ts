@@ -8,6 +8,7 @@ import { CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-ada
 import { AmapConnector, QWeatherConnector, TelegramConnector } from "@c-assistant/connectors";
 import type { CreatePlanInput, PlanAccommodationInput, PlanArrivalInput, PlanTransportPreferenceInput, PlanTravelContextInput, ProfileUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
+import { arrivalInstant, formatArrivalReminder, isArrivalReminderDue } from "./arrival-reminder.js";
 import { parseTelegramCommand } from "./telegram-commands.js";
 
 const server = Fastify({ logger: true });
@@ -22,6 +23,7 @@ const telegram = new TelegramConnector({ botToken: process.env.TELEGRAM_BOT_TOKE
 const codex = new CodexRuntimeAdapter();
 let generatingPlan = false;
 let pollingTelegram = false;
+let checkingArrivalReminder = false;
 
 await server.register(cors, { origin: true });
 
@@ -307,6 +309,30 @@ async function pollTelegram(): Promise<void> {
   }
 }
 
+async function runArrivalReminder(): Promise<void> {
+  if (checkingArrivalReminder) return;
+  const pairing = store.getTelegramPairingStatus();
+  if (pairing.state !== "paired" || !pairing.binding) return;
+  const workspace = store.getWorkspace();
+  const plan = workspace.activePlan;
+  const expectedAtLocal = plan.configuration.arrival.expectedAtLocal;
+  const timeZone = plan.configuration.arrival.timeZone;
+  if (plan.status !== "active" || !expectedAtLocal || !timeZone) return;
+  const dueAt = arrivalInstant(expectedAtLocal, timeZone);
+  if (!dueAt || !isArrivalReminderDue(dueAt)) return;
+  checkingArrivalReminder = true;
+  try {
+    const claimed = store.claimTelegramReminder({ planId: plan.id, reminderKey: "arrival-check-in", dueAt: dueAt.toISOString() });
+    if (!claimed) return;
+    const receipt = await telegram.sendMessage({ chatId: pairing.binding.chatId, text: formatArrivalReminder(plan) });
+    if (receipt.status !== "available") server.log.warn({ status: receipt.status, code: receipt.failure?.code }, "Telegram arrival reminder could not be delivered");
+  } catch (error) {
+    server.log.warn({ error }, "Telegram arrival reminder failed");
+  } finally {
+    checkingArrivalReminder = false;
+  }
+}
+
 function telegramCommandResponse(text: string | undefined): string | undefined {
   const command = parseTelegramCommand(text);
   if (command.type === "empty") return undefined;
@@ -329,11 +355,14 @@ const host = process.env.C_ASSISTANT_HOST ?? "127.0.0.1";
 
 await server.listen({ port, host });
 const telegramPollTimer = setInterval(() => void pollTelegram(), 1_000);
+const arrivalReminderTimer = setInterval(() => void runArrivalReminder(), 15_000);
 void pollTelegram();
+void runArrivalReminder();
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     clearInterval(telegramPollTimer);
+    clearInterval(arrivalReminderTimer);
     store.close();
     void server.close().finally(() => process.exit(0));
   });
