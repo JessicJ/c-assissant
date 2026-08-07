@@ -1,0 +1,15 @@
+{
+  "id": "arrival-preparation",
+  "country": "china",
+  "version": "0.1.0",
+  "visibility": "internal",
+  "entrypoint": "runArrivalPreparationSkill",
+  "requiredInputs": ["items", "schedule"],
+  "permittedProfileFields": [],
+  "permittedPlanFields": ["id", "version", "configuration.arrival", "stages.tasks"],
+  "capabilities": ["task.propose", "reminder.propose", "skill.deduplicate"],
+  "sources": { "provider": "supporting_skills", "freshness": "preserve_each_result" },
+  "risk": { "information": "regulated", "action": "read_only" },
+  "executionPolicy": "confirmation_required",
+  "failure": { "missingCriticalAnchor": "needs_input", "noValidItems": "degraded", "malformedInput": "failed" }
+}

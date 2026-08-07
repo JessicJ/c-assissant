@@ -707,6 +707,197 @@ function isValidDigitalLifeItem(item: unknown): item is DigitalLifeSetupItemInpu
     && candidate.stepsEnglish.every((step) => typeof step === "string" && Boolean(step.trim()));
 }
 
+export type ArrivalPreparationSourceSkillId = Exclude<ChinaArrivalPlanSupportingSkillId, "arrival-preparation">;
+export type ArrivalPreparationCategory = "documents" | "connectivity" | "apps" | "payments" | "packing" | "accommodation" | "transport" | "arrival_logistics";
+export type ArrivalPreparationAnchor = "departure" | "arrival" | "none";
+
+export interface ArrivalPreparationItemInput {
+  key: string;
+  titleEnglish: string;
+  titleOriginal?: string;
+  detailsEnglish: string;
+  category: ArrivalPreparationCategory;
+  criticality: "critical" | "supporting";
+  state: "needed" | "confirmed_completed";
+  sourceSkill: { id: ArrivalPreparationSourceSkillId; version: string };
+  timing: { anchor: ArrivalPreparationAnchor; leadMinutes?: number; refreshFacts: Array<"weather"> };
+}
+
+export interface ArrivalPreparationScheduleInput {
+  departureAt?: string;
+  arrivalAt?: string;
+  timeZone: string;
+}
+
+export interface ArrivalPreparationFact {
+  key: string;
+  titleEnglish: string;
+  titleOriginal?: string;
+  detailsEnglish: string;
+  category: ArrivalPreparationCategory;
+  criticality: "critical" | "supporting";
+  state: "needed" | "confirmed_completed";
+  sourceSkills: Array<{ id: ArrivalPreparationSourceSkillId; version: string }>;
+  timing: ArrivalPreparationItemInput["timing"];
+}
+
+export interface ArrivalPreparationSkillResult {
+  skill: { id: "arrival-preparation"; version: "0.1.0" };
+  status: "success" | "needs_input" | "degraded" | "failed";
+  summary: string;
+  facts: ArrivalPreparationFact[];
+  assumptions: [];
+  recommendations: Array<{ key: string; titleEnglish: string; detailsEnglish: string; criticality: "critical" | "supporting"; sourceSkills: ArrivalPreparationFact["sourceSkills"] }>;
+  proposedPlanChanges: [];
+  proposedTasks: Array<{ proposalId: string; title: string; details: string; category: ArrivalPreparationCategory; completion: "requires_user_confirmation"; sourceSkills: ArrivalPreparationFact["sourceSkills"] }>;
+  proposedReminders: Array<{ taskProposalId: string; dueAt: string; timeZone: string; purpose: string; refreshFacts: Array<"weather"> }>;
+  actionCards: [];
+  sources: Array<{ skillId: ArrivalPreparationSourceSkillId; version: string }>;
+  warnings: string[];
+  needsInput: Array<{ field: "schedule.departureAt" | "schedule.arrivalAt"; reason: string }>;
+}
+
+const arrivalPreparationCategories: ArrivalPreparationCategory[] = ["documents", "connectivity", "apps", "payments", "packing", "accommodation", "transport", "arrival_logistics"];
+const arrivalPreparationSourceSkillIds: ArrivalPreparationSourceSkillId[] = ["policy-applicability", "weather-and-packing", "housing-area-recommendation", "transport-planner", "local-food-guide", "digital-life-setup"];
+
+/** Compiles bounded supporting proposals; Core still owns durable Plan mutation and authorization. */
+export function runArrivalPreparationSkill(input: { items: ArrivalPreparationItemInput[]; schedule: ArrivalPreparationScheduleInput }): ArrivalPreparationSkillResult {
+  const identity = { id: "arrival-preparation" as const, version: "0.1.0" as const };
+  const empty = { assumptions: [] as [], proposedPlanChanges: [] as [], actionCards: [] as [] };
+  if (!Array.isArray(input.items) || !isValidArrivalPreparationSchedule(input.schedule)) {
+    return { skill: identity, ...empty, status: "failed", summary: "The arrival preparation input did not pass the Skill contract.", facts: [], recommendations: [], proposedTasks: [], proposedReminders: [], sources: [], warnings: ["No checklist or reminder proposal was produced from malformed context."], needsInput: [] };
+  }
+
+  const validItems = input.items.filter(isValidArrivalPreparationItem);
+  const grouped = new Map<string, ArrivalPreparationFact>();
+  let duplicateFound = false;
+  let conflictingDuplicate = false;
+  for (const item of validItems) {
+    const key = item.key.trim().toLocaleLowerCase();
+    const existing = grouped.get(key);
+    if (!existing) {
+      grouped.set(key, {
+        key,
+        titleEnglish: item.titleEnglish.trim(),
+        ...(item.titleOriginal?.trim() ? { titleOriginal: item.titleOriginal.trim() } : {}),
+        detailsEnglish: item.detailsEnglish.trim(),
+        category: item.category,
+        criticality: item.criticality,
+        state: item.state,
+        sourceSkills: [item.sourceSkill],
+        timing: item.timing
+      });
+      continue;
+    }
+    duplicateFound = true;
+    if (!existing.sourceSkills.some((source) => source.id === item.sourceSkill.id && source.version === item.sourceSkill.version)) existing.sourceSkills.push(item.sourceSkill);
+    if (item.state === "confirmed_completed") existing.state = "confirmed_completed";
+    if (existing.titleEnglish !== item.titleEnglish.trim() || existing.category !== item.category || existing.timing.anchor !== item.timing.anchor || existing.timing.leadMinutes !== item.timing.leadMinutes) conflictingDuplicate = true;
+  }
+  const facts = [...grouped.values()].sort((left, right) => Number(right.criticality === "critical") - Number(left.criticality === "critical")).slice(0, 20);
+  const recommendations = facts.filter((fact) => fact.state === "needed").map((fact) => ({ key: fact.key, titleEnglish: fact.titleEnglish, detailsEnglish: fact.detailsEnglish, criticality: fact.criticality, sourceSkills: fact.sourceSkills }));
+  const proposedTasks = recommendations.map((item) => ({ proposalId: `arrival-preparation:${item.key}`, title: item.titleEnglish, details: item.detailsEnglish, category: facts.find((fact) => fact.key === item.key)!.category, completion: "requires_user_confirmation" as const, sourceSkills: item.sourceSkills }));
+  const needsInput: ArrivalPreparationSkillResult["needsInput"] = [];
+  const proposedReminders: ArrivalPreparationSkillResult["proposedReminders"] = [];
+  for (const fact of facts) {
+    if (fact.state !== "needed" || fact.timing.anchor === "none") continue;
+    const anchorAt = fact.timing.anchor === "departure" ? input.schedule.departureAt : input.schedule.arrivalAt;
+    if (!anchorAt) {
+      if (fact.criticality === "critical" && !needsInput.some((item) => item.field === `schedule.${fact.timing.anchor}At`)) {
+        needsInput.push({ field: `schedule.${fact.timing.anchor}At`, reason: `${fact.titleEnglish} needs an exact ${fact.timing.anchor} time before its reminder can be calculated.` });
+      }
+      continue;
+    }
+    const leadMinutes = fact.timing.leadMinutes ?? 0;
+    proposedReminders.push({
+      taskProposalId: `arrival-preparation:${fact.key}`,
+      dueAt: new Date(Date.parse(anchorAt) - leadMinutes * 60_000).toISOString(),
+      timeZone: input.schedule.timeZone,
+      purpose: fact.titleEnglish,
+      refreshFacts: fact.timing.refreshFacts
+    });
+  }
+  const sources = facts.flatMap((fact) => fact.sourceSkills).filter((source, index, all) => all.findIndex((candidate) => candidate.id === source.id && candidate.version === source.version) === index).map((source) => ({ skillId: source.id, version: source.version }));
+  const warnings = [
+    "Tasks and Reminders are proposals only; Core must bind them to the reviewed Plan version before activation.",
+    "No external setup, booking, payment, navigation, entry procedure, or Task completion has been performed."
+  ];
+  if (validItems.length !== input.items.length || facts.length < grouped.size) warnings.push("Malformed or excess preparation items were omitted.");
+  if (duplicateFound) warnings.push("Duplicate preparation items were merged by stable semantic key.");
+  if (conflictingDuplicate) warnings.push("Conflicting duplicate items were merged using the first description and timing; a confirmed-completed state takes precedence.");
+  if (!facts.length) return { skill: identity, ...empty, status: "degraded", summary: "No valid source-backed preparation item is available to compile.", facts, recommendations, proposedTasks, proposedReminders, sources, warnings, needsInput };
+  const status = needsInput.length ? "needs_input" : "success";
+  return {
+    skill: identity,
+    ...empty,
+    status,
+    summary: `${recommendations.length} preparation ${recommendations.length === 1 ? "item remains" : "items remain"}; ${proposedReminders.length} exact-time reminder ${proposedReminders.length === 1 ? "is" : "are"} ready for Plan review.`,
+    facts,
+    recommendations,
+    proposedTasks,
+    proposedReminders,
+    sources,
+    warnings,
+    needsInput
+  };
+}
+
+function isValidArrivalPreparationSchedule(schedule: unknown): schedule is ArrivalPreparationScheduleInput {
+  if (typeof schedule !== "object" || schedule === null) return false;
+  const candidate = schedule as Partial<ArrivalPreparationScheduleInput>;
+  if (typeof candidate.timeZone !== "string" || !candidate.timeZone.trim() || !isIanaTimeZone(candidate.timeZone)) return false;
+  return [candidate.departureAt, candidate.arrivalAt].every((value) => value === undefined || (typeof value === "string" && isTimestampConsistentWithTimeZone(value, candidate.timeZone!)));
+}
+
+function isValidArrivalPreparationItem(item: unknown): item is ArrivalPreparationItemInput {
+  if (typeof item !== "object" || item === null) return false;
+  const candidate = item as Partial<ArrivalPreparationItemInput>;
+  const timing = candidate.timing;
+  const sourceSkill = candidate.sourceSkill;
+  if (typeof timing !== "object" || timing === null || typeof sourceSkill !== "object" || sourceSkill === null) return false;
+  const validLead = timing.leadMinutes === undefined || (Number.isInteger(timing.leadMinutes) && timing.leadMinutes >= 0 && timing.leadMinutes <= 43_200);
+  const validRefresh = Array.isArray(timing.refreshFacts) && timing.refreshFacts.every((fact) => fact === "weather")
+    && (timing.refreshFacts.length === 0 || candidate.category === "packing" || candidate.category === "transport");
+  return typeof candidate.key === "string" && Boolean(candidate.key.trim())
+    && typeof candidate.titleEnglish === "string" && Boolean(candidate.titleEnglish.trim())
+    && (candidate.titleOriginal === undefined || typeof candidate.titleOriginal === "string")
+    && typeof candidate.detailsEnglish === "string" && Boolean(candidate.detailsEnglish.trim())
+    && typeof candidate.category === "string" && arrivalPreparationCategories.includes(candidate.category as ArrivalPreparationCategory)
+    && (candidate.criticality === "critical" || candidate.criticality === "supporting")
+    && (candidate.state === "needed" || candidate.state === "confirmed_completed")
+    && typeof sourceSkill.id === "string" && arrivalPreparationSourceSkillIds.includes(sourceSkill.id as ArrivalPreparationSourceSkillId)
+    && typeof sourceSkill.version === "string" && /^\d+\.\d+\.\d+$/.test(sourceSkill.version)
+    && typeof timing.anchor === "string" && ["departure", "arrival", "none"].includes(timing.anchor)
+    && validLead && validRefresh
+    && (timing.anchor !== "none" || (timing.leadMinutes === undefined && timing.refreshFacts.length === 0));
+}
+
+function isIanaTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: value }).format();
+    return value.includes("/") || value === "UTC";
+  } catch {
+    return false;
+  }
+}
+
+function isTimestampConsistentWithTimeZone(value: string, timeZone: string): boolean {
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/i.exec(value);
+  const instant = Date.parse(value);
+  if (!match || !Number.isFinite(instant)) return false;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(instant).map((part) => [part.type, part.value]));
+  return match[1] === `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
 export const chinaArrivalPlanSupportingSkillOrder = [
   "policy-applicability",
   "weather-and-packing",
