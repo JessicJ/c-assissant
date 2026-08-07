@@ -56,7 +56,7 @@ On arrival or request, recommends nearby places using Amap facts and current con
 
 ### `weather-and-packing`
 
-Uses seasonal guidance when the trip is too far away for a reliable forecast and schedules a later refresh. Near the relevant date, it uses current weather facts to update packing guidance and reminders.
+Uses seasonal guidance when the trip is too far away for a reliable forecast and schedules a later refresh. Near the relevant date, it uses current weather facts to update packing guidance and reminders. The current delivery path resolves the Plan destination with Amap and refreshes QWeather immediately before an eligible Task reminder; only an exact-date forecast is presented as a forecast, provider attribution is retained in the message, and failure falls back to the original reminder without invented weather.
 
 ## Composition order
 
