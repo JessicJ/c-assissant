@@ -112,6 +112,31 @@
   font-size: 12px;
 }
 
+.plan-weather {
+  display: grid;
+  gap: 9px;
+  padding: 13px 14px;
+  margin: 0 0 24px;
+  border-radius: 12px;
+  background: #edf6f6;
+  color: #31554f;
+}
+
+.plan-weather > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.plan-weather span {
+  color: #6b827d;
+  font-size: 14px;
+}
+
+.plan-weather .secondary-button {
+  width: fit-content;
+  margin-top: 0;
+}
+
 .profile-prompt {
   display: flex;
   align-items: end;
