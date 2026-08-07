@@ -1,0 +1,16 @@
+{
+  "id": "policy-applicability",
+  "country": "china",
+  "version": "0.1.0",
+  "visibility": "internal",
+  "entrypoint": "runPolicyApplicabilitySkill",
+  "requiredInputs": ["immigrationStatus", "evidence", "now"],
+  "optionalInputs": ["nationality", "location", "dates"],
+  "permittedProfileFields": ["nationality", "immigrationStatus"],
+  "permittedPlanFields": ["location", "dates"],
+  "capabilities": ["official-source.snapshot.read"],
+  "sources": { "provider": "official", "requiredSourceId": "nia-english", "freshnessDays": 7 },
+  "risk": { "information": "regulated", "action": "read_only" },
+  "executionPolicy": "automatic_with_notice",
+  "failure": { "missingFacts": "needs_input", "missingOrStaleEvidence": "needs_evidence", "malformedInput": "failed" }
+}

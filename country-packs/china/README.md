@@ -12,4 +12,6 @@ The first executable internal module is `food-nearby` `0.1.0`. Server invokes it
 
 `weather-and-packing` `0.1.0` is the shared weather interpretation path for Web, Telegram `/weather`, and delivery-time reminder refresh. It emits only cautious packing prompts from traceable QWeather facts and never presents a non-matching observation as a dated forecast.
 
+`policy-applicability` `0.1.0` now owns the production evidence-preparation gate. It receives only minimized identity and Plan fields plus official snapshot metadata; `success` means ready for a separate source-backed review, never eligible or approved.
+
 See [China Country Pack V1](../../docs/china-pack-v1.md).

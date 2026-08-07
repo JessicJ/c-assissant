@@ -16,7 +16,7 @@ Composite entry point. Core orchestrates the supporting Skills and compiles one 
 
 Matches official requirements to nationality, passport or travel document, visa or permit, residence status, student status, purpose, date, and location. A missing requirement becomes a user-owned Task with a Reminder when appropriate; it does not automatically block unrelated parts of the Plan.
 
-The current implemented slice is deliberately narrower: an evidence-preparation gate checks that the active Profile has nationality and known immigration status, the Plan has a destination and dates, and a saved National Immigration Administration snapshot is no more than seven days old. Its only outcomes are `needs_input`, `needs_evidence`, and `ready_for_review`. It does not read the source text to determine a policy, visa, residence, or entry outcome; that remains the responsibility of a future source-backed Skill review.
+Implemented slice: `policy-applicability` `0.1.0` owns the production evidence-preparation gate. Server supplies only nationality, known immigration status, Plan destination and dates, and official snapshot metadata. The Skill requires an approved National Immigration Administration English snapshot inside a seven-day freshness window, rejects unapproved or malformed evidence, and preserves its title, authority, URL, retrieval time, and fingerprint. Its `success` outcome means only ready for a separate source-backed review; it does not read policy text or determine a policy, visa, residence, entry, or eligibility outcome.
 
 ### `arrival-preparation`
 

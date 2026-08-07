@@ -326,3 +326,97 @@ function approvedQWeatherUrl(value: string | undefined): string | undefined {
     return undefined;
   }
 }
+
+export interface PolicyEvidenceInput {
+  id: string;
+  sourceId: string;
+  authority: string;
+  titleOriginal: string;
+  url: string;
+  retrievedAt: string;
+  contentHash: string;
+}
+
+export interface PolicyApplicabilitySkillResult {
+  skill: { id: "policy-applicability"; version: "0.1.0" };
+  status: "success" | "needs_input" | "needs_evidence" | "failed";
+  summary: string;
+  facts: string[];
+  assumptions: string[];
+  recommendations: [];
+  proposedPlanChanges: [];
+  proposedTasks: [];
+  proposedReminders: [];
+  actionCards: [];
+  sources: PolicyEvidenceInput[];
+  warnings: string[];
+  needsInput: Array<{ field: "profile.nationality" | "profile.immigrationStatus" | "plan.location" | "plan.dates" | "official_source.nia-english"; label: string; reason: string }>;
+  nextAction: string;
+}
+
+const POLICY_EVIDENCE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000;
+
+/** Evidence gate only. It never reads policy text or decides personal eligibility. */
+export function runPolicyApplicabilitySkill(input: {
+  nationality?: string;
+  immigrationStatus: "unknown" | "short_term_visitor" | "tourist_visa" | "student_visa" | "work_visa" | "residence_permit" | "other";
+  location?: string;
+  dates?: string;
+  evidence: PolicyEvidenceInput[];
+  now: string;
+}): PolicyApplicabilitySkillResult {
+  const identity = { id: "policy-applicability" as const, version: "0.1.0" as const };
+  const noChanges = { recommendations: [] as [], proposedPlanChanges: [] as [], proposedTasks: [] as [], proposedReminders: [] as [], actionCards: [] as [] };
+  const nowMs = Date.parse(input.now);
+  const validContext = Number.isFinite(nowMs) && ["unknown", "short_term_visitor", "tourist_visa", "student_visa", "work_visa", "residence_permit", "other"].includes(input.immigrationStatus);
+  if (!validContext) return { skill: identity, ...noChanges, status: "failed", summary: "The policy preparation input did not pass the Skill contract.", facts: [], assumptions: [], sources: [], warnings: ["No policy or eligibility conclusion was produced."], needsInput: [], nextAction: "Correct the malformed preparation context before continuing." };
+
+  const facts: string[] = [];
+  const needsInput: PolicyApplicabilitySkillResult["needsInput"] = [];
+  if (isConfirmedPolicyValue(input.nationality)) facts.push(`Nationality: ${input.nationality!.trim()}`);
+  else needsInput.push({ field: "profile.nationality", label: "Nationality", reason: "Official immigration guidance can depend on nationality." });
+  if (input.immigrationStatus !== "unknown") facts.push("China visa or residence status is recorded.");
+  else needsInput.push({ field: "profile.immigrationStatus", label: "China visa or residence status", reason: "Choose the status you know, or update it when it becomes clear." });
+  if (isConfirmedPolicyValue(input.location)) facts.push(`Plan destination: ${input.location!.trim()}`);
+  else needsInput.push({ field: "plan.location", label: "Plan destination", reason: "A location is needed to prepare local policy research." });
+  if (isConfirmedPolicyValue(input.dates)) facts.push(`Plan dates: ${input.dates!.trim()}`);
+  else needsInput.push({ field: "plan.dates", label: "Plan dates", reason: "Dates are needed to decide when current official evidence should be refreshed." });
+
+  const approvedEvidence = input.evidence.filter(isValidNiaEvidence).sort((left, right) => Date.parse(right.retrievedAt) - Date.parse(left.retrievedAt));
+  const latest = approvedEvidence[0];
+  const retrievedAt = latest ? Date.parse(latest.retrievedAt) : Number.NaN;
+  const fresh = latest !== undefined && retrievedAt <= nowMs + 5 * 60 * 1_000 && retrievedAt >= nowMs - POLICY_EVIDENCE_MAX_AGE_MS;
+  if (!fresh) needsInput.push({ field: "official_source.nia-english", label: "Current National Immigration Administration evidence", reason: latest ? "The saved official snapshot is outside the seven-day freshness window. Refresh it before review." : "Refresh the approved National Immigration Administration source before review." });
+
+  const missingUserFacts = needsInput.some((item) => item.field.startsWith("profile.") || item.field.startsWith("plan."));
+  const status = missingUserFacts ? "needs_input" : fresh ? "success" : "needs_evidence";
+  const warnings = ["This evidence-preparation check does not determine visa, residence, entry, or policy eligibility."];
+  if (approvedEvidence.length !== input.evidence.length) warnings.push("Malformed or unapproved evidence metadata was omitted.");
+  return {
+    skill: identity,
+    ...noChanges,
+    status,
+    summary: status === "success" ? "Basic information and current official evidence are ready for a separate policy review." : status === "needs_input" ? "Confirmed Profile or Plan facts are still needed before policy review." : "Current approved official evidence is still needed before policy review.",
+    facts,
+    assumptions: [],
+    sources: latest ? [latest] : [],
+    warnings,
+    needsInput,
+    nextAction: status === "needs_input" ? "Save the missing Profile or Plan details, then refresh the approved official source." : status === "needs_evidence" ? "Refresh the approved National Immigration Administration source in Settings before review." : "Continue to a separate source-backed policy review; do not treat this gate as an eligibility result."
+  };
+}
+
+function isValidNiaEvidence(evidence: PolicyEvidenceInput): boolean {
+  if (!evidence.id.trim() || evidence.sourceId !== "nia-english" || !evidence.authority.trim() || !evidence.titleOriginal.trim() || !/^[a-f0-9]{64}$/i.test(evidence.contentHash) || !Number.isFinite(Date.parse(evidence.retrievedAt))) return false;
+  try {
+    const url = new URL(evidence.url);
+    return url.protocol === "https:" && (url.hostname === "nia.gov.cn" || url.hostname.endsWith(".nia.gov.cn"));
+  } catch {
+    return false;
+  }
+}
+
+function isConfirmedPolicyValue(value: string | undefined): boolean {
+  const normalized = value?.trim().toLocaleLowerCase() ?? "";
+  return Boolean(normalized) && !normalized.includes("to be confirmed") && !normalized.includes("not sure");
+}
