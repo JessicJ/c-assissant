@@ -57,7 +57,7 @@ test("heavy luggage makes an available driving route the preliminary choice", ()
   });
 
   assert.equal(recommendation.mode, "driving");
-  assert.match(recommendation.limitations[0] ?? "", /Live weather/i);
+  assert.match(recommendation.limitations[0] ?? "", /No weather fact matched/i);
 });
 
 test("a short route can preliminarily favour walking without heavy luggage", () => {
@@ -68,4 +68,29 @@ test("a short route can preliminarily favour walking without heavy luggage", () 
   });
 
   assert.equal(recommendation.mode, "walking");
+});
+
+test("a matching rainy arrival forecast avoids automatic walking when transit is available", () => {
+  const recommendation = recommendPlanTransport({
+    preference: "plan_recommended",
+    luggage: "light",
+    weather: { condition: "Light rain", precipitationMm: 1.2 },
+    routeFacts: [{ mode: "walking", distanceMeters: 1_100, durationSeconds: 16 * 60 }, { mode: "transit", distanceMeters: 1_400 }]
+  });
+
+  assert.equal(recommendation.mode, "transit");
+  assert.match(recommendation.reasons.join(" "), /Rain or snow/i);
+  assert.match(recommendation.limitations[0] ?? "", /matched to the expected arrival date/i);
+});
+
+test("an explicit walking preference remains user-owned in a rainy forecast", () => {
+  const recommendation = recommendPlanTransport({
+    preference: "walking",
+    luggage: "light",
+    weather: { condition: "Rain", precipitationMm: 0 },
+    routeFacts: [{ mode: "walking", distanceMeters: 1_100, durationSeconds: 16 * 60 }, { mode: "transit", distanceMeters: 1_400 }]
+  });
+
+  assert.equal(recommendation.mode, "walking");
+  assert.match(recommendation.reasons.join(" "), /explicit Plan preference is retained/i);
 });
