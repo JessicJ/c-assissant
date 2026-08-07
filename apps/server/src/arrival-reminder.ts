@@ -1,6 +1,7 @@
 import type { Plan } from "@c-assistant/core";
 
 const LOCAL_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
+export const ARRIVAL_LOCATION_FOLLOW_UP_DELAY_MS = 5 * 60_000;
 
 /** Converts a Plan-local arrival time to an instant using its declared IANA zone. */
 export function arrivalInstant(expectedAtLocal: string, timeZone: string): Date | undefined {
@@ -23,6 +24,13 @@ export function arrivalInstant(expectedAtLocal: string, timeZone: string): Date 
 export function isArrivalReminderDue(dueAt: Date, now = new Date()): boolean {
   const elapsed = now.getTime() - dueAt.getTime();
   return elapsed >= 0 && elapsed <= 30 * 60_000;
+}
+
+/** A location request is a follow-up, never part of the initial arrival notice. */
+export function isArrivalLocationPromptDue(checkInSentAt: string, now = new Date()): boolean {
+  const sentAt = Date.parse(checkInSentAt);
+  if (!Number.isFinite(sentAt)) return false;
+  return now.getTime() - sentAt >= ARRIVAL_LOCATION_FOLLOW_UP_DELAY_MS;
 }
 
 export function formatArrivalReminder(plan: Plan): string {

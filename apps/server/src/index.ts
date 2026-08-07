@@ -8,7 +8,7 @@ import { CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-ada
 import { AmapConnector, QWeatherConnector, TelegramConnector } from "@c-assistant/connectors";
 import type { CreatePlanInput, PlanAccommodationInput, PlanArrivalInput, PlanTransportPreferenceInput, PlanTravelContextInput, ProfileUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
-import { arrivalInstant, formatArrivalReminder, isArrivalReminderDue } from "./arrival-reminder.js";
+import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue } from "./arrival-reminder.js";
 import { parseTelegramCommand } from "./telegram-commands.js";
 
 const server = Fastify({ logger: true });
@@ -24,6 +24,8 @@ const codex = new CodexRuntimeAdapter();
 let generatingPlan = false;
 let pollingTelegram = false;
 let checkingArrivalReminder = false;
+let checkingArrivalLocationPrompt = false;
+let requestingArrivalLocation = false;
 
 await server.register(cors, { origin: true });
 
@@ -301,11 +303,12 @@ async function pollTelegram(): Promise<void> {
       if (update.kind === "callback") {
         if (update.callbackData === "arrival_not_here" && update.callbackId) {
           await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: "Share your location only if you want route help." });
-          await telegram.sendMessage({ chatId: pairing.binding.chatId, text: "If you want route help for this arrival, tap the button below to share your current location. C-assistant will use it only for this interaction and will not save it to your Profile.", replyMarkup: { keyboard: [[{ text: "Share current location", request_location: true }]], resize_keyboard: true, one_time_keyboard: true } });
+          await requestTelegramArrivalLocation(pairing.binding.chatId, "If you want route help for this arrival, tap the button below to share your current location.");
         }
         continue;
       }
       if (update.location) {
+        store.markTelegramArrivalLocationReceived(store.getWorkspace().activePlan.id, new Date().toISOString());
         await telegram.sendMessage({ chatId: pairing.binding.chatId, text: "Location received for this interaction. It has not been added to your long-term Profile, and no ride or route has been started yet." });
         continue;
       }
@@ -337,10 +340,42 @@ async function runArrivalReminder(): Promise<void> {
     if (!claimed) return;
     const receipt = await telegram.sendMessage({ chatId: pairing.binding.chatId, text: formatArrivalReminder(plan), replyMarkup: { inline_keyboard: [[{ text: "I haven't arrived", callback_data: "arrival_not_here" }]] } });
     if (receipt.status !== "available") server.log.warn({ status: receipt.status, code: receipt.failure?.code }, "Telegram arrival reminder could not be delivered");
+    else store.recordTelegramArrivalCheckin({ planId: plan.id, checkInSentAt: new Date().toISOString() });
   } catch (error) {
     server.log.warn({ error }, "Telegram arrival reminder failed");
   } finally {
     checkingArrivalReminder = false;
+  }
+}
+
+async function runArrivalLocationPrompt(): Promise<void> {
+  if (checkingArrivalLocationPrompt) return;
+  const pairing = store.getTelegramPairingStatus();
+  if (pairing.state !== "paired" || !pairing.binding) return;
+  const plan = store.getWorkspace().activePlan;
+  if (plan.status !== "active") return;
+  const checkin = store.getTelegramArrivalCheckin(plan.id);
+  if (!checkin || checkin.locationRequestedAt || checkin.locationReceivedAt || !isArrivalLocationPromptDue(checkin.checkInSentAt)) return;
+  checkingArrivalLocationPrompt = true;
+  try {
+    await requestTelegramArrivalLocation(pairing.binding.chatId, "We have not received an arrival update. If you want route help, tap the button below to share your current location.");
+  } finally {
+    checkingArrivalLocationPrompt = false;
+  }
+}
+
+async function requestTelegramArrivalLocation(chatId: string, intro: string): Promise<void> {
+  if (requestingArrivalLocation) return;
+  const planId = store.getWorkspace().activePlan.id;
+  const existing = store.getTelegramArrivalCheckin(planId);
+  if (existing?.locationRequestedAt || existing?.locationReceivedAt) return;
+  requestingArrivalLocation = true;
+  try {
+    const receipt = await telegram.sendMessage({ chatId, text: `${intro} C-assistant will use it only for this interaction and will not save it to your Profile.`, replyMarkup: { keyboard: [[{ text: "Share current location", request_location: true }]], resize_keyboard: true, one_time_keyboard: true } });
+    if (receipt.status === "available") store.markTelegramArrivalLocationRequested(planId, new Date().toISOString());
+    else server.log.warn({ status: receipt.status, code: receipt.failure?.code }, "Telegram arrival location request could not be delivered");
+  } finally {
+    requestingArrivalLocation = false;
   }
 }
 
@@ -367,13 +402,16 @@ const host = process.env.C_ASSISTANT_HOST ?? "127.0.0.1";
 await server.listen({ port, host });
 const telegramPollTimer = setInterval(() => void pollTelegram(), 1_000);
 const arrivalReminderTimer = setInterval(() => void runArrivalReminder(), 15_000);
+const arrivalLocationPromptTimer = setInterval(() => void runArrivalLocationPrompt(), 15_000);
 void pollTelegram();
 void runArrivalReminder();
+void runArrivalLocationPrompt();
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     clearInterval(telegramPollTimer);
     clearInterval(arrivalReminderTimer);
+    clearInterval(arrivalLocationPromptTimer);
     store.close();
     void server.close().finally(() => process.exit(0));
   });
