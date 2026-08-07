@@ -3,7 +3,7 @@ import "./manual-accommodation.css";
 import type { RuntimeCheck } from "@c-assistant/agent-adapters";
 import { createAmapDrivingHandoff, createAmapPlaceHandoff } from "@c-assistant/connectors";
 import type { AmapNearbyPlace, AmapPlace, AmapRoute, ConnectorResult, OfficialSourceDefinition, QWeatherWeatherSnapshot, TelegramBotIdentity, TelegramConfiguration } from "@c-assistant/connectors";
-import type { AgentRun, AgentRuntimeKind, PolicyPreparationAssessment, SourceSnapshotWriteResult, WorkspaceSnapshot } from "@c-assistant/core";
+import type { AgentRun, AgentRuntimeKind, PolicyPreparationAssessment, SourceSnapshotWriteResult, Task, WorkspaceSnapshot } from "@c-assistant/core";
 import { recommendPlanTransport, type TransportWeatherFact } from "@c-assistant/core/transport";
 
 type View = "Today" | "Plans" | "Inbox" | "Profile" | "Settings";
@@ -654,11 +654,7 @@ function App() {
                     <p>{stage.description}</p>
                     <div className="task-stack">
                       {stage.tasks.map((task) => (
-                        <div className="task-row" key={task.id}>
-                          <span className={`task-dot ${task.status}`} />
-                          <span>{task.title}</span>
-                          <small>{task.dueLabel}</small>
-                        </div>
+                        <PlanTaskRow task={task} key={task.id} />
                       ))}
                     </div>
                   </div>
@@ -692,12 +688,18 @@ function PlanView({ plan, policyPreparation, onActivate, confirming, amapQuery, 
       <TravelContext context={plan.configuration.travelContext} saving={savingTravelContext} onSave={onSaveTravelContext} />
       <h3>Assumptions to correct if needed</h3>
       <ul className="compact-list">{plan.assumptions.map((item) => <li key={item}>{item}</li>)}</ul>
+      <h3>Stages and tasks</h3>
+      <div className="plan-stage-list">{plan.stages.map((stage, index) => <section key={stage.id}><div><span>0{index + 1}</span><strong>{stage.title}</strong></div><p>{stage.description}</p><div className="task-stack">{stage.tasks.map((task) => <PlanTaskRow task={task} key={task.id} />)}</div></section>)}</div>
       {plan.status === "draft" ? <button className="primary-button" disabled={confirming} onClick={() => void onActivate()}>Confirm complete Plan</button> : null}
     </section>
     <PolicyPreparationCard assessment={policyPreparation} />
     <PlaceDecisionPanel amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={onSearch} routeOrigin={routeOrigin} routeDestination={routeDestination} savedAccommodation={savedAccommodation} routeMode={routeMode} routeResult={routeResult} routing={routing} routeComparisons={routeComparisons} comparingRoutes={comparingRoutes} transportPreference={plan.configuration.transport.preference} travelContext={plan.configuration.travelContext} arrivalWeather={arrivalWeather} foodCentre={foodCentre} foodResult={foodResult} findingFood={findingFood} stayCentre={stayCentre} stayResult={stayResult} findingStay={findingStay} savingAccommodation={savingAccommodation} onChooseRouteOrigin={onChooseRouteOrigin} onChooseRouteDestination={onChooseRouteDestination} onRouteModeChange={onRouteModeChange} onFindNearbyFood={onFindNearbyFood} onFindNearbyAccommodation={onFindNearbyAccommodation} onSaveAccommodationCandidate={onSaveAccommodationCandidate} onPlanRoute={onPlanRoute} onCompareRoutes={onCompareRoutes} />
     <section className="card"><p className="eyebrow">Sources</p>{plan.sources.length ? plan.sources.map((source) => <a className="source-link" href={source.url} key={source.title} target="_blank" rel="noreferrer"><strong>{source.title}</strong><span>{source.authority} · {source.retrievedAt}</span></a>) : <p>No evidence is linked to this Plan yet. The evidence-preparation status above uses only a saved official source snapshot; a separate policy Skill must still review it.</p>}</section>
   </div>;
+}
+
+function PlanTaskRow({ task }: { task: Task }) {
+  return <div className="task-row"><span className={`task-dot ${task.status}`} /><div className="task-copy"><span>{task.title}</span>{task.reminder ? <small>Reminder purpose: {task.reminder.purpose}</small> : null}</div><div className="task-timing"><small>{task.dueLabel}</small>{task.reminder ? <small className="task-reminder">Proposed: {task.reminder.scheduledAtLocal.replace("T", " ")} · {task.reminder.timeZone}</small> : null}</div></div>;
 }
 
 function PolicyPreparationCard({ assessment }: { assessment: PolicyPreparationAssessment | null }) {

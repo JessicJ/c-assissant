@@ -11,15 +11,17 @@ const validDraft = JSON.stringify({
   knownInformation: ["Purpose: exhibition"],
   assumptions: ["Accommodation is unconfirmed."],
   nextAction: "Review the complete Plan.",
-  stages: [{ title: "Before departure", description: "Prepare essentials.", tasks: [{ title: "Confirm accommodation", owner: "user", dueLabel: "Before departure" }] }]
+  stages: [{ title: "Before departure", description: "Prepare essentials.", tasks: [{ title: "Check documents", owner: "user", dueLabel: "Two hours before departure", reminder: { scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Check your passport, travel documents, phone, and charger before leaving." } }] }]
 });
 
 test("Codex Adapter accepts a schema-compatible Plan draft", () => {
   assert.equal(parsePlanDraft(validDraft).title, "Attend an exhibition in Shanghai");
+  assert.equal(parsePlanDraft(validDraft).stages[0]?.tasks[0]?.reminder?.scheduledAtLocal, "2026-09-01T05:00");
 });
 
 test("Codex Adapter rejects malformed Plan output", () => {
   assert.throws(() => parsePlanDraft("not json"), RuntimeAdapterError);
+  assert.throws(() => parsePlanDraft(validDraft.replace("Asia/Shanghai", "Mars/Olympus")), RuntimeAdapterError);
 });
 
 test("Claude Code Adapter extracts the Print-mode result before validating the Plan", () => {
@@ -66,4 +68,5 @@ test("Codex Plan context includes confirmed Profile identity without claiming po
   assert.match(prompt, /gender: woman/);
   assert.match(prompt, /China entry or residence status: tourist_visa/);
   assert.match(prompt, /not as proof of a policy entitlement/i);
+  assert.match(prompt, /Never invent a date, time, or departure time zone/i);
 });
