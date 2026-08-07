@@ -86,6 +86,19 @@ interface TelegramPairingRequestRow {
   expires_at: string;
 }
 
+interface TelegramArrivalCheckinRow {
+  check_in_sent_at: string;
+  location_requested_at: string | null;
+  location_received_at: string | null;
+}
+
+/** Contains delivery state only. Coordinates are never stored here. */
+export interface TelegramArrivalCheckinState {
+  checkInSentAt: string;
+  locationRequestedAt?: string;
+  locationReceivedAt?: string;
+}
+
 export class SqliteWorkspaceStore {
   private readonly database: DatabaseSync;
 
@@ -213,6 +226,33 @@ export class SqliteWorkspaceStore {
     if (existing) return false;
     this.database.prepare("INSERT INTO telegram_reminder_deliveries (plan_id, reminder_key, due_at, claimed_at) VALUES (?, ?, ?, ?)").run(planId, reminderKey, input.dueAt, new Date().toISOString());
     return true;
+  }
+
+  recordTelegramArrivalCheckin(input: { planId: string; checkInSentAt: string }): void {
+    const planId = input.planId.trim();
+    if (!planId || !Number.isFinite(Date.parse(input.checkInSentAt))) throw new Error("Telegram arrival check-in needs a Plan and valid delivery time.");
+    this.database.prepare("INSERT INTO telegram_arrival_checkins (plan_id, check_in_sent_at, location_requested_at, location_received_at) VALUES (?, ?, NULL, NULL) ON CONFLICT(plan_id) DO NOTHING").run(planId, input.checkInSentAt);
+  }
+
+  getTelegramArrivalCheckin(planId: string): TelegramArrivalCheckinState | undefined {
+    const row = this.database.prepare("SELECT check_in_sent_at, location_requested_at, location_received_at FROM telegram_arrival_checkins WHERE plan_id = ?").get(planId.trim()) as TelegramArrivalCheckinRow | undefined;
+    if (!row) return undefined;
+    return {
+      checkInSentAt: row.check_in_sent_at,
+      ...(row.location_requested_at ? { locationRequestedAt: row.location_requested_at } : {}),
+      ...(row.location_received_at ? { locationReceivedAt: row.location_received_at } : {})
+    };
+  }
+
+  markTelegramArrivalLocationRequested(planId: string, requestedAt: string): boolean {
+    if (!planId.trim() || !Number.isFinite(Date.parse(requestedAt))) throw new Error("Telegram arrival location request needs a Plan and valid time.");
+    const result = this.database.prepare("UPDATE telegram_arrival_checkins SET location_requested_at = ? WHERE plan_id = ? AND location_requested_at IS NULL AND location_received_at IS NULL").run(requestedAt, planId.trim());
+    return result.changes === 1;
+  }
+
+  markTelegramArrivalLocationReceived(planId: string, receivedAt: string): void {
+    if (!planId.trim() || !Number.isFinite(Date.parse(receivedAt))) throw new Error("Telegram arrival location receipt needs a Plan and valid time.");
+    this.database.prepare("UPDATE telegram_arrival_checkins SET location_received_at = ? WHERE plan_id = ?").run(receivedAt, planId.trim());
   }
 
   createPlan(input: CreatePlanInput): WorkspaceSnapshot {
@@ -459,11 +499,18 @@ export class SqliteWorkspaceStore {
         claimed_at TEXT NOT NULL,
         PRIMARY KEY (plan_id, reminder_key)
       );
+      CREATE TABLE IF NOT EXISTS telegram_arrival_checkins (
+        plan_id TEXT PRIMARY KEY REFERENCES plans(id) ON DELETE CASCADE,
+        check_in_sent_at TEXT NOT NULL,
+        location_requested_at TEXT,
+        location_received_at TEXT
+      );
       CREATE INDEX IF NOT EXISTS idx_plans_current ON plans(is_current, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_stages_plan_order ON stages(plan_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_tasks_stage_order ON tasks(stage_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_inbox_created_at ON inbox_items(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_telegram_pairing_requests_active ON telegram_pairing_requests(consumed_at, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_telegram_arrival_checkins_follow_up ON telegram_arrival_checkins(location_requested_at, location_received_at, check_in_sent_at);
       PRAGMA optimize;
     `);
     const planColumns = this.database.prepare("PRAGMA table_info(plans)").all() as unknown as Array<{ name: string }>;

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createPlanFromRequest } from "@c-assistant/core";
-import { arrivalInstant, formatArrivalReminder, isArrivalReminderDue } from "./arrival-reminder.js";
+import { ARRIVAL_LOCATION_FOLLOW_UP_DELAY_MS, arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue } from "./arrival-reminder.js";
 
 test("an Asia/Shanghai arrival is converted to the correct UTC instant", () => {
   const due = arrivalInstant("2026-09-01T07:00", "Asia/Shanghai");
@@ -13,6 +13,13 @@ test("arrival reminders are sent only within a short catch-up window", () => {
   const due = new Date("2026-09-01T00:00:00.000Z");
   assert.equal(isArrivalReminderDue(due, new Date("2026-09-01T00:15:00.000Z")), true);
   assert.equal(isArrivalReminderDue(due, new Date("2026-09-01T00:31:00.000Z")), false);
+});
+
+test("arrival location sharing is a five-minute follow-up after no response", () => {
+  const sentAt = "2026-09-01T00:00:00.000Z";
+  assert.equal(isArrivalLocationPromptDue(sentAt, new Date("2026-09-01T00:04:59.999Z")), false);
+  assert.equal(ARRIVAL_LOCATION_FOLLOW_UP_DELAY_MS, 5 * 60_000);
+  assert.equal(isArrivalLocationPromptDue(sentAt, new Date("2026-09-01T00:05:00.000Z")), true);
 });
 
 test("arrival reminder copy never claims that an external action started", () => {

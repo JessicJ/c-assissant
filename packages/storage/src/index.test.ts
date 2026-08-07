@@ -154,3 +154,17 @@ test("SQLite records an arrival reminder delivery attempt only once per Plan", (
   assert.equal(store.claimTelegramReminder(reminder), false);
   store.close();
 });
+
+test("SQLite stores arrival follow-up state without storing shared coordinates", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const planId = store.getWorkspace().activePlan.id;
+  store.recordTelegramArrivalCheckin({ planId, checkInSentAt: "2026-09-01T00:00:00.000Z" });
+  assert.equal(store.getTelegramArrivalCheckin(planId)?.locationRequestedAt, undefined);
+  assert.equal(store.markTelegramArrivalLocationRequested(planId, "2026-09-01T00:05:00.000Z"), true);
+  assert.equal(store.markTelegramArrivalLocationRequested(planId, "2026-09-01T00:05:01.000Z"), false);
+  store.markTelegramArrivalLocationReceived(planId, "2026-09-01T00:05:30.000Z");
+  const state = store.getTelegramArrivalCheckin(planId);
+  assert.equal(state?.locationReceivedAt, "2026-09-01T00:05:30.000Z");
+  assert.deepEqual(Object.keys(state ?? {}).sort(), ["checkInSentAt", "locationReceivedAt", "locationRequestedAt"]);
+  store.close();
+});
