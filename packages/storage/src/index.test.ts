@@ -76,3 +76,13 @@ test("SQLite keeps a transport preference inside the current Plan", () => {
   assert.equal(updated.activePlan.version, plan.version + 1);
   store.close();
 });
+
+test("SQLite keeps travel party and luggage context inside the current Plan", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const plan = store.getWorkspace().activePlan;
+  const updated = store.updatePlanTravelContext(plan.id, { partySize: 3, luggage: "heavy" });
+
+  assert.equal(updated.activePlan.configuration.travelContext.partySize, 3);
+  assert.equal(updated.activePlan.configuration.travelContext.luggage, "heavy");
+  store.close();
+});

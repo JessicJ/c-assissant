@@ -5,6 +5,7 @@ export type TaskStatus = "scheduled" | "ready" | "running" | "waiting_user" | "b
 export type ProfileGender = "not_specified" | "woman" | "man" | "nonbinary" | "prefer_not_to_say";
 export type ImmigrationStatus = "unknown" | "short_term_visitor" | "tourist_visa" | "student_visa" | "work_visa" | "residence_permit" | "other";
 export type TransportPreference = "plan_recommended" | "taxi" | "public_transit" | "walking";
+export type LuggageLevel = "unknown" | "light" | "standard" | "heavy";
 
 export interface Task {
   id: string;
@@ -43,6 +44,10 @@ export interface PlanConfiguration {
   accommodation: PlanAccommodation;
   transport: {
     preference: TransportPreference;
+  };
+  travelContext: {
+    partySize?: number;
+    luggage: LuggageLevel;
   };
 }
 
@@ -115,6 +120,11 @@ export interface PlanAccommodationInput {
 
 export interface PlanTransportPreferenceInput {
   preference: TransportPreference;
+}
+
+export interface PlanTravelContextInput {
+  partySize?: number;
+  luggage: LuggageLevel;
 }
 
 export interface GeneratedPlanDraft {
@@ -293,7 +303,7 @@ export function createPlanFromDraft(draft: GeneratedPlanDraft): Plan {
 }
 
 export function createDefaultPlanConfiguration(): PlanConfiguration {
-  return { accommodation: { status: "not_set" }, transport: { preference: "plan_recommended" } };
+  return { accommodation: { status: "not_set" }, transport: { preference: "plan_recommended" }, travelContext: { luggage: "unknown" } };
 }
 
 export function confirmPlan(snapshot: WorkspaceSnapshot, planId: string): WorkspaceSnapshot {

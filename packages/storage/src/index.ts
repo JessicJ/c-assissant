@@ -14,6 +14,7 @@ import {
   type Plan,
   type PlanAccommodationInput,
   type PlanConfiguration,
+  type PlanTravelContextInput,
   type PlanTransportPreferenceInput,
   type ProfileGender,
   type ProfileUpdate,
@@ -230,6 +231,30 @@ export class SqliteWorkspaceStore {
     return this.getWorkspace();
   }
 
+  updatePlanTravelContext(planId: string, input: PlanTravelContextInput): WorkspaceSnapshot {
+    const workspace = this.getWorkspace();
+    if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
+    const partySize = input.partySize;
+    if (partySize !== undefined && (!Number.isInteger(partySize) || partySize < 1 || partySize > 20)) throw new Error("Party size must be a whole number from 1 to 20.");
+    if (!["unknown", "light", "standard", "heavy"].includes(input.luggage)) throw new Error("Choose a supported luggage level.");
+    const configuration: PlanConfiguration = {
+      ...workspace.activePlan.configuration,
+      travelContext: {
+        ...(partySize === undefined ? {} : { partySize }),
+        luggage: input.luggage
+      }
+    };
+    this.database.prepare("UPDATE plans SET configuration_json = ?, version = version + 1 WHERE id = ?").run(JSON.stringify(configuration), planId);
+    this.addInbox({
+      id: `travel-context-${planId}-${Date.now()}`,
+      tone: "notice",
+      title: "Travel context saved in this Plan",
+      body: "Companions and luggage will guide later transport decisions.",
+      timestamp: "Just now"
+    });
+    return this.getWorkspace();
+  }
+
   private migrate(): void {
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS profiles (
@@ -414,7 +439,8 @@ function parsePlanConfiguration(value: string): PlanConfiguration {
     const parsed = JSON.parse(value) as Partial<PlanConfiguration>;
     const accommodation = parsed.accommodation && ["not_set", "candidate", "confirmed"].includes(parsed.accommodation.status) ? parsed.accommodation : defaults.accommodation;
     const preference = parsed.transport && ["plan_recommended", "taxi", "public_transit", "walking"].includes(parsed.transport.preference) ? parsed.transport.preference : defaults.transport.preference;
-    return { accommodation, transport: { preference } };
+    const travelContext = parsed.travelContext && ["unknown", "light", "standard", "heavy"].includes(parsed.travelContext.luggage) ? { ...(Number.isInteger(parsed.travelContext.partySize) && parsed.travelContext.partySize! >= 1 && parsed.travelContext.partySize! <= 20 ? { partySize: parsed.travelContext.partySize } : {}), luggage: parsed.travelContext.luggage } : defaults.travelContext;
+    return { accommodation, transport: { preference }, travelContext };
   } catch {
     // Old local data can safely fall back to an empty Plan configuration.
   }
