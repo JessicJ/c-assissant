@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-adapters";
 import { AmapConnector, OfficialSourceConnector, QWeatherConnector, TelegramConnector, type AmapPlace, type AmapRoute } from "@c-assistant/connectors";
-import type { AgentRuntimeKind, CreatePlanInput, PlanAccommodationInput, PlanArrivalInput, PlanTransportPreferenceInput, PlanTravelContextInput, ProfileUpdate, RuntimeSelectionUpdate } from "@c-assistant/core";
+import { assessPolicyPreparation, type AgentRuntimeKind, type CreatePlanInput, type PlanAccommodationInput, type PlanArrivalInput, type PlanTransportPreferenceInput, type PlanTravelContextInput, type ProfileUpdate, type RuntimeSelectionUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue } from "./arrival-reminder.js";
 import { arrivalRouteDestination, formatArrivalRoute, selectArrivalTransport } from "./arrival-route.js";
@@ -42,6 +42,15 @@ server.get("/health", async () => ({
 }));
 
 server.get("/api/workspace", async () => store.getWorkspace());
+
+server.get("/api/policy-applicability", async () => {
+  const workspace = store.getWorkspace();
+  return assessPolicyPreparation({
+    profile: workspace.profile,
+    plan: workspace.activePlan,
+    sourceSnapshots: workspace.sourceSnapshots
+  });
+});
 
 server.post<{ Params: { planId: string } }>("/api/plans/:planId/confirm", async (request, reply) => {
   try {
