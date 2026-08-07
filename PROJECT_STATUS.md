@@ -111,6 +111,7 @@
 
 - 已完成 Telegram Bot 身份验证、一次性私聊配对，以及已绑定账号的最小输入入口：普通文本和 `/new` 都会使用 Settings 中选定的本机 Codex 或 Claude Code 生成待确认 Plan；所选运行底座不可用时会明确降级为本地模板草案，另有 `/help`、`/plan` 和 `/prepare`。官方来源 Connector 已具备受限刷新和快照能力；数据库已建立可追踪 schema 基线和备份校验。
 - 已增加最小 GitHub Actions CI：在 `master`、`main` 推送及 Pull Request 上使用 Node.js 22 与锁定依赖执行 build、typecheck 和全部 tests，不注入任何生产凭据。
+- Web Settings 已增加实例就绪卡：统一汇总长期 Profile、当前选中的 Agent Runtime、高德、QWeather 与 Telegram 私聊配对状态，并只给出一个优先下一步。未选择的 Runtime 不影响整体就绪；当前实例使用已登录 Codex 时，本机 Claude Code 未登录会被正常保留为可选的待配置状态。
 - 已实现第一条 Plan 事件状态转换：任务只有显式 `arrival` 触发标记时，预计抵达事件才会把它从 `scheduled` 转为 `ready`，记录本地收件箱并更新当前下一步；不会推断或自动完成任何任务。
 - 已实现到达任务的显式完成闭环：只有绑定 Telegram 用户点击“我已完成此步骤”时，当前 Plan 内的 `ready` 任务才会改为 `completed`，并记录为用户确认；不会把打开高德或其他第三方应用当作完成回执。
 - Telegram 的 `/plan` 已提供当前完整 Plan：已知信息、需要纠正的假设、阶段、任务状态、提醒策略和下一步都会显示；超过单条消息安全长度时自动分页，确认按钮只附在最后一页。
@@ -162,7 +163,7 @@
 
 以下事项不阻塞当前本地 V1 代码闭环，进入发布准备或下一版本：
 
-1. 用户用已登录的 Claude Code 做一次真实草案端到端验证，并在手机上验证 Telegram 与高德 HTTPS 深链接。
+1. 在手机上验证 Telegram 与高德 HTTPS 深链接；Claude Code 的真实草案验证等本机未来选择并登录该底座后再做，不阻塞 Codex 实例。
 2. 确定最终项目名称、开源许可证、贡献治理和版本发布方式。
 3. 在现有 schema 基线与已验证备份之上，设计显式恢复流程、数据库加密和数据保留策略；恢复不得自动覆盖当前 workspace。
 4. 选择一键部署、进程守护与全天在线方案，并增加配额/限额可视化。

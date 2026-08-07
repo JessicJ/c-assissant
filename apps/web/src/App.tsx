@@ -36,6 +36,13 @@ type ChinaPlanPreparationView =
   | { status: "blocked"; stage: "source_preparation" | "compilation"; reasonCode: string; message: string; actionItems: string[]; sources: Array<{ sourceId: string; status: "ready" | "unavailable" }> };
 type DatabaseMaintenanceView = { schemaVersion: number; latestSchemaVersion: number; integrity: "ok" | "failed"; migrations: Array<{ version: number; name: string; appliedAt: string }> };
 type DatabaseBackupView = { path: string; fileName: string; createdAt: string; schemaVersion: number; integrity: "ok" };
+type SetupReadinessView = {
+  status: "ready" | "needs_attention";
+  readyCount: number;
+  totalCount: number;
+  nextAction: string;
+  items: Array<{ id: "profile" | "runtime" | "amap" | "qweather" | "telegram"; label: string; status: "ready" | "needs_attention"; detail: string }>;
+};
 
 const navigation: View[] = ["Today", "Plans", "Inbox", "Settings"];
 
@@ -166,6 +173,7 @@ function App() {
       setConfiguration((await response.json()) as LocalConfiguration);
       setConfigurationForm({ amapApiKey: "", qweatherApiKey: "", qweatherApiHost: "", telegramBotToken: "" });
       await loadTelegramStatus();
+      window.dispatchEvent(new Event("landi:setup-changed"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Local configuration could not be saved.");
     } finally {
@@ -256,6 +264,7 @@ function App() {
       if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "Telegram pairing could not be completed.");
       setTelegramPairing((await response.json()) as TelegramPairingView);
       await loadWorkspace();
+      window.dispatchEvent(new Event("landi:setup-changed"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Telegram pairing could not be completed.");
     } finally {
@@ -272,6 +281,7 @@ function App() {
       if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "Telegram could not be disconnected.");
       setTelegramPairing((await response.json()) as TelegramPairingView);
       await loadWorkspace();
+      window.dispatchEvent(new Event("landi:setup-changed"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Telegram could not be disconnected.");
     } finally {
@@ -396,6 +406,7 @@ function App() {
       if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "The Profile could not be saved.");
       setWorkspace((await response.json()) as WorkspaceSnapshot);
       await loadPolicyPreparation();
+      window.dispatchEvent(new Event("landi:setup-changed"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The Profile could not be saved.");
     }
@@ -412,6 +423,7 @@ function App() {
       if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "The Plan runtime could not be selected.");
       setWorkspace((await response.json()) as WorkspaceSnapshot);
       await loadRuntimeChecks();
+      window.dispatchEvent(new Event("landi:setup-changed"));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The Plan runtime could not be selected.");
     } finally {
@@ -905,6 +917,7 @@ function SettingsView({ workspace, onSaveProfile, configuration, configurationFo
   const snapshotsFor = (sourceId: string) => workspace.sourceSnapshots.filter((snapshot) => snapshot.sourceId === sourceId);
   const isLinkedToActivePlan = (snapshot: WorkspaceSnapshot["sourceSnapshots"][number]) => workspace.activePlan.sources.some((source) => source.url === snapshot.url && source.authority === snapshot.authority && source.retrievedAt === snapshot.retrievedAt);
   return <section className="content-stack">
+    <SetupReadinessCard />
     <ProfileView workspace={workspace} onSave={onSaveProfile} />
     <LocalConfigurationView configuration={configuration} form={configurationForm} saving={savingConfiguration} onChange={onConfigurationFormChange} onSave={onSaveConfiguration} />
     <DataMaintenanceCard />
@@ -1103,6 +1116,41 @@ function ChinaPlanPreparationCard({ plan, result, preparing, onPrepare }: { plan
     {result?.status === "saved" ? <div className="china-preparation-result success"><strong>{result.message}</strong><span>{result.taskCount} Tasks · {result.reminderCount} Reminders · {result.sources.filter((source) => source.status === "ready").length} sources ready</span></div> : null}
     {result?.status === "blocked" ? <div className="china-preparation-result blocked"><strong>{result.message}</strong><ul className="compact-list">{result.actionItems.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
     {plan.status === "draft" ? <button className="primary-button" disabled={preparing} onClick={() => void onPrepare()}>{preparing ? "Preparing with current sources…" : result?.status === "saved" ? "Prepare this updated draft again" : "Prepare with China Pack"}</button> : <p className="connector-message">This Plan is active. Create or revise a draft before preparing a new Country Pack proposal.</p>}
+  </section>;
+}
+
+function SetupReadinessCard() {
+  const [readiness, setReadiness] = useState<SetupReadinessView | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  async function refresh() {
+    try {
+      setChecking(true);
+      setFailure(null);
+      const response = await fetch("/api/setup-readiness");
+      if (!response.ok) throw new Error("Instance readiness could not be checked.");
+      setReadiness((await response.json()) as SetupReadinessView);
+    } catch (caught) {
+      setFailure(caught instanceof Error ? caught.message : "Instance readiness could not be checked.");
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  useEffect(() => {
+    const handleSetupChange = () => void refresh();
+    void refresh();
+    window.addEventListener("landi:setup-changed", handleSetupChange);
+    return () => window.removeEventListener("landi:setup-changed", handleSetupChange);
+  }, []);
+
+  return <section className="card setup-readiness-card">
+    <div className="split-heading"><div><p className="eyebrow">Instance setup</p><h2>See the one thing to finish next</h2></div><span className={`configuration-state ${readiness?.status === "ready" ? "ready" : ""}`}>{readiness ? `${readiness.readyCount}/${readiness.totalCount} ready` : "checking"}</span></div>
+    <p className="setup-next-action"><strong>Next:</strong> {readiness?.nextAction ?? "Checking this instance…"}</p>
+    {readiness ? <div className="setup-readiness-list">{readiness.items.map((item) => <article key={item.id}><span className={`setup-status-dot ${item.status}`} aria-hidden="true" /><div><strong>{item.label}</strong><small>{item.detail}</small></div></article>)}</div> : null}
+    <div className="setup-readiness-footer"><small>You can still draft and edit Plans while optional setup remains. Only the selected Agent runtime must be logged in; the other runtime may stay unused.</small><button className="secondary-button" disabled={checking} onClick={() => void refresh()}>{checking ? "Checking…" : "Refresh setup status"}</button></div>
+    {failure ? <p className="inline-error">{failure}</p> : null}
   </section>;
 }
 

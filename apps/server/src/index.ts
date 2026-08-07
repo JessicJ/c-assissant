@@ -27,6 +27,7 @@ import { createChinaArrivalCompilationService } from "./china-plan-compilation.j
 import { createChinaPlanWorkflow } from "./china-plan-workflow.js";
 import { presentChinaPlanPreparation } from "./china-plan-presentation.js";
 import { createChinaSourcePreparationService } from "./china-source-preparation.js";
+import { assessSetupReadiness } from "./setup-readiness.js";
 
 const server = Fastify({ logger: true });
 const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -232,6 +233,21 @@ server.post<{ Body: CreatePlanInput }>("/api/plans", async (request, reply) => {
 server.get("/api/runtimes/codex", async () => codex.check());
 server.get("/api/runtimes/claude-code", async () => claudeCode.check());
 server.get("/api/runtimes", async () => Promise.all([codex.check(), claudeCode.check()]));
+
+server.get("/api/setup-readiness", async () => {
+  const workspace = store.getWorkspace();
+  const configuration = localConfigurationSnapshot();
+  const runtimeChecks = await Promise.all([codex.check(), claudeCode.check()]);
+  return assessSetupReadiness({
+    profileStatus: workspace.profile.status,
+    selectedRuntime: workspace.runtime.selectedKind,
+    runtimeChecks,
+    amapConfigured: configuration.amap.configured,
+    qweatherConfigured: configuration.qweather.configured && Boolean(configuration.qweather.host),
+    telegramConfigured: configuration.telegram.configured,
+    telegramPaired: store.getTelegramPairingStatus().state === "paired"
+  });
+});
 
 server.put<{ Body: RuntimeSelectionUpdate }>("/api/runtime", async (request, reply) => {
   try {
