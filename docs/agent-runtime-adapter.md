@@ -68,10 +68,10 @@ Implementation references:
 
 - Codex supports non-interactive runs and structured output with `codex exec --output-schema`: [Codex developer commands](https://learn.chatgpt.com/docs/developer-commands#codex-exec)
 - Codex login and headless-device authentication: [Codex login](https://learn.chatgpt.com/docs/developer-commands#codex-login) and [authentication](https://learn.chatgpt.com/docs/auth#login-on-headless-devices)
-- Claude Code supports non-interactive `claude -p` output modes: [Claude Code CLI usage](https://docs.anthropic.com/en/docs/claude-code/cli-usage)
+- Claude Code supports non-interactive `claude -p`, JSON output, and a non-destructive `claude auth status` login check: [Claude Code CLI usage](https://code.claude.com/docs/en/cli-usage)
 - Claude Code setup: [Claude Code getting started](https://docs.anthropic.com/en/docs/claude-code/getting-started)
 
-These commands must be validated in a real adapter proof of concept before V1 is declared supported.
+The Codex adapter has a real structured-output proof of concept. The Claude Code adapter now has the same bounded local implementation and contract tests, but still needs a real logged-in end-to-end validation before Claude Code is declared supported for V1.
 
 ## Scheduling and concurrency
 

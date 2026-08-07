@@ -8,7 +8,7 @@ The project is not limited to tourism. The long-term direction includes daily li
 
 ## Current status
 
-The repository contains the approved V1 architecture baseline plus a first local workflow: a Core HTTP service, a Web workspace, local SQLite persistence, Profile editing for nationality, gender, and China visa/residence status, Plan creation and confirmation, a restricted Amap place, nearby-restaurant, and route-facts Connector, a QWeather current/three-day weather-facts Connector, a Codex-backed structured Plan-draft flow, and safe local Telegram bot configuration/identity verification. It is not yet a personal assistant for real use: Telegram pairing and reminders, official sources, scheduling, Claude Code, and external action handoffs beyond Amap routing have not been implemented.
+The repository contains the approved V1 architecture baseline plus a first local workflow: a Core HTTP service, a Web workspace, local SQLite persistence, Profile editing for nationality, gender, and China visa/residence status, Plan creation and confirmation, a restricted Amap place, nearby-restaurant, and route-facts Connector, a QWeather current/three-day weather-facts Connector, a Codex-backed structured Plan-draft flow, a bounded Claude Code adapter, and safe local Telegram bot configuration/identity verification. It is not yet a personal assistant for real use: runtime selection, official sources, full reminder scheduling, and external action handoffs beyond Amap routing still need implementation.
 
 ## Run the local demo
 

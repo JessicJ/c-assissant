@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { RuntimeAdapterError, buildPlanDraftPrompt, parsePlanDraft } from "./index.js";
+import { RuntimeAdapterError, buildPlanDraftPrompt, parseClaudePrintResult, parsePlanDraft } from "./index.js";
 
 const validDraft = JSON.stringify({
   title: "Attend an exhibition in Shanghai",
@@ -19,6 +19,11 @@ test("Codex Adapter accepts a schema-compatible Plan draft", () => {
 
 test("Codex Adapter rejects malformed Plan output", () => {
   assert.throws(() => parsePlanDraft("not json"), RuntimeAdapterError);
+});
+
+test("Claude Code Adapter extracts the Print-mode result before validating the Plan", () => {
+  assert.equal(parseClaudePrintResult(JSON.stringify({ result: validDraft })), validDraft);
+  assert.throws(() => parseClaudePrintResult(JSON.stringify({ result: 42 })), RuntimeAdapterError);
 });
 
 test("Codex Plan context includes confirmed Profile identity without claiming policy eligibility", () => {
