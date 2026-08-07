@@ -19,6 +19,7 @@ test("Telegram Plan creation saves a Codex draft when the local runtime succeeds
   let templateSaved = false;
   const result = await createTelegramPlan({
     request: "Attend an exhibition in Shanghai.",
+    runtime: "codex",
     generate: async () => generated,
     saveGenerated: (draft) => ({ ...createInitialWorkspace(), activePlan: createPlanFromDraft(draft) }),
     saveTemplate: () => {
@@ -26,7 +27,7 @@ test("Telegram Plan creation saves a Codex draft when the local runtime succeeds
       return createInitialWorkspace();
     }
   });
-  assert.equal(result.source, "codex");
+  assert.equal(result.source, "runtime");
   assert.equal(templateSaved, false);
   assert.match(formatTelegramPlanCreation(result), /Codex created/i);
 });
@@ -34,6 +35,7 @@ test("Telegram Plan creation saves a Codex draft when the local runtime succeeds
 test("Telegram Plan creation transparently falls back to a local draft when Codex fails", async () => {
   const result = await createTelegramPlan({
     request: "Attend an exhibition in Shanghai.",
+    runtime: "codex",
     generate: async () => { throw new Error("Codex unavailable"); },
     saveGenerated: () => createInitialWorkspace(),
     saveTemplate: () => createInitialWorkspace()

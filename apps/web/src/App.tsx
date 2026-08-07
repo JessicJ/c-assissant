@@ -3,7 +3,7 @@ import "./manual-accommodation.css";
 import type { RuntimeCheck } from "@c-assistant/agent-adapters";
 import { createAmapDrivingHandoff, createAmapPlaceHandoff } from "@c-assistant/connectors";
 import type { AmapNearbyPlace, AmapPlace, AmapRoute, ConnectorResult, QWeatherWeatherSnapshot, TelegramBotIdentity, TelegramConfiguration } from "@c-assistant/connectors";
-import type { WorkspaceSnapshot } from "@c-assistant/core";
+import type { AgentRuntimeKind, WorkspaceSnapshot } from "@c-assistant/core";
 import { recommendPlanTransport, type TransportWeatherFact } from "@c-assistant/core/transport";
 
 type View = "Today" | "Plans" | "Inbox" | "Profile" | "Settings";
@@ -56,7 +56,8 @@ function App() {
   const [checkingWeather, setCheckingWeather] = useState(false);
   const [planWeather, setPlanWeather] = useState<{ planId: string; result: ConnectorResult<QWeatherWeatherSnapshot> } | null>(null);
   const [checkingPlanWeather, setCheckingPlanWeather] = useState(false);
-  const [codexRuntime, setCodexRuntime] = useState<RuntimeCheck | null>(null);
+  const [runtimeChecks, setRuntimeChecks] = useState<RuntimeCheck[]>([]);
+  const [savingRuntime, setSavingRuntime] = useState(false);
   const [telegramStatus, setTelegramStatus] = useState<ConnectorResult<TelegramConfiguration> | null>(null);
   const [telegramVerification, setTelegramVerification] = useState<ConnectorResult<TelegramBotIdentity> | null>(null);
   const [verifyingTelegram, setVerifyingTelegram] = useState(false);
@@ -66,7 +67,7 @@ function App() {
 
   useEffect(() => {
     void loadWorkspace();
-    void loadCodexRuntime();
+    void loadRuntimeChecks();
     void loadTelegramStatus();
     void loadTelegramPairing();
   }, []);
@@ -84,12 +85,12 @@ function App() {
     }
   }
 
-  async function loadCodexRuntime() {
+  async function loadRuntimeChecks() {
     try {
-      const response = await fetch("/api/runtimes/codex");
-      if (response.ok) setCodexRuntime((await response.json()) as RuntimeCheck);
+      const response = await fetch("/api/runtimes");
+      if (response.ok) setRuntimeChecks((await response.json()) as RuntimeCheck[]);
     } catch {
-      setCodexRuntime(null);
+      setRuntimeChecks([]);
     }
   }
 
@@ -189,7 +190,7 @@ function App() {
     }
   }
 
-  async function generatePlanWithCodex() {
+  async function generatePlanWithSelectedRuntime() {
     if (!requestText.trim()) return;
     try {
       setGenerating(true);
@@ -198,12 +199,12 @@ function App() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ request: requestText })
       });
-      if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "Codex could not generate a Plan.");
+      if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "The selected runtime could not generate a Plan.");
       setWorkspace((await response.json()) as WorkspaceSnapshot);
       setRequestText("");
       setView("Plans");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Codex could not generate a Plan.");
+      setError(caught instanceof Error ? caught.message : "The selected runtime could not generate a Plan.");
     } finally {
       setGenerating(false);
     }
@@ -220,6 +221,24 @@ function App() {
       setWorkspace((await response.json()) as WorkspaceSnapshot);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The Profile could not be saved.");
+    }
+  }
+
+  async function saveRuntime(kind: AgentRuntimeKind) {
+    try {
+      setSavingRuntime(true);
+      const response = await fetch("/api/runtime", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind })
+      });
+      if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "The Plan runtime could not be selected.");
+      setWorkspace((await response.json()) as WorkspaceSnapshot);
+      await loadRuntimeChecks();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The Plan runtime could not be selected.");
+    } finally {
+      setSavingRuntime(false);
     }
   }
 
@@ -529,7 +548,7 @@ function App() {
                 <span className="sr-only">Describe your plan</span>
                 <textarea value={requestText} onChange={(event) => setRequestText(event.target.value)} placeholder="For example: I will study in Hangzhou from September 2026." rows={3} />
               </label>
-              <div className="plan-actions"><button className="secondary-button" disabled={creating || generating || !requestText.trim()} onClick={() => void createPlan()}>{creating ? "Saving…" : "Create local template"}</button><button className="primary-button" disabled={creating || generating || !requestText.trim()} onClick={() => void generatePlanWithCodex()}>{generating ? "Codex is drafting…" : "Draft complete Plan with Codex"}</button></div>
+              <div className="plan-actions"><button className="secondary-button" disabled={creating || generating || !requestText.trim()} onClick={() => void createPlan()}>{creating ? "Saving…" : "Create local template"}</button><button className="primary-button" disabled={creating || generating || !requestText.trim()} onClick={() => void generatePlanWithSelectedRuntime()}>{generating ? "Creating Plan draft…" : `Draft complete Plan with ${workspace.runtime.selectedKind === "claude-code" ? "Claude Code" : "Codex"}`}</button></div>
             </section>
 
             <section className="section-heading">
@@ -565,7 +584,7 @@ function App() {
         {view === "Plans" ? <PlanView plan={plan} onActivate={activatePlan} confirming={confirming} amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={searchAmap} routeOrigin={routeOrigin} routeDestination={routeDestination} routeMode={routeMode} routeResult={routeResult} routing={routing} routeComparisons={routeComparisons} comparingRoutes={comparingRoutes} planWeatherResult={planWeather?.planId === plan.id ? planWeather.result : null} checkingPlanWeather={checkingPlanWeather} foodCentre={foodCentre} foodResult={foodResult} findingFood={findingFood} stayCentre={stayCentre} stayResult={stayResult} findingStay={findingStay} savingAccommodation={savingAccommodation} confirmingAccommodation={confirmingAccommodation} savingTransportPreference={savingTransportPreference} savingTravelContext={savingTravelContext} savingArrival={savingArrival} onChooseRouteOrigin={(place) => { setRouteOrigin(place); setRouteResult(null); setRouteComparisons(null); }} onChooseRouteDestination={(place) => { setRouteDestination(place); setRouteResult(null); setRouteComparisons(null); }} onRouteModeChange={(mode) => { setRouteMode(mode); setRouteResult(null); }} onFindNearbyFood={findNearbyFood} onFindNearbyAccommodation={findNearbyAccommodation} onSaveAccommodationCandidate={saveAccommodationCandidate} onSaveManualAccommodation={saveManualAccommodation} onConfirmAccommodation={confirmAccommodationBooking} onSaveTransportPreference={saveTransportPreference} onSaveTravelContext={saveTravelContext} onSaveArrival={saveArrival} onPlanRoute={planAmapRoute} onCompareRoutes={compareAmapRoutes} onCheckPlanWeather={checkPlanWeather} /> : null}
         {view === "Inbox" ? <InboxView workspace={workspace} /> : null}
         {view === "Profile" ? <ProfileView workspace={workspace} onSave={saveProfile} /> : null}
-        {view === "Settings" ? <SettingsView workspace={workspace} codexRuntime={codexRuntime} telegramStatus={telegramStatus} telegramVerification={telegramVerification} verifyingTelegram={verifyingTelegram} telegramPairing={telegramPairing} pairingTelegram={pairingTelegram} onVerifyTelegram={verifyTelegram} onStartTelegramPairing={startTelegramPairing} onCompleteTelegramPairing={completeTelegramPairing} weatherLocation={weatherLocation} setWeatherLocation={setWeatherLocation} weatherResult={weatherResult} checkingWeather={checkingWeather} onCheckWeather={checkWeather} /> : null}
+        {view === "Settings" ? <SettingsView workspace={workspace} runtimeChecks={runtimeChecks} savingRuntime={savingRuntime} onSaveRuntime={saveRuntime} telegramStatus={telegramStatus} telegramVerification={telegramVerification} verifyingTelegram={verifyingTelegram} telegramPairing={telegramPairing} pairingTelegram={pairingTelegram} onVerifyTelegram={verifyTelegram} onStartTelegramPairing={startTelegramPairing} onCompleteTelegramPairing={completeTelegramPairing} weatherLocation={weatherLocation} setWeatherLocation={setWeatherLocation} weatherResult={weatherResult} checkingWeather={checkingWeather} onCheckWeather={checkWeather} /> : null}
       </section>
     </main>
   );
@@ -613,9 +632,29 @@ function ProfileView({ workspace, onSave }: { workspace: WorkspaceSnapshot; onSa
   return <section className="card profile-view"><p className="eyebrow">Long-term information</p><h2>Save only the basics you confirm</h2><form onSubmit={(event) => void submit(event)} className="profile-form"><label>Name<input value={profile.displayName} onChange={(event) => setProfile({ ...profile, displayName: event.target.value })} /></label><label>Preferred language<input value={profile.preferredLanguage} onChange={(event) => setProfile({ ...profile, preferredLanguage: event.target.value })} /></label><label>Nationality<input value={profile.nationality} onChange={(event) => setProfile({ ...profile, nationality: event.target.value })} /></label><label>Gender<select value={profile.gender} onChange={(event) => setProfile({ ...profile, gender: event.target.value as typeof profile.gender })}><option value="not_specified">Not specified</option><option value="woman">Woman</option><option value="man">Man</option><option value="nonbinary">Nonbinary</option><option value="prefer_not_to_say">Prefer not to say</option></select></label><label>China visa / residence status<select value={profile.immigrationStatus} onChange={(event) => setProfile({ ...profile, immigrationStatus: event.target.value as typeof profile.immigrationStatus })}><option value="unknown">Not sure yet</option><option value="short_term_visitor">Short-term visitor</option><option value="tourist_visa">Tourist visa</option><option value="student_visa">Student visa</option><option value="work_visa">Work visa</option><option value="residence_permit">Residence permit</option><option value="other">Other</option></select></label><p>These details help C-assistant later find the right policy route. Travel dates, companions, accommodation, and precise location remain inside a Plan, not this long-term Profile.</p><button className="primary-button" disabled={saving}>{saving ? "Saving…" : "Save confirmed Profile"}</button></form></section>;
 }
 
-function SettingsView({ workspace, codexRuntime, telegramStatus, telegramVerification, verifyingTelegram, telegramPairing, pairingTelegram, onVerifyTelegram, onStartTelegramPairing, onCompleteTelegramPairing, weatherLocation, setWeatherLocation, weatherResult, checkingWeather, onCheckWeather }: { workspace: WorkspaceSnapshot; codexRuntime: RuntimeCheck | null; telegramStatus: ConnectorResult<TelegramConfiguration> | null; telegramVerification: ConnectorResult<TelegramBotIdentity> | null; verifyingTelegram: boolean; telegramPairing: TelegramPairingView | null; pairingTelegram: boolean; onVerifyTelegram: () => Promise<void>; onStartTelegramPairing: () => Promise<void>; onCompleteTelegramPairing: () => Promise<void>; weatherLocation: string; setWeatherLocation: (value: string) => void; weatherResult: ConnectorResult<QWeatherWeatherSnapshot> | null; checkingWeather: boolean; onCheckWeather: () => Promise<void> }) {
+function SettingsView({ workspace, runtimeChecks, savingRuntime, onSaveRuntime, telegramStatus, telegramVerification, verifyingTelegram, telegramPairing, pairingTelegram, onVerifyTelegram, onStartTelegramPairing, onCompleteTelegramPairing, weatherLocation, setWeatherLocation, weatherResult, checkingWeather, onCheckWeather }: { workspace: WorkspaceSnapshot; runtimeChecks: RuntimeCheck[]; savingRuntime: boolean; onSaveRuntime: (kind: AgentRuntimeKind) => Promise<void>; telegramStatus: ConnectorResult<TelegramConfiguration> | null; telegramVerification: ConnectorResult<TelegramBotIdentity> | null; verifyingTelegram: boolean; telegramPairing: TelegramPairingView | null; pairingTelegram: boolean; onVerifyTelegram: () => Promise<void>; onStartTelegramPairing: () => Promise<void>; onCompleteTelegramPairing: () => Promise<void>; weatherLocation: string; setWeatherLocation: (value: string) => void; weatherResult: ConnectorResult<QWeatherWeatherSnapshot> | null; checkingWeather: boolean; onCheckWeather: () => Promise<void> }) {
   const telegramConfigured = telegramStatus?.status === "available";
-  return <section className="content-stack"><section className="card settings-view"><p className="eyebrow">Connection status</p><h2>Services are separated from the product UI</h2><div className="status-grid">{Object.entries(workspace.system).map(([name, status]) => <div key={name}><span>{name}</span><strong>{status.replaceAll("_", " ")}</strong></div>)}<div><span>Codex</span><strong>{codexRuntime?.installed && codexRuntime.authenticated ? "ready" : codexRuntime?.installed ? "login needed" : "not installed"}</strong></div><div><span>Telegram</span><strong>{telegramPairing?.state === "paired" ? "paired" : telegramConfigured ? "configured" : telegramStatus?.status === "not_configured" ? "token needed" : telegramStatus?.status ?? "checking"}</strong></div></div><p>Codex creates a draft only after you press the explicit generation button. Telegram starts with a private, user-owned pairing step.</p></section><section className="card weather-card"><p className="eyebrow">QWeather facts</p><h2>Check what the destination weather reports.</h2><div className="amap-search"><input value={weatherLocation} onChange={(event) => setWeatherLocation(event.target.value)} aria-label="Check destination weather" placeholder="City or region" /><button className="primary-button" disabled={checkingWeather || !weatherLocation.trim()} onClick={() => void onCheckWeather()}>{checkingWeather ? "Checking…" : "Check weather"}</button></div>{weatherResult ? <WeatherResults result={weatherResult} /> : <p>Weather is a changing fact, not a promise. C-assistant will use it for cautious packing and route suggestions after a Plan is confirmed.</p>}</section><section className="card telegram-card"><p className="eyebrow">Telegram bot</p><h2>Connect your private Telegram account</h2>{telegramConfigured ? <><p>Verification makes one safe identity request. It does not read messages or send a notification.</p><button className="secondary-button" disabled={verifyingTelegram} onClick={() => void onVerifyTelegram()}>{verifyingTelegram ? "Verifying…" : "Verify Telegram bot"}</button><TelegramPairing pairing={telegramPairing} busy={pairingTelegram} onStart={onStartTelegramPairing} onComplete={onCompleteTelegramPairing} /></> : <p>Add <code>TELEGRAM_BOT_TOKEN</code> to the local <code>.env</code> file, then restart the local service. The token is not shown in this workspace.</p>}{telegramVerification ? <TelegramVerification result={telegramVerification} /> : null}</section></section>;
+  const statusFor = (kind: AgentRuntimeKind) => runtimeChecks.find((runtime) => runtime.kind === kind);
+  const runtimeLabel = (kind: AgentRuntimeKind) => kind === "claude-code" ? "Claude Code" : "Codex";
+  return <section className="content-stack">
+    <section className="card settings-view">
+      <p className="eyebrow">Plan runtime</p>
+      <h2>Choose the account that creates Plan drafts</h2>
+      <p>This instance uses one local runtime at a time. C-assistant checks its availability but never asks for, reads, or stores its login credentials.</p>
+      <div className="runtime-options">
+        {(["codex", "claude-code"] as AgentRuntimeKind[]).map((kind) => {
+          const runtime = statusFor(kind);
+          const selected = workspace.runtime.selectedKind === kind;
+          const state = runtime?.installed && runtime.authenticated ? "ready" : runtime?.installed ? "login needed" : "not installed";
+          return <label className={`runtime-option ${selected ? "selected" : ""}`} key={kind}><input type="radio" name="plan-runtime" value={kind} checked={selected} disabled={savingRuntime} onChange={() => void onSaveRuntime(kind)} /><span><strong>{runtimeLabel(kind)}</strong><small>{state}{runtime?.version ? ` · ${runtime.version}` : ""}</small></span></label>;
+        })}
+      </div>
+      <p>Future Web and Telegram Plan drafts use this choice. If it is not ready, C-assistant explains the issue and does not silently switch runtimes.</p>
+    </section>
+    <section className="card settings-view"><p className="eyebrow">Connection status</p><h2>Services are separated from the product UI</h2><div className="status-grid">{Object.entries(workspace.system).map(([name, status]) => <div key={name}><span>{name}</span><strong>{status.replaceAll("_", " ")}</strong></div>)}<div><span>Telegram</span><strong>{telegramPairing?.state === "paired" ? "paired" : telegramConfigured ? "configured" : telegramStatus?.status === "not_configured" ? "token needed" : telegramStatus?.status ?? "checking"}</strong></div></div><p>Plan drafting starts only after you press its explicit button. Telegram starts with a private, user-owned pairing step.</p></section>
+    <section className="card weather-card"><p className="eyebrow">QWeather facts</p><h2>Check what the destination weather reports.</h2><div className="amap-search"><input value={weatherLocation} onChange={(event) => setWeatherLocation(event.target.value)} aria-label="Check destination weather" placeholder="City or region" /><button className="primary-button" disabled={checkingWeather || !weatherLocation.trim()} onClick={() => void onCheckWeather()}>{checkingWeather ? "Checking…" : "Check weather"}</button></div>{weatherResult ? <WeatherResults result={weatherResult} /> : <p>Weather is a changing fact, not a promise. C-assistant will use it for cautious packing and route suggestions after a Plan is confirmed.</p>}</section>
+    <section className="card telegram-card"><p className="eyebrow">Telegram bot</p><h2>Connect your private Telegram account</h2>{telegramConfigured ? <><p>Verification makes one safe identity request. It does not read messages or send a notification.</p><button className="secondary-button" disabled={verifyingTelegram} onClick={() => void onVerifyTelegram()}>{verifyingTelegram ? "Verifying…" : "Verify Telegram bot"}</button><TelegramPairing pairing={telegramPairing} busy={pairingTelegram} onStart={onStartTelegramPairing} onComplete={onCompleteTelegramPairing} /></> : <p>Add <code>TELEGRAM_BOT_TOKEN</code> to the local <code>.env</code> file, then restart the local service. The token is not shown in this workspace.</p>}{telegramVerification ? <TelegramVerification result={telegramVerification} /> : null}</section>
+  </section>;
 }
 
 function TelegramPairing({ pairing, busy, onStart, onComplete }: { pairing: TelegramPairingView | null; busy: boolean; onStart: () => Promise<void>; onComplete: () => Promise<void> }) {

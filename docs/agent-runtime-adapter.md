@@ -60,9 +60,9 @@ Setup in the Web workspace should:
 2. let the user select Codex or Claude Code;
 3. guide the user through that runtime's official login flow;
 4. verify authentication with a harmless check;
-5. save only the selected runtime type and health state.
+5. save only the selected runtime type; health is checked live and is not treated as a credential record.
 
-C-assistant does not collect or store the user's Codex or Claude Code credentials. One runtime is active per instance. If it fails, Core reports the failure and does not silently switch accounts or runtimes.
+C-assistant does not collect or store the user's Codex or Claude Code credentials. The current Web workspace detects both CLIs, lets the user select one, and reports its live availability; users complete the runtime's own official login flow outside C-assistant. One runtime is active per instance. If it fails, Core reports the failure and does not silently switch accounts or runtimes.
 
 Implementation references:
 

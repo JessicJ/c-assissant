@@ -7,6 +7,7 @@ export type TaskStatus = "scheduled" | "ready" | "running" | "waiting_user" | "b
 export type TaskActivationTrigger = "arrival";
 export type ProfileGender = "not_specified" | "woman" | "man" | "nonbinary" | "prefer_not_to_say";
 export type ImmigrationStatus = "unknown" | "short_term_visitor" | "tourist_visa" | "student_visa" | "work_visa" | "residence_permit" | "other";
+export type AgentRuntimeKind = "codex" | "claude-code";
 export type TransportPreference = "plan_recommended" | "taxi" | "public_transit" | "walking";
 export type LuggageLevel = "unknown" | "light" | "standard" | "heavy";
 
@@ -96,6 +97,11 @@ export interface Profile {
   status: "incomplete" | "ready";
 }
 
+/** A per-instance choice only; credentials remain in the selected CLI's own login state. */
+export interface RuntimeSelection {
+  selectedKind: AgentRuntimeKind;
+}
+
 /** A Telegram account bound to this single-user local instance. */
 export interface TelegramBinding {
   chatId: string;
@@ -113,12 +119,13 @@ export interface TelegramPairingStatus {
 
 export interface WorkspaceSnapshot {
   profile: Profile;
+  runtime: RuntimeSelection;
   activePlan: Plan;
   inbox: InboxItem[];
   system: {
     core: "ready";
     storage: "local";
-    runtime: "not_configured";
+    runtime: "configured";
     telegram: "not_configured";
     amap: "not_configured";
   };
@@ -134,6 +141,10 @@ export interface ProfileUpdate {
   nationality: string;
   gender: ProfileGender;
   immigrationStatus: ImmigrationStatus;
+}
+
+export interface RuntimeSelectionUpdate {
+  kind: AgentRuntimeKind;
 }
 
 export interface PlanAccommodationInput {
@@ -192,6 +203,7 @@ export function createInitialWorkspace(): WorkspaceSnapshot {
       immigrationStatus: "unknown",
       status: "incomplete"
     },
+    runtime: { selectedKind: "codex" },
     activePlan: {
       ...activePlan,
       title: "Attend an exhibition in Shanghai",
@@ -224,7 +236,7 @@ export function createInitialWorkspace(): WorkspaceSnapshot {
     system: {
       core: "ready",
       storage: "local",
-      runtime: "not_configured",
+      runtime: "configured",
       telegram: "not_configured",
       amap: "not_configured"
     }
