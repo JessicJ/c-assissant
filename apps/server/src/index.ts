@@ -14,6 +14,7 @@ import { createOfficialSourceService, parseOfficialSourceRegistry } from "./offi
 import { parseTelegramCommand } from "./telegram-commands.js";
 import { createTelegramPlan, formatTelegramPlanCreationPages, formatTelegramPlanPages, planDraftForRevision, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
 import { formatTelegramProfile, parseTelegramProfileCallback, telegramProfileChoiceMarkup, telegramProfileMarkup, telegramProfileTextPrompt, updateProfileText } from "./telegram-profile.js";
+import { fetchTelegramPlanWeather, formatTelegramWeather } from "./telegram-weather.js";
 import { dueTaskReminders, formatTaskReminder } from "./task-reminder.js";
 import { refreshTaskReminderWeather, taskReminderNeedsWeather, type TaskReminderWeatherContext } from "./task-reminder-weather.js";
 
@@ -640,7 +641,7 @@ async function sendTelegramCommandReplies(chatId: string, replies: TelegramComma
 async function telegramCommandResponse(text: string | undefined): Promise<TelegramCommandReply[] | undefined> {
   const command = parseTelegramCommand(text);
   if (command.type === "empty") return undefined;
-  if (command.type === "help") return [{ text: "C-assistant is connected. Send a normal message to create or revise a Plan draft with your selected local runtime, or use:\n/plan — show the current Plan and confirmation control\n/new <what you need to do> — create a separate Plan draft\n/profile — review or change your basic Profile\n/help — show this help\n\nReview the complete Plan in Telegram or Web before confirming it. Bookings and payments are not enabled." }];
+  if (command.type === "help") return [{ text: "C-assistant is connected. Send a normal message to create or revise a Plan draft with your selected local runtime, or use:\n/plan — show the current Plan and confirmation control\n/new <what you need to do> — create a separate Plan draft\n/profile — review or change your basic Profile\n/weather — check current weather for the Plan location\n/help — show this help\n\nReview the complete Plan in Telegram or Web before confirming it. Bookings and payments are not enabled." }];
   if (command.type === "plan") {
     const plan = store.getWorkspace().activePlan;
     const replyMarkup = telegramPlanConfirmationMarkup(plan);
@@ -650,6 +651,20 @@ async function telegramCommandResponse(text: string | undefined): Promise<Telegr
   if (command.type === "profile") {
     store.clearTelegramProfileTextEdit();
     return [{ text: formatTelegramProfile(store.getWorkspace().profile), replyMarkup: telegramProfileMarkup() }];
+  }
+  if (command.type === "weather") {
+    const workspace = store.getWorkspace();
+    const weatherConfiguration = qweather.configurationStatus();
+    if (weatherConfiguration.status !== "available") return [{ text: `Weather is unavailable for the current Plan. ${weatherConfiguration.failure?.message ?? "QWeather is not configured on this instance."}\n\nAmap was not called, no reminder was created, and your Plan was not changed.` }];
+    const result = await fetchTelegramPlanWeather({
+      location: workspace.activePlan.location,
+      language: /^zh|chinese/i.test(workspace.profile.preferredLanguage) ? "zh" : "en",
+      dependencies: {
+        geocodeAddress: (input) => amap.geocodeAddress(input),
+        weather: (input) => qweather.weather(input)
+      }
+    });
+    return [{ text: result.status === "available" ? formatTelegramWeather(result.data) : `Weather is unavailable for the current Plan. ${result.message}\nFailure stage: ${result.stage}${result.connectorStatus ? ` · status: ${result.connectorStatus}` : ""}\n\nNo weather was guessed, no reminder was created, and your Plan was not changed.` }];
   }
   if (command.type === "create_plan") {
     if (command.request.length > 1_500) return [{ text: "Keep a new Plan request under 1,500 characters, then send it again." }];

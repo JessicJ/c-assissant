@@ -35,6 +35,8 @@ In the paired Telegram chat, complete Plans are paginated without omission and o
 
 `/profile` lets the paired user complete long-term basics without switching to Web. Text entry is captured only after the user chooses a specific field and expires after 15 minutes; enum fields use allowlisted buttons. Partial setup remains visibly incomplete and does not imply any policy eligibility.
 
+`/weather` performs an explicit read-only weather check for the current Plan location through Amap and QWeather. It returns current and dated three-day facts with attribution, but creates no Reminder and stores no weather result in Profile or Plan.
+
 ## Product shape
 
 - Web workspace: the full desktop-grade product interface.

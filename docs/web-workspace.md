@@ -43,6 +43,8 @@ Both surfaces read and write through the same Core. A direct response returns to
 
 `/profile` provides the same basic long-term settings from Telegram without blocking Plan creation. Nationality, name, and preferred language are entered only after choosing that field; gender and China visa/residence status use explicit choices. A pending text edit expires after 15 minutes and survives a local Server restart, preventing the intended value from being mistaken for a Plan request. Disconnecting Telegram clears that pending edit but retains already confirmed Profile data.
 
+`/weather` provides the same on-demand destination facts from Telegram using the current Plan location. It is user-triggered and read-only: no Reminder is scheduled and no result is written into Profile or Plan. The response includes retrieval time, dated three-day forecasts, and an approved QWeather attribution link; an unresolved location or Provider failure is shown explicitly.
+
 Before confirmation, a normal Telegram message is treated as a correction to the current user-created draft; `/new` is the explicit way to start a separate objective. A successful correction creates a complete replacement draft, preserves Plan-scoped configuration such as party size and luggage, and requires review again. Official evidence links are not silently copied to the replacement. The initial example Plan is not considered user-created, so the user's first ordinary message starts their own Plan.
 
 Conflicting edits are resolved by Plan version. The client must refresh before confirming or changing an outdated version.
