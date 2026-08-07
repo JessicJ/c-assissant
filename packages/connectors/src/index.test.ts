@@ -1,7 +1,51 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { AmapConnector, createAmapDrivingHandoff, createAmapNavigationHandoff, createAmapPlaceHandoff, QWeatherConnector, TelegramConnector } from "./index.js";
+import { AmapConnector, createAmapDrivingHandoff, createAmapNavigationHandoff, createAmapPlaceHandoff, OfficialSourceConnector, QWeatherConnector, TelegramConnector } from "./index.js";
+
+const officialSources = [{
+  id: "immigration",
+  authority: "National Immigration Administration",
+  title: "Immigration information",
+  url: "https://en.nia.gov.cn/",
+  allowedDomains: ["en.nia.gov.cn"],
+  topics: ["immigration", "arrival"],
+  language: "en" as const
+}];
+
+test("Official source Connector fetches a bounded snapshot only from an approved official domain", async () => {
+  let requested = "";
+  const connector = new OfficialSourceConnector({
+    sources: officialSources,
+    fetcher: async (input) => {
+      requested = String(input);
+      return new Response("<html><head><title>Guidelines for Foreigners</title></head><body><main>Official arrival guidance for visitors.</main></body></html>", { headers: { "content-type": "text/html" } });
+    }
+  });
+
+  const result = await connector.fetchSnapshot({ sourceId: "immigration" });
+  assert.equal(result.status, "available");
+  assert.equal(result.data?.titleOriginal, "Guidelines for Foreigners");
+  assert.match(result.data?.excerpt ?? "", /Official arrival guidance/);
+  assert.match(result.data?.contentHash ?? "", /^[a-f0-9]{64}$/);
+  assert.equal(requested, "https://en.nia.gov.cn/");
+});
+
+test("Official source Connector rejects unapproved URLs without fetching them", async () => {
+  let calls = 0;
+  const connector = new OfficialSourceConnector({
+    sources: officialSources,
+    fetcher: async () => {
+      calls += 1;
+      return new Response();
+    }
+  });
+
+  const result = await connector.fetchSnapshot({ sourceId: "immigration", url: "https://example.com/visa" });
+  assert.equal(result.status, "unsupported");
+  assert.equal(result.failure?.code, "unapproved_source_url");
+  assert.equal(calls, 0);
+});
 
 test("Amap place search normalizes official response fields without exposing the key", async () => {
   const connector = new AmapConnector({

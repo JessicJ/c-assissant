@@ -18,6 +18,6 @@
   "providers": {
     "location_base": "amap",
     "accommodation_handoff": "unconfirmed",
-    "official_sources": "registry_pending"
+    "official_sources": "registry_ready_snapshot_pending"
   }
 }
