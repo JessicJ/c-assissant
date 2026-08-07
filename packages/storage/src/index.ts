@@ -240,6 +240,30 @@ export class SqliteWorkspaceStore {
     return this.getTelegramPairingStatus();
   }
 
+  /** Removes only the bound chat identity; Plans, Profile, update cursor, and local Bot token stay untouched. */
+  unpairTelegram(): TelegramPairingStatus {
+    const existing = this.getTelegramPairingStatus();
+    if (existing.state !== "paired") return existing;
+    const unpairedAt = new Date().toISOString();
+    this.database.exec("BEGIN");
+    try {
+      this.database.prepare("DELETE FROM telegram_binding WHERE id = 1").run();
+      this.database.prepare("UPDATE telegram_pairing_requests SET consumed_at = ? WHERE consumed_at IS NULL").run(unpairedAt);
+      this.addInbox({
+        id: `telegram-unpaired-${unpairedAt}`,
+        tone: "notice",
+        title: "Telegram disconnected",
+        body: "This Telegram chat is no longer bound to this instance. Your Plans, Profile, local Bot token, and existing records were not deleted.",
+        timestamp: "Just now"
+      });
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getTelegramPairingStatus();
+  }
+
   getTelegramUpdateOffset(): number | undefined {
     const row = this.database.prepare("SELECT next_update_id FROM telegram_update_cursor WHERE id = 1").get() as { next_update_id: number } | undefined;
     return row?.next_update_id;

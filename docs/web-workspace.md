@@ -52,6 +52,8 @@ V1 uses Telegram pairing:
 
 Telegram identity alone must not be the only recovery path. Sessions should be revocable from Settings.
 
+The current Settings surface lets the user explicitly disconnect the bound Telegram chat. This removes only the local chat binding after a confirmation prompt; it retains Plans, Profile, the local Bot token, and the Telegram update cursor. The user may pair a Telegram account again later.
+
 ## Setup flow
 
 First use may guide the user through:

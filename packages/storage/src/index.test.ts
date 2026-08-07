@@ -213,6 +213,22 @@ test("SQLite stores one explicit Telegram pairing and records it in the Inbox", 
   store.close();
 });
 
+test("SQLite disconnects only the Telegram binding and preserves the workspace", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const planId = store.getWorkspace().activePlan.id;
+  const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
+  store.createTelegramPairingRequest({ code: "pairing_code_456", expiresAt });
+  store.claimTelegramPairing({ code: "pairing_code_456", chatId: "1002", userId: "1002", firstName: "Avery" });
+
+  const disconnected = store.unpairTelegram();
+
+  assert.equal(disconnected.state, "not_paired");
+  assert.equal(store.getWorkspace().activePlan.id, planId);
+  assert.equal(store.getWorkspace().inbox[0]?.title, "Telegram disconnected");
+  assert.match(store.getWorkspace().inbox[0]?.body ?? "", /were not deleted/i);
+  store.close();
+});
+
 test("SQLite keeps the Telegram update cursor across reads", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   assert.equal(store.getTelegramUpdateOffset(), undefined);
