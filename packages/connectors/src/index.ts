@@ -719,15 +719,23 @@ export interface TelegramMessageReceipt {
   messageId: number;
 }
 
+export type TelegramReplyMarkup =
+  | { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> }
+  | { keyboard: Array<Array<{ text: string; request_location: true }>>; resize_keyboard: true; one_time_keyboard: true };
+
 /** A deliberately small, normalized subset of a Telegram update. */
 export interface TelegramIncomingUpdate {
   updateId: number;
+  kind: "message" | "callback";
   chatId: string;
   chatType: string;
   userId: string;
   firstName: string;
   username?: string;
   text?: string;
+  callbackId?: string;
+  callbackData?: string;
+  location?: { latitude: number; longitude: number };
 }
 
 export interface TelegramUpdateBatch {
@@ -764,8 +772,15 @@ interface TelegramUpdatePayload {
   update_id?: number;
   message?: {
     text?: string;
+    location?: { latitude?: number; longitude?: number };
     chat?: { id?: number | string; type?: string };
     from?: { id?: number | string; first_name?: string; username?: string };
+  };
+  callback_query?: {
+    id?: string;
+    data?: string;
+    from?: { id?: number | string; first_name?: string; username?: string };
+    message?: { chat?: { id?: number | string; type?: string } };
   };
 }
 
@@ -816,14 +831,14 @@ export class TelegramConnector {
     };
   }
 
-  async sendMessage(input: { chatId: string; text: string }): Promise<ConnectorResult<TelegramMessageReceipt>> {
+  async sendMessage(input: { chatId: string; text: string; replyMarkup?: TelegramReplyMarkup }): Promise<ConnectorResult<TelegramMessageReceipt>> {
     const chatId = input.chatId.trim();
     const text = input.text.trim();
     if (!chatId) return this.failure("unsupported", "A Telegram message needs a paired chat.", "missing_chat", false);
     if (!text || text.length > 4096) return this.failure("unsupported", "A Telegram message must contain 1 to 4096 characters.", "invalid_message", false);
     if (!this.botToken) return this.failure("not_configured", "Telegram is not configured on this instance.", "not_configured", false);
 
-    const response = await this.request<TelegramMessagePayload>("sendMessage", { chat_id: chatId, text });
+    const response = await this.request<TelegramMessagePayload>("sendMessage", { chat_id: chatId, text, ...(input.replyMarkup ? { reply_markup: input.replyMarkup } : {}) });
     if (!response.ok) return response.failure;
     const message = response.payload.result;
     if (!message || typeof message.message_id !== "number") {
@@ -837,29 +852,48 @@ export class TelegramConnector {
     };
   }
 
+  async answerCallbackQuery(input: { callbackId: string; text?: string }): Promise<ConnectorResult<true>> {
+    const callbackId = input.callbackId.trim();
+    if (!callbackId) return this.failure("unsupported", "Telegram callback acknowledgement needs an id.", "missing_callback", false);
+    if (!this.botToken) return this.failure("not_configured", "Telegram is not configured on this instance.", "not_configured", false);
+    const response = await this.request<true>("answerCallbackQuery", { callback_query_id: callbackId, ...(input.text?.trim() ? { text: input.text.trim().slice(0, 200) } : {}) });
+    if (!response.ok) return response.failure;
+    return { status: "available", provider: "telegram", observedAt: new Date().toISOString(), data: true };
+  }
+
   async getUpdates(input: { offset?: number; timeoutSeconds?: number } = {}): Promise<ConnectorResult<TelegramUpdateBatch>> {
     if (!this.botToken) return this.failure("not_configured", "Telegram is not configured on this instance.", "not_configured", false);
     if (input.offset !== undefined && (!Number.isInteger(input.offset) || input.offset < 0)) return this.failure("unsupported", "Telegram update offset must be a non-negative whole number.", "invalid_offset", false);
     const timeoutSeconds = input.timeoutSeconds ?? 0;
     if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 0 || timeoutSeconds > 8) return this.failure("unsupported", "Telegram update polling timeout must be between 0 and 8 seconds.", "invalid_timeout", false);
-    const response = await this.request<TelegramUpdatePayload[]>("getUpdates", { timeout: timeoutSeconds, ...(input.offset === undefined ? {} : { offset: input.offset }), allowed_updates: ["message"] });
+    const response = await this.request<TelegramUpdatePayload[]>("getUpdates", { timeout: timeoutSeconds, ...(input.offset === undefined ? {} : { offset: input.offset }), allowed_updates: ["message", "callback_query"] });
     if (!response.ok) return response.failure;
     const rawUpdates = response.payload.result ?? [];
     const updates = rawUpdates.flatMap((update): TelegramIncomingUpdate[] => {
       const updateId = update.update_id;
       const message = update.message;
+      const callback = update.callback_query;
+      if (callback) {
+        const chatId = callback.message?.chat?.id;
+        const chatType = callback.message?.chat?.type?.trim();
+        const from = callback.from;
+        if (typeof updateId !== "number" || !Number.isInteger(updateId) || !callback.id?.trim() || !chatType || chatId === undefined || from?.id === undefined || !from.first_name?.trim()) return [];
+        return [{ updateId, kind: "callback", chatId: String(chatId), chatType, userId: String(from.id), firstName: from.first_name.trim(), callbackId: callback.id.trim(), ...(from.username?.trim() ? { username: from.username.trim() } : {}), ...(callback.data?.trim() ? { callbackData: callback.data.trim() } : {}) }];
+      }
       const chatId = message?.chat?.id;
       const from = message?.from;
       const chatType = message?.chat?.type?.trim();
       if (typeof updateId !== "number" || !Number.isInteger(updateId) || !chatType || chatId === undefined || from?.id === undefined || !from.first_name?.trim()) return [];
       return [{
         updateId,
+        kind: "message",
         chatId: String(chatId),
         chatType,
         userId: String(from.id),
         firstName: from.first_name.trim(),
         ...(from.username?.trim() ? { username: from.username.trim() } : {}),
-        ...(message?.text?.trim() ? { text: message.text.trim() } : {})
+        ...(message?.text?.trim() ? { text: message.text.trim() } : {}),
+        ...(typeof message?.location?.latitude === "number" && typeof message.location.longitude === "number" ? { location: { latitude: message.location.latitude, longitude: message.location.longitude } } : {})
       }];
     });
     const updateIds = rawUpdates.flatMap((update) => typeof update.update_id === "number" && Number.isInteger(update.update_id) ? [update.update_id] : []);
@@ -867,7 +901,7 @@ export class TelegramConnector {
     return { status: "available", provider: "telegram", observedAt: new Date().toISOString(), data: { updates, ...(latestUpdateId === undefined ? {} : { nextOffset: latestUpdateId + 1 }) } };
   }
 
-  private async request<T>(method: "getMe" | "sendMessage" | "getUpdates", body?: Record<string, unknown>): Promise<{ ok: true; payload: TelegramApiResponse<T> } | { ok: false; failure: ConnectorResult<never> }> {
+  private async request<T>(method: "getMe" | "sendMessage" | "getUpdates" | "answerCallbackQuery", body?: Record<string, unknown>): Promise<{ ok: true; payload: TelegramApiResponse<T> } | { ok: false; failure: ConnectorResult<never> }> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
     try {
