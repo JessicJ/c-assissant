@@ -8,6 +8,7 @@ import { CodexRuntimeAdapter, RuntimeAdapterError } from "@c-assistant/agent-ada
 import { AmapConnector, QWeatherConnector, TelegramConnector } from "@c-assistant/connectors";
 import type { CreatePlanInput, PlanAccommodationInput, PlanArrivalInput, PlanTransportPreferenceInput, PlanTravelContextInput, ProfileUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
+import { parseTelegramCommand } from "./telegram-commands.js";
 
 const server = Fastify({ logger: true });
 const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -307,21 +308,20 @@ async function pollTelegram(): Promise<void> {
 }
 
 function telegramCommandResponse(text: string | undefined): string | undefined {
-  const normalized = text?.trim();
-  if (!normalized) return undefined;
-  if (/^\/help(?:@[-_A-Za-z0-9]+)?$/i.test(normalized)) return "C-assistant is connected. Available commands:\n/plan — show the current Plan\n/new <what you need to do> — create a draft Plan for review\n/help — show this help\n\nReminders, location requests, bookings, and payments are not enabled.";
-  if (/^\/plan(?:@[-_A-Za-z0-9]+)?$/i.test(normalized)) {
+  const command = parseTelegramCommand(text);
+  if (command.type === "empty") return undefined;
+  if (command.type === "help") return "C-assistant is connected. Send a normal message to create a draft Plan, or use:\n/plan — show the current Plan\n/new <what you need to do> — create a draft Plan\n/help — show this help\n\nReminders, location requests, bookings, and payments are not enabled.";
+  if (command.type === "plan") {
     const plan = store.getWorkspace().activePlan;
     return `Current Plan\n${plan.title}\n${plan.location} · ${plan.dates}\nStatus: ${plan.status}\nNext: ${plan.nextAction}\n\nUse the Web workspace to review or confirm the complete Plan.`;
   }
-  const newPlan = normalized.match(/^\/new(?:@[-_A-Za-z0-9]+)?\s+(.+)$/is)?.[1]?.trim();
-  if (newPlan) {
-    if (newPlan.length > 1_500) return "Keep a new Plan request under 1,500 characters, then send /new again.";
-    const workspace = store.createPlan({ request: newPlan });
+  if (command.type === "create_plan") {
+    if (command.request.length > 1_500) return "Keep a new Plan request under 1,500 characters, then send it again.";
+    const workspace = store.createPlan({ request: command.request });
     return `A new draft Plan is ready for review:\n${workspace.activePlan.title}\n${workspace.activePlan.location} · ${workspace.activePlan.dates}\n\nReview and confirm the complete Plan in the Web workspace before any future automation.`;
   }
-  if (/^\/start(?:@[-_A-Za-z0-9]+)?(?:\s|$)/i.test(normalized)) return "This Telegram account is already connected to C-assistant. Send /help to see available commands.";
-  return "I only handle explicit commands in this first version. Send /help to see what is available.";
+  if (command.type === "start") return "This Telegram account is already connected to C-assistant. Send /help to see available commands.";
+  return "That command is not available yet. Send /help to see what C-assistant can do.";
 }
 
 const port = Number(process.env.C_ASSISTANT_PORT ?? 8787);
