@@ -10,6 +10,7 @@ Current endpoints:
 - `PUT /api/plans/:planId/accommodation`
 - `PUT /api/plans/:planId/transport-preference`
 - `PUT /api/plans/:planId/travel-context`
+- `PUT /api/plans/:planId/arrival`
 - `POST /api/plans`
 - `POST /api/plans/generate`
 - `PUT /api/profile`
@@ -27,4 +28,4 @@ Current endpoints:
 - `GET /api/connectors/telegram`
 - `POST /api/connectors/telegram/verify`
 
-Profile and Plan state persist locally. A selected Amap accommodation can be saved as a Plan-scoped candidate and, after the user explicitly confirms a completed external booking, marked as confirmed; each change increments the Plan version. The Plan also stores an optional transport preference and optional party/luggage context, defaulting to a future context-based choice. `POST /api/plans/generate` uses the locally logged-in Codex CLI only after an explicit user request and returns a schema-validated draft. The weather route uses Amap geocoding followed by QWeather's current and three-day facts; it does not create a reminder or change a Plan. Nearby restaurant and accommodation discovery return Amap POI and distance facts around a user-selected Plan location; they do not rank, order, reserve, or pay. The Telegram verification route only calls the Bot API after the user explicitly presses Verify in the Web workspace; it does not pair chats or send messages. Scheduling, Telegram pairing, official sources, Claude Code, and external action handoffs beyond Amap routing remain unimplemented.
+Profile and Plan state persist locally. A selected Amap accommodation can be saved as a Plan-scoped candidate and, after the user explicitly confirms a completed external booking, marked as confirmed; each change increments the Plan version. The Plan also stores an optional local expected-arrival time and time zone, transport preference, and party/luggage context for later context-based decisions. Saving an arrival time does not schedule or send a reminder. `POST /api/plans/generate` uses the locally logged-in Codex CLI only after an explicit user request and returns a schema-validated draft. The weather route uses Amap geocoding followed by QWeather's current and three-day facts; it does not create a reminder or change a Plan. Nearby restaurant and accommodation discovery return Amap POI and distance facts around a user-selected Plan location; they do not rank, order, reserve, or pay. The Telegram verification route only calls the Bot API after the user explicitly presses Verify in the Web workspace; it does not pair chats or send messages. Scheduling, Telegram pairing, official sources, Claude Code, and external action handoffs beyond Amap routing remain unimplemented.
