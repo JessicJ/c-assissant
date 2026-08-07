@@ -26,3 +26,12 @@ test("arrival reminder copy never claims that an external action started", () =>
   const message = formatArrivalReminder(createPlanFromRequest({ request: "I will arrive in Shanghai." }));
   assert.match(message, /No ride, booking, payment, or location request has been started/i);
 });
+
+test("arrival reminder distinguishes a ready task from a completed task", () => {
+  const plan = createPlanFromRequest({ request: "I will arrive in Shanghai." });
+  const task = plan.stages[2]?.tasks[0];
+  assert.ok(task);
+  const message = formatArrivalReminder(plan, { ...task, status: "ready" });
+  assert.match(message, /Current step is ready/i);
+  assert.match(message, /not marked complete/i);
+});

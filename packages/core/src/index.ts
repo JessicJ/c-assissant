@@ -4,6 +4,7 @@ export { recommendPlanTransport, type TransportMode, type TransportRecommendatio
 
 export type PlanStatus = "draft" | "active" | "completed" | "cancelled";
 export type TaskStatus = "scheduled" | "ready" | "running" | "waiting_user" | "blocked" | "completed" | "skipped" | "failed" | "cancelled";
+export type TaskActivationTrigger = "arrival";
 export type ProfileGender = "not_specified" | "woman" | "man" | "nonbinary" | "prefer_not_to_say";
 export type ImmigrationStatus = "unknown" | "short_term_visitor" | "tourist_visa" | "student_visa" | "work_visa" | "residence_permit" | "other";
 export type TransportPreference = "plan_recommended" | "taxi" | "public_transit" | "walking";
@@ -15,6 +16,8 @@ export interface Task {
   owner: "assistant" | "user" | "external";
   status: TaskStatus;
   dueLabel: string;
+  /** An explicit event marker; Core must never infer this from a task title. */
+  activationTrigger?: TaskActivationTrigger;
 }
 
 export interface Stage {
@@ -166,10 +169,11 @@ export interface GeneratedPlanDraft {
   stages: Array<{
     title: string;
     description: string;
-    tasks: Array<{
-      title: string;
-      owner: Task["owner"];
-      dueLabel: string;
+      tasks: Array<{
+        title: string;
+        owner: Task["owner"];
+        dueLabel: string;
+        activationTrigger?: TaskActivationTrigger;
     }>;
   }>;
 }
@@ -292,7 +296,8 @@ export function createPlanFromRequest({ request }: CreatePlanInput): Plan {
             title: "Open the arrival route in Amap",
             owner: "external",
             status: "scheduled",
-            dueLabel: "At expected arrival time"
+            dueLabel: "At expected arrival time",
+            activationTrigger: "arrival"
           }
         ]
       }
@@ -323,7 +328,8 @@ export function createPlanFromDraft(draft: GeneratedPlanDraft): Plan {
         title: task.title,
         owner: task.owner,
         status: task.owner === "user" ? "waiting_user" : "scheduled",
-        dueLabel: task.dueLabel
+        dueLabel: task.dueLabel,
+        ...(task.activationTrigger ? { activationTrigger: task.activationTrigger } : {})
       }))
     })),
     sources: [],

@@ -398,7 +398,9 @@ async function runArrivalReminder(): Promise<void> {
   try {
     const claimed = store.claimTelegramReminder({ planId: plan.id, reminderKey: "arrival-check-in", dueAt: dueAt.toISOString() });
     if (!claimed) return;
-    const receipt = await telegram.sendMessage({ chatId: pairing.binding.chatId, text: formatArrivalReminder(plan), replyMarkup: { inline_keyboard: [[{ text: "I haven't arrived", callback_data: "arrival_not_here" }]] } });
+    const arrivalTask = store.activateArrivalTask(plan.id);
+    const updatedPlan = store.getWorkspace().activePlan;
+    const receipt = await telegram.sendMessage({ chatId: pairing.binding.chatId, text: formatArrivalReminder(updatedPlan, arrivalTask), replyMarkup: { inline_keyboard: [[{ text: "I haven't arrived", callback_data: "arrival_not_here" }]] } });
     if (receipt.status !== "available") server.log.warn({ status: receipt.status, code: receipt.failure?.code }, "Telegram arrival reminder could not be delivered");
     else store.recordTelegramArrivalCheckin({ planId: plan.id, checkInSentAt: new Date().toISOString() });
   } catch (error) {

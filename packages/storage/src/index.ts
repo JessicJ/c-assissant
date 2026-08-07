@@ -63,6 +63,7 @@ interface TaskRow {
   owner: Task["owner"];
   status: Task["status"];
   due_label: string;
+  activation_trigger: "arrival" | null;
 }
 
 interface InboxRow {
@@ -253,6 +254,34 @@ export class SqliteWorkspaceStore {
   markTelegramArrivalLocationReceived(planId: string, receivedAt: string): void {
     if (!planId.trim() || !Number.isFinite(Date.parse(receivedAt))) throw new Error("Telegram arrival location receipt needs a Plan and valid time.");
     this.database.prepare("UPDATE telegram_arrival_checkins SET location_received_at = ? WHERE plan_id = ?").run(receivedAt, planId.trim());
+  }
+
+  /** Marks only an explicitly arrival-triggered task as ready; completion stays user-owned. */
+  activateArrivalTask(planId: string): Task | undefined {
+    const workspace = this.getWorkspace();
+    if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
+    const selected = this.database.prepare(`SELECT t.id, t.title, t.owner, t.status, t.due_label, t.activation_trigger
+      FROM tasks t JOIN stages s ON s.id = t.stage_id
+      WHERE s.plan_id = ? AND t.activation_trigger = 'arrival' AND t.status = 'scheduled'
+      ORDER BY s.sort_order, t.sort_order LIMIT 1`).get(planId) as TaskRow | undefined;
+    if (!selected) return undefined;
+    this.database.exec("BEGIN");
+    try {
+      this.database.prepare("UPDATE tasks SET status = 'ready' WHERE id = ?").run(selected.id);
+      this.database.prepare("UPDATE plans SET version = version + 1, next_action = ? WHERE id = ?").run(`Current arrival step: ${selected.title}`, planId);
+      this.addInbox({
+        id: `arrival-task-ready-${selected.id}`,
+        tone: "ready",
+        title: "Arrival task is ready",
+        body: `${selected.title} is ready to begin. It has not been completed automatically.`,
+        timestamp: "Just now"
+      });
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return { id: selected.id, title: selected.title, owner: selected.owner, status: "ready", dueLabel: selected.due_label, activationTrigger: "arrival" };
   }
 
   createPlan(input: CreatePlanInput): WorkspaceSnapshot {
@@ -460,6 +489,7 @@ export class SqliteWorkspaceStore {
         owner TEXT NOT NULL,
         status TEXT NOT NULL,
         due_label TEXT NOT NULL,
+        activation_trigger TEXT,
         sort_order INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS inbox_items (
@@ -517,6 +547,9 @@ export class SqliteWorkspaceStore {
     if (!planColumns.some((column) => column.name === "configuration_json")) {
       this.database.exec("ALTER TABLE plans ADD COLUMN configuration_json TEXT NOT NULL DEFAULT '{\"accommodation\":{\"status\":\"not_set\"}}'");
     }
+    const taskColumns = this.database.prepare("PRAGMA table_info(tasks)").all() as unknown as Array<{ name: string }>;
+    if (!taskColumns.some((column) => column.name === "activation_trigger")) this.database.exec("ALTER TABLE tasks ADD COLUMN activation_trigger TEXT");
+    this.database.exec("CREATE INDEX IF NOT EXISTS idx_tasks_arrival_trigger ON tasks(activation_trigger, status) WHERE activation_trigger = 'arrival' AND status = 'scheduled'; PRAGMA optimize;");
     const profileColumns = this.database.prepare("PRAGMA table_info(profiles)").all() as unknown as Array<{ name: string }>;
     if (!profileColumns.some((column) => column.name === "gender")) this.database.exec("ALTER TABLE profiles ADD COLUMN gender TEXT NOT NULL DEFAULT 'not_specified'");
     if (!profileColumns.some((column) => column.name === "immigration_status")) this.database.exec("ALTER TABLE profiles ADD COLUMN immigration_status TEXT NOT NULL DEFAULT 'unknown'");
@@ -568,13 +601,14 @@ export class SqliteWorkspaceStore {
           stageIndex
         );
         stage.tasks.forEach((task, taskIndex) => {
-          this.database.prepare("INSERT INTO tasks (id, stage_id, title, owner, status, due_label, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+          this.database.prepare("INSERT INTO tasks (id, stage_id, title, owner, status, due_label, activation_trigger, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(
             task.id,
             stage.id,
             task.title,
             task.owner,
             task.status,
             task.dueLabel,
+            task.activationTrigger ?? null,
             taskIndex
           );
         });
@@ -596,12 +630,13 @@ export class SqliteWorkspaceStore {
       id: stage.id,
       title: stage.title,
       description: stage.description,
-      tasks: (this.database.prepare("SELECT id, title, owner, status, due_label FROM tasks WHERE stage_id = ? ORDER BY sort_order").all(stage.id) as unknown as TaskRow[]).map((task) => ({
+      tasks: (this.database.prepare("SELECT id, title, owner, status, due_label, activation_trigger FROM tasks WHERE stage_id = ? ORDER BY sort_order").all(stage.id) as unknown as TaskRow[]).map((task) => ({
         id: task.id,
         title: task.title,
         owner: task.owner,
         status: task.status,
-        dueLabel: task.due_label
+        dueLabel: task.due_label,
+        ...(task.activation_trigger === "arrival" ? { activationTrigger: "arrival" as const } : {})
       }))
     }));
 
