@@ -47,6 +47,7 @@
 - 实现 Claude Code Runtime Adapter：用 `claude auth status` 进行无破坏登录检查；每次草案生成都在隔离临时目录中以 Print JSON 模式运行，禁用内建工具和 MCP，再按与 Codex 相同的 Plan 契约验证结果。它也会剥离 Connector 和运行时密钥，且不会读取或保存 Claude Code 登录凭据。
 - 为 Claude Code Adapter 增加模拟 CLI 集成测试：覆盖安装/登录检查、无工具 Print JSON 命令、临时目录清理、输出契约验证和 Connector 密钥剥离；测试不会实际调用 Claude 账号。
 - 实现实例级运行底座选择：Web Settings 可检查并选择 Codex 或 Claude Code，选择只保存类型，不保存登录凭据；Web 与 Telegram 的后续 Plan 草案都使用该选择，故障时不会静默切换。生成后的完整草案会写入 SQLite，仍需用户确认才会激活。
+- 实现最小 Plan 生成 Run 审计：Web 或 Telegram 每次请求已选运行底座时，都会保存运行底座、入口、开始/完成时间、成功/失败/模板降级状态及成功后的 Plan ID；不保存用户请求、模型原文、错误原文、账号状态或任何凭据。Settings 提供用户可读的近期记录。
 - 完成一次真实 Codex 端到端验证：结构化草案已通过 Schema、保存为 4 个 Stage 和 16 个 Task；测试数据库随后已删除。
 - 实现 Telegram Connector 的本地配置状态与显式 Bot 身份验证；Token 仅停留在本地 Server 进程，不会传给 Web 或 Agent。
 - 实现高德路线行动交接：选择高德地点后可检查驾车路线，并生成由用户自行打开的高德路线链接；不调用叫车、预订或支付。
@@ -81,7 +82,7 @@
 - 已实现第一条 Plan 事件状态转换：任务只有显式 `arrival` 触发标记时，预计抵达事件才会把它从 `scheduled` 转为 `ready`，记录本地收件箱并更新当前下一步；不会推断或自动完成任何任务。
 - 已实现到达任务的显式完成闭环：只有绑定 Telegram 用户点击“我已完成此步骤”时，当前 Plan 内的 `ready` 任务才会改为 `completed`，并记录为用户确认；不会把打开高德或其他第三方应用当作完成回执。
 - Telegram 的 `/plan` 已提供当前 Plan 的移动端摘要：已知信息、需要纠正的假设、阶段、任务状态和下一步都会显示；超过 Telegram 消息安全长度时只截短预览，Web 工作台仍保留完整 Plan。
-- Claude Code Adapter 已实现并通过契约测试、接入用户可选的运行底座，但尚未在真实已登录账号上做端到端验证；Codex Adapter 也没有 Run 审计、取消和优先级队列。
+- Claude Code Adapter 已实现并通过契约测试、接入用户可选的运行底座，但尚未在真实已登录账号上做端到端验证；Plan 生成已具备最小 Run 审计，取消、优先级队列及 Task/Reminder/Event/Skill 级审计仍未实现。
 - 尚未实现本地 MCP Tool Gateway。
 - 尚未实现天气兜底、餐饮与住宿的第三方应用行动交接、地图深链接真机验证和限额/配额可视化。
 - 尚未支持住宿地点偏好和候选比较理由；当前只支持保存一个住宿候选或一个直接录入的住宿，再由用户显式确认。

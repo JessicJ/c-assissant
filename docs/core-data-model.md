@@ -165,6 +165,8 @@ A Run is one actual system execution. It records:
 
 The Web shows user-friendly results and source evidence, not raw Agent logs. Technical details remain available through local diagnostics.
 
+Current implementation starts with Plan generation Runs. Each record stores only the runtime kind, Web or Telegram trigger, start/finish time, outcome (`succeeded`, `failed`, or `fallback`), an Agent-generated Plan id on success, and a short failure classification when needed. User requests, raw model output, error text, account state, and credentials are intentionally not retained in the Run record. Broader Task, Reminder, Event, Skill, Connector, and evidence linkage remains future work.
+
 ## Confirmation
 
 A Confirmation records the exact object, version, scope, channel, and time approved by the user. It may be revoked.

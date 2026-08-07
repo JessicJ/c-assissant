@@ -98,4 +98,4 @@ Runtime upgrades are never automatic in V1. The Web workspace tells the user whe
 
 ## Run audit
 
-Each Run records the runtime kind and version, purpose, Skill version, input hash, allowed tools, timing, status, output hash, and sanitized failure. Prompts and tool results should be retained only according to the project's privacy policy and must exclude secrets.
+The current Plan-generation Run record stores the runtime kind, trigger surface, start/finish time, outcome, resulting Plan id when applicable, and a sanitized failure classification. It intentionally stores no prompt, tool result, raw model output, account state, or credential. Future broader Runs may add purpose, Skill version, minimized input/output hashes, and allowed-tool metadata only after a clear retention policy exists.

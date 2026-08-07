@@ -3,7 +3,7 @@ import "./manual-accommodation.css";
 import type { RuntimeCheck } from "@c-assistant/agent-adapters";
 import { createAmapDrivingHandoff, createAmapPlaceHandoff } from "@c-assistant/connectors";
 import type { AmapNearbyPlace, AmapPlace, AmapRoute, ConnectorResult, OfficialSourceDefinition, QWeatherWeatherSnapshot, TelegramBotIdentity, TelegramConfiguration } from "@c-assistant/connectors";
-import type { AgentRuntimeKind, PolicyPreparationAssessment, SourceSnapshotWriteResult, WorkspaceSnapshot } from "@c-assistant/core";
+import type { AgentRun, AgentRuntimeKind, PolicyPreparationAssessment, SourceSnapshotWriteResult, WorkspaceSnapshot } from "@c-assistant/core";
 import { recommendPlanTransport, type TransportWeatherFact } from "@c-assistant/core/transport";
 
 type View = "Today" | "Plans" | "Inbox" | "Profile" | "Settings";
@@ -57,6 +57,7 @@ function App() {
   const [planWeather, setPlanWeather] = useState<{ planId: string; result: ConnectorResult<QWeatherWeatherSnapshot> } | null>(null);
   const [checkingPlanWeather, setCheckingPlanWeather] = useState(false);
   const [runtimeChecks, setRuntimeChecks] = useState<RuntimeCheck[]>([]);
+  const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [savingRuntime, setSavingRuntime] = useState(false);
   const [officialSources, setOfficialSources] = useState<OfficialSourceDefinition[]>([]);
   const [refreshingSourceId, setRefreshingSourceId] = useState<string | null>(null);
@@ -72,6 +73,7 @@ function App() {
   useEffect(() => {
     void loadWorkspace();
     void loadRuntimeChecks();
+    void loadAgentRuns();
     void loadOfficialSources();
     void loadPolicyPreparation();
     void loadTelegramStatus();
@@ -97,6 +99,15 @@ function App() {
       if (response.ok) setRuntimeChecks((await response.json()) as RuntimeCheck[]);
     } catch {
       setRuntimeChecks([]);
+    }
+  }
+
+  async function loadAgentRuns() {
+    try {
+      const response = await fetch("/api/runs");
+      if (response.ok) setAgentRuns((await response.json()) as AgentRun[]);
+    } catch {
+      setAgentRuns([]);
     }
   }
 
@@ -209,6 +220,7 @@ function App() {
       setRequestText("");
       setView("Plans");
       await loadPolicyPreparation();
+      await loadAgentRuns();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The Plan could not be saved.");
     } finally {
@@ -230,6 +242,7 @@ function App() {
       setRequestText("");
       setView("Plans");
       await loadPolicyPreparation();
+      await loadAgentRuns();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The selected runtime could not generate a Plan.");
     } finally {
@@ -641,7 +654,7 @@ function App() {
         {view === "Plans" ? <PlanView plan={plan} policyPreparation={policyPreparation} onActivate={activatePlan} confirming={confirming} amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={searchAmap} routeOrigin={routeOrigin} routeDestination={routeDestination} routeMode={routeMode} routeResult={routeResult} routing={routing} routeComparisons={routeComparisons} comparingRoutes={comparingRoutes} planWeatherResult={planWeather?.planId === plan.id ? planWeather.result : null} checkingPlanWeather={checkingPlanWeather} foodCentre={foodCentre} foodResult={foodResult} findingFood={findingFood} stayCentre={stayCentre} stayResult={stayResult} findingStay={findingStay} savingAccommodation={savingAccommodation} confirmingAccommodation={confirmingAccommodation} savingTransportPreference={savingTransportPreference} savingTravelContext={savingTravelContext} savingArrival={savingArrival} onChooseRouteOrigin={(place) => { setRouteOrigin(place); setRouteResult(null); setRouteComparisons(null); }} onChooseRouteDestination={(place) => { setRouteDestination(place); setRouteResult(null); setRouteComparisons(null); }} onRouteModeChange={(mode) => { setRouteMode(mode); setRouteResult(null); }} onFindNearbyFood={findNearbyFood} onFindNearbyAccommodation={findNearbyAccommodation} onSaveAccommodationCandidate={saveAccommodationCandidate} onSaveManualAccommodation={saveManualAccommodation} onConfirmAccommodation={confirmAccommodationBooking} onSaveTransportPreference={saveTransportPreference} onSaveTravelContext={saveTravelContext} onSaveArrival={saveArrival} onPlanRoute={planAmapRoute} onCompareRoutes={compareAmapRoutes} onCheckPlanWeather={checkPlanWeather} /> : null}
         {view === "Inbox" ? <InboxView workspace={workspace} /> : null}
         {view === "Profile" ? <ProfileView workspace={workspace} onSave={saveProfile} /> : null}
-        {view === "Settings" ? <SettingsView workspace={workspace} runtimeChecks={runtimeChecks} savingRuntime={savingRuntime} onSaveRuntime={saveRuntime} officialSources={officialSources} refreshingSourceId={refreshingSourceId} linkingSourceSnapshotId={linkingSourceSnapshotId} onRefreshOfficialSource={refreshOfficialSource} onLinkSourceSnapshotToPlan={linkSourceSnapshotToPlan} telegramStatus={telegramStatus} telegramVerification={telegramVerification} verifyingTelegram={verifyingTelegram} telegramPairing={telegramPairing} pairingTelegram={pairingTelegram} onVerifyTelegram={verifyTelegram} onStartTelegramPairing={startTelegramPairing} onCompleteTelegramPairing={completeTelegramPairing} weatherLocation={weatherLocation} setWeatherLocation={setWeatherLocation} weatherResult={weatherResult} checkingWeather={checkingWeather} onCheckWeather={checkWeather} /> : null}
+        {view === "Settings" ? <SettingsView workspace={workspace} runtimeChecks={runtimeChecks} agentRuns={agentRuns} savingRuntime={savingRuntime} onSaveRuntime={saveRuntime} officialSources={officialSources} refreshingSourceId={refreshingSourceId} linkingSourceSnapshotId={linkingSourceSnapshotId} onRefreshOfficialSource={refreshOfficialSource} onLinkSourceSnapshotToPlan={linkSourceSnapshotToPlan} telegramStatus={telegramStatus} telegramVerification={telegramVerification} verifyingTelegram={verifyingTelegram} telegramPairing={telegramPairing} pairingTelegram={pairingTelegram} onVerifyTelegram={verifyTelegram} onStartTelegramPairing={startTelegramPairing} onCompleteTelegramPairing={completeTelegramPairing} weatherLocation={weatherLocation} setWeatherLocation={setWeatherLocation} weatherResult={weatherResult} checkingWeather={checkingWeather} onCheckWeather={checkWeather} /> : null}
       </section>
     </main>
   );
@@ -696,7 +709,7 @@ function ProfileView({ workspace, onSave }: { workspace: WorkspaceSnapshot; onSa
   return <section className="card profile-view"><p className="eyebrow">Long-term information</p><h2>Save only the basics you confirm</h2><form onSubmit={(event) => void submit(event)} className="profile-form"><label>Name<input value={profile.displayName} onChange={(event) => setProfile({ ...profile, displayName: event.target.value })} /></label><label>Preferred language<input value={profile.preferredLanguage} onChange={(event) => setProfile({ ...profile, preferredLanguage: event.target.value })} /></label><label>Nationality<input value={profile.nationality} onChange={(event) => setProfile({ ...profile, nationality: event.target.value })} /></label><label>Gender<select value={profile.gender} onChange={(event) => setProfile({ ...profile, gender: event.target.value as typeof profile.gender })}><option value="not_specified">Not specified</option><option value="woman">Woman</option><option value="man">Man</option><option value="nonbinary">Nonbinary</option><option value="prefer_not_to_say">Prefer not to say</option></select></label><label>China visa / residence status<select value={profile.immigrationStatus} onChange={(event) => setProfile({ ...profile, immigrationStatus: event.target.value as typeof profile.immigrationStatus })}><option value="unknown">Not sure yet</option><option value="short_term_visitor">Short-term visitor</option><option value="tourist_visa">Tourist visa</option><option value="student_visa">Student visa</option><option value="work_visa">Work visa</option><option value="residence_permit">Residence permit</option><option value="other">Other</option></select></label><p>These details help C-assistant later find the right policy route. Travel dates, companions, accommodation, and precise location remain inside a Plan, not this long-term Profile.</p><button className="primary-button" disabled={saving}>{saving ? "Saving…" : "Save confirmed Profile"}</button></form></section>;
 }
 
-function SettingsView({ workspace, runtimeChecks, savingRuntime, onSaveRuntime, officialSources, refreshingSourceId, linkingSourceSnapshotId, onRefreshOfficialSource, onLinkSourceSnapshotToPlan, telegramStatus, telegramVerification, verifyingTelegram, telegramPairing, pairingTelegram, onVerifyTelegram, onStartTelegramPairing, onCompleteTelegramPairing, weatherLocation, setWeatherLocation, weatherResult, checkingWeather, onCheckWeather }: { workspace: WorkspaceSnapshot; runtimeChecks: RuntimeCheck[]; savingRuntime: boolean; onSaveRuntime: (kind: AgentRuntimeKind) => Promise<void>; officialSources: OfficialSourceDefinition[]; refreshingSourceId: string | null; linkingSourceSnapshotId: string | null; onRefreshOfficialSource: (sourceId: string) => Promise<void>; onLinkSourceSnapshotToPlan: (snapshotId: string) => Promise<void>; telegramStatus: ConnectorResult<TelegramConfiguration> | null; telegramVerification: ConnectorResult<TelegramBotIdentity> | null; verifyingTelegram: boolean; telegramPairing: TelegramPairingView | null; pairingTelegram: boolean; onVerifyTelegram: () => Promise<void>; onStartTelegramPairing: () => Promise<void>; onCompleteTelegramPairing: () => Promise<void>; weatherLocation: string; setWeatherLocation: (value: string) => void; weatherResult: ConnectorResult<QWeatherWeatherSnapshot> | null; checkingWeather: boolean; onCheckWeather: () => Promise<void> }) {
+function SettingsView({ workspace, runtimeChecks, agentRuns, savingRuntime, onSaveRuntime, officialSources, refreshingSourceId, linkingSourceSnapshotId, onRefreshOfficialSource, onLinkSourceSnapshotToPlan, telegramStatus, telegramVerification, verifyingTelegram, telegramPairing, pairingTelegram, onVerifyTelegram, onStartTelegramPairing, onCompleteTelegramPairing, weatherLocation, setWeatherLocation, weatherResult, checkingWeather, onCheckWeather }: { workspace: WorkspaceSnapshot; runtimeChecks: RuntimeCheck[]; agentRuns: AgentRun[]; savingRuntime: boolean; onSaveRuntime: (kind: AgentRuntimeKind) => Promise<void>; officialSources: OfficialSourceDefinition[]; refreshingSourceId: string | null; linkingSourceSnapshotId: string | null; onRefreshOfficialSource: (sourceId: string) => Promise<void>; onLinkSourceSnapshotToPlan: (snapshotId: string) => Promise<void>; telegramStatus: ConnectorResult<TelegramConfiguration> | null; telegramVerification: ConnectorResult<TelegramBotIdentity> | null; verifyingTelegram: boolean; telegramPairing: TelegramPairingView | null; pairingTelegram: boolean; onVerifyTelegram: () => Promise<void>; onStartTelegramPairing: () => Promise<void>; onCompleteTelegramPairing: () => Promise<void>; weatherLocation: string; setWeatherLocation: (value: string) => void; weatherResult: ConnectorResult<QWeatherWeatherSnapshot> | null; checkingWeather: boolean; onCheckWeather: () => Promise<void> }) {
   const telegramConfigured = telegramStatus?.status === "available";
   const statusFor = (kind: AgentRuntimeKind) => runtimeChecks.find((runtime) => runtime.kind === kind);
   const runtimeLabel = (kind: AgentRuntimeKind) => kind === "claude-code" ? "Claude Code" : "Codex";
@@ -717,6 +730,7 @@ function SettingsView({ workspace, runtimeChecks, savingRuntime, onSaveRuntime, 
       </div>
       <p>Future Web and Telegram Plan drafts use this choice. If it is not ready, C-assistant explains the issue and does not silently switch runtimes.</p>
     </section>
+    <section className="card run-history-card"><p className="eyebrow">Plan generation history</p><h2>See what happened, without saving your private content</h2><p>Only the runtime, entry point, time, outcome, and generated Plan reference are retained. Your request, raw model output, and account credentials are never included in this history.</p>{agentRuns.length ? <div className="run-history-list">{agentRuns.map((run) => <article key={run.id}><strong>{run.runtimeKind === "claude-code" ? "Claude Code" : "Codex"} · {run.status.replaceAll("_", " ")}</strong><span>{run.trigger === "telegram" ? "Telegram" : "Web"} · started {run.startedAt}{run.failureCode ? ` · ${run.failureCode.replaceAll("_", " ")}` : ""}</span></article>)}</div> : <p className="connector-message">No Plan generation runs have been recorded yet.</p>}</section>
     <section className="card official-sources-card">
       <p className="eyebrow">Official source evidence</p>
       <h2>Refresh approved sources when you need current facts</h2>

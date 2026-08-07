@@ -9,6 +9,8 @@ export type TaskActivationTrigger = "arrival";
 export type ProfileGender = "not_specified" | "woman" | "man" | "nonbinary" | "prefer_not_to_say";
 export type ImmigrationStatus = "unknown" | "short_term_visitor" | "tourist_visa" | "student_visa" | "work_visa" | "residence_permit" | "other";
 export type AgentRuntimeKind = "codex" | "claude-code";
+export type RunStatus = "running" | "succeeded" | "failed" | "fallback";
+export type RunTrigger = "web" | "telegram";
 export type TransportPreference = "plan_recommended" | "taxi" | "public_transit" | "walking";
 export type LuggageLevel = "unknown" | "light" | "standard" | "heavy";
 
@@ -134,6 +136,20 @@ export interface Profile {
 /** A per-instance choice only; credentials remain in the selected CLI's own login state. */
 export interface RuntimeSelection {
   selectedKind: AgentRuntimeKind;
+}
+
+/** A privacy-preserving audit record for one user-requested Agent action. */
+export interface AgentRun {
+  id: string;
+  kind: "plan_generation";
+  runtimeKind: AgentRuntimeKind;
+  trigger: RunTrigger;
+  status: RunStatus;
+  startedAt: string;
+  finishedAt?: string;
+  outputPlanId?: string;
+  /** A short sanitized classification only; no prompt, model output, or secret. */
+  failureCode?: string;
 }
 
 /** A Telegram account bound to this single-user local instance. */

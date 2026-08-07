@@ -10,6 +10,7 @@ import {
   createDefaultPlanConfiguration,
   type CreatePlanInput,
   type AgentRuntimeKind,
+  type AgentRun,
   type GeneratedPlanDraft,
   type InboxItem,
   type ImmigrationStatus,
@@ -22,6 +23,8 @@ import {
   type ProfileGender,
   type ProfileUpdate,
   type RuntimeSelectionUpdate,
+  type RunStatus,
+  type RunTrigger,
   type SourceReference,
   type SourceSnapshot,
   type SourceSnapshotInput,
@@ -93,6 +96,18 @@ interface SourceSnapshotRow {
   retrieved_at: string;
   content_hash: string;
   excerpt: string;
+}
+
+interface AgentRunRow {
+  id: string;
+  kind: "plan_generation";
+  runtime_kind: AgentRuntimeKind;
+  trigger: RunTrigger;
+  status: RunStatus;
+  started_at: string;
+  finished_at: string | null;
+  output_plan_id: string | null;
+  failure_code: string | null;
 }
 
 interface TelegramBindingRow {
@@ -417,6 +432,46 @@ export class SqliteWorkspaceStore {
     return this.getWorkspace();
   }
 
+  startPlanGenerationRun(input: { runtimeKind: AgentRuntimeKind; trigger: RunTrigger }): AgentRun {
+    if (!isAgentRuntimeKind(input.runtimeKind)) throw new Error("Choose Codex or Claude Code for the recorded Plan run.");
+    if (!isRunTrigger(input.trigger)) throw new Error("Choose Web or Telegram as the Plan run trigger.");
+    const run: AgentRun = {
+      id: `run-${randomUUID()}`,
+      kind: "plan_generation",
+      runtimeKind: input.runtimeKind,
+      trigger: input.trigger,
+      status: "running",
+      startedAt: new Date().toISOString()
+    };
+    this.database.prepare(`INSERT INTO agent_runs (id, kind, runtime_kind, trigger, status, started_at, finished_at, output_plan_id, failure_code)
+      VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`).run(run.id, run.kind, run.runtimeKind, run.trigger, run.status, run.startedAt);
+    return run;
+  }
+
+  finishPlanGenerationRun(input: { runId: string; status: Exclude<RunStatus, "running">; outputPlanId?: string; failureCode?: string }): AgentRun {
+    const runId = input.runId.trim();
+    if (!runId) throw new Error("A Plan run id is required.");
+    if (!isFinishedRunStatus(input.status)) throw new Error("A Plan run must finish as succeeded, failed, or fallback.");
+    if (input.status === "succeeded" && !input.outputPlanId?.trim()) throw new Error("A successful Plan run needs its saved Plan id.");
+    if (input.status !== "succeeded" && input.outputPlanId) throw new Error("Only a successful Plan run can reference an Agent-generated Plan.");
+    const failureCode = input.failureCode?.trim();
+    if (failureCode && !/^[a-z0-9_:-]{1,80}$/i.test(failureCode)) throw new Error("A Plan run failure code must be a short safe classification.");
+    const finishedAt = new Date().toISOString();
+    const result = this.database.prepare(`UPDATE agent_runs
+      SET status = ?, finished_at = ?, output_plan_id = ?, failure_code = ?
+      WHERE id = ? AND status = 'running'`).run(input.status, finishedAt, input.outputPlanId?.trim() ?? null, failureCode ?? null, runId);
+    if (result.changes !== 1) throw new Error("The Plan run was not found or has already finished.");
+    const saved = this.database.prepare(`SELECT id, kind, runtime_kind, trigger, status, started_at, finished_at, output_plan_id, failure_code
+      FROM agent_runs WHERE id = ?`).get(runId) as unknown as AgentRunRow;
+    return agentRunFromRow(saved);
+  }
+
+  listRecentAgentRuns(limit = 12): AgentRun[] {
+    const safeLimit = Number.isInteger(limit) && limit > 0 && limit <= 50 ? limit : 12;
+    return (this.database.prepare(`SELECT id, kind, runtime_kind, trigger, status, started_at, finished_at, output_plan_id, failure_code
+      FROM agent_runs ORDER BY started_at DESC, rowid DESC LIMIT ?`).all(safeLimit) as unknown as AgentRunRow[]).map(agentRunFromRow);
+  }
+
   /** Stores immutable official-source evidence and reports only byte-level content change. */
   saveSourceSnapshot(input: SourceSnapshotInput): SourceSnapshotWriteResult {
     const normalized = normalizeSourceSnapshotInput(input);
@@ -644,6 +699,17 @@ export class SqliteWorkspaceStore {
         created_at TEXT NOT NULL,
         UNIQUE (source_id, url, content_hash)
       );
+      CREATE TABLE IF NOT EXISTS agent_runs (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind = 'plan_generation'),
+        runtime_kind TEXT NOT NULL CHECK (runtime_kind IN ('codex', 'claude-code')),
+        trigger TEXT NOT NULL CHECK (trigger IN ('web', 'telegram')),
+        status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'fallback')),
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        output_plan_id TEXT,
+        failure_code TEXT
+      );
       CREATE TABLE IF NOT EXISTS telegram_binding (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         chat_id TEXT NOT NULL,
@@ -684,6 +750,7 @@ export class SqliteWorkspaceStore {
       CREATE INDEX IF NOT EXISTS idx_tasks_stage_order ON tasks(stage_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_inbox_created_at ON inbox_items(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_source_snapshots_latest ON source_snapshots(source_id, url, retrieved_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_agent_runs_recent ON agent_runs(started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_telegram_pairing_requests_active ON telegram_pairing_requests(consumed_at, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_telegram_arrival_checkins_follow_up ON telegram_arrival_checkins(location_requested_at, location_received_at, check_in_sent_at);
       PRAGMA optimize;
@@ -869,8 +936,30 @@ function sourceSnapshotFromRow(row: SourceSnapshotRow): SourceSnapshot {
   return { id: row.id, sourceId: row.source_id, authority: row.authority, titleOriginal: row.title_original, url: row.url, retrievedAt: row.retrieved_at, contentHash: row.content_hash, excerpt: row.excerpt };
 }
 
+function agentRunFromRow(row: AgentRunRow): AgentRun {
+  return {
+    id: row.id,
+    kind: row.kind,
+    runtimeKind: row.runtime_kind,
+    trigger: row.trigger,
+    status: row.status,
+    startedAt: row.started_at,
+    ...(row.finished_at ? { finishedAt: row.finished_at } : {}),
+    ...(row.output_plan_id ? { outputPlanId: row.output_plan_id } : {}),
+    ...(row.failure_code ? { failureCode: row.failure_code } : {})
+  };
+}
+
 function isAgentRuntimeKind(value: unknown): value is AgentRuntimeKind {
   return value === "codex" || value === "claude-code";
+}
+
+function isRunTrigger(value: unknown): value is RunTrigger {
+  return value === "web" || value === "telegram";
+}
+
+function isFinishedRunStatus(value: unknown): value is Exclude<RunStatus, "running"> {
+  return value === "succeeded" || value === "failed" || value === "fallback";
 }
 
 function runtimeDisplayName(kind: AgentRuntimeKind): string {
