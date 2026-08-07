@@ -16,6 +16,10 @@ export type TaskReminderWeatherRefresh =
   | { status: "available"; data: TaskReminderWeatherContext }
   | { status: "unavailable"; stage: "amap" | "qweather"; code: string };
 
+export function taskReminderNeedsWeather(reminder: TaskReminder): boolean {
+  return reminder.refreshFacts?.includes("weather") ?? false;
+}
+
 /** Refreshes destination weather as optional delivery-time context; it never blocks the reminder itself. */
 export async function refreshTaskReminderWeather(input: { plan: Plan; reminder: TaskReminder; language?: "en" | "zh"; dependencies: ReminderWeatherDependencies }): Promise<TaskReminderWeatherRefresh> {
   const placeResult = await input.dependencies.geocodeAddress({ address: input.plan.location });

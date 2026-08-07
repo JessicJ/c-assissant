@@ -264,11 +264,12 @@ test("SQLite mirrors a delivered Task reminder into the Web Inbox", () => {
     knownInformation: ["Departure at 07:00."],
     assumptions: [],
     nextAction: "Review the reminder.",
-    stages: [{ title: "Departure", description: "Prepare.", tasks: [{ title: "Check essentials", owner: "user", dueLabel: "Two hours before departure", reminder: { scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Check passport and essential items." } }] }]
+    stages: [{ title: "Departure", description: "Prepare.", tasks: [{ title: "Check essentials", owner: "user", dueLabel: "Two hours before departure", reminder: { scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Check passport and essential items.", refreshFacts: ["weather"] } }] }]
   });
   const task = workspace.activePlan.stages[0]!.tasks[0]!;
   const reminder = task.reminder!;
   const reminderKey = `task-reminder:${task.id}:2026-08-31T21:00:00.000Z`;
+  assert.deepEqual(reminder.refreshFacts, ["weather"]);
 
   store.confirmPlan(workspace.activePlan.id);
   assert.deepEqual(store.claimTelegramTaskReminderAttempt({ planId: workspace.activePlan.id, reminderKey, taskId: task.id, dueAt: "2026-08-31T21:00:00.000Z", reminder, now: "2026-08-31T21:00:00.000Z" }), { claimed: true, attemptNumber: 1 });
@@ -277,6 +278,32 @@ test("SQLite mirrors a delivered Task reminder into the Web Inbox", () => {
   assert.equal(store.getWorkspace().inbox[0]?.title, "Reminder sent: Check essentials");
   assert.equal(store.getWorkspace().inbox[0]?.body, "Check passport and essential items.");
   assert.equal(store.claimTelegramTaskReminderAttempt({ planId: workspace.activePlan.id, reminderKey, taskId: task.id, dueAt: "2026-08-31T21:00:00.000Z", reminder, now: "2026-08-31T21:02:00.000Z" }).claimed, false);
+  store.close();
+});
+
+test("SQLite rejects a stale Task reminder when its dynamic fact policy changed", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const workspace = store.createGeneratedPlan({
+    title: "Prepare for departure",
+    location: "Shanghai, China",
+    dates: "September 1, 2026",
+    knownInformation: [],
+    assumptions: [],
+    nextAction: "Review.",
+    stages: [{ title: "Departure", description: "Prepare.", tasks: [{ title: "Pack", owner: "user", dueLabel: "Morning", reminder: { scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Pack for departure.", refreshFacts: ["weather"] } }] }]
+  });
+  const task = workspace.activePlan.stages[0]!.tasks[0]!;
+  const dueAt = "2026-08-31T21:00:00.000Z";
+  store.confirmPlan(workspace.activePlan.id);
+
+  assert.equal(store.claimTelegramTaskReminderAttempt({
+    planId: workspace.activePlan.id,
+    reminderKey: `task-reminder:${task.id}:${dueAt}`,
+    taskId: task.id,
+    dueAt,
+    reminder: { ...task.reminder!, refreshFacts: [] },
+    now: dueAt
+  }).claimed, false);
   store.close();
 });
 

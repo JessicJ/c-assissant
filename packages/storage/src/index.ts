@@ -347,7 +347,7 @@ export class SqliteWorkspaceStore {
     const workspace = this.getWorkspace();
     if (workspace.activePlan.id !== planId || workspace.activePlan.status !== "active") return { claimed: false };
     const currentReminder = workspace.activePlan.stages.flatMap((stage) => stage.tasks).find((task) => task.id === taskId)?.reminder;
-    if (!currentReminder || currentReminder.scheduledAtLocal !== input.reminder.scheduledAtLocal || currentReminder.timeZone !== input.reminder.timeZone || currentReminder.purpose !== input.reminder.purpose) return { claimed: false };
+    if (!currentReminder || !taskRemindersEqual(currentReminder, input.reminder)) return { claimed: false };
     const existing = this.database.prepare(`SELECT task_id, due_at, status, attempt_count, next_attempt_at
       FROM telegram_task_reminder_deliveries WHERE plan_id = ? AND reminder_key = ?`).get(planId, reminderKey) as TelegramTaskReminderDeliveryRow | undefined;
     const leaseUntil = new Date(nowMs + TASK_REMINDER_ATTEMPT_LEASE_MS).toISOString();
@@ -372,7 +372,7 @@ export class SqliteWorkspaceStore {
     if (!taskTitle || !input.reminder.purpose.trim()) throw new Error("A delivered Task reminder needs its delivery-time Task context.");
     const currentTask = workspace.activePlan.stages.flatMap((stage) => stage.tasks).find((candidate) => candidate.id === input.taskId);
     const currentReminder = currentTask?.reminder;
-    const currentMatch = workspace.activePlan.id === input.planId && workspace.activePlan.status === "active" && currentReminder?.scheduledAtLocal === input.reminder.scheduledAtLocal && currentReminder.timeZone === input.reminder.timeZone && currentReminder.purpose === input.reminder.purpose;
+    const currentMatch = workspace.activePlan.id === input.planId && workspace.activePlan.status === "active" && Boolean(currentReminder && taskRemindersEqual(currentReminder, input.reminder));
     const deliveredAt = input.deliveredAt ?? new Date().toISOString();
     if (!Number.isFinite(Date.parse(deliveredAt))) throw new Error("A delivered Task reminder needs a valid delivery time.");
     this.database.exec("BEGIN");
@@ -405,7 +405,7 @@ export class SqliteWorkspaceStore {
     if (!row || row.task_id !== input.taskId || row.status !== "attempting") throw new Error("The Task reminder delivery attempt is not active.");
     const workspace = this.getWorkspace();
     const currentReminder = workspace.activePlan.id === input.planId ? workspace.activePlan.stages.flatMap((stage) => stage.tasks).find((task) => task.id === input.taskId)?.reminder : undefined;
-    const currentMatch = workspace.activePlan.status === "active" && currentReminder?.scheduledAtLocal === input.reminder.scheduledAtLocal && currentReminder.timeZone === input.reminder.timeZone && currentReminder.purpose === input.reminder.purpose;
+    const currentMatch = workspace.activePlan.status === "active" && Boolean(currentReminder && taskRemindersEqual(currentReminder, input.reminder));
     if (!currentMatch) {
       this.database.prepare(`UPDATE telegram_task_reminder_deliveries
         SET status = 'failed', next_attempt_at = NULL, last_failure_code = 'reminder_cancelled', updated_at = ?
@@ -1214,10 +1214,19 @@ function parseTaskReminder(value: string | null): TaskReminder | undefined {
     if (typeof parsed.scheduledAtLocal !== "string" || !isLocalDateTime(parsed.scheduledAtLocal)) return undefined;
     if (typeof parsed.timeZone !== "string" || !isTimeZoneName(parsed.timeZone)) return undefined;
     if (typeof parsed.purpose !== "string" || !parsed.purpose.trim() || parsed.purpose.length > 500) return undefined;
-    return { scheduledAtLocal: parsed.scheduledAtLocal, timeZone: parsed.timeZone, purpose: parsed.purpose.trim() };
+    if (parsed.refreshFacts !== undefined && (!Array.isArray(parsed.refreshFacts) || parsed.refreshFacts.length > 1 || parsed.refreshFacts.some((fact) => fact !== "weather"))) return undefined;
+    const refreshFacts = parsed.refreshFacts?.includes("weather") ? ["weather" as const] : undefined;
+    return { scheduledAtLocal: parsed.scheduledAtLocal, timeZone: parsed.timeZone, purpose: parsed.purpose.trim(), ...(refreshFacts ? { refreshFacts } : {}) };
   } catch {
     return undefined;
   }
+}
+
+function taskRemindersEqual(left: TaskReminder, right: TaskReminder): boolean {
+  return left.scheduledAtLocal === right.scheduledAtLocal
+    && left.timeZone === right.timeZone
+    && left.purpose === right.purpose
+    && JSON.stringify(left.refreshFacts ?? []) === JSON.stringify(right.refreshFacts ?? []);
 }
 
 function isLocalDateTime(value: string): boolean {

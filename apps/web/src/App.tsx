@@ -714,7 +714,8 @@ function PlanView({ plan, policyPreparation, onActivate, confirming, amapQuery, 
 }
 
 function PlanTaskRow({ task, cancellingReminder = false, onCancelReminder }: { task: Task; cancellingReminder?: boolean; onCancelReminder?: (taskId: string) => Promise<void> }) {
-  return <div className="task-row"><span className={`task-dot ${task.status}`} /><div className="task-copy"><span>{task.title}</span>{task.reminder ? <small>Reminder purpose: {task.reminder.purpose}</small> : null}</div><div className="task-timing"><small>{task.dueLabel}</small>{task.reminder ? <><small className="task-reminder">{task.reminder.scheduledAtLocal.replace("T", " ")} · {task.reminder.timeZone}</small>{onCancelReminder ? <button className="text-button" disabled={cancellingReminder} aria-label={`Cancel reminder for ${task.title}`} onClick={() => void onCancelReminder(task.id)}>{cancellingReminder ? "Cancelling…" : "Cancel reminder"}</button> : null}</> : null}</div></div>;
+  const dynamicFacts = task.reminder?.refreshFacts?.includes("weather") ? "Refresh at delivery: destination weather" : "Dynamic facts: none";
+  return <div className="task-row"><span className={`task-dot ${task.status}`} /><div className="task-copy"><span>{task.title}</span>{task.reminder ? <><small>Reminder purpose: {task.reminder.purpose}</small><small>{dynamicFacts}</small></> : null}</div><div className="task-timing"><small>{task.dueLabel}</small>{task.reminder ? <><small className="task-reminder">{task.reminder.scheduledAtLocal.replace("T", " ")} · {task.reminder.timeZone}</small>{onCancelReminder ? <button className="text-button" disabled={cancellingReminder} aria-label={`Cancel reminder for ${task.title}`} onClick={() => void onCancelReminder(task.id)}>{cancellingReminder ? "Cancelling…" : "Cancel reminder"}</button> : null}</> : null}</div></div>;
 }
 
 function PolicyPreparationCard({ assessment }: { assessment: PolicyPreparationAssessment | null }) {
