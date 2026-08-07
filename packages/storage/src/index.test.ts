@@ -155,6 +155,20 @@ test("SQLite records an arrival reminder delivery attempt only once per Plan", (
   store.close();
 });
 
+test("SQLite advances an explicitly tagged arrival task to ready without completing it", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const planId = store.getWorkspace().activePlan.id;
+  store.confirmPlan(planId);
+  const task = store.activateArrivalTask(planId);
+  assert.equal(task?.status, "ready");
+  assert.equal(task?.activationTrigger, "arrival");
+  assert.equal(store.activateArrivalTask(planId), undefined);
+  const storedTask = store.getWorkspace().activePlan.stages.flatMap((stage) => stage.tasks).find((candidate) => candidate.id === task?.id);
+  assert.equal(storedTask?.status, "ready");
+  assert.match(store.getWorkspace().activePlan.nextAction, /Current arrival step/i);
+  store.close();
+});
+
 test("SQLite stores arrival follow-up state without storing shared coordinates", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const planId = store.getWorkspace().activePlan.id;

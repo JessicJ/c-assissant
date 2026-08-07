@@ -1,4 +1,4 @@
-import type { Plan } from "@c-assistant/core";
+import type { Plan, Task } from "@c-assistant/core";
 
 const LOCAL_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
 export const ARRIVAL_LOCATION_FOLLOW_UP_DELAY_MS = 5 * 60_000;
@@ -33,8 +33,9 @@ export function isArrivalLocationPromptDue(checkInSentAt: string, now = new Date
   return now.getTime() - sentAt >= ARRIVAL_LOCATION_FOLLOW_UP_DELAY_MS;
 }
 
-export function formatArrivalReminder(plan: Plan): string {
-  return `Arrival check-in\n${plan.title}\n${plan.location}\n\nYour scheduled arrival time has begun. Open your current Plan to review the next step:\n${plan.nextAction}\n\nUse /plan for the Plan summary. No ride, booking, payment, or location request has been started.`;
+export function formatArrivalReminder(plan: Plan, arrivalTask?: Task): string {
+  const currentStep = arrivalTask ? `\n\nCurrent step is ready: ${arrivalTask.title}\nIt is not marked complete.` : "";
+  return `Arrival check-in\n${plan.title}\n${plan.location}\n\nYour scheduled arrival time has begun. Open your current Plan to review the next step:\n${plan.nextAction}${currentStep}\n\nUse /plan for the Plan summary. No ride, booking, payment, or location request has been started.`;
 }
 
 function offsetAt(instant: number, timeZone: string): number {

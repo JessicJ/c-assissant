@@ -124,7 +124,8 @@ const planDraftSchema = {
               properties: {
                 title: { type: "string", minLength: 1, maxLength: 200 },
                 owner: { type: "string", enum: ["assistant", "user", "external"] },
-                dueLabel: { type: "string", minLength: 1, maxLength: 160 }
+                dueLabel: { type: "string", minLength: 1, maxLength: 160 },
+                activationTrigger: { type: "string", enum: ["arrival"] }
               }
             }
           }
@@ -151,13 +152,14 @@ Rules:
 - Treat Profile identity fields as user-provided planning context, not as proof of a policy entitlement or requirement.
 - Do not claim a policy requirement or cite an unofficial source. Official-source research happens in another Skill.
 - Include user-owned Tasks for real-world choices and external-owned Tasks for actions inside another application.
+- When one task is specifically intended to begin at the expected arrival time, set its activationTrigger to "arrival". Do not add that marker to any other task.
 - Do not say that C-assistant has booked, paid, hailed a ride, or completed any action.
 - The Plan must be readable as a complete draft before a user confirms it.`;
 }
 
 function isPlanDraft(value: unknown): value is GeneratedPlanDraft {
   if (!isRecord(value) || !isString(value.title) || !isString(value.location) || !isString(value.dates) || !isString(value.nextAction) || !isStringArray(value.knownInformation) || !isStringArray(value.assumptions) || !Array.isArray(value.stages) || value.stages.length === 0) return false;
-  return value.stages.every((stage) => isRecord(stage) && isString(stage.title) && isString(stage.description) && Array.isArray(stage.tasks) && stage.tasks.length > 0 && stage.tasks.every((task) => isRecord(task) && isString(task.title) && isString(task.dueLabel) && (task.owner === "assistant" || task.owner === "user" || task.owner === "external")));
+  return value.stages.every((stage) => isRecord(stage) && isString(stage.title) && isString(stage.description) && Array.isArray(stage.tasks) && stage.tasks.length > 0 && stage.tasks.every((task) => isRecord(task) && isString(task.title) && isString(task.dueLabel) && (task.owner === "assistant" || task.owner === "user" || task.owner === "external") && (task.activationTrigger === undefined || task.activationTrigger === "arrival")));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
