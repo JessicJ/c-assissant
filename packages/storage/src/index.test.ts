@@ -123,6 +123,35 @@ test("SQLite persists a validated Agent-generated Plan", () => {
   store.close();
 });
 
+test("SQLite revises only the expected draft and preserves its Plan-scoped configuration", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const original = store.getWorkspace().activePlan;
+  const configured = store.updatePlanTravelContext(original.id, { partySize: 2, luggage: "heavy" }).activePlan;
+  const draft = {
+    title: "Revised Shanghai arrival",
+    location: "Shanghai, China",
+    dates: "September 2, 2026",
+    knownInformation: ["Arrival moved to September 2."],
+    assumptions: [],
+    nextAction: "Review the revised Plan.",
+    stages: [{ title: "Arrival", description: "Arrive.", tasks: [{ title: "Reach accommodation", owner: "external" as const, dueLabel: "At arrival" }] }]
+  };
+  const revised = store.reviseGeneratedPlan({
+    expectedPlanId: configured.id,
+    expectedVersion: configured.version,
+    runtime: "claude-code",
+    draft
+  });
+
+  assert.notEqual(revised.activePlan.id, configured.id);
+  assert.equal(revised.activePlan.status, "draft");
+  assert.equal(revised.activePlan.dates, "September 2, 2026");
+  assert.deepEqual(revised.activePlan.configuration.travelContext, { partySize: 2, luggage: "heavy" });
+  assert.equal(revised.inbox[0]?.title, "Claude Code revised Plan draft saved locally");
+  assert.throws(() => store.reviseGeneratedPlan({ expectedPlanId: configured.id, expectedVersion: configured.version, draft }), /changed while/i);
+  store.close();
+});
+
 test("SQLite keeps an Amap accommodation candidate inside the current Plan", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const plan = store.getWorkspace().activePlan;

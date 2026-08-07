@@ -581,6 +581,24 @@ export class SqliteWorkspaceStore {
     return this.getWorkspace();
   }
 
+  reviseGeneratedPlan(input: { draft: GeneratedPlanDraft; runtime?: AgentRuntimeKind; expectedPlanId: string; expectedVersion: number }): WorkspaceSnapshot {
+    const workspace = this.getWorkspace();
+    if (workspace.activePlan.status !== "draft" || workspace.activePlan.id !== input.expectedPlanId || workspace.activePlan.version !== input.expectedVersion) {
+      throw new Error("The Plan changed while its revision was being prepared.");
+    }
+    const plan = createPlanFromDraft(input.draft);
+    plan.configuration = structuredClone(workspace.activePlan.configuration);
+    this.savePlan(plan);
+    this.addInbox({
+      id: `plan-revised-${plan.id}`,
+      tone: "notice",
+      title: `${runtimeDisplayName(input.runtime ?? "codex")} revised Plan draft saved locally`,
+      body: "The previous draft remains in local history. Review this complete replacement draft before activation.",
+      timestamp: "Just now"
+    });
+    return this.getWorkspace();
+  }
+
   confirmPlan(planId: string): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
     const confirmed = confirmPlan(workspace, planId);

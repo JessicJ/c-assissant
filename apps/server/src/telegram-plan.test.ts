@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createInitialWorkspace, createPlanFromDraft } from "@c-assistant/core";
-import { createTelegramPlan, formatTelegramPlan, formatTelegramPlanCreation, formatTelegramPlanPages, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup } from "./telegram-plan.js";
+import { createTelegramPlan, formatTelegramPlan, formatTelegramPlanCreation, formatTelegramPlanPages, planDraftForRevision, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
 
 const generated = {
   title: "Attend an exhibition in Shanghai",
@@ -89,4 +89,26 @@ test("Telegram confirmation is bound to the current draft Plan version", () => {
   assert.equal(telegramPlanConfirmationDecision({ ...plan, status: "active" }, callbackData), "already_active");
   assert.equal(telegramPlanConfirmationMarkup({ ...plan, status: "active" }), undefined);
   assert.equal(telegramPlanConfirmationDecision(plan, "arrival_not_here"), "not_confirmation");
+});
+
+test("Telegram revision context strips Core state while retaining the complete draft", () => {
+  const plan = createInitialWorkspace().activePlan;
+  plan.sources = [{ title: "Source", authority: "Authority", url: "https://example.com", retrievedAt: "2026-08-01T00:00:00.000Z", contentHash: "a".repeat(64) }];
+  const context = planDraftForRevision(plan);
+
+  assert.equal(context.title, plan.title);
+  assert.equal(context.stages.length, plan.stages.length);
+  assert.equal(context.stages[2]?.tasks[0]?.activationTrigger, "arrival");
+  assert.doesNotMatch(JSON.stringify(context), /plan-|stage-|task-|contentHash|configuration|sources/);
+});
+
+test("plain text revises only a user-created draft while /new always creates", () => {
+  const workspace = createInitialWorkspace();
+  assert.equal(telegramPlanRequestMode(workspace, false), "create");
+
+  workspace.inbox.unshift({ id: `plan-generated-${workspace.activePlan.id}`, tone: "notice", title: "Draft", body: "Draft", timestamp: "Now" });
+  assert.equal(telegramPlanRequestMode(workspace, false), "revise");
+  assert.equal(telegramPlanRequestMode(workspace, true), "create");
+  workspace.activePlan.status = "active";
+  assert.equal(telegramPlanRequestMode(workspace, false), "create");
 });
