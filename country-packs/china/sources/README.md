@@ -6,4 +6,6 @@ The `OfficialSourceConnector` may fetch a URL only when it is HTTPS and remains 
 
 The policy-applicability Skill must fail closed when it lacks a current, directly relevant snapshot. It may not turn a registry entry, a domain match, or model memory into a visa, residence, legal, banking, or medical conclusion.
 
-The initial list intentionally contains two English-language, national-level starting points. Local exit-entry, city, embassy, education, tax, banking, health, and business sources are added only after their authority, language, relevant scope, and URL stability are reviewed.
+The registry starts with national immigration and State Council entry points. It also contains reviewed, capability-specific pages for the first digital-life catalog: the State Council's English working-and-living guide, China Mobile's bilingual foreign-customer SIM guide, Amap's official mobile download page, and WeChat's official English download page. Local exit-entry, city, embassy, education, tax, banking, health, and business sources are added only after their authority, language, relevant scope, and URL stability are reviewed.
+
+`digital-life-catalog.json` contains bounded English setup steps and preserved Chinese product names, but it is not evidence by itself. Runtime joins each item to the newest matching immutable snapshot; missing or stale snapshots remain unresolved in `digital-life-setup`. Page excerpts, passwords, verification codes, payment credentials, and account state never enter this catalog.

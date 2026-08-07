@@ -12,9 +12,11 @@ The Node-side `chinaSkillRegistry` loads the internal `skill.json` files as runt
 
 `digital-life-setup` `0.1.0` maps Plan-derived capability needs to fresh, allowlisted first-party setup guidance. It retains Chinese names, provides English steps, skips user-confirmed completed items, and never receives account secrets or infers completion from a link handoff.
 
+The first reference catalog now covers mobile connectivity, communication, map navigation, and local payments with China Mobile SIM, WeChat, Amap, and Alipay preparation items. Static item instructions are joined at runtime only to the latest approved immutable snapshots from the Country Pack source registry. The loader selects the newest snapshot per source, omits page excerpts, and leaves a capability unresolved when current evidence is absent.
+
 `arrival-preparation` `0.1.0` deduplicates normalized preparation items, preserves their supporting Skill versions, suppresses user-confirmed completed work, and calculates bounded Reminder proposals only from explicit offset-qualified schedule anchors. It proposes only; Core still owns Plan-version binding, persistence, confirmation, and activation.
 
-The package-level China compilation adapter now verifies that the exact arrival-preparation version and status were included in a ready composite before producing the country-neutral Core proposal. Core can compile that proposal into a new draft Plan, but no production orchestrator or persistence path invokes it yet.
+The package-level China compilation adapter verifies that the exact arrival-preparation version and status were included in a ready composite before producing the country-neutral Core proposal. Core can compile that proposal into a new draft Plan, and the Server compilation service can persist the matching version atomically; Server entry-point assembly and user-facing review remain separate.
 
 The package also exposes a deterministic arrival orchestrator. Given normalized, credential-free provider facts, it invokes all seven supporting Skills in the declared order, derives preparation items, composes them, and asks Core for a new inert draft. It does not fetch provider data, persist the result, or send messages; those responsibilities remain with the host application.
 

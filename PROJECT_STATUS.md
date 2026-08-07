@@ -78,6 +78,7 @@
 - 实现确定性的 China arrival orchestrator：调用方只提供已归一化且不含凭据的 Profile/Plan 最小字段、官方快照元数据、高德/天气事实和 Country Pack 来源目录；orchestrator 严格按 `policy → weather → housing → transport → local food → digital life → arrival preparation` 顺序通过统一 Registry 执行，再调用 composite、China Adapter 和 Core compiler。它会自动把可用的政策审查、天气打包、住宿、交通和数字生活结果转成准备项，并允许加入另行验证过的计划特定事项；关键 supporting Skill 仍需输入时整体失败关闭。当前函数不访问 Connector、不写数据库、不发送消息。
 - 实现 Server 端的 China Plan 编排保存服务：从 Store 捕获当前 draft Plan/Profile 的准确快照，通过注入的 Fact Collector 接受已归一化事实，调用 China orchestrator，并把匹配版本的编译结果交给 SQLite 原子保存。服务区分前置条件、事实采集、Country Pack 编排和持久化失败；不回显 Connector 原始异常。Plan 在采集或编排期间被用户确认或改动时，旧结果不会覆盖新状态。当前尚未连接 Web/Telegram 触发入口。
 - 实现第一版生产 China Fact Collector：高德解析 Plan 目的地并返回附近住宿候选，QWeather 返回当前天气和三日预报；只有本次 Plan 已保存 candidate/confirmed 住宿坐标时，才采集该住宿到目的地的驾车、步行和公交事实，不把候选酒店偷偷当成已选交通起点。政策证据只采用显式链接到当前 Plan 且内容指纹匹配的不可变官方快照；当地饮食和数字生活目录通过 Country Pack 数据依赖注入。Collector 不读取环境变量、不接触密钥、不使用固定附近半径，也不向 Skill 传递官方正文或 Connector 原始错误。
+- 建立 China Pack 第一版数字生活来源目录：覆盖中国移动 SIM 卡、微信、高德地图和支付宝，对应移动网络、通信、地图导航和本地支付准备。新增中国移动外国用户双语 SIM 指南、高德官方下载页、WeChat 官方英文页和国务院英文版在华工作生活指南的受限来源定义。静态目录只保存中英文名称、英文理由和步骤；运行时 Loader 必须匹配当前不可变快照，按 sourceId 选择最新版本，并在传给 Skill 前移除正文 excerpt。缺少新鲜快照时能力保持 unresolved，不把静态目录当成最新证据。
 - 实现高德路线行动交接：选择高德地点后可检查驾车路线，并生成由用户自行打开的高德路线链接；不调用叫车、预订或支付。
 - 实现 QWeather Connector：经高德地理编码解析地点后，提供实况和三天预报；Key 与 Host 不会暴露给 Web 或 Agent。
 - 实现官方来源 Connector 的安全基础：仅从 Country Pack 注册表批准的 HTTPS 官方域名抓取，保留原始标题、规范链接、抓取时间、内容指纹和限长摘录；拒绝任意外部域名与跳转，且不生成个人政策适用性结论。China Pack 初始注册了国家移民管理局与国务院英文入口。
@@ -106,7 +107,7 @@
 
 ## 未完成内容
 
-- 生产 Fact Collector、七 Skill orchestrator、Server 编排保存服务、Core Plan 编译器、China Pack Proposal Adapter 与 SQLite 原子版本写入已分别完成并通过测试，但尚未在 Server 入口完成依赖装配，也未接入 Web/Telegram 完整审阅或逐 Skill Run 审计。当前 UI 不会触发这条路径；当地饮食和数字生活的正式来源目录也仍待建立。
+- 生产 Fact Collector、数字生活来源目录、七 Skill orchestrator、Server 编排保存服务、Core Plan 编译器、China Pack Proposal Adapter 与 SQLite 原子版本写入已分别完成并通过测试，但尚未在 Server 入口完成依赖装配，也未接入 Web/Telegram 完整审阅或逐 Skill Run 审计。当前 UI 不会触发这条路径；当地饮食正式来源目录仍待建立。
 
 - 已完成 Telegram Bot 身份验证、一次性私聊配对，以及已绑定账号的最小输入入口：普通文本和 `/new` 都会使用 Settings 中选定的本机 Codex 或 Claude Code 生成待确认 Plan；所选运行底座不可用时会明确降级为本地模板草案，另有 `/help` 和 `/plan`。官方来源 Connector 已具备受限刷新和快照能力；完整的数据库迁移体系尚未实现。
 - 已实现第一条 Plan 事件状态转换：任务只有显式 `arrival` 触发标记时，预计抵达事件才会把它从 `scheduled` 转为 `ready`，记录本地收件箱并更新当前下一步；不会推断或自动完成任何任务。

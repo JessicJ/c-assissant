@@ -22,6 +22,8 @@ Host service boundary: Server captures an exact draft Plan/Profile snapshot, ask
 
 Fact collection boundary: the first production collector resolves the Plan destination with Amap, collects QWeather facts and nearby accommodation POIs, and requests route modes only from a Plan-saved accommodation coordinate to the destination. It never promotes an accommodation search result into a chosen route origin. Policy evidence is limited to immutable saved snapshots explicitly linked to the exact Plan, while local-food and digital-life material comes from injected Country Pack reference catalogs. The collector passes metadata and normalized facts—not credentials, official-page excerpts, or raw provider failures—to orchestration.
 
+Digital-life catalog boundary: V1 contains bounded setup items for China Mobile SIM, WeChat, Amap, and Alipay, covering all four initial capabilities. Their approved source IDs point to the China Mobile foreign-customer guide, WeChat and Amap official download pages, and the State Council's English working-and-living guide. Runtime selects only the newest matching immutable snapshot and never passes its page excerpt to the Skill. Missing or stale source evidence leaves the corresponding capability unresolved rather than silently relying on bundled text.
+
 ### `policy-applicability`
 
 Matches official requirements to nationality, passport or travel document, visa or permit, residence status, student status, purpose, date, and location. A missing requirement becomes a user-owned Task with a Reminder when appropriate; it does not automatically block unrelated parts of the Plan.

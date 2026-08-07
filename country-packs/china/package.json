@@ -18,12 +18,16 @@
     "./orchestrator": {
       "types": "./lib/orchestrator.d.ts",
       "default": "./lib/orchestrator.js"
+    },
+    "./reference-catalog": {
+      "types": "./lib/reference-catalog.d.ts",
+      "default": "./lib/reference-catalog.js"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/index.test.ts src/orchestrator.test.ts"
+    "test": "tsx --test src/index.test.ts src/orchestrator.test.ts src/reference-catalog.test.ts"
   },
   "dependencies": {
     "@c-assistant/core": "workspace:*",

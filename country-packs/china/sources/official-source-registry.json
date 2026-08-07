@@ -16,5 +16,41 @@
     "allowedDomains": ["english.www.gov.cn", "www.gov.cn"],
     "topics": ["arrival", "daily_life", "business", "policy"],
     "language": "en"
+  },
+  {
+    "id": "china-working-living-guide-2025",
+    "authority": "The State Council of the People's Republic of China",
+    "title": "Guide to Working and Living in China (2025)",
+    "url": "https://english.www.gov.cn/2025special/bizexpatsinchina2025",
+    "allowedDomains": ["english.www.gov.cn", "www.gov.cn"],
+    "topics": ["digital_life", "mobile_payment", "communication", "daily_life"],
+    "language": "en"
+  },
+  {
+    "id": "china-mobile-foreign-sim",
+    "authority": "China Mobile",
+    "title": "SIM Card Guide for Foreign Customers",
+    "url": "https://www.10086.cn/support/service/foreign/",
+    "allowedDomains": ["www.10086.cn", "10086.cn"],
+    "topics": ["digital_life", "mobile_connectivity"],
+    "language": "multilingual"
+  },
+  {
+    "id": "amap-mobile-official",
+    "authority": "Amap",
+    "title": "高德地图官方网站",
+    "url": "https://mobile.amap.com/cn/Index.aspx",
+    "allowedDomains": ["mobile.amap.com", "www.amap.com", "amap.com"],
+    "topics": ["digital_life", "map_navigation", "transport"],
+    "language": "zh"
+  },
+  {
+    "id": "wechat-official",
+    "authority": "WeChat",
+    "title": "WeChat — Chats, Calls and Life Services",
+    "url": "https://www.wechat.com/en",
+    "allowedDomains": ["www.wechat.com", "wechat.com"],
+    "topics": ["digital_life", "communication"],
+    "language": "en"
   }
 ]
