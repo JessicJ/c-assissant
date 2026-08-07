@@ -54,6 +54,8 @@ Adds local specialties and useful food context to the Plan. It avoids prematurel
 
 On arrival or request, recommends nearby places using Amap facts and current context. It may ask or reuse the current party size when that changes the result.
 
+Implemented slice: `food-nearby` `0.1.0` is the first executable internal Skill. It requires Plan-scoped party size, accepts normalized Amap candidates and observation time, preserves Provider order, returns at most five facts and Amap handoff proposals, and leaves recommendations empty until trustworthy preference or availability facts exist. Telegram renders this structured result; it does not own the decision contract.
+
 ### `weather-and-packing`
 
 Uses seasonal guidance when the trip is too far away for a reliable forecast and schedules a later refresh. Near the relevant date, it uses current weather facts to update packing guidance and reminders. A reminder must explicitly declare that destination weather materially affects its immediate Task; only then does the current delivery path resolve the Plan destination with Amap and refresh QWeather. Only an exact-date forecast is presented as a forecast, provider attribution is retained in the message, and failure falls back to the original reminder without invented weather.

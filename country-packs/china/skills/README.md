@@ -1,6 +1,6 @@
 # Internal Skills
 
-Each future Skill directory follows the source structure below:
+Each Skill directory follows the source structure below:
 
 ```text
 skill-name/
@@ -13,3 +13,7 @@ skill-name/
 ```
 
 V1 does not expose these Skills for separate installation or direct execution.
+
+Implemented slice:
+
+- `food-nearby` `0.1.0`: deterministic, bounded transformation of current Amap nearby-place facts into a structured Skill result and external-handoff proposals. Runtime code is exported only through the complete `@c-assistant/china-country-pack` package.

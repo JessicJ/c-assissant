@@ -41,6 +41,8 @@ In the paired Telegram chat, complete Plans are paginated without omission and o
 
 `/food` provides the first Telegram food-discovery loop. It uses the Plan's party size (or asks once), then displays Telegram's explicit location-share control. That location is accepted only for the current Plan and named purpose for 15 minutes, converted for Amap, used once to retrieve nearby restaurant and distance facts, and never persisted. Results preserve Amap's provider order and hand the user to an HTTPS Amap place page; C-assistant does not independently rank, order, reserve, or pay.
 
+This flow now invokes the first executable internal China Pack Skill, `food-nearby` `0.1.0`, after Amap normalization. The versioned Skill emits structured facts and handoff proposals; Telegram only renders them. The Skill remains internal and cannot be installed separately from the complete China Country Pack.
+
 ## Product shape
 
 - Web workspace: the full desktop-grade product interface.

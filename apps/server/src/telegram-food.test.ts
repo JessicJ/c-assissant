@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { runFoodNearbySkill } from "@c-assistant/china-country-pack";
 
 import { formatTelegramNearbyFood, parseTelegramFoodPartyCallback, telegramFoodPartyMarkup } from "./telegram-food.js";
 
@@ -14,9 +15,11 @@ test("food party callbacks stay bound to an exact Plan version", () => {
 });
 
 test("nearby food is presented as Amap facts with user handoff", () => {
+  const places = [{ id: "poi-1", name: "Example Noodles", address: "88 Example Road", location: "121.47,31.23", type: "Chinese food", city: "Shanghai", district: "Huangpu", distanceMeters: 860 }];
   const result = formatTelegramNearbyFood({
     partySize: 2,
-    places: [{ id: "poi-1", name: "Example Noodles", address: "88 Example Road", location: "121.47,31.23", type: "Chinese food", city: "Shanghai", district: "Huangpu", distanceMeters: 860 }]
+    places,
+    result: runFoodNearbySkill({ partySize: 2, candidates: places, observedAt: "2026-08-07T00:00:00.000Z" })
   });
   assert.match(result.text, /Amap returned these candidates in provider distance order/);
   assert.match(result.text, /has not ranked them/);
@@ -29,6 +32,6 @@ test("nearby food is presented as Amap facts with user handoff", () => {
 });
 
 test("empty nearby food does not imply a fixed search radius", () => {
-  const result = formatTelegramNearbyFood({ partySize: 1, places: [] });
+  const result = formatTelegramNearbyFood({ partySize: 1, places: [], result: runFoodNearbySkill({ partySize: 1, candidates: [], observedAt: "2026-08-07T00:00:00.000Z" }) });
   assert.match(result.text, /No distance limit was imposed by C-assistant/);
 });
