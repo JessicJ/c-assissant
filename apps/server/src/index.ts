@@ -134,7 +134,9 @@ server.post<{ Body: CreatePlanInput }>("/api/plans/generate", async (request, re
       request: request.body.request,
       profile: {
         preferredLanguage: workspace.profile.preferredLanguage,
-        nationality: workspace.profile.nationality
+        nationality: workspace.profile.nationality,
+        gender: workspace.profile.gender,
+        immigrationStatus: workspace.profile.immigrationStatus
       }
     });
     return store.createGeneratedPlan(draft);
@@ -453,7 +455,7 @@ async function telegramCommandResponse(text: string | undefined): Promise<string
       const workspace = store.getWorkspace();
       const result = await createTelegramPlan({
         request: command.request,
-        generate: () => codex.generatePlanDraft({ request: command.request, profile: { preferredLanguage: workspace.profile.preferredLanguage, nationality: workspace.profile.nationality } }),
+        generate: () => codex.generatePlanDraft({ request: command.request, profile: { preferredLanguage: workspace.profile.preferredLanguage, nationality: workspace.profile.nationality, gender: workspace.profile.gender, immigrationStatus: workspace.profile.immigrationStatus } }),
         saveGenerated: (draft) => store.createGeneratedPlan(draft),
         saveTemplate: () => store.createPlan({ request: command.request })
       });
