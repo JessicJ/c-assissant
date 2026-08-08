@@ -1,0 +1,47 @@
+{
+  "version": "0.1.0",
+  "cities": [
+    {
+      "id": "shanghai",
+      "aliases": ["Shanghai", "上海"],
+      "approvedSourceIds": ["shanghai-official-iconic-foods-2026"],
+      "facts": [
+        {
+          "id": "shanghai-nanxiang-xiaolongbao",
+          "nameOriginal": "南翔小笼包",
+          "nameEnglish": "Nanxiang xiaolongbao",
+          "descriptionEnglish": "A steamed soup-dumpling specialty from Nanxiang in Jiading, traditionally made with a thin wrapper, minced pork, and jellied pork skin.",
+          "sourceId": "shanghai-official-iconic-foods-2026"
+        },
+        {
+          "id": "shanghai-yanduxian",
+          "nameOriginal": "腌笃鲜",
+          "nameEnglish": "Yanduxian",
+          "descriptionEnglish": "A seasonal spring soup combining salted pork, fresh pork, and bamboo shoots in a light-colored broth.",
+          "sourceId": "shanghai-official-iconic-foods-2026"
+        },
+        {
+          "id": "shanghai-eight-treasure-duck",
+          "nameOriginal": "八宝鸭",
+          "nameEnglish": "Eight-treasure duck",
+          "descriptionEnglish": "A classic Shanghai duck dish stuffed with ingredients such as glutinous rice, chestnuts, and mushrooms, then slowly braised.",
+          "sourceId": "shanghai-official-iconic-foods-2026"
+        },
+        {
+          "id": "shanghai-crystal-shrimp",
+          "nameOriginal": "水晶虾仁",
+          "nameEnglish": "Crystal shrimp",
+          "descriptionEnglish": "A Shanghai dish of lightly stir-fried shrimp known for a translucent appearance and a soft yet crisp texture.",
+          "sourceId": "shanghai-official-iconic-foods-2026"
+        },
+        {
+          "id": "shanghai-scallion-oil-noodles",
+          "nameOriginal": "葱油拌面",
+          "nameEnglish": "Scallion oil noodles",
+          "descriptionEnglish": "A traditional Shanghai noodle dish tossed with fragrant oil made by slowly cooking scallions until golden and crisp.",
+          "sourceId": "shanghai-official-iconic-foods-2026"
+        }
+      ]
+    }
+  ]
+}

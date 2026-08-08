@@ -1,5 +1,5 @@
 import type { ConnectorResult } from "@c-assistant/connectors";
-import { listChinaDigitalLifeSourceIds } from "@c-assistant/china-country-pack/reference-catalog";
+import { listChinaDigitalLifeSourceIds, listChinaLocalFoodSourceIds } from "@c-assistant/china-country-pack/reference-catalog";
 import type { SourceSnapshot, SourceSnapshotWriteResult, WorkspaceSnapshot } from "@c-assistant/core";
 
 export interface ChinaOfficialSourceRefresher {
@@ -27,10 +27,6 @@ const HOUR_MS = 60 * 60 * 1_000;
 
 /** Refreshes only allowlisted source IDs and links critical policy evidence to the exact draft. */
 export function createChinaSourcePreparationService(input: { store: ChinaSourcePreparationStore; refresher: ChinaOfficialSourceRefresher }) {
-  const requirements = [
-    { sourceId: "nia-english", critical: true, linkToPlan: true, maxAgeMs: 6 * HOUR_MS },
-    ...listChinaDigitalLifeSourceIds().map((sourceId) => ({ sourceId, critical: false, linkToPlan: false, maxAgeMs: 24 * HOUR_MS }))
-  ];
   return {
     async prepareCurrentPlan(options: { planId: string; now?: string }): Promise<ChinaSourcePreparationResult> {
       const now = options.now ?? new Date().toISOString();
@@ -40,6 +36,11 @@ export function createChinaSourcePreparationService(input: { store: ChinaSourceP
       if (initial.activePlan.id !== options.planId || initial.activePlan.status !== "draft") {
         return blocked("plan_not_draft", "Only the exact current draft Plan can receive refreshed China sources.", []);
       }
+      const requirements = [
+        { sourceId: "nia-english", critical: true, linkToPlan: true, maxAgeMs: 6 * HOUR_MS },
+        ...listChinaDigitalLifeSourceIds().map((sourceId) => ({ sourceId, critical: false, linkToPlan: false, maxAgeMs: 24 * HOUR_MS })),
+        ...listChinaLocalFoodSourceIds(initial.activePlan.location).map((sourceId) => ({ sourceId, critical: false, linkToPlan: true, maxAgeMs: 24 * HOUR_MS }))
+      ];
 
       const results: ChinaSourcePreparationItem[] = [];
       for (const requirement of requirements) {

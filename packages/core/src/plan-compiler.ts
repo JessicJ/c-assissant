@@ -35,6 +35,8 @@ export interface PlanCompilationProposal {
   compilationKey: string;
   stage: { title: string; description: string };
   tasks: PlanCompilationTaskProposal[];
+  /** Source-backed orientation that belongs in the complete Plan but is not a Task. */
+  knownInformation?: string[];
   assumptions: string[];
   limitations: string[];
 }
@@ -98,11 +100,13 @@ export function compilePlanProposal(plan: Plan, proposal: PlanCompilationProposa
   };
   const retainedStages = plan.stages.filter((candidate) => candidate.origin?.compilationKey !== proposal.compilationKey);
   const limitations = proposal.limitations.map((value) => `${proposal.countryPack.name} limitation: ${value.trim()}`);
+  const knownInformation = [...plan.knownInformation, ...(proposal.knownInformation ?? []).map((value) => value.trim())].filter((value, index, all) => value && all.indexOf(value) === index);
   const assumptions = [...plan.assumptions, ...proposal.assumptions.map((value) => value.trim()), ...limitations].filter((value, index, all) => value && all.indexOf(value) === index);
   const compiled: Plan = {
     ...plan,
     version: plan.version + 1,
     status: "draft",
+    knownInformation,
     assumptions,
     nextAction: "Review the complete compiled Plan. Confirm it only after its Tasks, Reminders, assumptions, and sources are correct.",
     stages: [...retainedStages, stage]
@@ -141,6 +145,7 @@ function isValidProposal(proposal: PlanCompilationProposal): boolean {
     && typeof proposal.stage.description === "string" && Boolean(proposal.stage.description.trim())
     && Array.isArray(proposal.tasks) && proposal.tasks.length <= 50 && proposal.tasks.every(isValidTaskProposal)
     && new Set(proposal.tasks.map((task) => task.proposalId)).size === proposal.tasks.length
+    && (proposal.knownInformation === undefined || (Array.isArray(proposal.knownInformation) && proposal.knownInformation.length <= 20 && proposal.knownInformation.every(isNonEmptyString)))
     && Array.isArray(proposal.assumptions) && proposal.assumptions.every(isNonEmptyString)
     && Array.isArray(proposal.limitations) && proposal.limitations.every(isNonEmptyString)
     && (proposal.composition.status !== "degraded" || proposal.limitations.length > 0);
@@ -221,7 +226,7 @@ function hasProposalScaffold(value: unknown): value is PlanCompilationProposal {
     && typeof candidate.countryPack === "object" && candidate.countryPack !== null
     && typeof candidate.composition === "object" && candidate.composition !== null
     && typeof candidate.stage === "object" && candidate.stage !== null
-    && Array.isArray(candidate.tasks) && Array.isArray(candidate.assumptions) && Array.isArray(candidate.limitations);
+    && Array.isArray(candidate.tasks) && (candidate.knownInformation === undefined || Array.isArray(candidate.knownInformation)) && Array.isArray(candidate.assumptions) && Array.isArray(candidate.limitations);
 }
 
 function isValidSourceSkill(value: unknown): value is { id: string; version: string } {

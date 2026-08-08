@@ -52,7 +52,7 @@ const chinaFactCollector = createChinaArrivalFactCollector({
   },
   qweather: { weather: (input) => qweather.weather(input) },
   sourceSnapshots: () => store.getWorkspace().sourceSnapshots,
-  referenceCatalog: () => createChinaReferenceCatalog({ snapshots: store.getWorkspace().sourceSnapshots })
+  referenceCatalog: (locationName) => createChinaReferenceCatalog({ snapshots: store.getWorkspace().sourceSnapshots, locationName })
 });
 const chinaCompilation = createChinaArrivalCompilationService({ store, factCollector: chinaFactCollector });
 const chinaSourcePreparation = createChinaSourcePreparationService({ store, refresher: { refresh: (input) => officialSources.refresh(input) } });
