@@ -1007,8 +1007,8 @@ export type ChinaPlanCompilationProposalDecision =
   | { status: "blocked"; reasonCode: "composition_not_ready" | "preparation_not_composed" | "invalid_preparation"; message: string };
 
 /** Converts already composed China results into the country-neutral Core proposal contract. */
-export function createChinaPlanCompilationProposal(input: { composite: ChinaArrivalPlanSkillResult; preparation: ArrivalPreparationSkillResult }): ChinaPlanCompilationProposalDecision {
-  const { composite, preparation } = input;
+export function createChinaPlanCompilationProposal(input: { composite: ChinaArrivalPlanSkillResult; preparation: ArrivalPreparationSkillResult; localFood: LocalFoodGuideSkillResult }): ChinaPlanCompilationProposalDecision {
+  const { composite, preparation, localFood } = input;
   if ((composite.status !== "success" && composite.status !== "degraded") || composite.missingSkills.length) {
     return { status: "blocked", reasonCode: "composition_not_ready", message: "All required China supporting results must be composed before Core compilation." };
   }
@@ -1018,6 +1018,10 @@ export function createChinaPlanCompilationProposal(input: { composite: ChinaArri
   }
   if ((preparation.status !== "success" && preparation.status !== "degraded") || preparation.needsInput.length) {
     return { status: "blocked", reasonCode: "invalid_preparation", message: "Arrival preparation still needs input or failed before Core compilation." };
+  }
+  const localFoodFact = composite.facts.find((fact) => fact.skillId === "local-food-guide");
+  if (!localFoodFact || localFoodFact.version !== localFood.skill.version || localFoodFact.status !== localFood.status) {
+    return { status: "blocked", reasonCode: "preparation_not_composed", message: "The local-food-guide result does not match the version and status recorded by the composite." };
   }
   const taskIds = preparation.proposedTasks.map((task) => task.proposalId);
   const reminderTaskIds = preparation.proposedReminders.map((reminder) => reminder.taskProposalId);
@@ -1048,6 +1052,7 @@ export function createChinaPlanCompilationProposal(input: { composite: ChinaArri
           ...(reminder ? { reminder: { dueAt: reminder.dueAt, timeZone: reminder.timeZone, purpose: reminder.purpose, refreshFacts: reminder.refreshFacts } } : {})
         };
       }),
+      knownInformation: localFood.recommendations.map((recommendation) => `Local food orientation: ${recommendation.text}`),
       assumptions,
       limitations
     }

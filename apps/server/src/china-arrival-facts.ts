@@ -41,7 +41,7 @@ export function createChinaArrivalFactCollector(input: {
   amap: ChinaArrivalAmapReader;
   qweather: ChinaArrivalWeatherReader;
   sourceSnapshots: () => SourceSnapshot[];
-  referenceCatalog: () => ChinaArrivalReferenceCatalog;
+  referenceCatalog: (locationName: string) => ChinaArrivalReferenceCatalog;
 }): ChinaArrivalFactCollector {
   return {
     async collect(context): Promise<ChinaArrivalCollectedFacts> {
@@ -62,7 +62,7 @@ export function createChinaArrivalFactCollector(input: {
       const routes = await collectPlanRoutes(input.amap, context.plan, destination);
       const targetDate = context.plan.configuration.arrival.expectedAtLocal?.slice(0, 10);
       const matchedForecast = targetDate ? weather.daily.find((day) => day.date === targetDate) : undefined;
-      const catalog = structuredClone(input.referenceCatalog());
+      const catalog = structuredClone(input.referenceCatalog(context.plan.location));
 
       return {
         policyEvidence: linkedPolicyEvidence(context.plan, input.sourceSnapshots()),

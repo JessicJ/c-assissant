@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createChinaReferenceCatalog, listChinaDigitalLifeSourceIds } from "@c-assistant/china-country-pack/reference-catalog";
+import { createChinaReferenceCatalog, listChinaDigitalLifeSourceIds, listChinaLocalFoodSourceIds } from "@c-assistant/china-country-pack/reference-catalog";
 import type { AmapRoute, ConnectorResult, QWeatherWeatherSnapshot } from "@c-assistant/connectors";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
 
@@ -44,7 +44,7 @@ test("fresh one-user instance prepares, reviews, and confirms a complete China P
     amap,
     qweather: { weather: async () => available("qweather", weather) },
     sourceSnapshots: () => store.getWorkspace().sourceSnapshots,
-    referenceCatalog: () => createChinaReferenceCatalog({ snapshots: store.getWorkspace().sourceSnapshots })
+    referenceCatalog: (locationName) => createChinaReferenceCatalog({ snapshots: store.getWorkspace().sourceSnapshots, locationName })
   });
   const sourcePreparation = createChinaSourcePreparationService({
     store,
@@ -60,9 +60,11 @@ test("fresh one-user instance prepares, reviews, and confirms a complete China P
   const result = await workflow.prepareCurrentPlan({ planId: initial.id, now });
   assert.equal(result.status, "saved", JSON.stringify(result));
   if (result.status !== "saved") return;
-  assert.equal(result.sources.length, 1 + listChinaDigitalLifeSourceIds().length);
+  assert.equal(result.sources.length, 1 + listChinaDigitalLifeSourceIds().length + listChinaLocalFoodSourceIds(initial.location).length);
   assert.equal(result.compilation.workspace.activePlan.status, "draft");
   assert.ok(result.compilation.workspace.activePlan.stages.at(-1)?.tasks.length);
+  assert.ok(result.compilation.workspace.activePlan.knownInformation.some((item) => /Nanxiang xiaolongbao.*南翔小笼包/i.test(item)));
+  assert.ok(result.compilation.workspace.activePlan.sources.some((source) => source.url.includes("english.shanghai.gov.cn/en-SpecialtyFood/")));
   assert.equal(store.listRecentCountryPackSkillRuns().length, 8);
 
   const confirmed = store.confirmPlan(initial.id);
@@ -76,7 +78,8 @@ function officialUrl(sourceId: string): string {
     "china-working-living-guide-2025": "https://english.www.gov.cn/2025special/bizexpatsinchina2025",
     "china-mobile-foreign-sim": "https://www.10086.cn/support/service/foreign/",
     "amap-mobile-official": "https://mobile.amap.com/cn/Index.aspx",
-    "wechat-official": "https://www.wechat.com/en"
+    "wechat-official": "https://www.wechat.com/en",
+    "shanghai-official-iconic-foods-2026": "https://english.shanghai.gov.cn/en-SpecialtyFood/20260511/594d417a429d426e8442a47336c47574.html"
   };
   return urls[sourceId]!;
 }

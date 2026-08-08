@@ -4,7 +4,9 @@ import type { SourceSnapshot } from "@c-assistant/core";
 
 import type {
   DigitalLifeCapability,
-  DigitalLifeSetupItemInput
+  DigitalLifeSetupItemInput,
+  LocalFoodGuideFactInput,
+  LocalFoodGuideSourceInput
 } from "./index.js";
 
 interface DigitalLifeCatalogFile {
@@ -13,8 +15,24 @@ interface DigitalLifeCatalogFile {
   items: DigitalLifeSetupItemInput[];
 }
 
+interface LocalFoodCatalogCity {
+  id: string;
+  aliases: string[];
+  approvedSourceIds: string[];
+  facts: LocalFoodGuideFactInput[];
+}
+
+interface LocalFoodCatalogFile {
+  version: string;
+  cities: LocalFoodCatalogCity[];
+}
+
 export interface ChinaReferenceCatalogResult {
-  localFood: { facts: []; sources: []; approvedSourceIds: [] };
+  localFood: {
+    facts: LocalFoodGuideFactInput[];
+    sources: LocalFoodGuideSourceInput[];
+    approvedSourceIds: string[];
+  };
   digitalLife: {
     requiredCapabilities: DigitalLifeCapability[];
     completedItemIds: string[];
@@ -32,15 +50,21 @@ export interface ChinaReferenceCatalogResult {
 }
 
 const digitalLifeCatalog = parseDigitalLifeCatalog(JSON.parse(readFileSync(new URL("../sources/digital-life-catalog.json", import.meta.url), "utf8")) as unknown);
+const localFoodCatalog = parseLocalFoodCatalog(JSON.parse(readFileSync(new URL("../sources/local-food-catalog.json", import.meta.url), "utf8")) as unknown);
 const allCapabilities: DigitalLifeCapability[] = ["mobile_connectivity", "communication", "map_navigation", "local_payments"];
 
 export function listChinaDigitalLifeSourceIds(): string[] {
   return [...digitalLifeCatalog.approvedSourceIds];
 }
 
+export function listChinaLocalFoodSourceIds(locationName: string): string[] {
+  return [...(matchingLocalFoodCity(locationName)?.approvedSourceIds ?? [])];
+}
+
 /** Joins static Country Pack guidance to current immutable source snapshots without passing excerpts. */
 export function createChinaReferenceCatalog(input: {
   snapshots: SourceSnapshot[];
+  locationName?: string;
   requiredCapabilities?: DigitalLifeCapability[];
   completedItemIds?: string[];
 }): ChinaReferenceCatalogResult {
@@ -65,7 +89,7 @@ export function createChinaReferenceCatalog(input: {
   const availableSourceIds = new Set(sources.map((source) => source.id));
   const items = digitalLifeCatalog.items.filter((item) => requiredCapabilities.includes(item.category) && availableSourceIds.has(item.sourceId)).map((item) => structuredClone(item));
   return {
-    localFood: { facts: [], sources: [], approvedSourceIds: [] },
+    localFood: createLocalFoodReference(input.snapshots, input.locationName),
     digitalLife: {
       requiredCapabilities,
       completedItemIds,
@@ -74,6 +98,77 @@ export function createChinaReferenceCatalog(input: {
       approvedSourceIds: digitalLifeCatalog.approvedSourceIds.filter((id) => availableSourceIds.has(id))
     }
   };
+}
+
+export function parseLocalFoodCatalog(value: unknown): LocalFoodCatalogFile {
+  if (!isRecord(value) || typeof value.version !== "string" || !/^\d+\.\d+\.\d+$/.test(value.version) || !Array.isArray(value.cities)) {
+    throw new Error("The China local-food catalog is malformed.");
+  }
+  const cityIds = new Set<string>();
+  const aliases = new Set<string>();
+  const cities = (value.cities as unknown[]).map((city) => {
+    if (!isRecord(city) || !nonEmptyString(city.id) || cityIds.has(city.id) || !Array.isArray(city.aliases) || !city.aliases.length || !city.aliases.every(nonEmptyString)
+      || !Array.isArray(city.approvedSourceIds) || !city.approvedSourceIds.length || !city.approvedSourceIds.every(nonEmptyString) || !Array.isArray(city.facts)) {
+      throw new Error("The China local-food catalog contains an invalid city.");
+    }
+    const normalizedAliases = city.aliases.map((alias) => alias.trim());
+    if (normalizedAliases.some((alias) => aliases.has(alias.toLocaleLowerCase()))) throw new Error("The China local-food catalog contains a duplicate city alias.");
+    const approvedSourceIds = [...new Set(city.approvedSourceIds.map((id) => id.trim()))];
+    const approved = new Set(approvedSourceIds);
+    const factIds = new Set<string>();
+    const facts = (city.facts as unknown[]).map((fact) => {
+      if (!isRecord(fact) || !nonEmptyString(fact.id) || factIds.has(fact.id) || !nonEmptyString(fact.nameOriginal) || !nonEmptyString(fact.nameEnglish)
+        || !nonEmptyString(fact.descriptionEnglish) || !nonEmptyString(fact.sourceId) || !approved.has(fact.sourceId)) {
+        throw new Error("The China local-food catalog contains an invalid fact.");
+      }
+      factIds.add(fact.id);
+      return { id: fact.id.trim(), nameOriginal: fact.nameOriginal.trim(), nameEnglish: fact.nameEnglish.trim(), descriptionEnglish: fact.descriptionEnglish.trim(), sourceId: fact.sourceId.trim() };
+    });
+    cityIds.add(city.id);
+    normalizedAliases.forEach((alias) => aliases.add(alias.toLocaleLowerCase()));
+    return { id: city.id.trim(), aliases: normalizedAliases, approvedSourceIds, facts };
+  });
+  return { version: value.version, cities };
+}
+
+function createLocalFoodReference(snapshots: SourceSnapshot[], locationName?: string): ChinaReferenceCatalogResult["localFood"] {
+  const city = matchingLocalFoodCity(locationName);
+  if (!city) return { facts: [], sources: [], approvedSourceIds: [] };
+  const approved = new Set(city.approvedSourceIds);
+  const latestBySource = new Map<string, SourceSnapshot>();
+  for (const snapshot of snapshots) {
+    if (!approved.has(snapshot.sourceId)) continue;
+    const current = latestBySource.get(snapshot.sourceId);
+    if (!current || Date.parse(snapshot.retrievedAt) > Date.parse(current.retrievedAt)) latestBySource.set(snapshot.sourceId, snapshot);
+  }
+  const sources = [...latestBySource.values()].map((snapshot) => ({
+    id: snapshot.sourceId,
+    authority: snapshot.authority,
+    titleOriginal: snapshot.titleOriginal,
+    url: snapshot.url,
+    retrievedAt: snapshot.retrievedAt,
+    contentHash: snapshot.contentHash
+  }));
+  const available = new Set(sources.map((source) => source.id));
+  return {
+    facts: city.facts.filter((fact) => available.has(fact.sourceId)).map((fact) => structuredClone(fact)),
+    sources,
+    approvedSourceIds: city.approvedSourceIds.filter((id) => available.has(id))
+  };
+}
+
+function matchingLocalFoodCity(locationName?: string): LocalFoodCatalogCity | undefined {
+  const normalized = locationName?.trim().toLocaleLowerCase();
+  if (!normalized) return undefined;
+  return localFoodCatalog.cities.find((city) => city.aliases.some((alias) => {
+    const candidate = alias.toLocaleLowerCase();
+    if (/^[\p{L}\p{N}]+$/u.test(candidate) && /^[\x00-\x7F]+$/.test(candidate)) return new RegExp(`(^|[^a-z0-9])${escapeRegex(candidate)}([^a-z0-9]|$)`, "i").test(normalized);
+    return normalized.includes(candidate);
+  }));
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export function parseDigitalLifeCatalog(value: unknown): DigitalLifeCatalogFile {

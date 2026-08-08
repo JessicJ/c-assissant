@@ -19,6 +19,7 @@ function compilationProposal(planId: string, planVersion: number): PlanCompilati
       sourceSkills: [{ id: "policy-applicability", version: "0.1.0" }, { id: "arrival-preparation", version: "0.1.0" }],
       reminder: { dueAt: "2026-08-31T21:00:00.000Z", timeZone: "Asia/Shanghai", purpose: "Carry entry documents", refreshFacts: [] }
     }],
+    knownInformation: ["Local food orientation: Learn about 葱油拌面 (scallion oil noodles)."],
     assumptions: ["The exact document set still requires source-backed review."],
     limitations: ["No entry eligibility conclusion has been made."]
   };
@@ -190,6 +191,7 @@ test("Core compiles a version-bound Country Pack proposal into a new draft Plan"
   assert.equal(stage.tasks[0]?.reminder?.scheduledAtLocal, "2026-09-01T05:00");
   assert.equal(stage.tasks[0]?.status, "waiting_user");
   assert.deepEqual(stage.tasks[0]?.origin?.sourceSkills.map((source) => source.id), ["policy-applicability", "arrival-preparation"]);
+  assert.ok(result.plan.knownInformation.includes("Local food orientation: Learn about 葱油拌面 (scallion oil noodles)."));
   assert.equal(result.audit.sourcePlanVersion, 1);
   assert.equal(result.audit.compiledPlanVersion, 2);
   assert.match(result.plan.nextAction, /Review the complete compiled Plan/);

@@ -352,25 +352,30 @@ test("china-arrival-plan fails duplicate results and propagates supporting gates
 
 test("China compilation adapter requires the exact composed arrival-preparation result", () => {
   const preparation = runArrivalPreparationSkill({ items: [preparationItems[0]!], schedule: { departureAt: "2026-09-01T07:00:00+08:00", timeZone: "Asia/Shanghai" } });
+  const localFood = runLocalFoodGuideSkill({ locationName: "Shanghai", facts: localFoodFacts, sources: [localFoodSource], approvedSourceIds: [localFoodSource.id], now: "2026-08-07T01:00:00.000Z" });
   const supporting = chinaArrivalPlanSupportingSkillOrder.map((id) => supportingResult(id, id === "arrival-preparation" ? preparation.status : "success"));
   const composite = runChinaArrivalPlanSkill({ planId: "plan-1", planVersion: 2, supportingResults: supporting });
-  const ready = createChinaPlanCompilationProposal({ composite, preparation });
+  const ready = createChinaPlanCompilationProposal({ composite, preparation, localFood });
   assert.equal(ready.status, "ready");
   if (ready.status === "ready") {
     assert.equal(ready.proposal.planRef.version, 2);
     assert.equal(ready.proposal.tasks[0]?.reminder?.dueAt, "2026-08-31T21:00:00.000Z");
     assert.deepEqual(ready.proposal.tasks[0]?.sourceSkills.map((source) => source.id), ["policy-applicability", "arrival-preparation"]);
+    assert.match(ready.proposal.knownInformation?.[0] ?? "", /xiaolongbao.*小笼包/i);
   }
-  const mismatched = createChinaPlanCompilationProposal({ composite: { ...composite, facts: composite.facts.map((fact) => fact.skillId === "arrival-preparation" ? { ...fact, version: "9.9.9" } : fact) }, preparation });
+  const mismatched = createChinaPlanCompilationProposal({ composite: { ...composite, facts: composite.facts.map((fact) => fact.skillId === "arrival-preparation" ? { ...fact, version: "9.9.9" } : fact) }, preparation, localFood });
   assert.equal(mismatched.status, "blocked");
+  const mismatchedFood = createChinaPlanCompilationProposal({ composite: { ...composite, facts: composite.facts.map((fact) => fact.skillId === "local-food-guide" ? { ...fact, version: "9.9.9" } : fact) }, preparation, localFood });
+  assert.equal(mismatchedFood.status, "blocked");
 });
 
 test("China proposal passes the country-neutral Core compiler without activating the Plan", () => {
   const plan = createPlanFromRequest({ request: "I will attend an exhibition in Shanghai in September 2026." });
   const preparation = runArrivalPreparationSkill({ items: [preparationItems[0]!], schedule: { departureAt: "2026-09-01T07:00:00+08:00", timeZone: "Asia/Shanghai" } });
+  const localFood = runLocalFoodGuideSkill({ locationName: "Shanghai", facts: localFoodFacts, sources: [localFoodSource], approvedSourceIds: [localFoodSource.id], now: "2026-08-07T01:00:00.000Z" });
   const supporting = chinaArrivalPlanSupportingSkillOrder.map((id) => supportingResult(id, id === "arrival-preparation" ? preparation.status : "success"));
   const composite = runChinaArrivalPlanSkill({ planId: plan.id, planVersion: plan.version, supportingResults: supporting });
-  const decision = createChinaPlanCompilationProposal({ composite, preparation });
+  const decision = createChinaPlanCompilationProposal({ composite, preparation, localFood });
   assert.equal(decision.status, "ready");
   if (decision.status !== "ready") return;
   const compiled = compilePlanProposal(plan, decision.proposal, new Date("2026-08-07T00:00:00.000Z"));
@@ -379,4 +384,5 @@ test("China proposal passes the country-neutral Core compiler without activating
   assert.equal(compiled.plan.status, "draft");
   assert.equal(compiled.plan.version, plan.version + 1);
   assert.equal(compiled.plan.stages.at(-1)?.tasks[0]?.reminder?.scheduledAtLocal, "2026-09-01T05:00");
+  assert.match(compiled.plan.knownInformation.at(-1) ?? "", /scallion oil noodles.*葱油拌面/i);
 });

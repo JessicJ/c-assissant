@@ -52,5 +52,14 @@
     "allowedDomains": ["www.wechat.com", "wechat.com"],
     "topics": ["digital_life", "communication"],
     "language": "en"
+  },
+  {
+    "id": "shanghai-official-iconic-foods-2026",
+    "authority": "Shanghai Municipal People's Government",
+    "title": "Explore Shanghai's culinary heritage: Iconic dishes and delicacies",
+    "url": "https://english.shanghai.gov.cn/en-SpecialtyFood/20260511/594d417a429d426e8442a47336c47574.html",
+    "allowedDomains": ["english.shanghai.gov.cn", "shanghai.gov.cn"],
+    "topics": ["local_food", "shanghai", "daily_life"],
+    "language": "en"
   }
 ]

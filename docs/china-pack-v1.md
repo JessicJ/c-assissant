@@ -70,7 +70,7 @@ Implemented slice: `transport-planner` `0.1.0` receives normalized Amap route fa
 
 Adds local specialties and useful food context to the Plan. It avoids prematurely scheduling specific restaurants unless the user asks.
 
-Implemented slice: `local-food-guide` `0.1.0` accepts only normalized food facts linked to an official-source ID from the Country Pack allowlist and a snapshot retrieved inside a 30-day freshness window. It preserves each Chinese original name, adds an English name and explanation, deduplicates and limits the Plan-time result to five items, and degrades rather than inventing local specialties when no traceable fact is available. It does not select restaurants or propose map, order, reservation, payment, or completion actions; specific places remain the later `food-nearby` flow.
+Implemented slice: `local-food-guide` `0.1.0` accepts only normalized food facts linked to an official-source ID from the Country Pack allowlist and a snapshot retrieved inside a 30-day freshness window. It preserves each Chinese original name, adds an English name and explanation, deduplicates and limits the Plan-time result to five items, and degrades rather than inventing local specialties when no traceable fact is available. The first city catalog covers Shanghai with five dishes from one Shanghai Municipal People's Government page; a matching city alias and a fresh immutable snapshot are required. The validated orientation is compiled into the complete Plan's known information and the snapshot is linked as a Plan source. It does not select restaurants or propose map, order, reservation, payment, or completion actions; specific places remain the later `food-nearby` flow.
 
 ### `food-nearby`
 

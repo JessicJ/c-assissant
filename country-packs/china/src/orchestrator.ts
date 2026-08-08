@@ -94,7 +94,7 @@ export async function orchestrateChinaArrivalPlan(input: ChinaArrivalOrchestrati
     planVersion: input.plan.version,
     supportingResults
   }) as unknown as ChinaArrivalPlanSkillResult;
-  const proposal = createChinaPlanCompilationProposal({ composite, preparation });
+  const proposal = createChinaPlanCompilationProposal({ composite, preparation, localFood });
   if (proposal.status === "blocked") return { status: "blocked", reasonCode: proposal.reasonCode, message: proposal.message, supportingResults, preparation, composite };
   const compilation = compilePlanProposal(input.plan, proposal.proposal, new Date(input.now));
   if (compilation.status === "blocked") return { status: "blocked", reasonCode: compilation.reasonCode, message: compilation.message, supportingResults, preparation, composite };
