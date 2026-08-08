@@ -60,6 +60,7 @@ This document separates accepted product decisions from questions that still req
 - retention periods for Profile, GPS, Runs, and SourceSnapshots;
 - exact definition of material Plan changes requiring reconfirmation;
 - notification timing, quiet hours, and no-response buffers;
+- departure/arrival inference from per-trip Telegram live-location sharing is deferred; opening an external handoff never confirms boarding or arrival;
 - initial official-source applicability test matrix;
 - complete Web visual design and accessibility requirements.
 
@@ -67,4 +68,4 @@ This document separates accepted product decisions from questions that still req
 
 V1 should not be called complete until the selected runtime, Amap Connector, Telegram delivery, persistence, scheduler, Web workspace, Plan confirmation, source traceability, and the arrival transport demo work together in a fresh one-user installation.
 
-Implementation status (2026-08-07): the repository satisfies this gate in an isolated, credential-free integration scenario and in component tests. Real-account/device release checks remain for Claude Code login, Telegram delivery, and Amap mobile handoff; those checks require the user's external sessions and are not simulated as successful.
+Implementation status (2026-08-08): the repository satisfies this gate in an isolated, credential-free integration scenario and in component tests. `pnpm release:check` repeats the local structural, tracked-file safety, build, typecheck, and test gates without contacting external services. Real-account/device release checks remain for Claude Code login, Telegram delivery, and Amap mobile handoff; those checks require the user's external sessions and are not simulated as successful.

@@ -111,6 +111,7 @@
 
 - 已完成 Telegram Bot 身份验证、一次性私聊配对，以及已绑定账号的最小输入入口：普通文本和 `/new` 都会使用 Settings 中选定的本机 Codex 或 Claude Code 生成待确认 Plan；所选运行底座不可用时会明确降级为本地模板草案，另有 `/help`、`/plan` 和 `/prepare`。官方来源 Connector 已具备受限刷新和快照能力；数据库已建立可追踪 schema 基线和备份校验。
 - 已增加最小 GitHub Actions CI：在 `master`、`main` 推送及 Pull Request 上使用 Node.js 22 与锁定依赖执行 build、typecheck 和全部 tests，不注入任何生产凭据。
+- 新增 `pnpm release:check` 本地发布验收入口，并在 CI 复用：先检查 Node 版本、八个 workspace、九个内部 China Skills、空值环境变量模板和 Git 跟踪文件中的凭据/私钥风险，再执行 build、typecheck 和全部 tests；全过程不连接任何外部账号或 Provider。
 - Web Settings 已增加实例就绪卡：统一汇总长期 Profile、当前选中的 Agent Runtime、高德、QWeather 与 Telegram 私聊配对状态，并只给出一个优先下一步。未选择的 Runtime 不影响整体就绪；当前实例使用已登录 Codex 时，本机 Claude Code 未登录会被正常保留为可选的待配置状态。
 - 已实现第一条 Plan 事件状态转换：任务只有显式 `arrival` 触发标记时，预计抵达事件才会把它从 `scheduled` 转为 `ready`，记录本地收件箱并更新当前下一步；不会推断或自动完成任何任务。
 - 已实现到达任务的显式完成闭环：只有绑定 Telegram 用户点击“我已完成此步骤”时，当前 Plan 内的 `ready` 任务才会改为 `completed`，并记录为用户确认；不会把打开高德或其他第三方应用当作完成回执。
@@ -143,7 +144,7 @@
 7. `docs/china-pack-v1.md`：China Pack V1 范围与第一条演示闭环。
 8. `docs/decisions-and-open-items.md`：已确认决策和待确认问题。
 
-基础环境是 Node.js 22 及以上版本和 pnpm。依赖安装完成后，可使用 `pnpm install`、`pnpm dev`、`pnpm build`、`pnpm typecheck` 和 `pnpm test`。`pnpm dev` 会启动本地 Server 与 Web，并在首次启动时创建 `data/c-assistant.sqlite`；真实部署和外部服务配置仍不在这一阶段。
+基础环境是 Node.js 22 及以上版本和 pnpm。依赖安装完成后，可使用 `pnpm install`、`pnpm dev`、`pnpm build`、`pnpm typecheck`、`pnpm test` 和 `pnpm release:check`。`pnpm dev` 会启动本地 Server 与 Web，并在首次启动时创建 `data/c-assistant.sqlite`；`pnpm release:check` 不访问外部服务，可用于每次交接或发布前的完整本地验收。真实部署和外部服务配置仍不在这一阶段。
 
 ## 已知问题与风险
 
@@ -153,6 +154,7 @@
 - 政策、入境、法律、银行和医疗结论必须使用最新官方来源；当前仅实现“资料与证据是否准备好进入审查”的状态，尚未形成可交付的适用性判断。
 - Profile 中的签证/居留状态目前已作为受限 Plan 草案上下文传给选定 Agent，但尚未接入官方来源的适用性判断，且不能被当作政策资格结论。
 - Telegram 不能静默读取 GPS，只能由用户通过明确操作分享位置。
+- Telegram 的逐次实时位置共享、上车/到达推断和动态 ETA 推进暂缓；当前仍不得把打开高德或一次定位视为已上车、已到达。
 - Telegram 附近餐饮目前只能依赖高德 POI 事实，无法验证营业状态、排队、桌位、菜单或外国人实际可用性；这些内容不会被推断。
 - Landi 不应存储 Codex 或 Claude Code 登录凭据，也不应把 Connector 密钥暴露给 Agent 或 Skill。
 - V1 不直接预订、叫车、点餐或支付；外部链接被打开也不能视为任务已经完成。
