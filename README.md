@@ -27,9 +27,10 @@ Useful verification commands:
 pnpm build
 pnpm typecheck
 pnpm test
+pnpm release:check
 ```
 
-The same build, typecheck, and test gates run in GitHub Actions on pull requests and pushes to `master` or `main`. CI uses no production Connector or runtime credentials.
+`pnpm release:check` runs a credential-free structural and tracked-file safety preflight followed by the complete build, typecheck, and test suite. It does not contact Telegram, Amap, QWeather, Codex, or Claude Code. The same gate runs in GitHub Actions on pull requests and pushes to `master` or `main`.
 
 The local instance creates `data/c-assistant.sqlite` on first start. If `AMAP_API_KEY` is set in the ignored `.env` file, the Plan screen can validate place-search facts, show nearby restaurant and accommodation POI and distance facts around a selected place, and compare driving, walking, and public-transit route facts. A user can also enter an already chosen stay by name and address; Amap resolves its location before it is saved inside that Plan. Driving can be handed to the user's Amap app without hailing a ride; the other route types remain factual comparisons until device handoffs are verified. A stay is marked as confirmed only after the user explicitly says they completed an external booking. Nearby results are factual candidates, not ranked recommendations, and the app does not order, reserve, or pay. If QWeather's ignored `QWEATHER_API_KEY` and `QWEATHER_API_HOST` are configured, it is the preferred source for current conditions, a three-day forecast, and cautious packing or transport prompts. When QWeather is unavailable, direct Web and Telegram weather checks may fall back to lower-detail Amap city weather; missing precipitation, UV, and feels-like values are never invented, and fallback facts do not enter packing or transport decisions. If `TELEGRAM_BOT_TOKEN` is configured there, the Settings screen can explicitly verify the bot identity without exposing the token. In Settings, choose the locally logged-in Codex or Claude Code CLI; the Plan composer and paired Telegram account then create a schema-validated draft only after an explicit user request.
 

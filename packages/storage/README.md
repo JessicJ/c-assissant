@@ -1,7 +1,7 @@
 # Storage
 
-Local SQLite persistence for the first personal-instance workflow.
+Local SQLite persistence for the personal-instance workflow.
 
-It currently stores the singleton Profile, the current Plan and its Stages/Tasks, plus Inbox items. The database is created automatically on first Server start and is ignored by Git.
+It stores the singleton Profile, current and historical Plans with Stages, Tasks and Reminders, Inbox items, minimized Runs, Telegram binding and delivery state, immutable SourceSnapshots, schema migrations, and other bounded workflow state. The database is created automatically on first Server start and is ignored by Git.
 
-This is not yet the final storage model: Reminder, Event, Run, Confirmation, SourceSnapshot, retention, backup, encryption, and migrations remain future work.
+Schema compatibility checks, integrity reporting, and explicit private backups are implemented. Automatic destructive recovery, database encryption, and a user-approved retention policy remain future work.

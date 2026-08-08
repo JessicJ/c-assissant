@@ -60,9 +60,10 @@ pnpm dev
 pnpm build
 pnpm typecheck
 pnpm test
+pnpm release:check
 ```
 
-Pull Request 以及向 `master`/`main` 的推送会在 GitHub Actions 中执行相同的构建、类型检查和测试；CI 不配置任何真实 Connector 或运行底座凭据。
+`pnpm release:check` 会先执行不访问外部账号的结构与 Git 跟踪文件安全预检，再执行完整构建、类型检查与测试；它不会调用 Telegram、高德、QWeather、Codex 或 Claude Code。Pull Request 以及向 `master`/`main` 的推送会在 GitHub Actions 中执行同一验收入口。
 
 首次启动会在 `data/c-assistant.sqlite` 创建本地数据库。配置本地 `.env` 后，高德可提供地点、周边餐饮与住宿、驾车、步行和公共交通事实，并把路线交接给用户自行打开；QWeather 可提供实况和三天预报。QWeather 不可用时，即时查询可降级显示高德基础天气；高德未提供的降水量、UV 和体感温度不会被猜测，降级结果也不会进入打包或交通决策。住宿只有在用户明确表示已完成第三方预订后才会标记为已确认，系统不会点餐、预订、叫车或支付。
 
