@@ -15,7 +15,7 @@ import { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue, shouldRenewExpiredArrivalLocationRequest } from "./arrival-reminder.js";
 import { arrivalRouteDestination, formatArrivalRoute, selectArrivalTransport } from "./arrival-route.js";
 import { createOfficialSourceService, parseOfficialSourceRegistry } from "./official-sources.js";
-import { parseTelegramCommand } from "./telegram-commands.js";
+import { formatTransportPreferenceAcknowledgement, parseTelegramCommand, shouldGenerateCompletePlan } from "./telegram-commands.js";
 import { formatTelegramNearbyFood, parseTelegramFoodPartyCallback, telegramFoodPartyMarkup } from "./telegram-food.js";
 import { createTelegramPlan, formatTelegramPlanCreationPages, formatTelegramPlanPages, planDraftForRevision, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
 import { formatTelegramProfile, parseTelegramProfileCallback, telegramProfileChoiceMarkup, telegramProfileMarkup, telegramProfileTextPrompt, updateProfileText } from "./telegram-profile.js";
@@ -915,7 +915,7 @@ async function requestTelegramFoodLocation(chatId: string): Promise<void> {
   }
 }
 
-type TelegramCommandReply = { text: string; replyMarkup?: TelegramReplyMarkup; locationIntent?: { purpose: "nearby_food"; planId: string } };
+type TelegramCommandReply = { text: string; replyMarkup?: TelegramReplyMarkup; locationIntent?: { purpose: "nearby_food" | "arrival_route"; planId: string } };
 
 async function sendTelegramCommandReplies(chatId: string, replies: TelegramCommandReply[]): Promise<void> {
   for (const reply of replies) {
@@ -933,7 +933,7 @@ async function sendTelegramCommandReplies(chatId: string, replies: TelegramComma
 async function telegramCommandResponse(text: string | undefined): Promise<TelegramCommandReply[] | undefined> {
   const command = parseTelegramCommand(text);
   if (command.type === "empty") return undefined;
-  if (command.type === "help") return [{ text: "Landi is connected. Send a normal message to create or revise a Plan draft with your selected local runtime, or use:\n/plan — show the current Plan and confirmation control\n/prepare — prepare the current draft with China Pack sources and Skills\n/new <what you need to do> — create a separate Plan draft\n/profile — review or change your basic Profile\n/weather — check current weather for the Plan location\n/food — find nearby food after an explicit location share\n/help — show this help\n\nReview the complete Plan in Telegram or Web before confirming it. Bookings and payments are not enabled." }];
+  if (command.type === "help") return [{ text: "Landi is connected. A clear first-use request can create a Plan draft with your selected local runtime. While a Plan is active, local requests such as ‘I prefer taxi’ update only the current context; they do not create or display a complete Plan. Use:\n/plan — show the current Plan and confirmation control\n/prepare — prepare the current draft with China Pack sources and Skills\n/new <what you need to do> — explicitly create a separate complete Plan draft\n/profile — review or change your basic Profile\n/weather — check current weather for the Plan location\n/food — find nearby food after an explicit location share\n/help — show this help\n\nA complete Plan is shown only for an explicit new or whole-Plan request. Bookings and payments are not enabled." }];
   if (command.type === "plan") {
     const plan = store.getWorkspace().activePlan;
     const replyMarkup = telegramPlanConfirmationMarkup(plan);
@@ -984,7 +984,27 @@ async function telegramCommandResponse(text: string | undefined): Promise<Telegr
     }
     return [{ text: `This Plan currently has ${plan.configuration.travelContext.partySize} ${plan.configuration.travelContext.partySize === 1 ? "person" : "people"}.\n\nTap below to share your current location for this one nearby food check. It expires after 15 minutes and will not be saved.`, replyMarkup: { keyboard: [[{ text: "Share current location", request_location: true }]], resize_keyboard: true, one_time_keyboard: true }, locationIntent: { purpose: "nearby_food", planId: plan.id } }];
   }
+  if (command.type === "set_transport_preference") {
+    const plan = store.getWorkspace().activePlan;
+    if (plan.configuration.transport.preference !== command.preference) store.updatePlanTransportPreference(plan.id, { preference: command.preference });
+    const accommodation = plan.configuration.accommodation;
+    const checkin = store.getTelegramArrivalCheckin(plan.id);
+    const offersCurrentRoute = plan.status === "active"
+      && (accommodation.status === "candidate" || accommodation.status === "confirmed")
+      && Boolean(accommodation.location && checkin?.checkInSentAt);
+    return [{
+      text: formatTransportPreferenceAcknowledgement(command.preference, offersCurrentRoute),
+      ...(offersCurrentRoute ? {
+        replyMarkup: { keyboard: [[{ text: "Share current location", request_location: true }]], resize_keyboard: true, one_time_keyboard: true },
+        locationIntent: { purpose: "arrival_route" as const, planId: plan.id }
+      } : {})
+    }];
+  }
   if (command.type === "create_plan") {
+    const existingWorkspace = store.getWorkspace();
+    if (!shouldGenerateCompletePlan(existingWorkspace.activePlan.status, command.request, command.explicit)) {
+      return [{ text: `I kept the active Plan “${existingWorkspace.activePlan.title}” unchanged because this looks like a current request, not an instruction to replace the complete Plan.\n\nFor a separate complete Plan, use /new. To replace the whole Plan, say that explicitly. Current V1 direct actions include transport preferences such as “I prefer taxi”, /weather, and /food.` }];
+    }
     if (command.request.length > 1_500) return [{ text: "Keep a new Plan request under 1,500 characters, then send it again." }];
     if (generatingPlan) return [{ text: "A Plan draft is already being prepared. Please wait for it before sending another request." }];
     generatingPlan = true;

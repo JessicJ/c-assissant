@@ -89,7 +89,7 @@ pnpm release:check
 
 Settings 会显示 SQLite schema 与完整性状态，并允许用户显式创建经过再次校验的本地备份。备份保存到 `data/backups`（自定义数据库则保存在其旁边），权限为 `0600`，不包含 Codex/Claude Code 登录凭据或 Connector 密钥。恢复会覆盖当前 workspace，因此 V1 不自动执行恢复。
 
-配置 `TELEGRAM_BOT_TOKEN` 后，可在 Settings 验证 Bot 并创建一次性私聊配对链接。首次普通文本或 `/new <事项>` 会使用本机已登录且在 Settings 选定的 Codex 或 Claude Code，结合已确认的 Profile 生成待确认 Plan；身份字段只作计划上下文，不能作为政策资格结论。用户创建的 Plan 仍为草案时，后续普通文本会作为一句话修订，`/new` 则始终新建独立 Plan。修订失败不会用模板覆盖原草案。新草案和 `/plan` 都会把完整 Plan 自动分页发送到 Telegram，确认按钮只出现在最后一页，并绑定当前 Plan ID 与版本；旧按钮不能确认已替换或已修改的草案。Web 工作台也保留同一套完整审阅和确认能力。
+配置 `TELEGRAM_BOT_TOKEN` 后，可在 Settings 验证 Bot 并创建一次性私聊配对链接。首次普通文本或 `/new <事项>` 会使用本机已登录且在 Settings 选定的 Codex 或 Claude Code，结合已确认的 Profile 生成待确认 Plan；身份字段只作计划上下文，不能作为政策资格结论。用户创建的 Plan 仍为草案时，后续普通文本会作为一句话修订，`/new` 则始终新建独立 Plan。Plan 激活后，局部意图不会擅自创建或展示另一份完整 Plan：例如 `I prefer taxi` 只更新本次 Plan 的临时交通偏好，并可为当前抵达路线提供一次性定位按钮；暂不支持的局部请求会保持当前 Plan 不变。只有 `/new` 或明确表达创建新计划、修改整个计划时，才进入完整 Plan 生成和展示。修订失败不会用模板覆盖原草案。新草案和 `/plan` 都会把完整 Plan 自动分页发送到 Telegram，确认按钮只出现在最后一页，并绑定当前 Plan ID 与版本；旧按钮不能确认已替换或已修改的草案。Web 工作台也保留同一套完整审阅和确认能力。
 
 Web Plan 页面或 Telegram `/prepare` 会刷新已批准且缓存过期的官方来源，收集高德和 QWeather 当前事实，依次运行 China Pack 的七个 supporting Skills 与组合 Skill，并原子保存新的完整草稿版本。首批当地特色饮食目录覆盖上海、北京和广州；只有地点匹配且存在对应官方英文城市门户的新鲜快照时，五项保留中文原名的英文介绍才会进入完整 Plan 并附原文来源。每个依赖官方资料的 Task、编排 Run 和逐 Skill Run 都会保留准确的快照 ID 与内容指纹，但不复制官方正文；不存在或指纹不符的证据会让写入整体回滚。Web 会在对应 Task 下显示可读的官方依据链接，Telegram 则用编号把 Task 指向完整计划末尾的原文来源，不向用户展示内部 ID 或哈希。缺少住宿路线、Profile 或时间等关键事实时，只返回需要补充的项目并保留原草稿；成功后仍必须完整审阅并确认，Task 和 Reminder 才会激活。
 
