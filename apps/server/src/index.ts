@@ -104,6 +104,22 @@ server.get("/health", async () => ({
 
 server.get("/api/workspace", async () => store.getWorkspace());
 server.get("/api/plans/history", async () => store.listHistoricalPlans());
+server.delete<{ Params: { planId: string } }>("/api/plans/:planId/history", async (request, reply) => {
+  try {
+    if (!store.deleteHistoricalPlan(request.params.planId)) return reply.code(404).send({ error: "The historical Plan was not found." });
+    return { deleted: true };
+  } catch (error) {
+    return reply.code(400).send({ error: error instanceof Error ? error.message : "The historical Plan could not be deleted." });
+  }
+});
+server.patch<{ Params: { planId: string; taskId: string }; Body: { checked?: boolean } }>("/api/plans/:planId/tasks/:taskId/check", async (request, reply) => {
+  if (typeof request.body?.checked !== "boolean") return reply.code(400).send({ error: "A checklist update requires checked=true or checked=false." });
+  try {
+    return store.setPlanTaskChecked(request.params.planId, request.params.taskId, request.body.checked);
+  } catch (error) {
+    return reply.code(400).send({ error: error instanceof Error ? error.message : "The checklist item could not be updated." });
+  }
+});
 server.get("/api/runs", async () => store.listRecentAgentRuns());
 server.get("/api/runs/task-reminders", async () => store.listRecentTaskReminderRuns());
 server.get("/api/runs/plan-compilations", async () => store.listRecentPlanCompilationRuns());
@@ -254,6 +270,25 @@ server.post<{ Body: CreatePlanInput }>("/api/plans", async (request, reply) => {
 server.get("/api/runtimes/codex", async () => codex.check());
 server.get("/api/runtimes/claude-code", async () => claudeCode.check());
 server.get("/api/runtimes", async () => Promise.all([codex.check(), claudeCode.check()]));
+server.post<{ Params: { kind: string } }>("/api/runtimes/:kind/test", async (request, reply) => {
+  if (request.params.kind !== "codex" && request.params.kind !== "claude-code") return reply.code(400).send({ error: "Unsupported runtime." });
+  try {
+    const workspace = store.getWorkspace();
+    const runtime = selectedRuntimeAdapter(request.params.kind);
+    const draft = await runtime.generatePlanDraft({
+      request: "Create a minimal travel Plan used only to verify that this local runtime can return valid structured output. Do not perform external actions.",
+      profile: {
+        preferredLanguage: workspace.profile.preferredLanguage,
+        nationality: workspace.profile.nationality,
+        gender: workspace.profile.gender,
+        immigrationStatus: workspace.profile.immigrationStatus
+      }
+    });
+    return { ok: true, message: `${runtimeName(request.params.kind)} 调用成功：${draft.title}` };
+  } catch (error) {
+    return reply.code(error instanceof RuntimeAdapterError && (error.code === "not_installed" || error.code === "not_authenticated") ? 503 : 400).send({ error: error instanceof Error ? error.message : "Runtime test failed." });
+  }
+});
 
 server.get("/api/setup-readiness", async () => {
   const workspace = store.getWorkspace();

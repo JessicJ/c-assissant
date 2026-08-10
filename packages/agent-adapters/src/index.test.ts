@@ -120,6 +120,19 @@ test("Codex Plan context includes confirmed Profile identity without claiming po
   assert.match(prompt, /not as proof of a policy entitlement/i);
   assert.match(prompt, /Never invent a date, time, or departure time zone/i);
   assert.match(prompt, /Use \["weather"\] only when current destination weather/i);
+  assert.match(prompt, /exactly six stages/i);
+  assert.match(prompt, /总行程表/);
+  assert.match(prompt, /每日行程/);
+  assert.match(prompt, /预订清单/);
+  assert.match(prompt, /预算表/);
+  assert.match(prompt, /交通方案/);
+  assert.match(prompt, /应急资料/);
+  assert.match(prompt, /10-20% contingency/i);
+  assert.match(prompt, /plan backward/i);
+  assert.match(prompt, /1-2 must-do items per day/i);
+  assert.match(prompt, /only time-bound travel nodes/i);
+  assert.match(prompt, /individually checkable user-owned Tasks/i);
+  assert.match(prompt, /Never invent an app download URL/i);
 });
 
 test("Plan revision context is complete but excludes Core and Connector state", () => {

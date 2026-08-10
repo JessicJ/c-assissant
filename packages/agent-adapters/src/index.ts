@@ -213,8 +213,8 @@ export const planDraftSchema = {
     title: { type: "string", minLength: 1, maxLength: 120 },
     location: { type: "string", minLength: 1, maxLength: 120 },
     dates: { type: "string", minLength: 1, maxLength: 120 },
-    knownInformation: { type: "array", minItems: 1, maxItems: 8, items: { type: "string", minLength: 1, maxLength: 300 } },
-    assumptions: { type: "array", maxItems: 8, items: { type: "string", minLength: 1, maxLength: 300 } },
+    knownInformation: { type: "array", minItems: 1, maxItems: 20, items: { type: "string", minLength: 1, maxLength: 300 } },
+    assumptions: { type: "array", maxItems: 20, items: { type: "string", minLength: 1, maxLength: 300 } },
     nextAction: { type: "string", minLength: 1, maxLength: 300 },
     stages: {
       type: "array",
@@ -230,7 +230,7 @@ export const planDraftSchema = {
           tasks: {
             type: "array",
             minItems: 1,
-            maxItems: 8,
+            maxItems: 30,
             items: {
               type: "object",
               additionalProperties: false,
@@ -277,9 +277,21 @@ Confirmed Profile fields:
 - China entry or residence status: ${input.profile.immigrationStatus}
 
 Rules:
-- Use English because the end user reads English.
-- Make a useful but conservative Plan with 2-4 stages.
+- Write all user-facing Plan content in the confirmed preferred language. If that Profile value is unknown, follow the language used in the user's request.
+- For a trip, return exactly six stages in this order, using localized equivalents of these titles: 1) 总行程表, 2) 每日行程, 3) 预订清单, 4) 预算表, 5) 交通方案, 6) 应急资料.
+- 总行程表 must state the trip's core goal, an explicit priority order for resolving conflicts, countries and cities in route order, travel dates and total days, realistically usable travel time, fixed events, entry or visa gates, and relevant season or local-event conditions.
+- 每日行程 must be day-by-day when dates are known. Group activities geographically; identify only 1-2 must-do items per day; distinguish optional items; leave 1-3 hours of buffer; keep arrival, jet-lag, and departure days light; and include a nearby weather or closure Plan B. When dates are unknown, create a day-allocation framework and ask the user to confirm dates before inventing a calendar.
+- Put only time-bound travel nodes in 每日行程, such as leaving for the airport, a flight or train, hotel check-in, an attraction slot, a fixed event, and the return journey. Do not put packing, document preparation, app installation, payment setup, or other pre-trip work on the itinerary timeline.
+- 预订清单 must cover every reservation that may apply: international and domestic transport, accommodation, fixed events, attractions, restaurants, tours, rental cars, and transfers. Record the local date/time, address, booking status, cancellation rule, and latest cancellation time when known; otherwise mark the field for confirmation.
+- 预算表 must cover international transport, intercity and local transport, accommodation, visa or entry authorization, insurance, event and attraction tickets, food, connectivity, baggage, shopping, airport transfers, and emergency funds. Never invent a price. Use confirmed amounts or clearly labeled planning estimates, include currency, and add a 10-20% contingency recommendation.
+- 交通方案 must optimize city order to avoid backtracking; compare door-to-door time rather than flight time alone; cover international ticket strategy, open-jaw options where useful, airport transfers, intercity movement, local transit, late-night event return, and driving restrictions when relevant.
+- 应急资料 must cover entry documents, insurance, payment redundancy, cash, phone or eSIM, offline maps and local-language addresses, offline copies of documents, safety and scams, emergency numbers, health and medication, luggage rules, clothing and cultural rules, key risk-specific alternatives, and final checks one week and one day before departure.
+- Write preparation work as individually checkable user-owned Tasks. When an official travel app is needed in China, use its recognizable official name in the Task title (for example WeChat/微信, Amap/高德地图, Alipay/支付宝, or China Mobile/中国移动) so Landi can attach the verified official download or service link. Never invent an app download URL in the draft.
+- Determine the core goal before optimizing details. If the trip contains a concert, exhibition, meeting, competition, cruise, wedding, or other immovable event, plan backward from it, arrive with a safe buffer, avoid risky transport immediately beforehand, and include venue entry and post-event transport checks.
+- Treat passport validity, visa or electronic authorization, permitted activity, return-ticket, accommodation-proof, funds, insurance, and special entry conditions as gates to verify before non-refundable bookings. Put material visa risk first.
+- Prefer accommodation areas based on safety, convenient transport, proximity to fixed activities, and nightly return practicality before recommending a specific property.
 - Place every unknown that could materially change execution in assumptions; do not invent visa, policy, booking, location, dates, prices, or provider availability.
+- Turn critical unknowns—goal, priority order, travelers, dates, usable days, budget and currency, fixed events, entry status, city interests, pace, and accessibility needs—into early user-owned Tasks. Do not hide them inside generic wording.
 - Treat Profile identity fields as user-provided planning context, not as proof of a policy entitlement or requirement.
 - Do not claim a policy requirement or cite an unofficial source. Official-source research happens in another Skill.
 - Include user-owned Tasks for real-world choices and external-owned Tasks for actions inside another application.
@@ -289,7 +301,8 @@ Rules:
 - Every reminder must include refreshFacts. Use ["weather"] only when current destination weather can materially change this Task's immediate packing, departure, outdoor, or transport decision. Use [] for documents, apps, payments, policy checks, and all other Tasks. Do not infer or request unsupported dynamic facts.
 - A reminder in the draft is only a proposal. It will not run until the user reviews and confirms the complete Plan.
 - Do not say that Landi has booked, paid, hailed a ride, or completed any action.
-- The Plan must be readable as a complete draft before a user confirms it.`;
+- Each task title must be concrete enough to act on. Use dueLabel for a known local day/time or a meaningful decision deadline, never false precision.
+- The Plan must be readable as a complete draft before a user confirms it, and the six stages together must function as a trip overview, daily itinerary, reservation list, budget, transport plan, and emergency pack.`;
 }
 
 function isPlanDraft(value: unknown): value is GeneratedPlanDraft {

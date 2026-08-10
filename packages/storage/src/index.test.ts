@@ -402,6 +402,41 @@ test("SQLite turns an active Plan revision into a replacement draft without inte
   store.close();
 });
 
+test("SQLite persists Web preparation checklist changes only for user-owned current tasks", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const workspace = store.createGeneratedPlan({
+    title: "Preparation checklist",
+    location: "Shanghai, China",
+    dates: "October 2026",
+    knownInformation: ["A preparation checklist is needed."],
+    assumptions: [],
+    nextAction: "Complete preparation.",
+    stages: [{ title: "应急资料", description: "Prepare before travel.", tasks: [
+      { title: "Pack passport", owner: "user", dueLabel: "Before departure" },
+      { title: "Open official app", owner: "external", dueLabel: "Before departure" }
+    ] }]
+  }, "codex");
+  const [userTask, externalTask] = workspace.activePlan.stages[0]?.tasks ?? [];
+
+  const checked = store.setPlanTaskChecked(workspace.activePlan.id, userTask?.id ?? "", true);
+  assert.equal(checked.activePlan.stages[0]?.tasks[0]?.status, "completed");
+  const unchecked = store.setPlanTaskChecked(workspace.activePlan.id, userTask?.id ?? "", false);
+  assert.equal(unchecked.activePlan.stages[0]?.tasks[0]?.status, "waiting_user");
+  assert.throws(() => store.setPlanTaskChecked(workspace.activePlan.id, externalTask?.id ?? "", true), /user-owned/i);
+  store.close();
+});
+
+test("SQLite deletes only archived history Plans", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const original = store.getWorkspace().activePlan;
+  const replacement = store.createPlan({ request: "I am going to Beijing next month." }).activePlan;
+  assert.equal(store.listHistoricalPlans().some((plan) => plan.id === original.id), true);
+  assert.equal(store.deleteHistoricalPlan(original.id), true);
+  assert.equal(store.listHistoricalPlans().some((plan) => plan.id === original.id), false);
+  assert.throws(() => store.deleteHistoricalPlan(replacement.id), /cannot be deleted/i);
+  store.close();
+});
+
 test("SQLite keeps an Amap accommodation candidate inside the current Plan", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const plan = store.getWorkspace().activePlan;
