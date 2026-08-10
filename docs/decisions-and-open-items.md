@@ -10,6 +10,7 @@ This document separates accepted product decisions from questions that still req
 - Users may self-deploy, ask a friend to deploy, or eventually use a one-click deployment service.
 - Telegram is the only V1 messaging channel; WhatsApp is deferred.
 - Web is a full desktop product surface.
+- The confirmed Web workspace uses one column without a sidebar. Plan creation and revision open conversational dialogs; Plan content chooses overview, itinerary, checklist, reservation, budget, or transport presentation instead of forcing every Task into one timeline.
 - Profile stores long-term facts; Plan stores one concrete objective and its temporary context.
 - `plans[]` is the collection; a Plan contains Stages, Tasks, Reminders, Events, Decisions, Sources, and assumptions.
 - Core owns state and scheduling; Agent runtimes perform isolated reasoning Runs.
