@@ -28,6 +28,15 @@ pnpm start
 
 Open `http://127.0.0.1:8787/`. The production process serves the built Web workspace together with the Core API, Telegram polling, and Reminder scheduler; Vite is not required at runtime.
 
+On macOS, preview and install a per-user always-on service with:
+
+```bash
+pnpm run service:preview:macos
+pnpm run service:install:macos
+```
+
+The LaunchAgent starts at login and restarts after an unexpected exit. Its plist contains no Connector or Agent credentials. `pnpm run service:remove:macos` removes only the service registration and keeps local data, `.env`, and logs.
+
 Open the local URL printed by Vite. The Server health check is available at `http://127.0.0.1:8787/health` by default.
 
 Useful verification commands:

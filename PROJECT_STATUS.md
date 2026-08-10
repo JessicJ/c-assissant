@@ -131,6 +131,7 @@
 - 项目名称已确定为 Landi；开源许可证和贡献治理方式尚未确定。
 - 尚未确定一键部署与全天在线方案。
 - 已增加单进程生产入口：`pnpm build && pnpm start` 由 Server 同时提供构建后的 Web 工作台、Core API、Telegram 轮询与 Reminder 调度，生产运行不再依赖 Vite；开机启动、崩溃拉起和远程一键部署仍待确定。
+- 已增加 macOS 当前用户级常驻服务安装器及 dry-run 预览：LaunchAgent 在登录时启动、异常退出后拉起单一生产进程，plist 不保存 Connector 或 Agent 凭据，卸载保留本地数据和日志。Linux/Windows 与远程托管部署仍待适配。
 
 ## 运行方法
 

@@ -63,6 +63,15 @@ pnpm start
 
 随后打开 `http://127.0.0.1:8787/`。这个生产入口会同时提供 Web 工作台、Core API、Telegram 轮询和 Reminder 调度；不再需要长期运行 Vite 开发服务器。进程守护与开机启动仍由部署环境负责。
 
+在 macOS 上，可以先预览、再安装当前用户的常驻服务：
+
+```bash
+pnpm run service:preview:macos
+pnpm run service:install:macos
+```
+
+安装后，Landi 会在当前用户登录时启动，并在异常退出后自动拉起。安装文件不包含 Connector 或 Agent 凭据，服务继续从项目根目录的本地 `.env` 和各运行底座自己的登录状态读取配置。卸载常驻服务使用 `pnpm run service:remove:macos`；该操作保留 Profile、Plans、数据库、`.env` 和日志。
+
 可使用下列命令验证：
 
 ```bash
