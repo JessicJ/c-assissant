@@ -106,3 +106,23 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .connector-config-actions { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 3px; }.connector-config-actions .primary-button { margin-top: 0; flex: none; }
 .runtime-footer { display: flex; align-items: center; justify-content: space-between; gap: 15px; }.runtime-footer p { margin: 0; }.runtime-footer .secondary-button { margin-top: 0; flex: none; }
 @media (max-width: 760px) { .connector-config-form { grid-template-columns: 1fr; }.connector-config-actions, .runtime-footer { align-items: flex-start; flex-direction: column; }.connector-config-actions .primary-button, .runtime-footer .secondary-button { align-self: flex-start; } }
+.plans-tabs { max-width: 900px; display: flex; gap: 5px; margin: 0 0 14px; padding: 4px; border: 1px solid #e0e6e7; border-radius: 11px; background: #eef2f2; }
+.plans-tabs button { border: 0; border-radius: 8px; padding: 9px 13px; background: transparent; color: #68767c; font: inherit; font-size: 12px; font-weight: 700; }
+.plans-tabs button.active { background: #fff; color: #28616a; box-shadow: 0 1px 4px rgba(30,42,51,.08); }
+.plans-tabs button span { margin-left: 5px; color: #8a969b; }
+.plan-history-empty { max-width: 900px; padding: 28px; }
+.plan-history { max-width: 900px; }
+.plan-history-card { padding: 0; overflow: hidden; }
+.plan-history-card summary { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 20px 22px; cursor: pointer; list-style: none; }
+.plan-history-card summary::-webkit-details-marker { display: none; }
+.plan-history-card summary > div { display: grid; gap: 5px; }
+.plan-history-card summary h2, .plan-history-card summary p { margin: 0; }
+.plan-history-card summary h2 { font-size: 18px; }
+.plan-history-card summary small { flex: none; color: #89949a; }
+.plan-history-card .plan-state { width: fit-content; }
+.plan-history-detail { display: grid; gap: 13px; padding: 20px 22px 24px; border-top: 1px solid #e5e9eb; background: #fbfcfc; }
+.plan-history-detail > p, .plan-history-detail h3 { margin: 0; }
+.plan-history-detail > section { display: grid; gap: 7px; padding-top: 13px; border-top: 1px solid #e7ebed; }
+.plan-history-detail > section > p { margin: 0; }
+.history-sources { display: grid; gap: 7px; padding-top: 10px; }
+@media (max-width: 760px) { .plan-history-card summary { flex-direction: column; }.plan-history-card summary small { align-self: flex-start; } }

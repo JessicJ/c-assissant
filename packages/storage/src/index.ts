@@ -370,6 +370,14 @@ export class SqliteWorkspaceStore {
     };
   }
 
+  /** Returns archived Plan versions for read-only user review. */
+  listHistoricalPlans(limit = 20): Plan[] {
+    const safeLimit = Number.isInteger(limit) && limit > 0 && limit <= 100 ? limit : 20;
+    const rows = this.database.prepare(`SELECT id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, created_at
+      FROM plans WHERE is_current = 0 ORDER BY created_at DESC, rowid DESC LIMIT ?`).all(safeLimit) as unknown as PlanRow[];
+    return rows.map((row) => this.planFromRow(row));
+  }
+
   getTelegramPairingStatus(): TelegramPairingStatus {
     const binding = this.database.prepare("SELECT chat_id, user_id, first_name, username, paired_at FROM telegram_binding WHERE id = 1").get() as TelegramBindingRow | undefined;
     if (binding) return {
@@ -1615,8 +1623,10 @@ export class SqliteWorkspaceStore {
   private getCurrentPlan(): Plan | undefined {
     const plan = this.database.prepare(`SELECT id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, created_at
       FROM plans WHERE is_current = 1 ORDER BY created_at DESC LIMIT 1`).get() as PlanRow | undefined;
-    if (!plan) return undefined;
+    return plan ? this.planFromRow(plan) : undefined;
+  }
 
+  private planFromRow(plan: PlanRow): Plan {
     const stageRows = this.database.prepare("SELECT id, title, description, origin_json FROM stages WHERE plan_id = ? ORDER BY sort_order").all(plan.id) as unknown as StageRow[];
     const stages: Stage[] = stageRows.map((stage) => {
       const origin = parsePlanCompilationOrigin(stage.origin_json);

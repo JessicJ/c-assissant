@@ -5,7 +5,7 @@ import type { RuntimeCheck } from "@c-assistant/agent-adapters";
 import { runTransportPlannerSkill, runWeatherAndPackingSkill, type HousingAreaSkillResult, type TransportPlannerSkillResult } from "@c-assistant/china-country-pack";
 import { createAmapDrivingHandoff, createAmapPlaceHandoff } from "@c-assistant/connectors";
 import type { AmapBasicWeatherSnapshot, AmapNearbyPlace, AmapPlace, AmapRoute, ConnectorResult, OfficialSourceDefinition, QWeatherWeatherSnapshot as CompleteWeatherSnapshot, TelegramBotIdentity, TelegramConfiguration } from "@c-assistant/connectors";
-import type { AgentRun, AgentRuntimeKind, PolicyPreparationAssessment, SourceSnapshotWriteResult, Task, WorkspaceSnapshot } from "@c-assistant/core";
+import type { AgentRun, AgentRuntimeKind, Plan, PolicyPreparationAssessment, SourceSnapshotWriteResult, Task, WorkspaceSnapshot } from "@c-assistant/core";
 import type { TransportWeatherFact } from "@c-assistant/core/transport";
 
 type View = "Today" | "Plans" | "Inbox" | "Settings";
@@ -17,6 +17,7 @@ type UserWeatherSnapshot = CompleteWeatherSnapshot | AmapBasicWeatherSnapshot;
 type QWeatherWeatherSnapshot = UserWeatherSnapshot;
 type ChatMode = "new_plan" | "revise_plan";
 type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
+type PlansTab = "current" | "history";
 type LocalConfiguration = {
   amap: { configured: boolean };
   qweather: { configured: boolean; host: string };
@@ -50,6 +51,8 @@ const navigation: View[] = ["Today", "Plans", "Inbox", "Settings"];
 
 function App() {
   const [workspace, setWorkspace] = useState<WorkspaceSnapshot | null>(null);
+  const [historicalPlans, setHistoricalPlans] = useState<Plan[]>([]);
+  const [plansTab, setPlansTab] = useState<PlansTab>("current");
   const [view, setView] = useState<View>("Today");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -123,6 +126,10 @@ function App() {
 
   useEffect(() => setChinaPlanPreparation(null), [workspace?.activePlan.id]);
 
+  useEffect(() => {
+    if (view === "Plans") void loadPlanHistory();
+  }, [view, workspace?.activePlan.id]);
+
   async function loadWorkspace() {
     try {
       setLoading(true);
@@ -133,6 +140,16 @@ function App() {
       setError(caught instanceof Error ? caught.message : "Unable to reach the Core service.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadPlanHistory() {
+    try {
+      const response = await fetch("/api/plans/history");
+      if (!response.ok) throw new Error("Plan history is not available right now.");
+      setHistoricalPlans((await response.json()) as Plan[]);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Plan history is not available right now.");
     }
   }
 
@@ -813,8 +830,10 @@ function App() {
           </>
         ) : null}
 
-        {view === "Plans" ? <ChinaPlanPreparationCard plan={plan} result={chinaPlanPreparation} preparing={preparingChinaPlan} onPrepare={prepareChinaPlan} /> : null}
-        {view === "Plans" ? <PlanView plan={plan} policyPreparation={policyPreparation} onActivate={activatePlan} confirming={confirming} amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={searchAmap} routeOrigin={routeOrigin} routeDestination={routeDestination} routeMode={routeMode} routeResult={routeResult} routing={routing} routeComparisons={routeComparisons} comparingRoutes={comparingRoutes} planWeatherResult={planWeather?.planId === plan.id ? planWeather.result : null} checkingPlanWeather={checkingPlanWeather} foodCentre={foodCentre} foodResult={foodResult} findingFood={findingFood} stayCentre={stayCentre} stayResult={stayResult} findingStay={findingStay} savingAccommodation={savingAccommodation} confirmingAccommodation={confirmingAccommodation} savingTransportPreference={savingTransportPreference} savingTravelContext={savingTravelContext} savingArrival={savingArrival} cancellingReminderTaskId={cancellingReminderTaskId} onChooseRouteOrigin={(place) => { setRouteOrigin(place); setRouteResult(null); setRouteComparisons(null); }} onChooseRouteDestination={(place) => { setRouteDestination(place); setRouteResult(null); setRouteComparisons(null); }} onRouteModeChange={(mode) => { setRouteMode(mode); setRouteResult(null); }} onFindNearbyFood={findNearbyFood} onFindNearbyAccommodation={findNearbyAccommodation} onSaveAccommodationCandidate={saveAccommodationCandidate} onSaveManualAccommodation={saveManualAccommodation} onConfirmAccommodation={confirmAccommodationBooking} onSaveTransportPreference={saveTransportPreference} onSaveTravelContext={saveTravelContext} onSaveArrival={saveArrival} onCancelReminder={cancelTaskReminder} onPlanRoute={planAmapRoute} onCompareRoutes={compareAmapRoutes} onCheckPlanWeather={checkPlanWeather} /> : null}
+        {view === "Plans" ? <PlansTabs tab={plansTab} historyCount={historicalPlans.length} onChange={setPlansTab} /> : null}
+        {view === "Plans" && plansTab === "current" ? <ChinaPlanPreparationCard plan={plan} result={chinaPlanPreparation} preparing={preparingChinaPlan} onPrepare={prepareChinaPlan} /> : null}
+        {view === "Plans" && plansTab === "current" ? <PlanView plan={plan} policyPreparation={policyPreparation} onActivate={activatePlan} confirming={confirming} amapQuery={amapQuery} setAmapQuery={setAmapQuery} amapResult={amapResult} searchingAmap={searchingAmap} onSearch={searchAmap} routeOrigin={routeOrigin} routeDestination={routeDestination} routeMode={routeMode} routeResult={routeResult} routing={routing} routeComparisons={routeComparisons} comparingRoutes={comparingRoutes} planWeatherResult={planWeather?.planId === plan.id ? planWeather.result : null} checkingPlanWeather={checkingPlanWeather} foodCentre={foodCentre} foodResult={foodResult} findingFood={findingFood} stayCentre={stayCentre} stayResult={stayResult} findingStay={findingStay} savingAccommodation={savingAccommodation} confirmingAccommodation={confirmingAccommodation} savingTransportPreference={savingTransportPreference} savingTravelContext={savingTravelContext} savingArrival={savingArrival} cancellingReminderTaskId={cancellingReminderTaskId} onChooseRouteOrigin={(place) => { setRouteOrigin(place); setRouteResult(null); setRouteComparisons(null); }} onChooseRouteDestination={(place) => { setRouteDestination(place); setRouteResult(null); setRouteComparisons(null); }} onRouteModeChange={(mode) => { setRouteMode(mode); setRouteResult(null); }} onFindNearbyFood={findNearbyFood} onFindNearbyAccommodation={findNearbyAccommodation} onSaveAccommodationCandidate={saveAccommodationCandidate} onSaveManualAccommodation={saveManualAccommodation} onConfirmAccommodation={confirmAccommodationBooking} onSaveTransportPreference={saveTransportPreference} onSaveTravelContext={saveTravelContext} onSaveArrival={saveArrival} onCancelReminder={cancelTaskReminder} onPlanRoute={planAmapRoute} onCompareRoutes={compareAmapRoutes} onCheckPlanWeather={checkPlanWeather} /> : null}
+        {view === "Plans" && plansTab === "history" ? <PlanHistoryView plans={historicalPlans} /> : null}
         {view === "Inbox" ? <InboxView workspace={workspace} /> : null}
         {view === "Settings" ? <SettingsView workspace={workspace} onSaveProfile={saveProfile} configuration={configuration} configurationForm={configurationForm} savingConfiguration={savingConfiguration} onConfigurationFormChange={(next) => setConfigurationForm((current) => ({ ...current, ...next }))} onSaveConfiguration={saveConfiguration} runtimeChecks={runtimeChecks} refreshingRuntimes={refreshingRuntimes} onRefreshRuntimes={refreshRuntimes} agentRuns={agentRuns} savingRuntime={savingRuntime} onSaveRuntime={saveRuntime} officialSources={officialSources} refreshingSourceId={refreshingSourceId} linkingSourceSnapshotId={linkingSourceSnapshotId} onRefreshOfficialSource={refreshOfficialSource} onLinkSourceSnapshotToPlan={linkSourceSnapshotToPlan} telegramStatus={telegramStatus} telegramVerification={telegramVerification} verifyingTelegram={verifyingTelegram} telegramPairing={telegramPairing} pairingTelegram={pairingTelegram} disconnectingTelegram={disconnectingTelegram} onVerifyTelegram={verifyTelegram} onStartTelegramPairing={startTelegramPairing} onCompleteTelegramPairing={completeTelegramPairing} onDisconnectTelegram={disconnectTelegramPairing} weatherLocation={weatherLocation} setWeatherLocation={setWeatherLocation} weatherResult={weatherResult} checkingWeather={checkingWeather} onCheckWeather={checkWeather} /> : null}
       </section>
@@ -834,6 +853,20 @@ function AgentPanel({ messages, input, mode, canRevise, busy, onInput, onMode, o
       <div className="agent-messages" aria-live="polite">{messages.map((message) => <div className={`agent-message ${message.role}`} key={message.id}><span>{message.role === "assistant" ? "Agent" : "You"}</span><p>{message.text}</p></div>)}{busy ? <div className="agent-message assistant"><span>Agent</span><p className="agent-thinking"><i /> Thinking through your Plan…</p></div> : null}</div>
       <form className="agent-composer" onSubmit={submit}><textarea value={input} onChange={(event) => onInput(event.target.value)} placeholder={mode === "revise_plan" ? "Tell the Agent what to change in the current draft…" : "For example: I am moving to Shanghai for work in October…"} rows={3} maxLength={1_500} disabled={busy} /><div><small>{mode === "revise_plan" ? "The current draft is replaced only after a complete revision returns. Newer Plan changes are never overwritten." : "The result stays a draft until you review its complete details and confirm it."} · {input.length}/1500</small><button className="primary-button" disabled={busy || !input.trim()}>{busy ? "Working…" : "Send to Agent"}</button></div></form>
     </section>;
+}
+
+function PlansTabs({ tab, historyCount, onChange }: { tab: PlansTab; historyCount: number; onChange: (tab: PlansTab) => void }) {
+  return <div className="plans-tabs" role="tablist" aria-label="Plan versions"><button type="button" role="tab" aria-selected={tab === "current"} className={tab === "current" ? "active" : ""} onClick={() => onChange("current")}>Current Plan</button><button type="button" role="tab" aria-selected={tab === "history"} className={tab === "history" ? "active" : ""} onClick={() => onChange("history")}>History <span>{historyCount}</span></button></div>;
+}
+
+function PlanHistoryView({ plans }: { plans: Plan[] }) {
+  if (!plans.length) return <section className="card plan-history-empty"><p className="eyebrow">Plan history</p><h2>No archived Plans yet</h2><p>When a complete replacement Plan is saved, the previous version will appear here for read-only reference.</p></section>;
+  return <section className="content-stack plan-history"><section className="card"><p className="eyebrow">Plan history</p><h2>Previous Plans remain readable</h2><p>History is read-only. Opening an archived Plan cannot activate its reminders or change the current Plan.</p></section>{plans.map((plan) => <details className="card plan-history-card" key={plan.id}><summary><div><span className="plan-state">archived</span><h2>{plan.title}</h2><p>{plan.location} · {plan.dates}</p></div><small>Plan v{plan.version} · {formatPlanDate(plan.createdAt)}</small></summary><div className="plan-history-detail"><p><strong>Last recorded next action:</strong> {plan.nextAction}</p>{plan.assumptions.length ? <><h3>Assumptions at that time</h3><ul className="compact-list">{plan.assumptions.map((item) => <li key={item}>{item}</li>)}</ul></> : null}<h3>Stages and tasks</h3>{plan.stages.map((stage, index) => <section key={stage.id}><strong>{index + 1}. {stage.title}</strong><p>{stage.description}</p><div className="task-stack">{stage.tasks.map((task) => <PlanTaskRow task={task} planSources={plan.sources} key={task.id} />)}</div></section>)}{plan.sources.length ? <div className="history-sources"><h3>Sources saved with this Plan</h3>{plan.sources.map((source) => <a className="source-link" href={source.url} key={`${source.url}:${source.retrievedAt}`} target="_blank" rel="noreferrer"><strong>{source.title}</strong><span>{source.authority} · {source.retrievedAt}</span></a>)}</div> : null}</div></details>)}</section>;
+}
+
+function formatPlanDate(value: string): string {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat("en", { year: "numeric", month: "short", day: "numeric" }).format(date) : value;
 }
 
 function PlanView({ plan, policyPreparation, onActivate, confirming, amapQuery, setAmapQuery, amapResult, searchingAmap, onSearch, routeOrigin, routeDestination, routeMode, routeResult, routing, routeComparisons, comparingRoutes, planWeatherResult, checkingPlanWeather, foodCentre, foodResult, findingFood, stayCentre, stayResult, findingStay, savingAccommodation, confirmingAccommodation, savingTransportPreference, savingTravelContext, savingArrival, cancellingReminderTaskId, onChooseRouteOrigin, onChooseRouteDestination, onRouteModeChange, onFindNearbyFood, onFindNearbyAccommodation, onSaveAccommodationCandidate, onSaveManualAccommodation, onConfirmAccommodation, onSaveTransportPreference, onSaveTravelContext, onSaveArrival, onCancelReminder, onPlanRoute, onCompareRoutes, onCheckPlanWeather }: { plan: WorkspaceSnapshot["activePlan"]; policyPreparation: PolicyPreparationAssessment | null; onActivate: () => Promise<void>; confirming: boolean; amapQuery: string; setAmapQuery: (value: string) => void; amapResult: ConnectorResult<AmapPlace[]> | null; searchingAmap: boolean; onSearch: () => Promise<void>; routeOrigin: AmapPlace | null; routeDestination: AmapPlace | null; routeMode: RouteMode; routeResult: ConnectorResult<AmapRoute> | null; routing: boolean; routeComparisons: RouteComparisons | null; comparingRoutes: boolean; planWeatherResult: ConnectorResult<QWeatherWeatherSnapshot> | null; checkingPlanWeather: boolean; foodCentre: AmapPlace | null; foodResult: ConnectorResult<AmapNearbyPlace[]> | null; findingFood: boolean; stayCentre: AmapPlace | null; stayResult: ConnectorResult<AmapNearbyPlace[]> | null; findingStay: boolean; savingAccommodation: boolean; confirmingAccommodation: boolean; savingTransportPreference: boolean; savingTravelContext: boolean; savingArrival: boolean; cancellingReminderTaskId: string | null; onChooseRouteOrigin: (place: AmapPlace) => void; onChooseRouteDestination: (place: AmapPlace) => void; onRouteModeChange: (mode: RouteMode) => void; onFindNearbyFood: (place: AmapPlace) => Promise<void>; onFindNearbyAccommodation: (place: AmapPlace) => Promise<void>; onSaveAccommodationCandidate: (place: AmapNearbyPlace) => Promise<void>; onSaveManualAccommodation: (input: { name: string; address: string; status: "candidate" | "confirmed" }) => Promise<void>; onConfirmAccommodation: () => Promise<void>; onSaveTransportPreference: (preference: WorkspaceSnapshot["activePlan"]["configuration"]["transport"]["preference"]) => Promise<void>; onSaveTravelContext: (context: WorkspaceSnapshot["activePlan"]["configuration"]["travelContext"]) => Promise<void>; onSaveArrival: (arrival: WorkspaceSnapshot["activePlan"]["configuration"]["arrival"]) => Promise<void>; onCancelReminder: (taskId: string) => Promise<void>; onPlanRoute: () => Promise<void>; onCompareRoutes: () => Promise<void>; onCheckPlanWeather: (planId: string, location: string) => Promise<void> }) {
