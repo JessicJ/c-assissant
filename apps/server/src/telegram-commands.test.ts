@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseTelegramCommand } from "./telegram-commands.js";
+import { formatTransportPreferenceAcknowledgement, parseTelegramCommand, requestsCompletePlan, shouldGenerateCompletePlan } from "./telegram-commands.js";
 
 test("plain Telegram text becomes an implicit Plan request", () => {
   assert.deepEqual(parseTelegramCommand("I will attend an exhibition in Shanghai in September."), {
@@ -17,6 +17,30 @@ test("new Plan command remains available for an explicit request", () => {
     request: "I need to settle into Shanghai",
     explicit: true
   });
+});
+
+test("local transport preferences do not create or render a complete Plan", () => {
+  assert.deepEqual(parseTelegramCommand("i perfer taxi"), { type: "set_transport_preference", preference: "taxi" });
+  assert.deepEqual(parseTelegramCommand("I prefer public transit"), { type: "set_transport_preference", preference: "public_transit" });
+  assert.deepEqual(parseTelegramCommand("我想走路"), { type: "set_transport_preference", preference: "walking" });
+  assert.deepEqual(parseTelegramCommand("我想打车"), { type: "set_transport_preference", preference: "taxi" });
+  assert.match(formatTransportPreferenceAcknowledgement("taxi", true), /No new Plan was created/i);
+  assert.match(formatTransportPreferenceAcknowledgement("taxi", true), /share your location/i);
+});
+
+test("explicit whole-Plan changes and /new still use the complete Plan path", () => {
+  assert.equal(parseTelegramCommand("Change my whole plan to prefer taxi").type, "create_plan");
+  assert.deepEqual(parseTelegramCommand("/new I prefer taxi for my China stay"), { type: "create_plan", request: "I prefer taxi for my China stay", explicit: true });
+  assert.equal(parseTelegramCommand("I do not want a taxi").type, "create_plan");
+  assert.equal(requestsCompletePlan("Create a new plan for another exhibition"), true);
+  assert.equal(requestsCompletePlan("I need help with the current taxi"), false);
+});
+
+test("an active Plan needs explicit whole-Plan intent before complete generation", () => {
+  assert.equal(shouldGenerateCompletePlan("active", "I need help with the current pickup", false), false);
+  assert.equal(shouldGenerateCompletePlan("active", "Change my whole plan", false), true);
+  assert.equal(shouldGenerateCompletePlan("active", "Anything", true), true);
+  assert.equal(shouldGenerateCompletePlan("draft", "Correct the hotel", false), true);
 });
 
 test("control commands do not create a Plan", () => {
