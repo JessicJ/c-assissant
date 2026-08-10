@@ -61,5 +61,14 @@
     "allowedDomains": ["english.shanghai.gov.cn", "shanghai.gov.cn"],
     "topics": ["local_food", "shanghai", "daily_life"],
     "language": "en"
+  },
+  {
+    "id": "beijing-official-must-try-foods-2026",
+    "authority": "People's Government of Beijing Municipality",
+    "title": "Beijing Must-Try List",
+    "url": "https://english.beijing.gov.cn/beijinginfo/videos/202606/t20260608_4691225.html",
+    "allowedDomains": ["english.beijing.gov.cn", "beijing.gov.cn"],
+    "topics": ["local_food", "beijing", "daily_life"],
+    "language": "en"
   }
 ]

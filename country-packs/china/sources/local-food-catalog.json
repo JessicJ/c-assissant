@@ -42,6 +42,48 @@
           "sourceId": "shanghai-official-iconic-foods-2026"
         }
       ]
+    },
+    {
+      "id": "beijing",
+      "aliases": ["Beijing", "北京"],
+      "approvedSourceIds": ["beijing-official-must-try-foods-2026"],
+      "facts": [
+        {
+          "id": "beijing-peking-duck",
+          "nameOriginal": "北京烤鸭",
+          "nameEnglish": "Peking Duck",
+          "descriptionEnglish": "Listed by Beijing's official English portal among the city's timeless traditional cuisine.",
+          "sourceId": "beijing-official-must-try-foods-2026"
+        },
+        {
+          "id": "beijing-copper-pot-hot-pot",
+          "nameOriginal": "铜锅涮肉",
+          "nameEnglish": "Copper Pot Hot Pot",
+          "descriptionEnglish": "Listed by Beijing's official English portal as a traditional cuisine experience associated with the city.",
+          "sourceId": "beijing-official-must-try-foods-2026"
+        },
+        {
+          "id": "beijing-fried-dough-rings",
+          "nameOriginal": "焦圈",
+          "nameEnglish": "Fried Dough Rings",
+          "descriptionEnglish": "Listed by Beijing's official English portal among the city's neighborhood specialty snacks.",
+          "sourceId": "beijing-official-must-try-foods-2026"
+        },
+        {
+          "id": "beijing-douzhi",
+          "nameOriginal": "豆汁",
+          "nameEnglish": "Fermented Mung Bean Juice (Douzhi)",
+          "descriptionEnglish": "Listed by Beijing's official English portal among the city's neighborhood specialty snacks.",
+          "sourceId": "beijing-official-must-try-foods-2026"
+        },
+        {
+          "id": "beijing-zhajiang-noodles",
+          "nameOriginal": "炸酱面",
+          "nameEnglish": "Zhajiang Noodles (Soybean Paste Noodles)",
+          "descriptionEnglish": "Listed by Beijing's official English portal among the city's neighborhood specialty snacks.",
+          "sourceId": "beijing-official-must-try-foods-2026"
+        }
+      ]
     }
   ]
 }
