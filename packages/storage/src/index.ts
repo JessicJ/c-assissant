@@ -815,6 +815,7 @@ export class SqliteWorkspaceStore {
     }
     const plan = createPlanFromDraft(input.draft);
     plan.configuration = structuredClone(workspace.activePlan.configuration);
+    plan.sources = structuredClone(workspace.activePlan.sources);
     carryForwardCompletedTasks(workspace.activePlan, plan);
     this.savePlan(plan);
     this.addInbox({
