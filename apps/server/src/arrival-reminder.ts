@@ -38,6 +38,11 @@ export function isArrivalLocationPromptDue(checkInSentAt: string, now = new Date
   return now.getTime() - sentAt >= ARRIVAL_LOCATION_FOLLOW_UP_DELAY_MS;
 }
 
+/** Re-prompts only after a real active-Plan arrival request; the stale coordinates remain unused. */
+export function shouldRenewExpiredArrivalLocationRequest(planStatus: Plan["status"], checkin?: { checkInSentAt: string; locationRequestedAt?: string; locationReceivedAt?: string }): boolean {
+  return planStatus === "active" && Boolean(checkin?.checkInSentAt && checkin.locationRequestedAt && !checkin.locationReceivedAt);
+}
+
 export function formatArrivalReminder(plan: Plan, arrivalTask?: Task): string {
   const currentStep = arrivalTask ? `\n\nCurrent step is ready: ${arrivalTask.title}\nIt is not marked complete.` : "";
   return `Arrival check-in\n${plan.title}\n${plan.location}\n\nYour scheduled arrival time has begun. Open your current Plan to review the next step:\n${plan.nextAction}${currentStep}\n\nUse /plan for the Plan summary. No ride, booking, payment, or location request has been started.`;

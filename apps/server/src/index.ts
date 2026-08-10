@@ -12,7 +12,7 @@ import { chinaSkillRegistry } from "@c-assistant/china-country-pack/registry";
 import { createChinaReferenceCatalog } from "@c-assistant/china-country-pack/reference-catalog";
 import { type AgentRuntimeKind, type CreatePlanInput, type GeneratedPlanDraft, type PlanAccommodationInput, type PlanArrivalInput, type PlanTransportPreferenceInput, type PlanTravelContextInput, type ProfileUpdate, type RuntimeSelectionUpdate } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
-import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue } from "./arrival-reminder.js";
+import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue, shouldRenewExpiredArrivalLocationRequest } from "./arrival-reminder.js";
 import { arrivalRouteDestination, formatArrivalRoute, selectArrivalTransport } from "./arrival-route.js";
 import { createOfficialSourceService, parseOfficialSourceRegistry } from "./official-sources.js";
 import { parseTelegramCommand } from "./telegram-commands.js";
@@ -656,7 +656,12 @@ async function pollTelegram(): Promise<void> {
         store.clearTelegramLocationIntent();
         const currentPlan = store.getWorkspace().activePlan;
         if (!intent || intent.planId !== currentPlan.id) {
-          await telegram.sendMessage({ chatId: pairing.binding.chatId, text: "There is no active location request for the current Plan. Send /food for nearby food, or use the arrival route action when it appears. These coordinates were not used or saved." });
+          const checkin = store.getTelegramArrivalCheckin(currentPlan.id);
+          if (shouldRenewExpiredArrivalLocationRequest(currentPlan.status, checkin)) {
+            await requestTelegramArrivalLocation(pairing.binding.chatId, "The earlier location request expired, so those coordinates were not used or saved. Tap below to share again now.");
+          } else {
+            await telegram.sendMessage({ chatId: pairing.binding.chatId, text: "There is no active location request for the current Plan. Send /food for nearby food, or use the arrival route action when it appears. These coordinates were not used or saved." });
+          }
         } else if (intent.purpose === "nearby_food") {
           await sendNearbyFoodFromSharedLocation(pairing.binding.chatId, update.location);
         } else {
