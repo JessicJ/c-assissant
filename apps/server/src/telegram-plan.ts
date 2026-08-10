@@ -67,13 +67,21 @@ export function formatTelegramPlanCreation(result: TelegramPlanCreation): string
   const plan = result.workspace.activePlan;
   const runtime = result.runtime === "claude-code" ? "Claude Code" : "Codex";
   const origin = result.source === "runtime" ? `${runtime} created a complete Plan draft` : `${runtime} is unavailable, so Landi created a local template draft`;
-  return truncateTelegramText(`${origin}.\n\n${formatTelegramPlan(plan)}`);
+  const continuity = telegramExecutionContinuityNotice(result.workspace);
+  return truncateTelegramText(`${origin}.${continuity ? `\n\n${continuity}` : ""}\n\n${formatTelegramPlan(plan)}`);
 }
 
 export function formatTelegramPlanCreationPages(result: TelegramPlanCreation): string[] {
   const runtime = result.runtime === "claude-code" ? "Claude Code" : "Codex";
   const origin = result.source === "runtime" ? `${runtime} created a complete Plan draft.` : `${runtime} is unavailable, so Landi created a local template draft.`;
-  return paginateTelegramText(`${origin}\n\n${telegramPlanText(result.workspace.activePlan)}`);
+  const continuity = telegramExecutionContinuityNotice(result.workspace);
+  return paginateTelegramText(`${origin}${continuity ? `\n\n${continuity}` : ""}\n\n${telegramPlanText(result.workspace.activePlan)}`);
+}
+
+/** Explains the review/execution split without presenting inferred state as fact. */
+export function telegramExecutionContinuityNotice(workspace: WorkspaceSnapshot): string | undefined {
+  if (!workspace.executionPlan || workspace.activePlan.status !== "draft") return undefined;
+  return `The existing Plan “${workspace.executionPlan.title}” is still active. Its approved reminders and timeline continue while you review this complete replacement draft. Landi switches execution only after you confirm the replacement.`;
 }
 
 /** A readable mobile copy of the complete Plan, bounded by Telegram's message limit. */
