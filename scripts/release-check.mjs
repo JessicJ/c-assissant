@@ -32,6 +32,9 @@ const nodeMajor = Number(process.versions.node.split(".")[0]);
 if (!Number.isInteger(nodeMajor) || nodeMajor < 22) fail(`Node.js 22 or newer is required; found ${process.versions.node}.`);
 
 const rootPackage = readJson("package.json");
+const releaseVersion = "0.1.0";
+if (rootPackage?.version !== releaseVersion) fail(`package.json version must be ${releaseVersion} for the V1 release; found ${String(rootPackage?.version)}.`);
+if (rootPackage?.packageManager !== "pnpm@11.20.0") fail("package.json must pin pnpm@11.20.0 for reproducible V1 installs.");
 for (const script of ["build", "typecheck", "test", "release:check"]) {
   if (typeof rootPackage?.scripts?.[script] !== "string" || !rootPackage.scripts[script].trim()) fail(`package.json is missing the ${script} script.`);
 }
@@ -50,6 +53,7 @@ const packageNames = new Set();
 for (const relativePath of workspacePackages) {
   const workspacePackage = readJson(relativePath);
   if (!workspacePackage) continue;
+  if (workspacePackage.version !== releaseVersion) fail(`${relativePath} version must match the V1 release version ${releaseVersion}.`);
   if (workspacePackage.private !== true) fail(`${relativePath} must remain private until publishing is deliberately designed.`);
   if (typeof workspacePackage.name !== "string" || !workspacePackage.name.trim()) fail(`${relativePath} has no package name.`);
   else if (packageNames.has(workspacePackage.name)) fail(`Duplicate workspace package name: ${workspacePackage.name}.`);
