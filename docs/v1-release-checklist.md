@@ -21,14 +21,15 @@ This checklist separates reproducible repository evidence from real-account and 
 - [x] A real Codex Plan is generated through the running production Web API and persisted with a successful Run.
 - [x] A normal Telegram command is received once by the background poller and advances the persistent update cursor.
 - [ ] The corresponding command reply is confirmed visible on the paired phone.
-- [ ] A real Codex Plan is created from Telegram, fully reviewed, prepared with China Pack, and explicitly confirmed.
+- [x] A real Codex Plan is created from Telegram and prepared through the complete China Pack with current official evidence and provider facts.
+- [ ] The complete Telegram Plan is reviewed on the paired phone and explicitly confirmed from its final page.
 - [ ] A near-term Reminder is delivered to the paired phone from an active Plan.
 - [ ] The explicit Telegram location request is accepted, and the resulting Amap HTTPS route opens correctly on the phone.
 - [x] Claude Code is explicitly labelled optional preview: its contract and expired-login handling are tested, but paid access, login, and real-account success are not required for the Codex `0.1.0` release.
 
 ## Public release decisions
 
-- [ ] Add the owner-approved open-source license.
+- [x] Add the owner-approved Apache-2.0 license and declare it consistently across all workspace manifests.
 - [x] Keep the V1 Web interface consistently English; preserve the unfinished Chinese draft separately without shipping it.
 - [ ] Run `pnpm release:check` on the exact release commit.
 - [ ] Push the release commit, verify GitHub Actions, and create tag `v0.1.0` with the matching release notes.

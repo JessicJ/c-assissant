@@ -4,6 +4,8 @@
 
 Landi 的目标不是只做旅行问答，而是帮助来到某个国家或地区的人更快适应当地生活。首个 Country Pack 面向中国，V1 聚焦来华准备与吃、住、行，并为以后扩展法律、银行、经商等能力保留模块化结构。
 
+Landi 采用 [Apache License 2.0](LICENSE) 开源许可证。
+
 项目已完成一条本地 V1 闭环：Web 工作台、Core HTTP 服务与调度器、本地 SQLite、Profile、Plan、已真实验证的 Codex 草案、Claude Code 预览适配器、中国 Country Pack 完整编排、官方来源刷新与追溯、高德/QWeather 事实、Telegram 配对/完整审阅/提醒/定位交接和 Plan 确认已经连通。Claude Code 已有契约测试，但没有可用付费账号完成真实 V1 验收，因此 `0.1.0` 正式支持 Codex，Claude Code 只作为自愿启用的预览能力。两种底座的登录凭据与 Connector 密钥都不会写入领域数据或传给 Skill。V1 仍保持明确边界：不根据网页正文替用户作受监管资格结论，也不点餐、订房、叫车或支付。
 
 ## 已确定的产品形态
