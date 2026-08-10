@@ -17,9 +17,15 @@ test("Web Agent refuses to overwrite Plan changes made during a Runtime turn", (
   assert.throws(() => assertWebAgentPlanUnchanged(expected, { id: "plan-b", version: 1 }), /newer changes were preserved/);
 });
 
-test("Web Agent reply keeps complete Plan review explicit", () => {
+test("Web Agent reply asks only one progressive refinement question", () => {
+  const reply = formatWebAgentPlanReply({ runtimeName: "Codex", mode: "new_plan", plan: { title: "China work setup", nextAction: "Share the venue." }, followUpQuestion: "Which venue will you attend?" });
+  assert.match(reply, /saved the usable Plan skeleton/i);
+  assert.match(reply, /Which venue will you attend\?/);
+  assert.doesNotMatch(reply, /complete assumptions, stages, tasks, reminders, and sources/);
+});
+
+test("Web Agent reply moves to complete review only when refinement is ready", () => {
   const reply = formatWebAgentPlanReply({ runtimeName: "Codex", mode: "new_plan", plan: { title: "China work setup", nextAction: "Review assumptions." } });
-  assert.match(reply, /remains a draft/);
-  assert.match(reply, /complete assumptions, stages, tasks, reminders, and sources/);
-  assert.match(reply, /Review assumptions/);
+  assert.match(reply, /sufficient for a complete review/i);
+  assert.match(reply, /confirm it to activate eligible reminders/i);
 });

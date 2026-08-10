@@ -1,4 +1,5 @@
 import type { AgentRuntimeKind, GeneratedPlanDraft, Plan, WorkspaceSnapshot } from "@c-assistant/core";
+import { planRefinementState } from "./plan-refinement.js";
 
 export type TelegramPlanConfirmationDecision = "confirm" | "already_active" | "stale" | "not_confirmation";
 export type TelegramPlanConfirmationMarkup = { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
@@ -150,7 +151,7 @@ function sourceEvidenceKey(sourceSnapshotId: string | undefined, contentHash: st
 }
 
 export function telegramPlanConfirmationMarkup(plan: Plan): TelegramPlanConfirmationMarkup | undefined {
-  if (plan.status !== "draft") return undefined;
+  if (plan.status !== "draft" || !planRefinementState(plan).readyForReview) return undefined;
   return { inline_keyboard: [[{ text: "Confirm complete Plan", callback_data: `confirm_plan:${plan.id}:${plan.version}` }]] };
 }
 

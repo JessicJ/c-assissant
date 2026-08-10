@@ -133,6 +133,10 @@ test("Codex Plan context includes confirmed Profile identity without claiming po
   assert.match(prompt, /only time-bound travel nodes/i);
   assert.match(prompt, /Only packing or carry items and concrete work that must be completed before departure/i);
   assert.match(prompt, /Do not present itinerary nodes, on-trip activities, general information, budgets, transport guidance, or post-arrival actions as checklist work/i);
+  assert.match(prompt, /approximate date, purpose, and place are enough for a usable Plan skeleton/i);
+  assert.match(prompt, /single highest-value missing fact/i);
+  assert.match(prompt, /Do not turn missing profile fields, dates, venues, budgets, preferences, or other information requests into user-owned Tasks/i);
+  assert.match(prompt, /Missing information blocks only the Task or decision that requires it/i);
   assert.match(prompt, /Never invent an app download URL/i);
 });
 

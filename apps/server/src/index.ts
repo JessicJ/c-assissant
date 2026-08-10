@@ -16,6 +16,7 @@ import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isAr
 import { arrivalRouteDestination, formatArrivalRoute, selectArrivalTransport } from "./arrival-route.js";
 import { DEFAULT_HANDOFF_SAFETY_SECONDS, DEFAULT_HANDOFF_WAIT_SECONDS, HANDOFF_DELAY_SECONDS, expectedArrivalAt, formatExpectedArrivalGuidance } from "./route-handoff.js";
 import { createOfficialSourceService, parseOfficialSourceRegistry } from "./official-sources.js";
+import { planRefinementState } from "./plan-refinement.js";
 import { formatTransportChoiceAcknowledgement, parseTelegramCommand, shouldGenerateCompletePlan } from "./telegram-commands.js";
 import { formatTelegramNearbyFood, parseTelegramFoodPartyCallback, telegramFoodPartyMarkup } from "./telegram-food.js";
 import { completedTasksForRevision, createTelegramPlan, formatTelegramPlanCreationPages, formatTelegramPlanPages, formatTelegramWorkspacePlanPages, planDraftForRevision, telegramExecutionContinuityNotice, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
@@ -177,6 +178,11 @@ server.post<{ Params: { planId: string } }>("/api/plans/:planId/china/prepare", 
 
 server.post<{ Params: { planId: string } }>("/api/plans/:planId/confirm", async (request, reply) => {
   try {
+    const current = store.getWorkspace().activePlan;
+    if (current.id === request.params.planId) {
+      const refinement = planRefinementState(current);
+      if (refinement.followUpQuestion) return reply.code(409).send({ error: `Continue the Plan conversation before confirmation: ${refinement.followUpQuestion}` });
+    }
     return store.confirmPlan(request.params.planId);
   } catch (error) {
     return reply.code(404).send({
@@ -376,9 +382,12 @@ server.post<{ Body: unknown }>("/api/agent/chat", async (request, reply) => {
       ? store.reviseGeneratedPlan({ draft, runtime: workspace.runtime.selectedKind, expectedPlanId: workspace.activePlan.id, expectedVersion: workspace.activePlan.version })
       : store.createGeneratedPlan(draft, workspace.runtime.selectedKind);
     store.finishPlanGenerationRun({ runId, status: "succeeded", outputPlanId: updated.activePlan.id });
+    const refinement = planRefinementState(updated.activePlan);
     return {
-      reply: formatWebAgentPlanReply({ runtimeName: runtimeName(workspace.runtime.selectedKind), mode: turn.mode, plan: updated.activePlan }),
-      workspace: updated
+      reply: formatWebAgentPlanReply({ runtimeName: runtimeName(workspace.runtime.selectedKind), mode: turn.mode, plan: updated.activePlan, ...(refinement.followUpQuestion ? { followUpQuestion: refinement.followUpQuestion } : {}) }),
+      workspace: updated,
+      readyForReview: refinement.readyForReview,
+      ...(refinement.followUpQuestion ? { followUpQuestion: refinement.followUpQuestion } : {})
     };
   } catch (error) {
     if (runId) store.finishPlanGenerationRun({ runId, status: "failed", failureCode: planGenerationFailureCode(error) });
@@ -659,6 +668,12 @@ async function pollTelegram(): Promise<void> {
         const confirmation = telegramPlanConfirmationDecision(store.getWorkspace().activePlan, update.callbackData);
         if (confirmation !== "not_confirmation" && update.callbackId) {
           if (confirmation === "confirm") {
+            const refinement = planRefinementState(store.getWorkspace().activePlan);
+            if (refinement.followUpQuestion) {
+              await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: "The Plan still needs one critical answer." });
+              await telegram.sendMessage({ chatId: pairing.binding.chatId, text: `Before final confirmation, answer this one question:\n\n${refinement.followUpQuestion}` });
+              continue;
+            }
             const previousExecution = store.getExecutionPlan();
             const confirmed = store.confirmPlan(store.getWorkspace().activePlan.id);
             await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: "Plan activated." });
@@ -1146,6 +1161,10 @@ async function telegramCommandResponse(text: string | undefined): Promise<Telegr
           return telegramPlanReplies(currentPlan, "The Plan changed while the revision was being prepared, so the older result was not saved. Review the current Plan below.");
         }
         store.finishPlanGenerationRun({ runId: run.id, status: "succeeded", outputPlanId: revised.activePlan.id });
+        const refinement = planRefinementState(revised.activePlan);
+        if (refinement.followUpQuestion) {
+          return [{ text: withTelegramExecutionContinuity(revised, `${runtimeName(workspace.runtime.selectedKind)} updated the Plan skeleton from your answer.\n\n${refinement.followUpQuestion}`) }];
+        }
         return telegramPlanReplies(revised.activePlan, withTelegramExecutionContinuity(revised, `${runtimeName(workspace.runtime.selectedKind)} revised the current Plan from your correction.`));
       }
       const result = await createTelegramPlan({
@@ -1165,6 +1184,11 @@ async function telegramCommandResponse(text: string | undefined): Promise<Telegr
       store.finishPlanGenerationRun(result.source === "runtime"
         ? { runId: run.id, status: "succeeded", outputPlanId: result.workspace.activePlan.id }
         : { runId: run.id, status: "fallback", failureCode: runtimeFailureCode });
+      const refinement = planRefinementState(result.workspace.activePlan);
+      if (refinement.followUpQuestion) {
+        const source = result.source === "runtime" ? runtimeName(workspace.runtime.selectedKind) : "Landi's local template";
+        return [{ text: withTelegramExecutionContinuity(result.workspace, `${source} created and saved a usable Plan skeleton. I will ask for one important detail at a time instead of showing a long incomplete Plan.\n\n${refinement.followUpQuestion}`) }];
+      }
       const replyMarkup = telegramPlanConfirmationMarkup(result.workspace.activePlan);
       const pages = formatTelegramPlanCreationPages(result);
       return pages.map((page, index) => ({ text: page, ...(index === pages.length - 1 && replyMarkup ? { replyMarkup } : {}) }));

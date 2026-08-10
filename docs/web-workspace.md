@@ -77,6 +77,8 @@ First use may guide the user through:
 
 Setup is optional and progressive. A user can start by writing an open request such as “I will attend an exhibition in Shanghai in September,” and Core collects only missing critical facts.
 
+Plan drafting is progressive as well. Approximate date, purpose, and place are enough to save a usable skeleton. The dialog remains open and asks at most one high-value, user-answerable question per turn; each answer revises the saved draft without reopening completed work. Missing information blocks only the dependent Task or decision. The complete Plan is presented for final review only when no further critical user-answerable fact is required, or when the user chooses to pause and review the saved draft.
+
 ## Diagnostics boundary
 
 The Web workspace may show user-actionable health messages, such as “Codex login expired” or “Amap is not configured.” Detailed logs, traces, raw model output, and stack errors remain in local logs or CLI diagnostics.

@@ -19,7 +19,10 @@ export function assertWebAgentPlanUnchanged(expected: Pick<Plan, "id" | "version
   }
 }
 
-export function formatWebAgentPlanReply(input: { runtimeName: string; mode: WebAgentMode; plan: Pick<Plan, "title" | "nextAction"> }): string {
+export function formatWebAgentPlanReply(input: { runtimeName: string; mode: WebAgentMode; plan: Pick<Plan, "title" | "nextAction">; followUpQuestion?: string }): string {
   const action = input.mode === "revise_plan" ? "updated the current draft" : "prepared a new draft";
-  return `${input.runtimeName} ${action}: “${input.plan.title}”. It remains a draft so you can review the complete assumptions, stages, tasks, reminders, and sources before activating it. Next: ${input.plan.nextAction}`;
+  if (input.followUpQuestion) {
+    return `${input.runtimeName} ${action}: “${input.plan.title}”. I saved the usable Plan skeleton and will fill it in one important detail at a time. ${input.followUpQuestion}`;
+  }
+  return `${input.runtimeName} ${action}: “${input.plan.title}”. The available information is sufficient for a complete review. Open the saved Plan, check its facts and assumptions, then confirm it to activate eligible reminders and execution.`;
 }

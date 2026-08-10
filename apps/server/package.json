@@ -8,7 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/telegram-commands.test.ts src/telegram-profile.test.ts src/telegram-weather.test.ts src/telegram-food.test.ts src/arrival-reminder.test.ts src/arrival-route.test.ts src/route-handoff.test.ts src/telegram-plan.test.ts src/official-sources.test.ts src/task-reminder.test.ts src/task-reminder-weather.test.ts src/web-agent.test.ts src/china-plan-compilation.test.ts src/china-arrival-facts.test.ts src/china-source-preparation.test.ts src/china-plan-workflow.test.ts src/china-plan-presentation.test.ts src/china-v1-e2e.test.ts src/setup-readiness.test.ts src/user-weather.test.ts",
+    "test": "tsx --test src/telegram-commands.test.ts src/telegram-profile.test.ts src/telegram-weather.test.ts src/telegram-food.test.ts src/arrival-reminder.test.ts src/arrival-route.test.ts src/route-handoff.test.ts src/telegram-plan.test.ts src/plan-refinement.test.ts src/official-sources.test.ts src/task-reminder.test.ts src/task-reminder-weather.test.ts src/web-agent.test.ts src/china-plan-compilation.test.ts src/china-arrival-facts.test.ts src/china-source-preparation.test.ts src/china-plan-workflow.test.ts src/china-plan-presentation.test.ts src/china-v1-e2e.test.ts src/setup-readiness.test.ts src/user-weather.test.ts",
     "start": "node lib/index.js"
   },
   "dependencies": {
