@@ -617,7 +617,7 @@ export class SqliteWorkspaceStore {
     if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
     const selected = this.database.prepare(`SELECT t.id, t.title, t.owner, t.status, t.due_label, t.activation_trigger
       FROM tasks t JOIN stages s ON s.id = t.stage_id
-      WHERE s.plan_id = ? AND t.activation_trigger = 'arrival' AND t.status = 'scheduled'
+      WHERE s.plan_id = ? AND t.activation_trigger = 'arrival' AND t.status IN ('scheduled', 'waiting_user')
       ORDER BY s.sort_order, t.sort_order LIMIT 1`).get(planId) as TaskRow | undefined;
     if (!selected) return undefined;
     this.database.exec("BEGIN");

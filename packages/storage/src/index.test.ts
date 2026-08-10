@@ -701,6 +701,35 @@ test("SQLite advances an explicitly tagged arrival task to ready without complet
   store.close();
 });
 
+test("SQLite advances an arrival Task saved by an older runtime as waiting_user", () => {
+  const directory = mkdtempSync(join(tmpdir(), "c-assistant-arrival-legacy-"));
+  try {
+    const databasePath = join(directory, "workspace.sqlite");
+    const store = new SqliteWorkspaceStore(databasePath);
+    const workspace = store.createGeneratedPlan({
+      title: "Arrive in Shanghai",
+      location: "Shanghai, China",
+      dates: "September 2026",
+      knownInformation: ["Arrival airport: PVG"],
+      assumptions: ["The terminal is unknown."],
+      nextAction: "Review the complete Plan.",
+      stages: [{ title: "Arrival", description: "Complete arrival steps.", tasks: [{ title: "Collect baggage", owner: "user", dueLabel: "At arrival", activationTrigger: "arrival" }] }]
+    });
+    store.confirmPlan(workspace.activePlan.id);
+
+    const legacyWriter = new DatabaseSync(databasePath);
+    legacyWriter.prepare("UPDATE tasks SET status = 'waiting_user' WHERE activation_trigger = 'arrival'").run();
+    legacyWriter.close();
+
+    const task = store.activateArrivalTask(workspace.activePlan.id);
+    assert.equal(task?.status, "ready");
+    assert.equal(task?.activationTrigger, "arrival");
+    store.close();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("SQLite completes a ready task only after an explicit user confirmation", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const planId = store.getWorkspace().activePlan.id;

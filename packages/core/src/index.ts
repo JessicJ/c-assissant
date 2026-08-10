@@ -467,7 +467,7 @@ export function createPlanFromDraft(draft: GeneratedPlanDraft): Plan {
         id: `task-${randomUUID()}`,
         title: task.title,
         owner: task.owner,
-        status: task.owner === "user" ? "waiting_user" : "scheduled",
+        status: task.activationTrigger ? "scheduled" : task.owner === "user" ? "waiting_user" : "scheduled",
         dueLabel: task.dueLabel,
         ...(task.activationTrigger ? { activationTrigger: task.activationTrigger } : {}),
         ...(task.reminder ? { reminder: task.reminder } : {})
