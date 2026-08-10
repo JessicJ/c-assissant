@@ -4,6 +4,8 @@
 
 Landi is an open-source regional assistant. Its first Country Pack, `china`, is designed to help foreigners prepare for and adapt to life in China through plans, timely reminders, official-source guidance, and actionable handoffs to local services.
 
+Landi is released under the [Apache License 2.0](LICENSE).
+
 The project is not limited to tourism. The long-term direction includes daily life, study, work, business, banking, legal, and other country-specific capabilities. The Core is country-neutral so additional Country Packs can be added later.
 
 ## Current status
