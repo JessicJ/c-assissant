@@ -15,7 +15,7 @@ import { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue, shouldRenewExpiredArrivalLocationRequest } from "./arrival-reminder.js";
 import { arrivalRouteDestination, formatArrivalRoute, selectArrivalTransport } from "./arrival-route.js";
 import { createOfficialSourceService, parseOfficialSourceRegistry } from "./official-sources.js";
-import { formatTransportPreferenceAcknowledgement, parseTelegramCommand, shouldGenerateCompletePlan } from "./telegram-commands.js";
+import { formatTransportChoiceAcknowledgement, parseTelegramCommand, shouldGenerateCompletePlan } from "./telegram-commands.js";
 import { formatTelegramNearbyFood, parseTelegramFoodPartyCallback, telegramFoodPartyMarkup } from "./telegram-food.js";
 import { createTelegramPlan, formatTelegramPlanCreationPages, formatTelegramPlanPages, planDraftForRevision, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
 import { formatTelegramProfile, parseTelegramProfileCallback, telegramProfileChoiceMarkup, telegramProfileMarkup, telegramProfileTextPrompt, updateProfileText } from "./telegram-profile.js";
@@ -665,7 +665,7 @@ async function pollTelegram(): Promise<void> {
         } else if (intent.purpose === "nearby_food") {
           await sendNearbyFoodFromSharedLocation(pairing.binding.chatId, update.location);
         } else {
-          await sendArrivalRouteFromSharedLocation(pairing.binding.chatId, update.location);
+          await sendArrivalRouteFromSharedLocation(pairing.binding.chatId, update.location, intent.transportOverride);
         }
         continue;
       }
@@ -691,7 +691,7 @@ async function pollTelegram(): Promise<void> {
   }
 }
 
-async function sendArrivalRouteFromSharedLocation(chatId: string, location: { latitude: number; longitude: number }): Promise<void> {
+async function sendArrivalRouteFromSharedLocation(chatId: string, location: { latitude: number; longitude: number }, transportOverride?: "taxi" | "public_transit" | "walking"): Promise<void> {
   const plan = store.getWorkspace().activePlan;
   store.markTelegramArrivalLocationReceived(plan.id, new Date().toISOString());
   const destination = arrivalRouteDestination(plan);
@@ -707,7 +707,7 @@ async function sendArrivalRouteFromSharedLocation(chatId: string, location: { la
   }
   const origin: AmapPlace = { id: "", name: "Shared current location", address: "", location: converted.data.location, type: "Temporary location", city: "", district: "" };
   const routeFacts: AmapRoute[] = [];
-  const preference = plan.configuration.transport.preference;
+  const preference = transportOverride ?? plan.configuration.transport.preference;
   if (preference === "taxi") {
     const route = await amap.drivingRoute({ origin: origin.location, destination: destination.location, destinationId: destination.id || undefined });
     if (route.status === "available" && route.data) routeFacts.push(route.data);
@@ -727,7 +727,7 @@ async function sendArrivalRouteFromSharedLocation(chatId: string, location: { la
     if (walking.status === "available" && walking.data) routeFacts.push(walking.data);
     if (transit) routeFacts.push(transit);
   }
-  const transport = selectArrivalTransport(plan, routeFacts);
+  const transport = selectArrivalTransport(plan, routeFacts, transportOverride);
   const selectedRoute = routeFacts.find((route) => route.mode === transport);
   const result = formatArrivalRoute({ origin, destination, transport, ...(selectedRoute ? { route: selectedRoute } : {}) });
   await telegram.sendMessage({ chatId, text: result.text, replyMarkup: { inline_keyboard: [[{ text: "Open route in Amap", url: result.handoffUrl }]] } });
@@ -915,7 +915,7 @@ async function requestTelegramFoodLocation(chatId: string): Promise<void> {
   }
 }
 
-type TelegramCommandReply = { text: string; replyMarkup?: TelegramReplyMarkup; locationIntent?: { purpose: "nearby_food" | "arrival_route"; planId: string } };
+type TelegramCommandReply = { text: string; replyMarkup?: TelegramReplyMarkup; locationIntent?: { purpose: "nearby_food" | "arrival_route"; planId: string; transportOverride?: "taxi" | "public_transit" | "walking" } };
 
 async function sendTelegramCommandReplies(chatId: string, replies: TelegramCommandReply[]): Promise<void> {
   for (const reply of replies) {
@@ -984,19 +984,20 @@ async function telegramCommandResponse(text: string | undefined): Promise<Telegr
     }
     return [{ text: `This Plan currently has ${plan.configuration.travelContext.partySize} ${plan.configuration.travelContext.partySize === 1 ? "person" : "people"}.\n\nTap below to share your current location for this one nearby food check. It expires after 15 minutes and will not be saved.`, replyMarkup: { keyboard: [[{ text: "Share current location", request_location: true }]], resize_keyboard: true, one_time_keyboard: true }, locationIntent: { purpose: "nearby_food", planId: plan.id } }];
   }
-  if (command.type === "set_transport_preference") {
+  if (command.type === "transport_choice") {
     const plan = store.getWorkspace().activePlan;
-    if (plan.configuration.transport.preference !== command.preference) store.updatePlanTransportPreference(plan.id, { preference: command.preference });
     const accommodation = plan.configuration.accommodation;
     const checkin = store.getTelegramArrivalCheckin(plan.id);
     const offersCurrentRoute = plan.status === "active"
       && (accommodation.status === "candidate" || accommodation.status === "confirmed")
       && Boolean(accommodation.location && checkin?.checkInSentAt);
+    const resolvedScope = offersCurrentRoute && command.scope !== "plan" ? "current_action" : "plan";
+    if (resolvedScope === "plan" && plan.configuration.transport.preference !== command.preference) store.updatePlanTransportPreference(plan.id, { preference: command.preference });
     return [{
-      text: formatTransportPreferenceAcknowledgement(command.preference, offersCurrentRoute),
+      text: formatTransportChoiceAcknowledgement(command.preference, resolvedScope, offersCurrentRoute),
       ...(offersCurrentRoute ? {
         replyMarkup: { keyboard: [[{ text: "Share current location", request_location: true }]], resize_keyboard: true, one_time_keyboard: true },
-        locationIntent: { purpose: "arrival_route" as const, planId: plan.id }
+        locationIntent: { purpose: "arrival_route" as const, planId: plan.id, ...(resolvedScope === "current_action" ? { transportOverride: command.preference } : {}) }
       } : {})
     }];
   }

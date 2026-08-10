@@ -1,6 +1,6 @@
 import { createAmapNavigationHandoff, type AmapPlace, type AmapRoute } from "@c-assistant/connectors";
 import { runTransportPlannerSkill } from "@c-assistant/china-country-pack";
-import type { TransportMode } from "@c-assistant/core";
+import type { TransportMode, TransportPreference } from "@c-assistant/core";
 import type { Plan } from "@c-assistant/core";
 
 export function arrivalRouteDestination(plan: Plan): AmapPlace | undefined {
@@ -9,10 +9,11 @@ export function arrivalRouteDestination(plan: Plan): AmapPlace | undefined {
   return { id: accommodation.id ?? "", name: accommodation.name, address: accommodation.address, location: accommodation.location, type: "Plan accommodation", city: "", district: "" };
 }
 
-export function selectArrivalTransport(plan: Plan, routeFacts: AmapRoute[]): TransportMode {
-  const fallback = plan.configuration.transport.preference === "public_transit" ? "transit" : plan.configuration.transport.preference === "walking" ? "walking" : "driving";
+export function selectArrivalTransport(plan: Plan, routeFacts: AmapRoute[], preferenceOverride?: Exclude<TransportPreference, "plan_recommended">): TransportMode {
+  const preference = preferenceOverride ?? plan.configuration.transport.preference;
+  const fallback = preference === "public_transit" ? "transit" : preference === "walking" ? "walking" : "driving";
   const result = runTransportPlannerSkill({
-    preference: plan.configuration.transport.preference,
+    preference,
     ...(plan.configuration.travelContext.partySize !== undefined ? { partySize: plan.configuration.travelContext.partySize } : {}),
     luggage: plan.configuration.travelContext.luggage,
     routeFacts: routeFacts.map((route) => ({ mode: route.mode, distanceMeters: route.distanceMeters, ...(route.durationSeconds !== undefined ? { durationSeconds: route.durationSeconds } : {}) })),
@@ -25,7 +26,7 @@ export function formatArrivalRoute(input: { origin: AmapPlace; destination: Amap
   const handoff = createAmapNavigationHandoff({ origin: input.origin, destination: input.destination, transport: input.transport });
   const transportLabel = input.transport === "driving" ? "Driving / taxi" : input.transport === "walking" ? "Walking" : "Public transit";
   const routeFact = input.route ? `\nRoute fact: ${formatDistance(input.route.distanceMeters)}${input.route.durationSeconds === undefined ? "" : ` · about ${formatDuration(input.route.durationSeconds)}`}${input.route.taxiCostYuan === undefined ? "" : ` · estimated taxi fare ¥${input.route.taxiCostYuan}`}${input.route.transitCostYuan === undefined ? "" : ` · estimated transit fare ¥${input.route.transitCostYuan}`}.` : "\nOpen Amap to get the current live route.";
-  return { text: `Arrival route ready\nTo: ${input.destination.name}\nChosen Plan mode: ${transportLabel}.${routeFact}\n\nOpen Amap to review the route and choose the next action. Landi has not hailed a ride, made a booking, or started payment.`, handoffUrl: handoff.url };
+  return { text: `Arrival route ready\nTo: ${input.destination.name}\nChosen route mode: ${transportLabel}.${routeFact}\n\nOpen Amap to review the route and choose the next action. Landi has not hailed a ride, made a booking, or started payment.`, handoffUrl: handoff.url };
 }
 
 function formatDistance(distanceMeters: number): string {

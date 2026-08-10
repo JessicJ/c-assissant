@@ -15,9 +15,10 @@ test("SQLite records its schema baseline and creates a verified private backup",
     const store = new SqliteWorkspaceStore(databasePath);
     store.updateProfile({ displayName: "Backup owner", preferredLanguage: "English", nationality: "Canada", gender: "not_specified", immigrationStatus: "tourist_visa" });
     const maintenance = store.getDatabaseMaintenanceStatus();
-    assert.deepEqual({ schemaVersion: maintenance.schemaVersion, latest: maintenance.latestSchemaVersion, integrity: maintenance.integrity }, { schemaVersion: 2, latest: 2, integrity: "ok" });
+    assert.deepEqual({ schemaVersion: maintenance.schemaVersion, latest: maintenance.latestSchemaVersion, integrity: maintenance.integrity }, { schemaVersion: 3, latest: 3, integrity: "ok" });
     assert.equal(maintenance.migrations[0]?.name, "v1-local-workspace-baseline");
     assert.equal(maintenance.migrations[1]?.name, "country-pack-source-evidence-links");
+    assert.equal(maintenance.migrations[2]?.name, "telegram-one-route-transport-override");
 
     const backup = store.createBackup(new Date("2026-08-07T12:34:56.000Z"));
     assert.equal(backup.integrity, "ok");
@@ -39,7 +40,7 @@ test("SQLite refuses to open a workspace created by a newer schema", () => {
     const future = new DatabaseSync(databasePath);
     future.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, applied_at TEXT NOT NULL); INSERT INTO schema_migrations VALUES (999, 'future', '2026-08-07T00:00:00.000Z');");
     future.close();
-    assert.throws(() => new SqliteWorkspaceStore(databasePath), /supports schema 2.*schema 999/i);
+    assert.throws(() => new SqliteWorkspaceStore(databasePath), /supports schema 3.*schema 999/i);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -53,7 +54,7 @@ test("SQLite upgrades a schema-one workspace with source-evidence link tables", 
     old.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, applied_at TEXT NOT NULL); INSERT INTO schema_migrations VALUES (1, 'v1-local-workspace-baseline', '2026-08-07T00:00:00.000Z');");
     old.close();
     const store = new SqliteWorkspaceStore(databasePath);
-    assert.equal(store.getDatabaseMaintenanceStatus().schemaVersion, 2);
+    assert.equal(store.getDatabaseMaintenanceStatus().schemaVersion, 3);
     const tables = new DatabaseSync(databasePath, { readOnly: true });
     const names = tables.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%run_sources' ORDER BY name").all().map((row) => (row as { name: string }).name);
     assert.deepEqual(names, ["country_pack_skill_run_sources", "plan_compilation_run_sources"]);
@@ -125,6 +126,17 @@ test("SQLite binds temporary Telegram location use to a Plan and expires it", ()
 
   assert.deepEqual(store.getTelegramLocationIntent("2026-08-07T00:14:59.000Z"), { purpose: "nearby_food", planId });
   assert.equal(store.getTelegramLocationIntent("2026-08-07T00:15:01.000Z"), undefined);
+  store.close();
+});
+
+test("SQLite keeps a one-route transport override temporary and purpose-bound", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const planId = store.getWorkspace().activePlan.id;
+  store.startTelegramLocationIntent({ purpose: "arrival_route", planId, transportOverride: "taxi", startedAt: "2026-08-07T00:00:00.000Z" });
+
+  assert.deepEqual(store.getTelegramLocationIntent("2026-08-07T00:14:59.000Z"), { purpose: "arrival_route", planId, transportOverride: "taxi" });
+  assert.equal(store.getWorkspace().activePlan.configuration.transport.preference, "plan_recommended");
+  assert.throws(() => store.startTelegramLocationIntent({ purpose: "nearby_food", planId, transportOverride: "taxi" }), /only valid for an arrival route/i);
   store.close();
 });
 

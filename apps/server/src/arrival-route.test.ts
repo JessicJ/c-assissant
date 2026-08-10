@@ -17,6 +17,13 @@ test("arrival route selection keeps an explicit Plan preference", () => {
   assert.equal(selectArrivalTransport(plan, [{ mode: "driving", origin: "121.455,31.249", destination: "121.456,31.250", distanceMeters: 1_600, durationSeconds: 300, strategy: "amap_recommended" }, { mode: "walking", origin: "121.455,31.249", destination: "121.456,31.250", distanceMeters: 1_100, durationSeconds: 900, strategy: "amap_recommended" }]), "walking");
 });
 
+test("a one-route override wins without changing the saved Plan preference", () => {
+  const plan = createPlanFromRequest({ request: "I will arrive in Shanghai." });
+  plan.configuration.transport.preference = "plan_recommended";
+  assert.equal(selectArrivalTransport(plan, [{ mode: "driving", origin: "121.455,31.249", destination: "121.456,31.250", distanceMeters: 1_600, durationSeconds: 300, strategy: "amap_recommended" }], "taxi"), "driving");
+  assert.equal(plan.configuration.transport.preference, "plan_recommended");
+});
+
 test("arrival route copy makes the Amap handoff and its boundary explicit", () => {
   const origin = { id: "", name: "Shared current location", address: "", location: "121.455,31.249", type: "Temporary location", city: "", district: "" };
   const destination = { id: "stay-1", name: "Riverside Hotel", address: "1 River Road", location: "121.456,31.250", type: "Accommodation", city: "Shanghai", district: "Jing'an" };
