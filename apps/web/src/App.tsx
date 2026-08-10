@@ -160,12 +160,36 @@ function EmptyPlan({ onCreate }: { onCreate: () => void }) {
 }
 
 function CurrentPlan({ plan, onRevise, onTaskToggle, onConfirm, confirming }: { plan: Plan; onRevise: () => void; onTaskToggle: (planId: string, taskId: string, checked: boolean) => Promise<void>; onConfirm: (planId: string) => Promise<void>; confirming: boolean }) {
+  const checklistItems = plan.stages.flatMap((stage) => stage.tasks
+    .filter((task) => isPreDepartureChecklistTask(task, stage.title))
+    .map((task) => ({ task, stageTitle: stage.title })));
+  const checklistTaskIds = new Set(checklistItems.map((item) => item.task.id));
+  const timelineTasks = plan.stages
+    .flatMap((stage) => sectionKind(stage.title) === "itinerary" ? stage.tasks : stage.tasks.filter(isTravelTimelineTask))
+    .filter((task) => !checklistTaskIds.has(task.id));
+  const featuredTaskIds = new Set([...checklistItems.map((item) => item.task.id), ...timelineTasks.map((task) => task.id)]);
+  const remainingStages = plan.stages
+    .map((stage) => ({ ...stage, tasks: stage.tasks.filter((task) => !featuredTaskIds.has(task.id)) }))
+    .filter((stage) => stage.tasks.length > 0);
+  const leadSectionCount = Number(checklistItems.length > 0) + Number(timelineTasks.length > 0);
   return <article className="current-plan-card">
     <header className="plan-hero"><div><span className={`plan-status ${plan.status}`}>{plan.status === "draft" ? "待确认草稿" : "执行中"}</span><h2>{plan.title}</h2><div className="plan-meta"><span>⌖ {plan.location}</span><span>◷ {plan.dates}</span></div></div></header>
-    <section className="plan-sections">{plan.stages.map((stage, index) => <PlanContentSection key={stage.id} plan={plan} stage={stage} index={index} onTaskToggle={onTaskToggle} />)}</section>
+    <section className="plan-sections">
+      {checklistItems.length ? <FeaturedChecklist plan={plan} index={0} items={checklistItems} onTaskToggle={onTaskToggle} /> : null}
+      {timelineTasks.length ? <FeaturedTimeline index={checklistItems.length ? 1 : 0} tasks={timelineTasks} /> : null}
+      {remainingStages.map((stage, index) => <PlanContentSection key={stage.id} plan={plan} stage={stage} index={index + leadSectionCount} onTaskToggle={onTaskToggle} />)}
+    </section>
     <section className="plan-evidence"><div className="section-title"><p>官方证据</p><span>直接关联到计划内容</span></div>{plan.sources.length ? <div className="evidence-list">{plan.sources.map((source) => <a href={source.url} target="_blank" rel="noreferrer" key={`${source.url}-${source.retrievedAt}`}><span>官方</span><div><strong>{source.title}</strong><small>{source.authority} · {source.retrievedAt}</small></div><b>↗</b></a>)}</div> : <div className="evidence-empty">暂无官方证据</div>}</section>
     <footer className="plan-footer"><div><strong>{plan.status === "draft" ? "确认完整计划" : "需要调整吗？"}</strong><span>{plan.status === "draft" ? "确认后才会启用提醒和执行；若已有计划正在运行，它会在此时进入历史计划。" : "修改会先生成完整替代草稿；当前计划继续运行到你确认替代草稿。"}</span></div><div className="plan-footer-actions"><button className="secondary-action" onClick={onRevise}>修改当前计划</button>{plan.status === "draft" ? <button className="primary-action" disabled={confirming} onClick={() => void onConfirm(plan.id)}>{confirming ? "确认中…" : "确认并启用计划"}</button> : null}</div></footer>
   </article>;
+}
+
+function FeaturedChecklist({ plan, index, items, onTaskToggle }: { plan: Plan; index: number; items: Array<{ task: Task; stageTitle: string }>; onTaskToggle: (planId: string, taskId: string, checked: boolean) => Promise<void> }) {
+  return <section className="plan-content-section featured checklist"><header><div><span>{String(index + 1).padStart(2, "0")}</span><h3>出发前准备</h3></div><small>{items.length} 项</small></header><p>需要携带的物品和出发前必须完成的事项集中在这里；勾选结果会影响后续提醒。</p><div className="preparation-checklist">{items.map(({ task }) => { const download = appDownload(task, plan.sources); const checked = task.status === "completed"; return <div className={checked ? "checked" : ""} key={task.id}><input type="checkbox" checked={checked} onChange={(event) => void onTaskToggle(plan.id, task.id, event.target.checked)} aria-label={`完成 ${task.title}`} /><div><strong>{task.title}</strong>{task.description ? <small>{task.description}</small> : null}<small>{task.dueLabel}</small></div>{download ? <a className="download-action" href={download.url} target="_blank" rel="noreferrer">{download.label} ↗</a> : null}</div>; })}</div></section>;
+}
+
+function FeaturedTimeline({ index, tasks }: { index: number; tasks: Task[] }) {
+  return <section className="plan-content-section featured itinerary"><header><div><span>{String(index + 1).padStart(2, "0")}</span><h3>完整行程时间轴</h3></div><small>{tasks.length} 个节点</small></header><p>从抵达、交通、入住、固定活动到返程，所有旅行节点在同一条时间轴上连续呈现。</p><ItineraryView tasks={tasks} /></section>;
 }
 
 function PlanContentSection({ plan, stage, index, onTaskToggle }: { plan: Plan; stage: Plan["stages"][number]; index: number; onTaskToggle: (planId: string, taskId: string, checked: boolean) => Promise<void> }) {
@@ -217,6 +241,16 @@ function isPreDepartureChecklistTask(task: Pick<Task, "title" | "description" | 
   if (!/^(before|prior to)\b|^(在)?.+(前|之前)$/.test(due)) return false;
   if (/每日行程|daily itinerary|itinerary|arriv|arrival|exhibition|展会|抵达|到达/.test(stage) || /airport|hotel check-in|first exhibition|final exhibition|leaving the airport|机场|入住|展会/.test(due)) return false;
   return /准备|行前|清单|预订|应急资料|prepar|essential|checklist|reservation|booking|document/.test(stage);
+}
+
+function isTravelTimelineTask(task: Task): boolean {
+  const text = `${task.title} ${task.description ?? ""}`.trim().toLocaleLowerCase();
+  const due = task.dueLabel.toLocaleLowerCase();
+  if (/\bcheck[ -]?in\b|办理入住/.test(text)) return true;
+  if (/^(check|confirm|choose|compare|book|prepare|review|create|set|research|save|download|install)\b|^(检查|确认|选择|比较|预订|准备|复核|制定|设置|研究|保存|下载|安装)/.test(text)) return false;
+  const concreteTravelAction = /\b(depart|leave for|go to|travel to|arrive|arrival formalities|collect baggage|board|flight|train|transfer to|ride to|visit|attend|return journey)\b|出发去|前往|启程|抵达|到达|入境手续|提取行李|登机|航班|火车|换乘|游览|参观|参加|返程/.test(text);
+  const concreteTravelTime = /\b(on arrival|at arrival|departure day|return day|day \d+|\d{1,2}:\d{2})\b|抵达时|到达时|出发当天|返程当天|第[一二三四五六七八九十\d]+天|\d{1,2}[：:]\d{2}/.test(due);
+  return concreteTravelAction && concreteTravelTime;
 }
 
 function appDownload(task: Task, sources: Plan["sources"]): { label: string; url: string } | null {

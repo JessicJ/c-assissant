@@ -56,6 +56,7 @@ a { color: inherit; text-decoration: none; }
 .overview-grid strong { font-size: 13px; line-height: 1.45; }
 .overview-grid p { margin: 0; color: #7e8985; font-size: 10px; line-height: 1.55; }
 .journey-timeline { display: grid; }
+.plan-content-section.featured { background: linear-gradient(180deg,#fbfdfc 0%,#fff 100%); }
 .journey-timeline article { display: grid; grid-template-columns: 38px minmax(0,1fr); gap: 13px; }
 .journey-marker { position: relative; display: flex; justify-content: center; }
 .journey-marker::after { content: ""; position: absolute; top: 29px; bottom: 0; width: 1px; background: #d5e0db; }

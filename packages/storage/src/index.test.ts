@@ -380,7 +380,18 @@ test("SQLite revises only the expected draft and preserves its Plan-scoped confi
 
 test("SQLite turns an active Plan revision into a replacement draft without interrupting execution", () => {
   const store = new SqliteWorkspaceStore(":memory:");
-  const active = store.confirmPlan(store.getWorkspace().activePlan.id).activePlan;
+  const initial = store.getWorkspace().activePlan;
+  const snapshot = store.saveSourceSnapshot({
+    sourceId: "nia-english",
+    authority: "National Immigration Administration",
+    titleOriginal: "Guidelines for Foreigners",
+    url: "https://en.nia.gov.cn/guide",
+    retrievedAt: "2026-08-10T08:00:00.000Z",
+    contentHash: "c".repeat(64),
+    excerpt: "Official evidence only."
+  }).snapshot;
+  store.linkSourceSnapshotToPlan(initial.id, snapshot.id);
+  const active = store.confirmPlan(initial.id).activePlan;
   const revised = store.reviseGeneratedPlan({
     expectedPlanId: active.id,
     expectedVersion: active.version,
@@ -396,6 +407,7 @@ test("SQLite turns an active Plan revision into a replacement draft without inte
   });
 
   assert.equal(revised.activePlan.status, "draft");
+  assert.deepEqual(revised.activePlan.sources, active.sources);
   assert.equal(revised.executionPlan?.id, active.id);
   assert.equal(store.getExecutionPlan()?.id, active.id);
   assert.equal(store.listHistoricalPlans().some((plan) => plan.id === active.id), false);
