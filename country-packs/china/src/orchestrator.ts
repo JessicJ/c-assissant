@@ -1,4 +1,4 @@
-import { compilePlanProposal, type Plan, type PlanCompilationDecision, type Profile } from "@c-assistant/core";
+import { compilePlanProposal, type Plan, type PlanCompilationDecision, type Profile, type SourceEvidenceRef } from "@c-assistant/core";
 
 import {
   createChinaPlanCompilationProposal,
@@ -49,6 +49,7 @@ export type ChinaArrivalOrchestrationResult =
     supportingResults: ChinaArrivalPlanSupportingResult[];
     preparation: ArrivalPreparationSkillResult;
     composite: ChinaArrivalPlanSkillResult;
+    sourceEvidenceBySkill: Partial<Record<ChinaArrivalPlanSupportingResult["skill"]["id"], SourceEvidenceRef[]>>;
     compilation: Extract<PlanCompilationDecision, { status: "compiled" }>;
   }
   | {
@@ -94,11 +95,28 @@ export async function orchestrateChinaArrivalPlan(input: ChinaArrivalOrchestrati
     planVersion: input.plan.version,
     supportingResults
   }) as unknown as ChinaArrivalPlanSkillResult;
-  const proposal = createChinaPlanCompilationProposal({ composite, preparation, localFood });
+  const sourceEvidenceBySkill = collectSourceEvidence({ policy, localFood, digitalLife });
+  const proposal = createChinaPlanCompilationProposal({ composite, preparation, localFood, sourceEvidenceBySkill });
   if (proposal.status === "blocked") return { status: "blocked", reasonCode: proposal.reasonCode, message: proposal.message, supportingResults, preparation, composite };
   const compilation = compilePlanProposal(input.plan, proposal.proposal, new Date(input.now));
   if (compilation.status === "blocked") return { status: "blocked", reasonCode: compilation.reasonCode, message: compilation.message, supportingResults, preparation, composite };
-  return { status: "compiled", supportingResults, preparation, composite, compilation };
+  return { status: "compiled", supportingResults, preparation, composite, sourceEvidenceBySkill, compilation };
+}
+
+function collectSourceEvidence(input: {
+  policy: PolicyApplicabilitySkillResult;
+  localFood: LocalFoodGuideSkillResult;
+  digitalLife: DigitalLifeSetupSkillResult;
+}): Partial<Record<ChinaArrivalPlanSupportingResult["skill"]["id"], SourceEvidenceRef[]>> {
+  return {
+    "policy-applicability": uniqueEvidence(input.policy.sources.map((source) => ({ sourceSnapshotId: source.id, contentHash: source.contentHash }))),
+    "local-food-guide": uniqueEvidence(input.localFood.sources.map((source) => ({ sourceSnapshotId: source.sourceSnapshotId, contentHash: source.contentHash }))),
+    "digital-life-setup": uniqueEvidence(input.digitalLife.sources.map((source) => ({ sourceSnapshotId: source.sourceSnapshotId, contentHash: source.contentHash })))
+  };
+}
+
+function uniqueEvidence(evidence: SourceEvidenceRef[]): SourceEvidenceRef[] {
+  return evidence.filter((item, index, all) => all.findIndex((candidate) => candidate.sourceSnapshotId === item.sourceSnapshotId && candidate.contentHash === item.contentHash) === index).map((item) => ({ ...item }));
 }
 
 async function invokeSupporting(id: string, input: unknown): Promise<ChinaArrivalPlanSupportingResult> {

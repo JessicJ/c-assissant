@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 
 import type { Plan, Stage, Task, TaskReminderDynamicFact } from "./index.js";
 
+export interface SourceEvidenceRef {
+  sourceSnapshotId: string;
+  contentHash: string;
+}
+
 export interface PlanCompilationOrigin {
   kind: "country_pack_compilation";
   countryPackId: string;
@@ -11,6 +16,8 @@ export interface PlanCompilationOrigin {
   compilationKey: string;
   sourcePlanVersion: number;
   sourceSkills: Array<{ id: string; version: string }>;
+  /** Exact immutable official evidence versions used for this Stage or Task. */
+  sourceEvidence?: SourceEvidenceRef[];
 }
 
 export interface PlanCompilationTaskProposal {
@@ -20,6 +27,7 @@ export interface PlanCompilationTaskProposal {
   owner: Task["owner"];
   dueLabel: string;
   sourceSkills: Array<{ id: string; version: string }>;
+  sourceEvidence?: SourceEvidenceRef[];
   reminder?: {
     dueAt: string;
     timeZone: string;
@@ -35,6 +43,8 @@ export interface PlanCompilationProposal {
   compilationKey: string;
   stage: { title: string; description: string };
   tasks: PlanCompilationTaskProposal[];
+  /** All immutable official evidence versions used by this compilation. */
+  sourceEvidence?: SourceEvidenceRef[];
   /** Source-backed orientation that belongs in the complete Plan but is not a Task. */
   knownInformation?: string[];
   assumptions: string[];
@@ -52,6 +62,7 @@ export interface PlanCompilationAudit {
   compiledPlanVersion: number;
   taskCount: number;
   reminderCount: number;
+  sourceEvidence: SourceEvidenceRef[];
 }
 
 export type PlanCompilationDecision =
@@ -77,7 +88,7 @@ export function compilePlanProposal(plan: Plan, proposal: PlanCompilationProposa
     if (task.reminder && !reminder) return blocked("invalid_proposal", `Reminder for ${task.proposalId} is malformed or inconsistent with its time zone.`);
     if (task.reminder && Date.parse(task.reminder.dueAt) <= now.getTime()) return blocked("stale_reminder", `Reminder for ${task.proposalId} is not in the future.`);
     if (reminder) reminderCount += 1;
-    const origin = compilationOrigin(proposal, task.sourceSkills);
+    const origin = compilationOrigin(proposal, task.sourceSkills, task.sourceEvidence ?? []);
     compiledTasks.push({
       id: `task-${randomUUID()}`,
       title: task.title.trim(),
@@ -90,7 +101,11 @@ export function compilePlanProposal(plan: Plan, proposal: PlanCompilationProposa
     });
   }
 
-  const stageOrigin = compilationOrigin(proposal, uniqueSources(proposal.tasks.flatMap((task) => task.sourceSkills)));
+  const stageOrigin = compilationOrigin(
+    proposal,
+    uniqueSources(proposal.tasks.flatMap((task) => task.sourceSkills)),
+    proposal.sourceEvidence ?? proposal.tasks.flatMap((task) => task.sourceEvidence ?? [])
+  );
   const stage: Stage = {
     id: `stage-${randomUUID()}`,
     title: proposal.stage.title.trim(),
@@ -122,7 +137,8 @@ export function compilePlanProposal(plan: Plan, proposal: PlanCompilationProposa
       sourcePlanVersion: plan.version,
       compiledPlanVersion: compiled.version,
       taskCount: compiledTasks.length,
-      reminderCount
+      reminderCount,
+      sourceEvidence: uniqueEvidence(proposal.sourceEvidence ?? proposal.tasks.flatMap((task) => task.sourceEvidence ?? []))
     },
     warnings: [...proposal.limitations]
   };
@@ -144,6 +160,7 @@ function isValidProposal(proposal: PlanCompilationProposal): boolean {
     && typeof proposal.stage.title === "string" && Boolean(proposal.stage.title.trim())
     && typeof proposal.stage.description === "string" && Boolean(proposal.stage.description.trim())
     && Array.isArray(proposal.tasks) && proposal.tasks.length <= 50 && proposal.tasks.every(isValidTaskProposal)
+    && (proposal.sourceEvidence === undefined || (Array.isArray(proposal.sourceEvidence) && proposal.sourceEvidence.every(isValidSourceEvidence)))
     && new Set(proposal.tasks.map((task) => task.proposalId)).size === proposal.tasks.length
     && (proposal.knownInformation === undefined || (Array.isArray(proposal.knownInformation) && proposal.knownInformation.length <= 20 && proposal.knownInformation.every(isNonEmptyString)))
     && Array.isArray(proposal.assumptions) && proposal.assumptions.every(isNonEmptyString)
@@ -156,6 +173,7 @@ function isValidTaskProposal(task: unknown): task is PlanCompilationTaskProposal
   const candidate = task as Partial<PlanCompilationTaskProposal>;
   if (typeof candidate.proposalId !== "string" || typeof candidate.title !== "string" || typeof candidate.description !== "string" || typeof candidate.owner !== "string" || typeof candidate.dueLabel !== "string" || !Array.isArray(candidate.sourceSkills)) return false;
   if (!candidate.sourceSkills.every(isValidSourceSkill)) return false;
+  if (candidate.sourceEvidence !== undefined && (!Array.isArray(candidate.sourceEvidence) || !candidate.sourceEvidence.every(isValidSourceEvidence))) return false;
   const reminder = candidate.reminder;
   if (reminder !== undefined && (typeof reminder !== "object" || reminder === null || !isNonEmptyString(reminder.dueAt) || !isNonEmptyString(reminder.timeZone) || !isNonEmptyString(reminder.purpose)
     || !Array.isArray(reminder.refreshFacts) || !reminder.refreshFacts.every((fact) => fact === "weather"))) return false;
@@ -181,7 +199,7 @@ function localMinute(instant: Date, timeZone: string): string | undefined {
   }
 }
 
-function compilationOrigin(proposal: PlanCompilationProposal, sourceSkills: Array<{ id: string; version: string }>): PlanCompilationOrigin {
+function compilationOrigin(proposal: PlanCompilationProposal, sourceSkills: Array<{ id: string; version: string }>, sourceEvidence: SourceEvidenceRef[] = []): PlanCompilationOrigin {
   return {
     kind: "country_pack_compilation",
     countryPackId: proposal.countryPack.id,
@@ -190,12 +208,17 @@ function compilationOrigin(proposal: PlanCompilationProposal, sourceSkills: Arra
     compositionSkillVersion: proposal.composition.version,
     compilationKey: proposal.compilationKey,
     sourcePlanVersion: proposal.planRef.version,
-    sourceSkills: uniqueSources(sourceSkills)
+    sourceSkills: uniqueSources(sourceSkills),
+    sourceEvidence: uniqueEvidence(sourceEvidence)
   };
 }
 
 function uniqueSources(sources: Array<{ id: string; version: string }>) {
   return sources.filter((source, index, all) => all.findIndex((candidate) => candidate.id === source.id && candidate.version === source.version) === index).map((source) => ({ ...source }));
+}
+
+function uniqueEvidence(evidence: SourceEvidenceRef[]) {
+  return evidence.filter((item, index, all) => all.findIndex((candidate) => candidate.sourceSnapshotId === item.sourceSnapshotId && candidate.contentHash === item.contentHash) === index).map((item) => ({ ...item }));
 }
 
 function isIanaTimeZone(value: string): boolean {
@@ -233,4 +256,11 @@ function isValidSourceSkill(value: unknown): value is { id: string; version: str
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as { id?: unknown; version?: unknown };
   return typeof candidate.id === "string" && isSlug(candidate.id) && typeof candidate.version === "string" && isSemver(candidate.version);
+}
+
+function isValidSourceEvidence(value: unknown): value is SourceEvidenceRef {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<SourceEvidenceRef>;
+  return typeof candidate.sourceSnapshotId === "string" && isSlug(candidate.sourceSnapshotId)
+    && typeof candidate.contentHash === "string" && /^[a-f0-9]{64}$/i.test(candidate.contentHash);
 }

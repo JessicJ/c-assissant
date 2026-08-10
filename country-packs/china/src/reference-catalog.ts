@@ -39,6 +39,7 @@ export interface ChinaReferenceCatalogResult {
     items: DigitalLifeSetupItemInput[];
     sources: Array<{
       id: string;
+      sourceSnapshotId: string;
       authority: string;
       titleOriginal: string;
       url: string;
@@ -80,6 +81,7 @@ export function createChinaReferenceCatalog(input: {
   }
   const sources = [...latestBySource.values()].map((snapshot) => ({
     id: snapshot.sourceId,
+    sourceSnapshotId: snapshot.id,
     authority: snapshot.authority,
     titleOriginal: snapshot.titleOriginal,
     url: snapshot.url,
@@ -143,6 +145,7 @@ function createLocalFoodReference(snapshots: SourceSnapshot[], locationName?: st
   }
   const sources = [...latestBySource.values()].map((snapshot) => ({
     id: snapshot.sourceId,
+    sourceSnapshotId: snapshot.id,
     authority: snapshot.authority,
     titleOriginal: snapshot.titleOriginal,
     url: snapshot.url,

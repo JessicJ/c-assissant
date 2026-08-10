@@ -115,7 +115,7 @@ This Connector maintains traceable policy evidence. It should:
 
 The Connector fetches source facts. The `policy-applicability` Skill determines applicability using nationality, document or visa status, residence status, purpose, place, and date.
 
-Current implementation: the generic Connector accepts only a Country Pack-owned HTTPS domain allowlist and produces a bounded snapshot with original title, canonical URL, retrieval time, and content hash. China Pack starts with the English National Immigration Administration and State Council entry points. Core persists snapshots locally, deduplicates equal source/url/hash records, and reports a later differing hash as a content change. Linking snapshots to Plans/Runs and applying them remains Skill work; a registry entry or content change alone never supports a policy conclusion.
+Current implementation: the generic Connector accepts only a Country Pack-owned HTTPS domain allowlist and produces a bounded snapshot with original title, canonical URL, retrieval time, and content hash. China Pack starts with approved English government and first-party entry points. Core persists snapshots locally, deduplicates equal source/url/hash records, and reports a later differing hash as a content change. Source preparation links used snapshots to the draft Plan; successful compilation retains exact snapshot ID/hash pairs on dependent Tasks, the compilation Run, and corresponding Skill Runs. A registry entry, link, or content change alone never supports a policy conclusion.
 
 Core exposes the registry as a read-only endpoint. Refreshing a single source is an explicit request and uses the registered source id; Core does not schedule background crawling in V1.
 

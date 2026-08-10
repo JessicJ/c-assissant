@@ -30,6 +30,7 @@ import {
   type RunStatus,
   type RunTrigger,
   type SourceReference,
+  type SourceEvidenceRef,
   type SourceSnapshot,
   type SourceSnapshotInput,
   type SourceSnapshotWriteResult,
@@ -218,7 +219,7 @@ export interface TelegramTaskReminderFailureResult {
 const TASK_REMINDER_CATCH_UP_MS = 30 * 60_000;
 const TASK_REMINDER_ATTEMPT_LEASE_MS = 60_000;
 const TASK_REMINDER_RETRY_DELAYS_MS = [60_000, 5 * 60_000] as const;
-const CURRENT_SCHEMA_VERSION = 1;
+const CURRENT_SCHEMA_VERSION = 2;
 
 export interface DatabaseMaintenanceStatus {
   schemaVersion: number;
@@ -713,7 +714,7 @@ export class SqliteWorkspaceStore {
   }
 
   /** Atomically applies an already authorized Core compilation to the exact current draft version. */
-  saveCompiledPlan(input: { plan: Plan; expectedPlanId: string; expectedVersion: number; audit: PlanCompilationAudit; skillRuns?: Array<Pick<CountryPackSkillRun, "skillId" | "skillVersion" | "status">>; compiledAt?: string }): WorkspaceSnapshot {
+  saveCompiledPlan(input: { plan: Plan; expectedPlanId: string; expectedVersion: number; audit: PlanCompilationAudit; skillRuns?: Array<Pick<CountryPackSkillRun, "skillId" | "skillVersion" | "status"> & { sourceEvidence?: SourceEvidenceRef[] }>; compiledAt?: string }): WorkspaceSnapshot {
     const compiledAt = input.compiledAt ?? new Date().toISOString();
     validateCompiledPlanWrite(input, compiledAt);
     const run: PlanCompilationRun = {
@@ -728,7 +729,8 @@ export class SqliteWorkspaceStore {
       compiledPlanVersion: input.audit.compiledPlanVersion,
       taskCount: input.audit.taskCount,
       reminderCount: input.audit.reminderCount,
-      compiledAt
+      compiledAt,
+      sourceEvidence: structuredClone(input.audit.sourceEvidence)
     };
     this.database.exec("BEGIN IMMEDIATE");
     try {
@@ -765,11 +767,14 @@ export class SqliteWorkspaceStore {
         run.reminderCount,
         run.compiledAt
       );
+      this.insertCompilationRunEvidence(run.id, run.sourceEvidence);
       const insertSkillRun = this.database.prepare(`INSERT INTO country_pack_skill_runs
         (id, compilation_run_id, plan_id, source_plan_version, skill_id, skill_version, status, finished_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
       for (const skillRun of input.skillRuns ?? []) {
-        insertSkillRun.run(`run-${randomUUID()}`, run.id, run.planId, run.sourcePlanVersion, skillRun.skillId, skillRun.skillVersion, skillRun.status, compiledAt);
+        const skillRunId = `run-${randomUUID()}`;
+        insertSkillRun.run(skillRunId, run.id, run.planId, run.sourcePlanVersion, skillRun.skillId, skillRun.skillVersion, skillRun.status, compiledAt);
+        this.insertSkillRunEvidence(skillRunId, skillRun.sourceEvidence ?? []);
       }
       this.addInbox({
         id: `plan-compiled-${input.plan.id}-${input.plan.version}`,
@@ -790,7 +795,7 @@ export class SqliteWorkspaceStore {
     const safeLimit = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), 100) : 20;
     return (this.database.prepare(`SELECT id, plan_id, country_pack_id, country_pack_version, composition_skill_id, composition_skill_version,
       source_plan_version, compiled_plan_version, task_count, reminder_count, compiled_at
-      FROM plan_compilation_runs ORDER BY compiled_at DESC, rowid DESC LIMIT ?`).all(safeLimit) as unknown as PlanCompilationRunRow[]).map(planCompilationRunFromRow);
+      FROM plan_compilation_runs ORDER BY compiled_at DESC, rowid DESC LIMIT ?`).all(safeLimit) as unknown as PlanCompilationRunRow[]).map((row) => ({ ...planCompilationRunFromRow(row), sourceEvidence: this.listCompilationRunEvidence(row.id) }));
   }
 
   listRecentCountryPackSkillRuns(limit = 100): CountryPackSkillRun[] {
@@ -805,8 +810,38 @@ export class SqliteWorkspaceStore {
       skillId: row.skill_id,
       skillVersion: row.skill_version,
       status: row.status,
-      finishedAt: row.finished_at
+      finishedAt: row.finished_at,
+      sourceEvidence: this.listSkillRunEvidence(row.id)
     }));
+  }
+
+  private insertCompilationRunEvidence(runId: string, evidence: SourceEvidenceRef[]): void {
+    const insert = this.database.prepare(`INSERT INTO plan_compilation_run_sources (compilation_run_id, source_snapshot_id, content_hash) VALUES (?, ?, ?)`);
+    for (const source of evidence) {
+      this.requireStoredEvidence(source);
+      insert.run(runId, source.sourceSnapshotId, source.contentHash);
+    }
+  }
+
+  private insertSkillRunEvidence(runId: string, evidence: SourceEvidenceRef[]): void {
+    const insert = this.database.prepare(`INSERT INTO country_pack_skill_run_sources (skill_run_id, source_snapshot_id, content_hash) VALUES (?, ?, ?)`);
+    for (const source of evidence) {
+      this.requireStoredEvidence(source);
+      insert.run(runId, source.sourceSnapshotId, source.contentHash);
+    }
+  }
+
+  private requireStoredEvidence(evidence: SourceEvidenceRef): void {
+    const found = this.database.prepare("SELECT 1 FROM source_snapshots WHERE id = ? AND content_hash = ?").get(evidence.sourceSnapshotId, evidence.contentHash);
+    if (!found) throw new Error("Compilation evidence does not match a stored immutable source snapshot.");
+  }
+
+  private listCompilationRunEvidence(runId: string): SourceEvidenceRef[] {
+    return this.database.prepare(`SELECT source_snapshot_id, content_hash FROM plan_compilation_run_sources WHERE compilation_run_id = ? ORDER BY rowid`).all(runId).map(evidenceFromRow);
+  }
+
+  private listSkillRunEvidence(runId: string): SourceEvidenceRef[] {
+    return this.database.prepare(`SELECT source_snapshot_id, content_hash FROM country_pack_skill_run_sources WHERE skill_run_id = ? ORDER BY rowid`).all(runId).map(evidenceFromRow);
   }
 
   confirmPlan(planId: string): WorkspaceSnapshot {
@@ -1300,6 +1335,18 @@ export class SqliteWorkspaceStore {
         finished_at TEXT NOT NULL,
         UNIQUE (compilation_run_id, skill_id)
       );
+      CREATE TABLE IF NOT EXISTS plan_compilation_run_sources (
+        compilation_run_id TEXT NOT NULL REFERENCES plan_compilation_runs(id) ON DELETE CASCADE,
+        source_snapshot_id TEXT NOT NULL REFERENCES source_snapshots(id) ON DELETE RESTRICT,
+        content_hash TEXT NOT NULL,
+        PRIMARY KEY (compilation_run_id, source_snapshot_id, content_hash)
+      );
+      CREATE TABLE IF NOT EXISTS country_pack_skill_run_sources (
+        skill_run_id TEXT NOT NULL REFERENCES country_pack_skill_runs(id) ON DELETE CASCADE,
+        source_snapshot_id TEXT NOT NULL REFERENCES source_snapshots(id) ON DELETE RESTRICT,
+        content_hash TEXT NOT NULL,
+        PRIMARY KEY (skill_run_id, source_snapshot_id, content_hash)
+      );
       CREATE TABLE IF NOT EXISTS telegram_binding (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         chat_id TEXT NOT NULL,
@@ -1368,6 +1415,8 @@ export class SqliteWorkspaceStore {
       CREATE INDEX IF NOT EXISTS idx_task_reminder_runs_recent ON task_reminder_runs(started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_plan_compilation_runs_recent ON plan_compilation_runs(compiled_at DESC);
       CREATE INDEX IF NOT EXISTS idx_country_pack_skill_runs_recent ON country_pack_skill_runs(finished_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_plan_compilation_run_sources_snapshot ON plan_compilation_run_sources(source_snapshot_id);
+      CREATE INDEX IF NOT EXISTS idx_country_pack_skill_run_sources_snapshot ON country_pack_skill_run_sources(source_snapshot_id);
       CREATE INDEX IF NOT EXISTS idx_telegram_pairing_requests_active ON telegram_pairing_requests(consumed_at, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_telegram_task_reminders_due ON telegram_task_reminder_deliveries(status, next_attempt_at);
       CREATE INDEX IF NOT EXISTS idx_telegram_arrival_checkins_follow_up ON telegram_arrival_checkins(location_requested_at, location_received_at, check_in_sent_at);
@@ -1389,7 +1438,9 @@ export class SqliteWorkspaceStore {
     if (!profileColumns.some((column) => column.name === "gender")) this.database.exec("ALTER TABLE profiles ADD COLUMN gender TEXT NOT NULL DEFAULT 'not_specified'");
     if (!profileColumns.some((column) => column.name === "immigration_status")) this.database.exec("ALTER TABLE profiles ADD COLUMN immigration_status TEXT NOT NULL DEFAULT 'unknown'");
     this.database.prepare("INSERT OR IGNORE INTO runtime_settings (id, selected_runtime, updated_at) VALUES (1, 'codex', ?)").run(new Date().toISOString());
-    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)").run(CURRENT_SCHEMA_VERSION, "v1-local-workspace-baseline", new Date().toISOString());
+    const migrationTime = new Date().toISOString();
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (1, 'v1-local-workspace-baseline', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (2, 'country-pack-source-evidence-links', ?)").run(migrationTime);
   }
 
   private seedIfEmpty(): void {
@@ -1564,12 +1615,13 @@ function parseTaskReminder(value: string | null): TaskReminder | undefined {
   }
 }
 
-function validateCompiledPlanWrite(input: { plan: Plan; expectedPlanId: string; expectedVersion: number; audit: PlanCompilationAudit; skillRuns?: Array<Pick<CountryPackSkillRun, "skillId" | "skillVersion" | "status">> }, compiledAt: string): void {
+function validateCompiledPlanWrite(input: { plan: Plan; expectedPlanId: string; expectedVersion: number; audit: PlanCompilationAudit; skillRuns?: Array<Pick<CountryPackSkillRun, "skillId" | "skillVersion" | "status"> & { sourceEvidence?: SourceEvidenceRef[] }> }, compiledAt: string): void {
   if (!input.expectedPlanId.trim() || !Number.isInteger(input.expectedVersion) || input.expectedVersion < 1) throw new Error("A compiled Plan write needs an exact expected Plan version.");
   if (input.plan.id !== input.expectedPlanId || input.plan.version !== input.expectedVersion + 1 || input.plan.status !== "draft") throw new Error("The compiled Plan must be the next draft version of the expected Plan.");
   if (!Number.isFinite(Date.parse(compiledAt))) throw new Error("A compiled Plan write needs a valid audit time.");
   if (input.audit.sourcePlanVersion !== input.expectedVersion || input.audit.compiledPlanVersion !== input.plan.version) throw new Error("The compilation audit does not match the Plan version transition.");
   if (!isStableId(input.audit.countryPackId) || !isSemver(input.audit.countryPackVersion) || !isStableId(input.audit.compositionSkillId) || !isSemver(input.audit.compositionSkillVersion)) throw new Error("The compilation audit has invalid Country Pack or Skill identity.");
+  if (!isValidEvidenceList(input.audit.sourceEvidence)) throw new Error("The compilation audit has invalid or duplicate source evidence.");
   const generatedStages = input.plan.stages.filter((stage) => stage.origin?.kind === "country_pack_compilation");
   if (generatedStages.length !== 1) throw new Error("A compiled Plan write needs exactly one generated Stage.");
   const generatedStage = generatedStages[0]!;
@@ -1581,13 +1633,16 @@ function validateCompiledPlanWrite(input: { plan: Plan; expectedPlanId: string; 
     sourcePlanVersion: input.expectedVersion
   };
   if (!originMatchesAudit(generatedStage.origin, expectedOrigin)) throw new Error("The generated Stage provenance does not match the compilation audit.");
+  if (!sameEvidence(generatedStage.origin?.sourceEvidence ?? [], input.audit.sourceEvidence)) throw new Error("The generated Stage evidence does not match the compilation audit.");
   if (generatedStage.tasks.some((task) => !originMatchesAudit(task.origin, expectedOrigin))) throw new Error("Every generated Task needs provenance matching the compilation audit.");
+  if (generatedStage.tasks.some((task) => !isEvidenceSubset(task.origin?.sourceEvidence ?? [], input.audit.sourceEvidence))) throw new Error("Every generated Task evidence reference must belong to the compilation audit.");
   const reminderCount = generatedStage.tasks.filter((task) => task.reminder).length;
   if (input.audit.taskCount !== generatedStage.tasks.length || input.audit.reminderCount !== reminderCount) throw new Error("The compilation audit counts do not match the generated Plan content.");
   const skillIds = (input.skillRuns ?? []).map((run) => run.skillId);
-  if (new Set(skillIds).size !== skillIds.length || (input.skillRuns ?? []).some((run) => !isStableId(run.skillId) || !isSemver(run.skillVersion) || !["success", "degraded", "needs_input", "blocked", "failed", "not_supported"].includes(run.status))) {
+  if (new Set(skillIds).size !== skillIds.length || (input.skillRuns ?? []).some((run) => !isStableId(run.skillId) || !isSemver(run.skillVersion) || !["success", "degraded", "needs_input", "blocked", "failed", "not_supported"].includes(run.status) || !isValidEvidenceList(run.sourceEvidence ?? []))) {
     throw new Error("The compilation Skill audit contains an invalid or duplicate Skill result.");
   }
+  if ((input.skillRuns ?? []).some((run) => !isEvidenceSubset(run.sourceEvidence ?? [], input.audit.sourceEvidence))) throw new Error("Every Skill evidence reference must belong to the compilation audit.");
 }
 
 function parsePlanCompilationOrigin(value: string | null | undefined): PlanCompilationOrigin | undefined {
@@ -1611,7 +1666,8 @@ function isPlanCompilationOrigin(value: unknown): value is PlanCompilationOrigin
     && typeof candidate.compilationKey === "string" && isStableId(candidate.compilationKey)
     && Number.isInteger(candidate.sourcePlanVersion) && candidate.sourcePlanVersion! >= 1
     && Array.isArray(candidate.sourceSkills) && candidate.sourceSkills.every((source) => typeof source === "object" && source !== null
-      && typeof source.id === "string" && isStableId(source.id) && typeof source.version === "string" && isSemver(source.version));
+      && typeof source.id === "string" && isStableId(source.id) && typeof source.version === "string" && isSemver(source.version))
+    && (candidate.sourceEvidence === undefined || isValidEvidenceList(candidate.sourceEvidence));
 }
 
 function originMatchesAudit(origin: PlanCompilationOrigin | undefined, audit: { countryPackId: string; countryPackVersion: string; compositionSkillId: string; compositionSkillVersion: string; sourcePlanVersion: number }): boolean {
@@ -1623,7 +1679,7 @@ function originMatchesAudit(origin: PlanCompilationOrigin | undefined, audit: { 
     && origin.sourcePlanVersion === audit.sourcePlanVersion);
 }
 
-function planCompilationRunFromRow(row: PlanCompilationRunRow): PlanCompilationRun {
+function planCompilationRunFromRow(row: PlanCompilationRunRow): Omit<PlanCompilationRun, "sourceEvidence"> {
   return {
     id: row.id,
     kind: "plan_compilation",
@@ -1638,6 +1694,28 @@ function planCompilationRunFromRow(row: PlanCompilationRunRow): PlanCompilationR
     reminderCount: row.reminder_count,
     compiledAt: row.compiled_at
   };
+}
+
+function evidenceFromRow(value: unknown): SourceEvidenceRef {
+  const row = value as { source_snapshot_id: string; content_hash: string };
+  return { sourceSnapshotId: row.source_snapshot_id, contentHash: row.content_hash };
+}
+
+function isValidEvidenceList(value: unknown): value is SourceEvidenceRef[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "object" || item === null
+    || typeof (item as SourceEvidenceRef).sourceSnapshotId !== "string" || !isStableId((item as SourceEvidenceRef).sourceSnapshotId)
+    || typeof (item as SourceEvidenceRef).contentHash !== "string" || !/^[a-f0-9]{64}$/i.test((item as SourceEvidenceRef).contentHash))) return false;
+  return new Set(value.map((item) => `${item.sourceSnapshotId}:${item.contentHash}`)).size === value.length;
+}
+
+function sameEvidence(left: SourceEvidenceRef[], right: SourceEvidenceRef[]): boolean {
+  const key = (item: SourceEvidenceRef) => `${item.sourceSnapshotId}:${item.contentHash}`;
+  return left.length === right.length && left.map(key).sort().every((value, index) => value === right.map(key).sort()[index]);
+}
+
+function isEvidenceSubset(subset: SourceEvidenceRef[], complete: SourceEvidenceRef[]): boolean {
+  const completeKeys = new Set(complete.map((item) => `${item.sourceSnapshotId}:${item.contentHash}`));
+  return subset.every((item) => completeKeys.has(`${item.sourceSnapshotId}:${item.contentHash}`));
 }
 
 function isStableId(value: string): boolean {

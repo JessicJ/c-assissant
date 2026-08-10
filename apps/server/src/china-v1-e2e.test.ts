@@ -69,7 +69,7 @@ test("fresh one-user instance prepares, reviews, and confirms a complete China P
 
   const confirmed = store.confirmPlan(initial.id);
   assert.equal(confirmed.activePlan.status, "active");
-  assert.throws(() => store.saveCompiledPlan({ plan: result.compilation.workspace.activePlan, expectedPlanId: initial.id, expectedVersion: initial.version, audit: { countryPackId: "china", countryPackVersion: "0.1.0", compositionSkillId: "china-arrival-plan", compositionSkillVersion: "0.1.0", sourcePlanVersion: initial.version, compiledPlanVersion: initial.version + 1, taskCount: 0, reminderCount: 0 } }), /changed before|next draft/i);
+  assert.throws(() => store.saveCompiledPlan({ plan: result.compilation.workspace.activePlan, expectedPlanId: initial.id, expectedVersion: initial.version, audit: { countryPackId: "china", countryPackVersion: "0.1.0", compositionSkillId: "china-arrival-plan", compositionSkillVersion: "0.1.0", sourcePlanVersion: initial.version, compiledPlanVersion: initial.version + 1, taskCount: 0, reminderCount: 0, sourceEvidence: [] } }), /changed before|next draft/i);
   store.close();
 });
 

@@ -7,7 +7,7 @@ import { orchestrateChinaArrivalPlan, type ChinaArrivalOrchestrationInput } from
 
 function orchestrationInput(): ChinaArrivalOrchestrationInput {
   const plan = createPlanFromRequest({ request: "I will attend an exhibition in Shanghai in September 2026." });
-  const digitalSource = { id: "amap-user-guide", authority: "Amap", titleOriginal: "高德地图用户指南", url: "https://lbs.amap.com/", retrievedAt: "2026-08-07T00:00:00.000Z", contentHash: "c".repeat(64) };
+  const digitalSource = { id: "amap-user-guide", sourceSnapshotId: "snapshot-amap-user-guide", authority: "Amap", titleOriginal: "高德地图用户指南", url: "https://lbs.amap.com/", retrievedAt: "2026-08-07T00:00:00.000Z", contentHash: "c".repeat(64) };
   return {
     plan,
     profile: { nationality: "Canada", immigrationStatus: "tourist_visa" },

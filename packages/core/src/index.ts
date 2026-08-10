@@ -3,7 +3,7 @@ import type { PlanCompilationOrigin } from "./plan-compiler.js";
 
 export { recommendPlanTransport, type TransportMode, type TransportRecommendation, type TransportRouteFact } from "./transport.js";
 export { assessPolicyPreparation, type PolicyPreparationAssessment, type PolicyPreparationItem, type PolicyPreparationStatus } from "./policy-applicability.js";
-export { compilePlanProposal, type PlanCompilationAudit, type PlanCompilationBlockReason, type PlanCompilationDecision, type PlanCompilationOrigin, type PlanCompilationProposal, type PlanCompilationTaskProposal } from "./plan-compiler.js";
+export { compilePlanProposal, type PlanCompilationAudit, type PlanCompilationBlockReason, type PlanCompilationDecision, type PlanCompilationOrigin, type PlanCompilationProposal, type PlanCompilationTaskProposal, type SourceEvidenceRef } from "./plan-compiler.js";
 
 export type PlanStatus = "draft" | "active" | "completed" | "cancelled";
 export type TaskStatus = "scheduled" | "ready" | "running" | "waiting_user" | "blocked" | "completed" | "skipped" | "failed" | "cancelled";
@@ -210,6 +210,7 @@ export interface PlanCompilationRun {
   taskCount: number;
   reminderCount: number;
   compiledAt: string;
+  sourceEvidence: import("./plan-compiler.js").SourceEvidenceRef[];
 }
 
 /** One minimized internal Skill result belonging to a successful Country Pack compilation. */
@@ -223,6 +224,7 @@ export interface CountryPackSkillRun {
   skillVersion: string;
   status: "success" | "degraded" | "needs_input" | "blocked" | "failed" | "not_supported";
   finishedAt: string;
+  sourceEvidence: import("./plan-compiler.js").SourceEvidenceRef[];
 }
 
 /** A Telegram account bound to this single-user local instance. */

@@ -24,7 +24,7 @@ function savingRefresher(store: SqliteWorkspaceStore, calls: string[]): ChinaOff
   };
 }
 
-test("China source preparation refreshes approved sources and links policy plus city food evidence to the draft", async () => {
+test("China source preparation refreshes and links every official evidence version used by the draft", async () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const original = store.getWorkspace().activePlan;
   const calls: string[] = [];
@@ -34,15 +34,15 @@ test("China source preparation refreshes approved sources and links policy plus 
   const localFoodSourceIds = listChinaLocalFoodSourceIds(original.location);
   assert.deepEqual(calls, ["nia-english", ...listChinaDigitalLifeSourceIds(), ...localFoodSourceIds]);
   const prepared = store.getWorkspace();
-  assert.equal(prepared.activePlan.version, original.version + 1 + localFoodSourceIds.length);
-  assert.deepEqual(new Set(prepared.activePlan.sources.map((source) => source.sourceSnapshotId)), new Set(prepared.sourceSnapshots.filter((snapshot) => snapshot.sourceId === "nia-english" || localFoodSourceIds.includes(snapshot.sourceId)).map((snapshot) => snapshot.id)));
+  assert.equal(prepared.activePlan.version, original.version + 1 + listChinaDigitalLifeSourceIds().length + localFoodSourceIds.length);
+  assert.deepEqual(new Set(prepared.activePlan.sources.map((source) => source.sourceSnapshotId)), new Set(prepared.sourceSnapshots.map((snapshot) => snapshot.id)));
   assert.equal(prepared.sourceSnapshots.length, 1 + listChinaDigitalLifeSourceIds().length + localFoodSourceIds.length);
 
   calls.length = 0;
   const second = await service.prepareCurrentPlan({ planId: original.id, now });
   assert.equal(second.status, "ready");
   assert.deepEqual(calls, []);
-  assert.equal(store.getWorkspace().activePlan.version, original.version + 1 + localFoodSourceIds.length);
+  assert.equal(store.getWorkspace().activePlan.version, original.version + 1 + listChinaDigitalLifeSourceIds().length + localFoodSourceIds.length);
   store.close();
 });
 

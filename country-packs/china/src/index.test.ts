@@ -178,7 +178,7 @@ test("policy-applicability rejects stale, future, and unapproved evidence for cu
   assert.match(unapproved.warnings.join(" "), /omitted/);
 });
 
-const localFoodSource = { id: "shanghai-culture-1", authority: "Shanghai Municipal Administration of Culture and Tourism", titleOriginal: "上海美食介绍", url: "https://example.shanghai.gov.cn/food", retrievedAt: "2026-08-07T00:00:00.000Z", contentHash: "b".repeat(64) };
+const localFoodSource = { id: "shanghai-culture-1", sourceSnapshotId: "snapshot-shanghai-culture-1", authority: "Shanghai Municipal Administration of Culture and Tourism", titleOriginal: "上海美食介绍", url: "https://example.shanghai.gov.cn/food", retrievedAt: "2026-08-07T00:00:00.000Z", contentHash: "b".repeat(64) };
 const localFoodFacts = [
   { id: "xiaolongbao", nameOriginal: "小笼包", nameEnglish: "xiaolongbao", descriptionEnglish: "A steamed bun style associated with the destination's food culture.", sourceId: localFoodSource.id },
   { id: "scallion-noodles", nameOriginal: "葱油拌面", nameEnglish: "scallion oil noodles", descriptionEnglish: "A noodle dish described by the linked destination source.", sourceId: localFoodSource.id }
@@ -217,7 +217,7 @@ test("local-food-guide degrades without traceable facts and omits malformed or d
   assert.equal(stale.status, "degraded");
 });
 
-const digitalSource = { id: "amap-user-guide", authority: "Amap", titleOriginal: "高德地图用户指南", url: "https://lbs.amap.com/", retrievedAt: "2026-08-07T00:00:00.000Z", contentHash: "c".repeat(64) };
+const digitalSource = { id: "amap-user-guide", sourceSnapshotId: "snapshot-amap-user-guide", authority: "Amap", titleOriginal: "高德地图用户指南", url: "https://lbs.amap.com/", retrievedAt: "2026-08-07T00:00:00.000Z", contentHash: "c".repeat(64) };
 const digitalItems = [
   { id: "amap", nameOriginal: "高德地图", nameEnglish: "Amap", category: "map_navigation" as const, reasonEnglish: "Use the Plan's verified places and route handoffs.", stepsEnglish: ["Open the official link.", "Install Amap from the official store for your device."], sourceId: digitalSource.id },
   { id: "unused-pay", nameOriginal: "示例支付", nameEnglish: "Example payment app", category: "local_payments" as const, reasonEnglish: "Payment context.", stepsEnglish: ["Review the official setup guide."], sourceId: digitalSource.id }

@@ -13,7 +13,7 @@ import {
 const now = "2026-08-07T01:00:00.000Z";
 
 function collectedFacts(): ChinaArrivalCollectedFacts {
-  const digitalSource = { id: "amap-user-guide", authority: "Amap", titleOriginal: "高德地图用户指南", url: "https://lbs.amap.com/", retrievedAt: "2026-08-07T00:00:00.000Z", contentHash: "c".repeat(64) };
+  const digitalSource = { id: "amap-user-guide", sourceSnapshotId: "snapshot-amap-user-guide", authority: "Amap", titleOriginal: "高德地图用户指南", url: "https://lbs.amap.com/", retrievedAt: "2026-08-07T00:00:00.000Z", contentHash: "c".repeat(64) };
   return {
     policyEvidence: [{ id: "nia-1", sourceId: "nia-english", authority: "National Immigration Administration", titleOriginal: "Guidance", url: "https://en.nia.gov.cn/", retrievedAt: "2026-08-07T00:00:00.000Z", contentHash: "a".repeat(64) }],
     weather: {
@@ -66,10 +66,19 @@ function collector(facts = collectedFacts()): ChinaArrivalFactCollector {
   return { collect: async () => structuredClone(facts) };
 }
 
+function collectorForStore(store: SqliteWorkspaceStore): ChinaArrivalFactCollector {
+  const policy = store.saveSourceSnapshot({ sourceId: "nia-english", authority: "National Immigration Administration", titleOriginal: "Guidance", url: "https://en.nia.gov.cn/", retrievedAt: "2026-08-07T00:00:00.000Z", contentHash: "a".repeat(64), excerpt: "Official guidance." }).snapshot;
+  const digital = store.saveSourceSnapshot({ sourceId: "amap-user-guide", authority: "Amap", titleOriginal: "高德地图用户指南", url: "https://lbs.amap.com/", retrievedAt: "2026-08-07T00:00:00.000Z", contentHash: "c".repeat(64), excerpt: "Official setup guidance." }).snapshot;
+  const facts = collectedFacts();
+  facts.policyEvidence[0]!.id = policy.id;
+  facts.digitalLife.sources[0]!.sourceSnapshotId = digital.id;
+  return collector(facts);
+}
+
 test("China compilation service orchestrates and atomically saves the next inert draft", async () => {
   const store = readyStore();
   const original = store.getWorkspace().activePlan;
-  const service = createChinaArrivalCompilationService({ store, factCollector: collector() });
+  const service = createChinaArrivalCompilationService({ store, factCollector: collectorForStore(store) });
   const result = await service.compileCurrentPlan({ now });
   assert.equal(result.status, "saved");
   if (result.status !== "saved") return;
@@ -82,13 +91,19 @@ test("China compilation service orchestrates and atomically saves the next inert
   assert.equal(skillRuns.length, 8);
   assert.deepEqual(skillRuns.map((run) => run.skillId).sort(), ["arrival-preparation", "china-arrival-plan", "digital-life-setup", "housing-area-recommendation", "local-food-guide", "policy-applicability", "transport-planner", "weather-and-packing"]);
   assert.ok(skillRuns.every((run) => run.compilationRunId === store.listRecentPlanCompilationRuns()[0]!.id));
+  assert.equal(store.listRecentPlanCompilationRuns()[0]?.sourceEvidence.length, 2);
+  assert.equal(skillRuns.find((run) => run.skillId === "policy-applicability")?.sourceEvidence.length, 1);
+  assert.equal(skillRuns.find((run) => run.skillId === "digital-life-setup")?.sourceEvidence.length, 1);
+  assert.equal(skillRuns.find((run) => run.skillId === "china-arrival-plan")?.sourceEvidence.length, 2);
+  assert.equal(result.workspace.activePlan.stages.at(-1)?.tasks.find((task) => task.title === "Complete the source-backed entry requirement review")?.origin?.sourceEvidence?.length, 1);
+  assert.equal(result.workspace.activePlan.stages.at(-1)?.tasks.find((task) => /Set up Amap/.test(task.title))?.origin?.sourceEvidence?.length, 1);
   store.close();
 });
 
 test("China compilation service preserves a draft when orchestration needs user input", async () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const original = store.getWorkspace().activePlan;
-  const service = createChinaArrivalCompilationService({ store, factCollector: collector() });
+  const service = createChinaArrivalCompilationService({ store, factCollector: collectorForStore(store) });
   const result = await service.compileCurrentPlan({ now });
   assert.equal(result.status, "blocked");
   if (result.status === "blocked") {
@@ -117,7 +132,7 @@ test("China compilation service rejects a plan version race without a partial co
   const store = readyStore();
   const service = createChinaArrivalCompilationService({
     store,
-    factCollector: collector(),
+    factCollector: collectorForStore(store),
     orchestrate: async (input) => {
       const result = await orchestrateChinaArrivalPlan(input);
       store.confirmPlan(input.plan.id);
@@ -142,7 +157,7 @@ test("China compilation service does not misreport or expose an unexpected stora
       getWorkspace: () => underlying.getWorkspace(),
       saveCompiledPlan: () => { throw new Error("database path and secret-value"); }
     },
-    factCollector: collector()
+    factCollector: collectorForStore(underlying)
   });
   const result = await service.compileCurrentPlan({ now });
   assert.equal(result.status, "blocked");
