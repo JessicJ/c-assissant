@@ -368,6 +368,10 @@ test("SQLite revises only the expected draft and preserves its Plan-scoped confi
   assert.equal(revised.activePlan.status, "draft");
   assert.equal(revised.activePlan.dates, "September 2, 2026");
   assert.deepEqual(revised.activePlan.configuration.travelContext, { partySize: 2, luggage: "heavy" });
+  const historical = store.listHistoricalPlans();
+  assert.equal(historical[0]?.id, configured.id);
+  assert.equal(historical[0]?.stages[0]?.tasks[0]?.title, original.stages[0]?.tasks[0]?.title);
+  assert.equal(store.listHistoricalPlans(1).length, 1);
   assert.equal(revised.inbox[0]?.title, "Claude Code revised Plan draft saved locally");
   assert.throws(() => store.reviseGeneratedPlan({ expectedPlanId: configured.id, expectedVersion: configured.version, draft }), /changed while/i);
   store.close();

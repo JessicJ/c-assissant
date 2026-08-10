@@ -103,6 +103,7 @@ server.get("/health", async () => ({
 }));
 
 server.get("/api/workspace", async () => store.getWorkspace());
+server.get("/api/plans/history", async () => store.listHistoricalPlans());
 server.get("/api/runs", async () => store.listRecentAgentRuns());
 server.get("/api/runs/task-reminders", async () => store.listRecentTaskReminderRuns());
 server.get("/api/runs/plan-compilations", async () => store.listRecentPlanCompilationRuns());

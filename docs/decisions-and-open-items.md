@@ -22,6 +22,7 @@ This document separates accepted product decisions from questions that still req
 - The final confirmation screen presents the complete Plan without a diff or highlighted changes.
 - Confirming a Plan activates the exact version and declared automation scope.
 - Expected Events may trigger reversible preparation and action cards; they do not become occurred Events without evidence.
+- Ordinary route handoffs advance from conservative expected timing by default, with an `I haven't arrived` exception action. Expected journey states remain projections and never become confirmed facts or authorize critical actions.
 - Exact GPS requires an explicit user share, is scoped to the current Task, and is not stored in Profile.
 
 ## Open items before implementation claims
@@ -60,7 +61,7 @@ This document separates accepted product decisions from questions that still req
 - retention periods for Profile, GPS, Runs, and SourceSnapshots;
 - exact definition of material Plan changes requiring reconfirmation;
 - notification timing, quiet hours, and no-response buffers;
-- departure/arrival inference from per-trip Telegram live-location sharing is deferred; opening an external handoff never confirms boarding or arrival;
+- fact-level departure/arrival recognition from Telegram live location remains deferred; a delivered or opened external handoff never confirms boarding or arrival;
 - initial official-source applicability test matrix;
 - complete Web visual design and accessibility requirements.
 
