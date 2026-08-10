@@ -11,7 +11,7 @@ test("progressive refinement asks exactly one highest-value user question", () =
     assumptions: ["抵达和返程日期尚未确认。", "展会场馆尚未确认。", "住宿尚未预订。"],
     nextAction: "继续完善计划。"
   });
-  assert.equal(result.readyForReview, false);
+  assert.equal(result.readyForReview, true);
   assert.equal(result.followUpQuestion, "你预计哪一天抵达，哪一天离开？大致日期也可以。");
   assert.equal(result.unresolvedCount, 3);
 });

@@ -105,6 +105,7 @@ server.get("/health", async () => ({
 
 server.get("/api/workspace", async () => store.getWorkspace());
 server.get("/api/plans/history", async () => store.listHistoricalPlans());
+server.delete("/api/plans/history", async () => ({ deleted: store.clearHistoricalPlans() }));
 server.delete<{ Params: { planId: string } }>("/api/plans/:planId/history", async (request, reply) => {
   try {
     if (!store.deleteHistoricalPlan(request.params.planId)) return reply.code(404).send({ error: "The historical Plan was not found." });
@@ -179,10 +180,9 @@ server.post<{ Params: { planId: string } }>("/api/plans/:planId/china/prepare", 
 server.post<{ Params: { planId: string } }>("/api/plans/:planId/confirm", async (request, reply) => {
   try {
     const current = store.getWorkspace().activePlan;
-    if (current.id === request.params.planId) {
-      const refinement = planRefinementState(current);
-      if (refinement.followUpQuestion) return reply.code(409).send({ error: `Continue the Plan conversation before confirmation: ${refinement.followUpQuestion}` });
-    }
+    // Confirmation is intentionally not gated by unanswered assumptions. The
+    // Plan keeps those facts visible as pending confirmation items, while the
+    // user remains free to stop refining and activate the usable draft.
     return store.confirmPlan(request.params.planId);
   } catch (error) {
     return reply.code(404).send({
@@ -325,6 +325,7 @@ server.post<{ Body: CreatePlanInput }>("/api/plans/generate", async (request, re
   let runId: string | undefined;
   try {
     const workspace = store.getWorkspace();
+    if (workspace.profile.status !== "ready") return reply.code(409).send({ error: "Complete the required Profile basics before creating or revising a Plan." });
     runId = store.startPlanGenerationRun({ runtimeKind: workspace.runtime.selectedKind, trigger: "web" }).id;
     const runtime = selectedRuntimeAdapter(workspace.runtime.selectedKind);
     const draft = await runtime.generatePlanDraft({
@@ -362,6 +363,7 @@ server.post<{ Body: unknown }>("/api/agent/chat", async (request, reply) => {
   let runId: string | undefined;
   try {
     const workspace = store.getWorkspace();
+    if (workspace.profile.status !== "ready") return reply.code(409).send({ error: "Complete the required Profile basics before creating or revising a Plan." });
     runId = store.startPlanGenerationRun({ runtimeKind: workspace.runtime.selectedKind, trigger: "web" }).id;
     const runtime = selectedRuntimeAdapter(workspace.runtime.selectedKind);
     const draft = await runtime.generatePlanDraft({
@@ -378,9 +380,15 @@ server.post<{ Body: unknown }>("/api/agent/chat", async (request, reply) => {
       }
     });
     assertWebAgentPlanUnchanged(workspace.activePlan, store.getWorkspace().activePlan);
-    const updated = turn.mode === "revise_plan"
+    let updated = turn.mode === "revise_plan"
       ? store.reviseGeneratedPlan({ draft, runtime: workspace.runtime.selectedKind, expectedPlanId: workspace.activePlan.id, expectedVersion: workspace.activePlan.version })
       : store.createGeneratedPlan(draft, workspace.runtime.selectedKind);
+    if (turn.mode === "new_plan" && turn.intake) {
+      const planId = updated.activePlan.id;
+      updated = store.updatePlanTravelContext(planId, { partySize: turn.intake.partySize, luggage: turn.intake.luggage });
+      updated = store.updatePlanTransportPreference(planId, { preference: turn.intake.transportPreference });
+      if (turn.intake.arrivalTime) updated = store.updatePlanArrival(planId, { expectedAtLocal: `${turn.intake.arrivalDate}T${turn.intake.arrivalTime}`, timeZone: "Asia/Shanghai" });
+    }
     store.finishPlanGenerationRun({ runId, status: "succeeded", outputPlanId: updated.activePlan.id });
     const refinement = planRefinementState(updated.activePlan);
     return {
@@ -1132,6 +1140,7 @@ async function telegramCommandResponse(text: string | undefined): Promise<Telegr
     generatingPlan = true;
     try {
       const workspace = store.getWorkspace();
+      if (workspace.profile.status !== "ready") return [{ text: "Complete your required long-term Profile before creating a Plan. Send /profile, fill in nationality and China visa or residence status, then send your Plan request again." }];
       const runtime = selectedRuntimeAdapter(workspace.runtime.selectedKind);
       const run = store.startPlanGenerationRun({ runtimeKind: workspace.runtime.selectedKind, trigger: "telegram" });
       let runtimeFailureCode = "generation_failed";

@@ -7,9 +7,9 @@ export interface PlanRefinementState {
 }
 
 /**
- * Selects at most one high-value question for progressive Plan refinement.
- * Assumptions that require source research rather than a user answer do not
- * keep the drafting conversation open.
+ * Selects at most one optional high-value question for progressive Plan
+ * refinement. A Plan is always reviewable: unanswered details stay visible as
+ * assumptions instead of turning confirmation into an intake-form gate.
  */
 export function planRefinementState(plan: Pick<Plan, "title" | "location" | "dates" | "assumptions" | "nextAction">): PlanRefinementState {
   const answerable = plan.assumptions.filter(isUserAnswerableAssumption);
@@ -18,7 +18,7 @@ export function planRefinementState(plan: Pick<Plan, "title" | "location" | "dat
     : undefined;
   const followUpQuestion = explicitQuestion ?? questionForAssumptions(answerable, plan);
   return {
-    readyForReview: !followUpQuestion,
+    readyForReview: true,
     ...(followUpQuestion ? { followUpQuestion } : {}),
     unresolvedCount: answerable.length
   };

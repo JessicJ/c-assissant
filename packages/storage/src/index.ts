@@ -389,6 +389,11 @@ export class SqliteWorkspaceStore {
     return this.database.prepare("DELETE FROM plans WHERE id = ?").run(planId).changes > 0;
   }
 
+  /** Permanently removes every archived Plan while protecting current and executing Plans. */
+  clearHistoricalPlans(): number {
+    return Number(this.database.prepare("DELETE FROM plans WHERE is_current = 0 AND is_execution = 0").run().changes);
+  }
+
   /** Persists a user-owned preparation checklist item from the Web workspace. */
   setPlanTaskChecked(planId: string, taskId: string, checked: boolean): WorkspaceSnapshot {
     const task = this.database.prepare(`SELECT tasks.owner, tasks.status, tasks.title, tasks.description, tasks.due_label, stages.title AS stage_title
