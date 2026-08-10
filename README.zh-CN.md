@@ -54,6 +54,15 @@ pnpm dev
 
 打开 Vite 输出的本地地址即可查看 Web 工作台。默认健康检查地址是 `http://127.0.0.1:8787/health`。
 
+长期运行时先构建，再只启动一个 Landi 服务进程：
+
+```bash
+pnpm build
+pnpm start
+```
+
+随后打开 `http://127.0.0.1:8787/`。这个生产入口会同时提供 Web 工作台、Core API、Telegram 轮询和 Reminder 调度；不再需要长期运行 Vite 开发服务器。进程守护与开机启动仍由部署环境负责。
+
 可使用下列命令验证：
 
 ```bash
