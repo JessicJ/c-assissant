@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import test from "node:test";
 
-import { ClaudeCodeRuntimeAdapter, RuntimeAdapterError, buildPlanDraftPrompt, parseClaudePrintResult, parsePlanDraft, type RuntimeProcess } from "./index.js";
+import { ClaudeCodeRuntimeAdapter, RuntimeAdapterError, buildPlanDraftPrompt, parseClaudePrintResult, parsePlanDraft, planDraftSchema, type RuntimeProcess } from "./index.js";
 
 const validDraft = JSON.stringify({
   title: "Attend an exhibition in Shanghai",
@@ -24,6 +24,25 @@ test("Codex Adapter rejects malformed Plan output", () => {
   assert.throws(() => parsePlanDraft("not json"), RuntimeAdapterError);
   assert.throws(() => parsePlanDraft(validDraft.replace("Asia/Shanghai", "Mars/Olympus")), RuntimeAdapterError);
   assert.throws(() => parsePlanDraft(validDraft.replace('"refreshFacts":[]', '"refreshFacts":["traffic"]')), RuntimeAdapterError);
+});
+
+test("Codex Adapter removes structured-output nulls from optional Task fields", () => {
+  const withNulls = JSON.stringify({
+    title: "Attend an exhibition in Shanghai",
+    location: "Shanghai, China",
+    dates: "September 2026",
+    knownInformation: ["Purpose: exhibition"],
+    assumptions: ["Accommodation is unconfirmed."],
+    nextAction: "Review the complete Plan.",
+    stages: [{ title: "Before departure", description: "Prepare essentials.", tasks: [{ title: "Choose accommodation", owner: "user", dueLabel: "Before departure", activationTrigger: null, reminder: null }] }]
+  });
+  const draft = parsePlanDraft(withNulls);
+  assert.equal(draft.stages[0]?.tasks[0]?.activationTrigger, undefined);
+  assert.equal(draft.stages[0]?.tasks[0]?.reminder, undefined);
+});
+
+test("Codex output schema stays inside the supported structured-output subset", () => {
+  assert.doesNotMatch(JSON.stringify(planDraftSchema), /uniqueItems/);
 });
 
 test("Claude Code Adapter extracts the Print-mode result before validating the Plan", () => {
