@@ -77,6 +77,31 @@ test("Telegram Plan summary shows a proposed structured reminder", () => {
   assert.match(summary, /refresh at delivery: destination weather/);
 });
 
+test("Telegram Plan summary maps Task evidence to readable official source links", () => {
+  const workspace = createInitialWorkspace();
+  const sourceSnapshotId = "source-11111111-1111-1111-1111-111111111111";
+  const contentHash = "b".repeat(64);
+  workspace.activePlan.sources = [{ title: "Official entry guidance", authority: "National Immigration Administration", url: "https://en.nia.gov.cn/", retrievedAt: "2026-08-10T00:00:00.000Z", sourceSnapshotId, contentHash }];
+  workspace.activePlan.stages[0]!.tasks[0]!.origin = {
+    kind: "country_pack_compilation",
+    countryPackId: "china",
+    countryPackVersion: "0.1.0",
+    compositionSkillId: "china-arrival-plan",
+    compositionSkillVersion: "0.1.0",
+    compilationKey: "china-arrival-preparation",
+    sourcePlanVersion: workspace.activePlan.version,
+    sourceSkills: [{ id: "policy-applicability", version: "0.1.0" }],
+    sourceEvidence: [{ sourceSnapshotId, contentHash }]
+  };
+
+  const summary = formatTelegramPlanPages(workspace.activePlan).join("\n");
+
+  assert.match(summary, /Official basis: \[1\]/);
+  assert.match(summary, /\[1\] Official entry guidance — National Immigration Administration/);
+  assert.match(summary, /https:\/\/en\.nia\.gov\.cn\//);
+  assert.doesNotMatch(summary, /source-11111111|bbbbbbbbbbbb/);
+});
+
 test("Telegram confirmation is bound to the current draft Plan version", () => {
   const plan = createInitialWorkspace().activePlan;
   const markup = telegramPlanConfirmationMarkup(plan);

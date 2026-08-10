@@ -10,6 +10,8 @@ The Web workspace is Landi's desktop product surface. It replaces a desktop clie
 - **Profile** — long-term facts and preferences, with provenance and edit controls.
 - **Settings** — runtime, Telegram pairing, approved official-source evidence, Country Pack, data, language, and recovery.
 
+Source-backed generated Tasks show an `Official basis` link resolved from the exact snapshot ID/hash stored in Task provenance. The UI displays the official title and original URL, never the internal snapshot identifier or content fingerprint. Telegram uses the same relationship as numbered references in the complete Plan so repeated links remain compact on mobile.
+
 Conversation is globally available and shares Core context with Telegram.
 
 ## Plan experience

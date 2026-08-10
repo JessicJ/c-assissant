@@ -79,6 +79,7 @@ export function formatTelegramPlanPages(plan: Plan): string[] {
 }
 
 function telegramPlanText(plan: Plan): string {
+  const sourceNumbers = new Map(plan.sources.map((source, index) => [sourceEvidenceKey(source.sourceSnapshotId, source.contentHash), index + 1]));
   const lines = [
     "Current Plan",
     plan.title,
@@ -101,13 +102,30 @@ function telegramPlanText(plan: Plan): string {
         const refresh = task.reminder.refreshFacts?.includes("weather") ? " · refresh at delivery: destination weather" : " · dynamic facts: none";
         lines.push(`      Proposed reminder: ${task.reminder.scheduledAtLocal.replace("T", " ")} (${task.reminder.timeZone}) — ${oneLine(task.reminder.purpose, 180)}${refresh}`);
       }
+      const taskSourceNumbers = [...new Set((task.origin?.sourceEvidence ?? []).flatMap((evidence) => {
+        const number = sourceNumbers.get(sourceEvidenceKey(evidence.sourceSnapshotId, evidence.contentHash));
+        return number ? [number] : [];
+      }))];
+      if (taskSourceNumbers.length) lines.push(`      Official basis: ${taskSourceNumbers.map((number) => `[${number}]`).join(" ")}`);
     });
   });
+  if (plan.sources.length) {
+    lines.push("", "Official sources");
+    plan.sources.forEach((source, index) => {
+      lines.push(`[${index + 1}] ${oneLine(source.title, 160)} — ${oneLine(source.authority, 120)}`);
+      lines.push(`    ${oneLine(source.url, 500)}`);
+      lines.push(`    Retrieved: ${oneLine(source.retrievedAt, 80)}`);
+    });
+  }
   const closing = plan.status === "draft"
     ? "Review every field above. Confirm only if this complete Plan is correct; otherwise send your correction or create a revised Plan."
     : "This Plan is active. Send a correction to create a new draft before changing its automation scope.";
   lines.push("", `Next: ${oneLine(plan.nextAction)}`, "", closing);
   return lines.join("\n");
+}
+
+function sourceEvidenceKey(sourceSnapshotId: string | undefined, contentHash: string | undefined): string {
+  return sourceSnapshotId && contentHash ? `${sourceSnapshotId}:${contentHash}` : "";
 }
 
 export function telegramPlanConfirmationMarkup(plan: Plan): TelegramPlanConfirmationMarkup | undefined {
