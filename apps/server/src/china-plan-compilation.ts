@@ -1,4 +1,4 @@
-import type { CountryPackSkillRun, Plan, PlanCompilationAudit, Profile, WorkspaceSnapshot } from "@c-assistant/core";
+import type { CountryPackSkillRun, Plan, PlanCompilationAudit, Profile, SourceEvidenceRef, WorkspaceSnapshot } from "@c-assistant/core";
 import {
   orchestrateChinaArrivalPlan,
   type ChinaArrivalOrchestrationInput,
@@ -22,7 +22,7 @@ export interface ChinaArrivalCompilationStore {
     expectedPlanId: string;
     expectedVersion: number;
     audit: PlanCompilationAudit;
-    skillRuns?: Array<Pick<CountryPackSkillRun, "skillId" | "skillVersion" | "status">>;
+    skillRuns?: Array<Pick<CountryPackSkillRun, "skillId" | "skillVersion" | "status"> & { sourceEvidence?: SourceEvidenceRef[] }>;
     compiledAt?: string;
   }): WorkspaceSnapshot;
 }
@@ -99,7 +99,14 @@ export function createChinaArrivalCompilationService(input: {
           expectedPlanId: plan.id,
           expectedVersion: plan.version,
           audit: orchestration.compilation.audit,
-          skillRuns: [...orchestration.supportingResults, orchestration.composite].map((result) => ({ skillId: result.skill.id, skillVersion: result.skill.version, status: result.status })),
+          skillRuns: [...orchestration.supportingResults, orchestration.composite].map((result) => ({
+            skillId: result.skill.id,
+            skillVersion: result.skill.version,
+            status: result.status,
+            sourceEvidence: result.skill.id === orchestration.composite.skill.id
+              ? orchestration.compilation.audit.sourceEvidence
+              : orchestration.sourceEvidenceBySkill[result.skill.id] ?? []
+          })),
           compiledAt: now
         });
         return {

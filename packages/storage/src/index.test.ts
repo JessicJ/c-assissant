@@ -15,8 +15,9 @@ test("SQLite records its schema baseline and creates a verified private backup",
     const store = new SqliteWorkspaceStore(databasePath);
     store.updateProfile({ displayName: "Backup owner", preferredLanguage: "English", nationality: "Canada", gender: "not_specified", immigrationStatus: "tourist_visa" });
     const maintenance = store.getDatabaseMaintenanceStatus();
-    assert.deepEqual({ schemaVersion: maintenance.schemaVersion, latest: maintenance.latestSchemaVersion, integrity: maintenance.integrity }, { schemaVersion: 1, latest: 1, integrity: "ok" });
+    assert.deepEqual({ schemaVersion: maintenance.schemaVersion, latest: maintenance.latestSchemaVersion, integrity: maintenance.integrity }, { schemaVersion: 2, latest: 2, integrity: "ok" });
     assert.equal(maintenance.migrations[0]?.name, "v1-local-workspace-baseline");
+    assert.equal(maintenance.migrations[1]?.name, "country-pack-source-evidence-links");
 
     const backup = store.createBackup(new Date("2026-08-07T12:34:56.000Z"));
     assert.equal(backup.integrity, "ok");
@@ -38,7 +39,26 @@ test("SQLite refuses to open a workspace created by a newer schema", () => {
     const future = new DatabaseSync(databasePath);
     future.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, applied_at TEXT NOT NULL); INSERT INTO schema_migrations VALUES (999, 'future', '2026-08-07T00:00:00.000Z');");
     future.close();
-    assert.throws(() => new SqliteWorkspaceStore(databasePath), /supports schema 1.*schema 999/i);
+    assert.throws(() => new SqliteWorkspaceStore(databasePath), /supports schema 2.*schema 999/i);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("SQLite upgrades a schema-one workspace with source-evidence link tables", () => {
+  const directory = mkdtempSync(join(tmpdir(), "c-assistant-schema-upgrade-"));
+  try {
+    const databasePath = join(directory, "workspace.sqlite");
+    const old = new DatabaseSync(databasePath);
+    old.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, applied_at TEXT NOT NULL); INSERT INTO schema_migrations VALUES (1, 'v1-local-workspace-baseline', '2026-08-07T00:00:00.000Z');");
+    old.close();
+    const store = new SqliteWorkspaceStore(databasePath);
+    assert.equal(store.getDatabaseMaintenanceStatus().schemaVersion, 2);
+    const tables = new DatabaseSync(databasePath, { readOnly: true });
+    const names = tables.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%run_sources' ORDER BY name").all().map((row) => (row as { name: string }).name);
+    assert.deepEqual(names, ["country_pack_skill_run_sources", "plan_compilation_run_sources"]);
+    tables.close();
+    store.close();
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -222,15 +242,21 @@ test("SQLite persists a validated Agent-generated Plan", () => {
 test("SQLite atomically persists a compiled draft with Skill provenance and audit", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const original = store.getWorkspace().activePlan;
-  const decision = compilePlanProposal(original, storageCompilationProposal(original.id, original.version), new Date("2026-08-07T00:00:00.000Z"));
+  const snapshot = store.saveSourceSnapshot({ sourceId: "nia-english", authority: "National Immigration Administration", titleOriginal: "Guidance", url: "https://en.nia.gov.cn/", retrievedAt: "2026-08-07T00:00:00.000Z", contentHash: "a".repeat(64), excerpt: "Official guidance." }).snapshot;
+  const evidence = [{ sourceSnapshotId: snapshot.id, contentHash: snapshot.contentHash }];
+  const proposal = storageCompilationProposal(original.id, original.version);
+  proposal.sourceEvidence = evidence;
+  proposal.tasks[0]!.sourceEvidence = evidence;
+  const decision = compilePlanProposal(original, proposal, new Date("2026-08-07T00:00:00.000Z"));
   assert.equal(decision.status, "compiled");
   if (decision.status !== "compiled") return;
-  const saved = store.saveCompiledPlan({ plan: decision.plan, expectedPlanId: original.id, expectedVersion: original.version, audit: decision.audit, compiledAt: "2026-08-07T00:01:00.000Z" });
+  const saved = store.saveCompiledPlan({ plan: decision.plan, expectedPlanId: original.id, expectedVersion: original.version, audit: decision.audit, skillRuns: [{ skillId: "policy-applicability", skillVersion: "0.1.0", status: "success", sourceEvidence: evidence }], compiledAt: "2026-08-07T00:01:00.000Z" });
   const generatedStage = saved.activePlan.stages.find((stage) => stage.origin?.compilationKey === "china-arrival-preparation");
   assert.equal(saved.activePlan.version, original.version + 1);
   assert.equal(saved.activePlan.status, "draft");
   assert.equal(generatedStage?.tasks[0]?.description, "Keep the reviewed documents accessible.");
   assert.equal(generatedStage?.tasks[0]?.origin?.sourcePlanVersion, original.version);
+  assert.deepEqual(generatedStage?.tasks[0]?.origin?.sourceEvidence, evidence);
   assert.equal(generatedStage?.tasks[0]?.reminder?.scheduledAtLocal, "2026-09-01T05:00");
   const run = store.listRecentPlanCompilationRuns()[0];
   assert.equal(run?.planId, original.id);
@@ -238,6 +264,8 @@ test("SQLite atomically persists a compiled draft with Skill provenance and audi
   assert.equal(run?.compiledPlanVersion, original.version + 1);
   assert.equal(run?.taskCount, 1);
   assert.equal(run?.reminderCount, 1);
+  assert.deepEqual(run?.sourceEvidence, evidence);
+  assert.deepEqual(store.listRecentCountryPackSkillRuns()[0]?.sourceEvidence, evidence);
   assert.equal(Object.hasOwn(run ?? {}, "proposal"), false);
   assert.match(saved.inbox[0]?.body ?? "", /No Task, Reminder, or external action was activated/);
 
@@ -254,6 +282,22 @@ test("SQLite rejects compilation metadata that does not match generated content"
   assert.equal(decision.status, "compiled");
   if (decision.status !== "compiled") return;
   assert.throws(() => store.saveCompiledPlan({ plan: decision.plan, expectedPlanId: original.id, expectedVersion: original.version, audit: { ...decision.audit, taskCount: 99 } }), /counts do not match/i);
+  assert.equal(store.getWorkspace().activePlan.version, original.version);
+  assert.equal(store.listRecentPlanCompilationRuns().length, 0);
+  store.close();
+});
+
+test("SQLite rejects compilation evidence that is not an exact stored snapshot", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const original = store.getWorkspace().activePlan;
+  const evidence = [{ sourceSnapshotId: "source-missing", contentHash: "d".repeat(64) }];
+  const proposal = storageCompilationProposal(original.id, original.version);
+  proposal.sourceEvidence = evidence;
+  proposal.tasks[0]!.sourceEvidence = evidence;
+  const decision = compilePlanProposal(original, proposal, new Date("2026-08-07T00:00:00.000Z"));
+  assert.equal(decision.status, "compiled");
+  if (decision.status !== "compiled") return;
+  assert.throws(() => store.saveCompiledPlan({ plan: decision.plan, expectedPlanId: original.id, expectedVersion: original.version, audit: decision.audit }), /stored immutable source snapshot/i);
   assert.equal(store.getWorkspace().activePlan.version, original.version);
   assert.equal(store.listRecentPlanCompilationRuns().length, 0);
   store.close();

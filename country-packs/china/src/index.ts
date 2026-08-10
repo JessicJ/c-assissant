@@ -1,5 +1,5 @@
 import { recommendPlanTransport } from "@c-assistant/core/transport";
-import type { LuggageLevel, PlanCompilationProposal, TransportPreference } from "@c-assistant/core";
+import type { LuggageLevel, PlanCompilationProposal, SourceEvidenceRef, TransportPreference } from "@c-assistant/core";
 import type { TransportMode, TransportRouteFact, TransportWeatherFact } from "@c-assistant/core/transport";
 import type { SkillStatus } from "@c-assistant/skill-runtime";
 
@@ -431,6 +431,7 @@ function isConfirmedPolicyValue(value: string | undefined): boolean {
 
 export interface LocalFoodGuideSourceInput {
   id: string;
+  sourceSnapshotId: string;
   authority: string;
   titleOriginal: string;
   url: string;
@@ -547,7 +548,7 @@ export function runLocalFoodGuideSkill(input: {
 }
 
 function isValidLocalFoodSource(source: LocalFoodGuideSourceInput, nowMs: number): boolean {
-  if (!source.id.trim() || !source.authority.trim() || !source.titleOriginal.trim() || !/^[a-f0-9]{64}$/i.test(source.contentHash) || !Number.isFinite(Date.parse(source.retrievedAt))) return false;
+  if (!source.id.trim() || !source.sourceSnapshotId.trim() || !source.authority.trim() || !source.titleOriginal.trim() || !/^[a-f0-9]{64}$/i.test(source.contentHash) || !Number.isFinite(Date.parse(source.retrievedAt))) return false;
   const retrievedAt = Date.parse(source.retrievedAt);
   if (retrievedAt > nowMs + 5 * 60 * 1_000 || retrievedAt < nowMs - LOCAL_FOOD_SOURCE_MAX_AGE_MS) return false;
   try {
@@ -565,6 +566,7 @@ export type DigitalLifeCapability = "mobile_connectivity" | "communication" | "m
 
 export interface DigitalLifeSetupSourceInput {
   id: string;
+  sourceSnapshotId: string;
   authority: string;
   titleOriginal: string;
   url: string;
@@ -680,6 +682,7 @@ function isValidDigitalLifeSource(source: unknown, nowMs: number): source is Dig
   if (typeof source !== "object" || source === null) return false;
   const candidate = source as Partial<DigitalLifeSetupSourceInput>;
   if (typeof candidate.id !== "string" || !candidate.id.trim()
+    || typeof candidate.sourceSnapshotId !== "string" || !candidate.sourceSnapshotId.trim()
     || typeof candidate.authority !== "string" || !candidate.authority.trim()
     || typeof candidate.titleOriginal !== "string" || !candidate.titleOriginal.trim()
     || typeof candidate.url !== "string"
@@ -1007,7 +1010,7 @@ export type ChinaPlanCompilationProposalDecision =
   | { status: "blocked"; reasonCode: "composition_not_ready" | "preparation_not_composed" | "invalid_preparation"; message: string };
 
 /** Converts already composed China results into the country-neutral Core proposal contract. */
-export function createChinaPlanCompilationProposal(input: { composite: ChinaArrivalPlanSkillResult; preparation: ArrivalPreparationSkillResult; localFood: LocalFoodGuideSkillResult }): ChinaPlanCompilationProposalDecision {
+export function createChinaPlanCompilationProposal(input: { composite: ChinaArrivalPlanSkillResult; preparation: ArrivalPreparationSkillResult; localFood: LocalFoodGuideSkillResult; sourceEvidenceBySkill?: Partial<Record<ChinaArrivalPlanSupportingSkillId, SourceEvidenceRef[]>> }): ChinaPlanCompilationProposalDecision {
   const { composite, preparation, localFood } = input;
   if ((composite.status !== "success" && composite.status !== "degraded") || composite.missingSkills.length) {
     return { status: "blocked", reasonCode: "composition_not_ready", message: "All required China supporting results must be composed before Core compilation." };
@@ -1031,6 +1034,7 @@ export function createChinaPlanCompilationProposal(input: { composite: ChinaArri
   const reminders = new Map(preparation.proposedReminders.map((reminder) => [reminder.taskProposalId, reminder]));
   const limitations = [...new Set([...composite.warnings, ...preparation.warnings].filter((warning) => warning.trim()))];
   const assumptions = composite.assumptions.flatMap((assumption) => typeof assumption.value === "string" && assumption.value.trim() ? [assumption.value.trim()] : []);
+  const allSourceEvidence = uniqueSourceEvidence(Object.values(input.sourceEvidenceBySkill ?? {}).flatMap((evidence) => evidence ?? []));
   return {
     status: "ready",
     proposal: {
@@ -1039,6 +1043,7 @@ export function createChinaPlanCompilationProposal(input: { composite: ChinaArri
       composition: { skillId: composite.skill.id, version: composite.skill.version, status: composite.status },
       compilationKey: "china-arrival-preparation",
       stage: { title: "China arrival preparation", description: "Source-bound preparation compiled from the reviewed China Country Pack results." },
+      sourceEvidence: allSourceEvidence,
       tasks: preparation.proposedTasks.map((task) => {
         const reminder = reminders.get(task.proposalId);
         const sourceSkills = [...task.sourceSkills, { id: preparation.skill.id, version: preparation.skill.version }].filter((source, index, all) => all.findIndex((candidate) => candidate.id === source.id && candidate.version === source.version) === index);
@@ -1049,6 +1054,7 @@ export function createChinaPlanCompilationProposal(input: { composite: ChinaArri
           owner: "user" as const,
           dueLabel: reminder ? "At the proposed reminder time" : "Before arrival",
           sourceSkills,
+          sourceEvidence: uniqueSourceEvidence(task.sourceSkills.flatMap((source) => input.sourceEvidenceBySkill?.[source.id] ?? [])),
           ...(reminder ? { reminder: { dueAt: reminder.dueAt, timeZone: reminder.timeZone, purpose: reminder.purpose, refreshFacts: reminder.refreshFacts } } : {})
         };
       }),
@@ -1057,4 +1063,8 @@ export function createChinaPlanCompilationProposal(input: { composite: ChinaArri
       limitations
     }
   };
+}
+
+function uniqueSourceEvidence(evidence: SourceEvidenceRef[]): SourceEvidenceRef[] {
+  return evidence.filter((item, index, all) => all.findIndex((candidate) => candidate.sourceSnapshotId === item.sourceSnapshotId && candidate.contentHash === item.contentHash) === index).map((item) => ({ ...item }));
 }

@@ -25,7 +25,7 @@ export type ChinaSourcePreparationResult =
 
 const HOUR_MS = 60 * 60 * 1_000;
 
-/** Refreshes only allowlisted source IDs and links critical policy evidence to the exact draft. */
+/** Refreshes only allowlisted source IDs and links every evidence version used by the exact draft. */
 export function createChinaSourcePreparationService(input: { store: ChinaSourcePreparationStore; refresher: ChinaOfficialSourceRefresher }) {
   return {
     async prepareCurrentPlan(options: { planId: string; now?: string }): Promise<ChinaSourcePreparationResult> {
@@ -38,7 +38,7 @@ export function createChinaSourcePreparationService(input: { store: ChinaSourceP
       }
       const requirements = [
         { sourceId: "nia-english", critical: true, linkToPlan: true, maxAgeMs: 6 * HOUR_MS },
-        ...listChinaDigitalLifeSourceIds().map((sourceId) => ({ sourceId, critical: false, linkToPlan: false, maxAgeMs: 24 * HOUR_MS })),
+        ...listChinaDigitalLifeSourceIds().map((sourceId) => ({ sourceId, critical: false, linkToPlan: true, maxAgeMs: 24 * HOUR_MS })),
         ...listChinaLocalFoodSourceIds(initial.activePlan.location).map((sourceId) => ({ sourceId, critical: false, linkToPlan: true, maxAgeMs: 24 * HOUR_MS }))
       ];
 
