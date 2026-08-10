@@ -14,6 +14,7 @@ import { type AgentRuntimeKind, type CreatePlanInput, type GeneratedPlanDraft, t
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue, shouldRenewExpiredArrivalLocationRequest } from "./arrival-reminder.js";
 import { arrivalRouteDestination, formatArrivalRoute, selectArrivalTransport } from "./arrival-route.js";
+import { DEFAULT_HANDOFF_SAFETY_SECONDS, DEFAULT_HANDOFF_WAIT_SECONDS, HANDOFF_DELAY_SECONDS, expectedArrivalAt, formatExpectedArrivalGuidance } from "./route-handoff.js";
 import { createOfficialSourceService, parseOfficialSourceRegistry } from "./official-sources.js";
 import { formatTransportChoiceAcknowledgement, parseTelegramCommand, shouldGenerateCompletePlan } from "./telegram-commands.js";
 import { formatTelegramNearbyFood, parseTelegramFoodPartyCallback, telegramFoodPartyMarkup } from "./telegram-food.js";
@@ -68,6 +69,7 @@ let pollingTelegram = false;
 let checkingArrivalReminder = false;
 let checkingTaskReminders = false;
 let checkingArrivalLocationPrompt = false;
+let checkingRouteHandoffGuidance = false;
 let requestingArrivalLocation = false;
 let requestingFoodLocation = false;
 let creatingBackup = false;
@@ -643,6 +645,18 @@ async function pollTelegram(): Promise<void> {
           await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: "Share your location only if you want route help." });
           await requestTelegramArrivalLocation(pairing.binding.chatId, "If you want route help for this arrival, tap the button below to share your current location.");
         }
+        const delayedRoutePlanId = update.callbackData?.match(/^route_not_arrived:(plan-[0-9a-f-]{36})$/)?.[1];
+        if (delayedRoutePlanId && update.callbackId) {
+          const activePlan = store.getWorkspace().activePlan;
+          if (activePlan.id !== delayedRoutePlanId) {
+            await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: "That route timeline is no longer current." });
+          } else {
+            const delayed = store.delayTelegramRouteArrivalGuidance(activePlan.id, new Date().toISOString(), HANDOFF_DELAY_SECONDS);
+            await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: delayed ? "Arrival guidance delayed by 15 minutes." : "This delay was already recorded." });
+            if (delayed) await requestTelegramArrivalLocation(pairing.binding.chatId, "No problem. Landi has delayed the next arrival guidance by 15 minutes. To recalculate from current conditions, share your location once below.", true);
+          }
+          continue;
+        }
         const completedTaskId = update.callbackData?.match(/^arrival_task_complete:(task-[0-9a-f-]{36})$/)?.[1];
         if (completedTaskId && update.callbackId) {
           const completed = store.completeReadyTask(store.getWorkspace().activePlan.id, completedTaskId);
@@ -730,7 +744,18 @@ async function sendArrivalRouteFromSharedLocation(chatId: string, location: { la
   const transport = selectArrivalTransport(plan, routeFacts, transportOverride);
   const selectedRoute = routeFacts.find((route) => route.mode === transport);
   const result = formatArrivalRoute({ origin, destination, transport, taxiRequested: preference === "taxi", ...(selectedRoute ? { route: selectedRoute } : {}) });
-  await telegram.sendMessage({ chatId, text: result.text, replyMarkup: { inline_keyboard: [[{ text: result.handoffLabel, url: result.handoffUrl }]] } });
+  const receipt = await telegram.sendMessage({ chatId, text: result.text, replyMarkup: { inline_keyboard: [[{ text: result.handoffLabel, url: result.handoffUrl }]] } });
+  if (receipt.status === "available" && selectedRoute?.durationSeconds !== undefined) {
+    const offeredAt = receipt.observedAt;
+    store.recordTelegramRouteHandoffOffered({
+      planId: plan.id,
+      offeredAt,
+      routeDurationSeconds: selectedRoute.durationSeconds,
+      waitBufferSeconds: DEFAULT_HANDOFF_WAIT_SECONDS,
+      safetyMarginSeconds: DEFAULT_HANDOFF_SAFETY_SECONDS,
+      expectedArrivalAt: expectedArrivalAt({ basisAt: offeredAt, routeDurationSeconds: selectedRoute.durationSeconds })
+    });
+  }
 }
 
 async function sendNearbyFoodFromSharedLocation(chatId: string, location: { latitude: number; longitude: number }): Promise<void> {
@@ -795,6 +820,34 @@ async function runArrivalReminder(): Promise<void> {
     server.log.warn({ error }, "Telegram arrival reminder failed");
   } finally {
     checkingArrivalReminder = false;
+  }
+}
+
+async function runRouteHandoffGuidance(): Promise<void> {
+  if (checkingRouteHandoffGuidance) return;
+  const pairing = store.getTelegramPairingStatus();
+  if (pairing.state !== "paired" || !pairing.binding) return;
+  const plan = store.getWorkspace().activePlan;
+  if (plan.status !== "active") return;
+  checkingRouteHandoffGuidance = true;
+  const claimTime = new Date().toISOString();
+  try {
+    const handoff = store.claimTelegramRouteArrivalGuidance(plan.id, claimTime);
+    if (!handoff) return;
+    const receipt = await telegram.sendMessage({
+      chatId: pairing.binding.chatId,
+      text: formatExpectedArrivalGuidance(plan),
+      replyMarkup: { inline_keyboard: [[{ text: "I haven't arrived", callback_data: `route_not_arrived:${plan.id}` }]] }
+    });
+    if (receipt.status !== "available") {
+      store.releaseTelegramRouteArrivalGuidance(plan.id, handoff.guidanceSentAt ?? claimTime);
+      server.log.warn({ status: receipt.status, code: receipt.failure?.code }, "Telegram expected-arrival guidance could not be delivered");
+    }
+  } catch (error) {
+    store.releaseTelegramRouteArrivalGuidance(plan.id, claimTime);
+    server.log.warn({ error }, "Telegram expected-arrival guidance failed");
+  } finally {
+    checkingRouteHandoffGuidance = false;
   }
 }
 
@@ -879,12 +932,12 @@ async function runArrivalLocationPrompt(): Promise<void> {
   }
 }
 
-async function requestTelegramArrivalLocation(chatId: string, intro: string): Promise<void> {
+async function requestTelegramArrivalLocation(chatId: string, intro: string, allowRepeat = false): Promise<void> {
   if (requestingArrivalLocation) return;
   const planId = store.getWorkspace().activePlan.id;
   const existing = store.getTelegramArrivalCheckin(planId);
   const activeIntent = store.getTelegramLocationIntent();
-  if (existing?.locationReceivedAt || (activeIntent?.purpose === "arrival_route" && activeIntent.planId === planId)) return;
+  if ((!allowRepeat && existing?.locationReceivedAt) || (activeIntent?.purpose === "arrival_route" && activeIntent.planId === planId)) return;
   requestingArrivalLocation = true;
   try {
     const receipt = await telegram.sendMessage({ chatId, text: `${intro} Landi will use it only for this interaction and will not save it to your Profile.`, replyMarkup: { keyboard: [[{ text: "Share current location", request_location: true }]], resize_keyboard: true, one_time_keyboard: true } });
@@ -1096,10 +1149,12 @@ const host = process.env.C_ASSISTANT_HOST ?? "127.0.0.1";
 await server.listen({ port, host });
 const telegramPollTimer = setInterval(() => void pollTelegram(), 1_000);
 const arrivalReminderTimer = setInterval(() => void runArrivalReminder(), 15_000);
+const routeHandoffGuidanceTimer = setInterval(() => void runRouteHandoffGuidance(), 15_000);
 const taskReminderTimer = setInterval(() => void runTaskReminders(), 15_000);
 const arrivalLocationPromptTimer = setInterval(() => void runArrivalLocationPrompt(), 15_000);
 void pollTelegram();
 void runArrivalReminder();
+void runRouteHandoffGuidance();
 void runTaskReminders();
 void runArrivalLocationPrompt();
 
@@ -1107,6 +1162,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     clearInterval(telegramPollTimer);
     clearInterval(arrivalReminderTimer);
+    clearInterval(routeHandoffGuidanceTimer);
     clearInterval(taskReminderTimer);
     clearInterval(arrivalLocationPromptTimer);
     store.close();
