@@ -24,7 +24,8 @@ This checklist separates reproducible repository evidence from real-account and 
 - [x] A real Codex Plan is created from Telegram and prepared through the complete China Pack with current official evidence and provider facts.
 - [x] The complete Telegram Plan is reviewed on the paired phone and explicitly confirmed from its final page.
 - [x] A near-term Reminder is delivered to the paired phone from an active Plan, and its callback is received.
-- [ ] The explicit Telegram location request is accepted, and the resulting Amap HTTPS route opens correctly on the phone.
+- [x] The explicit Telegram location request is accepted once; only the receipt timestamp is retained and the coordinates are not persisted.
+- [ ] The resulting Amap HTTPS route is visible in Telegram and opens correctly on the phone.
 - [x] Claude Code is explicitly labelled optional preview: its contract and expired-login handling are tested, but paid access, login, and real-account success are not required for the Codex `0.1.0` release.
 
 ## Public release decisions

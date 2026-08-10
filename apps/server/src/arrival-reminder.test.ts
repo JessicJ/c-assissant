@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createPlanFromRequest } from "@c-assistant/core";
-import { ARRIVAL_LOCATION_FOLLOW_UP_DELAY_MS, arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue } from "./arrival-reminder.js";
+import { ARRIVAL_LOCATION_FOLLOW_UP_DELAY_MS, arrivalInstant, formatArrivalReminder, isArrivalLocationPromptDue, isArrivalReminderDue, shouldRenewExpiredArrivalLocationRequest } from "./arrival-reminder.js";
 
 test("an Asia/Shanghai arrival is converted to the correct UTC instant", () => {
   const due = arrivalInstant("2026-09-01T07:00", "Asia/Shanghai");
@@ -20,6 +20,14 @@ test("arrival location sharing is a five-minute follow-up after no response", ()
   assert.equal(isArrivalLocationPromptDue(sentAt, new Date("2026-09-01T00:04:59.999Z")), false);
   assert.equal(ARRIVAL_LOCATION_FOLLOW_UP_DELAY_MS, 5 * 60_000);
   assert.equal(isArrivalLocationPromptDue(sentAt, new Date("2026-09-01T00:05:00.000Z")), true);
+});
+
+test("an expired arrival location share gets a fresh explicit request without using stale coordinates", () => {
+  const pending = { checkInSentAt: "2026-09-01T00:00:00.000Z", locationRequestedAt: "2026-09-01T00:05:00.000Z" };
+  assert.equal(shouldRenewExpiredArrivalLocationRequest("active", pending), true);
+  assert.equal(shouldRenewExpiredArrivalLocationRequest("draft", pending), false);
+  assert.equal(shouldRenewExpiredArrivalLocationRequest("active", { ...pending, locationReceivedAt: "2026-09-01T00:06:00.000Z" }), false);
+  assert.equal(shouldRenewExpiredArrivalLocationRequest("active"), false);
 });
 
 test("arrival reminder copy never claims that an external action started", () => {
