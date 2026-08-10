@@ -60,7 +60,7 @@ The production policy evidence gate now runs through `policy-applicability` `0.1
 
 The registered `china-arrival-plan` `0.1.0` composite gate now preserves ordered supporting Skill provenance for one exact Plan version. All seven supporting Skill modules exist; an individual composition still fails closed if any required result is absent, and the composite does not yet mutate Core state.
 
-The internal `local-food-guide` `0.1.0` adds only source-backed destination food context during planning. Its first city catalogs cover five Shanghai and five Beijing references from the respective municipal-government English portals; a matching destination and fresh immutable snapshot are required before the bilingual references enter the complete Plan. Specific restaurant discovery remains an explicit later request.
+The internal `local-food-guide` `0.1.0` adds only source-backed destination food context during planning. Its first city catalogs cover five references each for Shanghai, Beijing, and Guangzhou from their official English city portals; a matching destination and fresh immutable snapshot are required before the bilingual references enter the complete Plan. Specific restaurant discovery remains an explicit later request.
 
 The internal `digital-life-setup` `0.1.0` selects only the connectivity, communication, navigation, or payment setup capabilities required by the current Plan. It uses fresh allowlisted first-party guidance, presents English steps alongside Chinese names, and does not treat opening a link as setup completion.
 
