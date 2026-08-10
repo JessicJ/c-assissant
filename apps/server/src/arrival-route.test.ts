@@ -42,6 +42,8 @@ test("a taxi request guides the user from Amap's web route to its taxi confirmat
   assert.match(result.text, /打车 \(Taxi\)/i);
   assert.match(result.text, /立即打车 \(Call now\)/i);
   assert.match(result.text, /only when you are ready/i);
+  assert.match(result.text, /do not need to confirm boarding or arrival/i);
+  assert.match(result.text, /I haven't arrived/i);
   assert.equal(result.handoffLabel, "Open driving route in Amap");
 });
 
