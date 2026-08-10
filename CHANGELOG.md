@@ -10,7 +10,7 @@ First local, single-user V1 of Landi and the complete China Country Pack.
 
 - A local Web workspace backed by Core and SQLite.
 - Telegram private-account pairing, Plan creation and revision, complete review, confirmation, reminders, weather, nearby food, and explicit location handoff.
-- User-selectable Codex or Claude Code Plan drafting with tool-free, credential-minimized Runtime Adapters.
+- Verified Codex Plan drafting plus an opt-in Claude Code preview, both using tool-free, credential-minimized Runtime Adapters.
 - A complete internal China Country Pack orchestration path with nine internal Skills, immutable official-source evidence, Task provenance, and Run audit records.
 - Amap place, nearby food/accommodation, route, and external action handoff facts.
 - QWeather current conditions and three-day forecasts, with an honest display-only Amap fallback.
