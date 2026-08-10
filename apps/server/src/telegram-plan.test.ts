@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createInitialWorkspace, createPlanFromDraft } from "@c-assistant/core";
-import { completedTasksForRevision, createTelegramPlan, formatTelegramPlan, formatTelegramPlanCreation, formatTelegramPlanCreationPages, formatTelegramPlanPages, planDraftForRevision, telegramExecutionContinuityNotice, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
+import { completedTasksForRevision, createTelegramPlan, formatTelegramPlan, formatTelegramPlanCreation, formatTelegramPlanCreationPages, formatTelegramPlanPages, formatTelegramWorkspacePlanPages, planDraftForRevision, telegramExecutionContinuityNotice, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
 
 const generated = {
   title: "Attend an exhibition in Shanghai",
@@ -57,6 +57,7 @@ test("Telegram explains that an existing Plan continues while a replacement draf
   assert.match(notice ?? "", /Current Shanghai Plan.*still active/i);
   assert.match(pages.join("\n"), /approved reminders and timeline continue/i);
   assert.match(pages.join("\n"), /switches execution only after you confirm/i);
+  assert.match(formatTelegramWorkspacePlanPages(replacementWorkspace).join("\n"), /Current Shanghai Plan.*still active/i);
   const { executionPlan: _executionPlan, ...workspaceWithoutExecution } = replacementWorkspace;
   assert.equal(telegramExecutionContinuityNotice(workspaceWithoutExecution), undefined);
 });

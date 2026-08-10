@@ -18,7 +18,7 @@ import { DEFAULT_HANDOFF_SAFETY_SECONDS, DEFAULT_HANDOFF_WAIT_SECONDS, HANDOFF_D
 import { createOfficialSourceService, parseOfficialSourceRegistry } from "./official-sources.js";
 import { formatTransportChoiceAcknowledgement, parseTelegramCommand, shouldGenerateCompletePlan } from "./telegram-commands.js";
 import { formatTelegramNearbyFood, parseTelegramFoodPartyCallback, telegramFoodPartyMarkup } from "./telegram-food.js";
-import { completedTasksForRevision, createTelegramPlan, formatTelegramPlanCreationPages, formatTelegramPlanPages, planDraftForRevision, telegramExecutionContinuityNotice, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
+import { completedTasksForRevision, createTelegramPlan, formatTelegramPlanCreationPages, formatTelegramPlanPages, formatTelegramWorkspacePlanPages, planDraftForRevision, telegramExecutionContinuityNotice, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
 import { formatTelegramProfile, parseTelegramProfileCallback, telegramProfileChoiceMarkup, telegramProfileMarkup, telegramProfileTextPrompt, updateProfileText } from "./telegram-profile.js";
 import { fetchTelegramPlanWeather, formatTelegramWeather } from "./telegram-weather.js";
 import { assertWebAgentPlanUnchanged, formatWebAgentPlanReply, parseWebAgentTurn } from "./web-agent.js";
@@ -1037,9 +1037,10 @@ async function telegramCommandResponse(text: string | undefined): Promise<Telegr
   if (command.type === "empty") return undefined;
   if (command.type === "help") return [{ text: "Landi is connected. A clear first-use request can create a Plan draft with your selected local runtime. While a Plan is active, local requests such as ‘I prefer taxi’ update only the current context; they do not create or display a complete Plan. Use:\n/plan — show the current Plan and confirmation control\n/prepare — prepare the current draft with China Pack sources and Skills\n/new <what you need to do> — explicitly create a separate complete Plan draft\n/profile — review or change your basic Profile\n/weather — check current weather for the Plan location\n/food — find nearby food after an explicit location share\n/help — show this help\n\nA complete Plan is shown only for an explicit new or whole-Plan request. Bookings and payments are not enabled." }];
   if (command.type === "plan") {
-    const plan = store.getWorkspace().activePlan;
+    const workspace = store.getWorkspace();
+    const plan = workspace.activePlan;
     const replyMarkup = telegramPlanConfirmationMarkup(plan);
-    const pages = formatTelegramPlanPages(plan);
+    const pages = formatTelegramWorkspacePlanPages(workspace);
     return pages.map((page, index) => ({ text: page, ...(index === pages.length - 1 && replyMarkup ? { replyMarkup } : {}) }));
   }
   if (command.type === "prepare") {

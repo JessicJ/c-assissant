@@ -93,6 +93,12 @@ export function formatTelegramPlanPages(plan: Plan): string[] {
   return paginateTelegramText(telegramPlanText(plan));
 }
 
+/** Formats the current review Plan together with any distinct Plan still executing. */
+export function formatTelegramWorkspacePlanPages(workspace: WorkspaceSnapshot): string[] {
+  const continuity = telegramExecutionContinuityNotice(workspace);
+  return paginateTelegramText(`${continuity ? `${continuity}\n\n` : ""}${telegramPlanText(workspace.activePlan)}`);
+}
+
 function telegramPlanText(plan: Plan): string {
   const sourceNumbers = new Map(plan.sources.map((source, index) => [sourceEvidenceKey(source.sourceSnapshotId, source.contentHash), index + 1]));
   const lines = [
