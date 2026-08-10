@@ -109,6 +109,8 @@
 
 ## V1 完成状态与后续范围
 
+- 首个公开版本已统一标记为 `0.1.0`；发布预检会拒绝根项目与八个 workspace 的版本漂移。
+
 - 生产 Fact Collector、数字生活来源目录、七 Skill orchestrator、Server 编排保存服务、Core Plan 编译器、China Pack Proposal Adapter 与 SQLite 原子版本写入已在 Server 完成装配。Web Plan 页面和 Telegram `/prepare` 共用同一条来源准备、编排、原子保存和用户可读失败路径；成功后完整显示新草稿，并保存组合编译 Run 与八条逐 Skill Run，最终仍需用户确认。
 
 - 已完成 Telegram Bot 身份验证、一次性私聊配对，以及已绑定账号的最小输入入口：普通文本和 `/new` 都会使用 Settings 中选定的本机 Codex 或 Claude Code 生成待确认 Plan；所选运行底座不可用时会明确降级为本地模板草案，另有 `/help`、`/plan` 和 `/prepare`。官方来源 Connector 已具备受限刷新和快照能力；数据库已建立可追踪 schema 基线和备份校验。

@@ -9,6 +9,7 @@ These documents are the current architecture source of truth. They record decisi
 5. [Agent Runtime Adapter Contract](agent-runtime-adapter.md)
 6. [Web workspace](web-workspace.md)
 7. [China Pack V1](china-pack-v1.md)
-8. [Decisions and open items](decisions-and-open-items.md)
+8. [V1 release checklist](v1-release-checklist.md)
+9. [Decisions and open items](decisions-and-open-items.md)
 
 When implementation and a document disagree, the difference must be resolved explicitly. Do not silently treat implementation drift as a new architecture decision.
