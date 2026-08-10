@@ -26,7 +26,8 @@ This checklist separates reproducible repository evidence from real-account and 
 - [x] A near-term Reminder is delivered to the paired phone from an active Plan, and its callback is received.
 - [x] The explicit Telegram location request is accepted once; only the receipt timestamp is retained and the coordinates are not persisted.
 - [x] The resulting Amap HTTPS route is visible in Telegram and opens correctly on the phone.
-- [ ] An ambiguous taxi request in the active arrival context creates no Codex Run or new Plan, leaves the saved Plan preference unchanged, and hands off one driving/taxi route.
+- [x] An ambiguous taxi request in the active arrival context creates no Codex Run or new Plan, leaves the saved Plan preference unchanged, and hands off one Amap driving-route estimate.
+- [ ] The updated taxi card is confirmed visible on the phone and states that Amap's documented public URI cannot open its taxi-order page, so the user must switch modes and confirm manually.
 - [x] Claude Code is explicitly labelled optional preview: its contract and expired-login handling are tested, but paid access, login, and real-account success are not required for the Codex `0.1.0` release.
 
 ## Public release decisions

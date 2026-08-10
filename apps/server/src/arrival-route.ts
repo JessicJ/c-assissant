@@ -22,11 +22,16 @@ export function selectArrivalTransport(plan: Plan, routeFacts: AmapRoute[], pref
   return result.recommendations[0]?.mode ?? fallback;
 }
 
-export function formatArrivalRoute(input: { origin: AmapPlace; destination: AmapPlace; transport: TransportMode; route?: AmapRoute }): { text: string; handoffUrl: string } {
+export function formatArrivalRoute(input: { origin: AmapPlace; destination: AmapPlace; transport: TransportMode; route?: AmapRoute; taxiRequested?: boolean }): { text: string; handoffUrl: string; handoffLabel: string } {
   const handoff = createAmapNavigationHandoff({ origin: input.origin, destination: input.destination, transport: input.transport });
-  const transportLabel = input.transport === "driving" ? "Driving / taxi" : input.transport === "walking" ? "Walking" : "Public transit";
+  const transportLabel = input.taxiRequested ? "Taxi estimate (using Amap's driving route)" : input.transport === "driving" ? "Driving" : input.transport === "walking" ? "Walking" : "Public transit";
   const routeFact = input.route ? `\nRoute fact: ${formatDistance(input.route.distanceMeters)}${input.route.durationSeconds === undefined ? "" : ` · about ${formatDuration(input.route.durationSeconds)}`}${input.route.taxiCostYuan === undefined ? "" : ` · estimated taxi fare ¥${input.route.taxiCostYuan}`}${input.route.transitCostYuan === undefined ? "" : ` · estimated transit fare ¥${input.route.transitCostYuan}`}.` : "\nOpen Amap to get the current live route.";
-  return { text: `Arrival route ready\nTo: ${input.destination.name}\nChosen route mode: ${transportLabel}.${routeFact}\n\nOpen Amap to review the route and choose the next action. Landi has not hailed a ride, made a booking, or started payment.`, handoffUrl: handoff.url };
+  const taxiBoundary = input.taxiRequested ? "\n\nAmap's public link can open only a driving route, not its taxi-order page. After opening Amap, switch to Taxi, verify the pickup point, and confirm the order yourself." : "";
+  return {
+    text: `Arrival route ready\nTo: ${input.destination.name}\nChosen route mode: ${transportLabel}.${routeFact}${taxiBoundary}\n\nLandi has not hailed a ride, made a booking, or started payment.`,
+    handoffUrl: handoff.url,
+    handoffLabel: input.taxiRequested ? "Open driving route in Amap" : "Open route in Amap"
+  };
 }
 
 function formatDistance(distanceMeters: number): string {
