@@ -63,6 +63,21 @@ test("a validated Agent draft becomes a draft Plan with user-owned follow-up Tas
   assert.deepEqual(plan.stages[0]?.tasks[0]?.reminder?.refreshFacts, ["weather"]);
 });
 
+test("an arrival-triggered user Task waits for the arrival event before becoming user-ready", () => {
+  const plan = createPlanFromDraft({
+    title: "Arrive in Shanghai",
+    location: "Shanghai, China",
+    dates: "September 2026",
+    knownInformation: ["Arrival airport: PVG"],
+    assumptions: ["The exact terminal is unknown."],
+    nextAction: "Review the complete Plan.",
+    stages: [{ title: "Arrival", description: "Complete arrival steps.", tasks: [{ title: "Collect baggage", owner: "user", dueLabel: "At arrival", activationTrigger: "arrival" }] }]
+  });
+
+  assert.equal(plan.stages[0]?.tasks[0]?.status, "scheduled");
+  assert.equal(plan.stages[0]?.tasks[0]?.activationTrigger, "arrival");
+});
+
 test("a Plan preference takes precedence in an explainable transport suggestion", () => {
   const recommendation = recommendPlanTransport({
     preference: "public_transit",
