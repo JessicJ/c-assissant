@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createInitialWorkspace, createPlanFromDraft } from "@c-assistant/core";
-import { completedTasksForRevision, createTelegramPlan, formatTelegramPlan, formatTelegramPlanCreation, formatTelegramPlanPages, planDraftForRevision, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
+import { completedTasksForRevision, createTelegramPlan, formatTelegramPlan, formatTelegramPlanCreation, formatTelegramPlanCreationPages, formatTelegramPlanPages, planDraftForRevision, telegramExecutionContinuityNotice, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
 
 const generated = {
   title: "Attend an exhibition in Shanghai",
@@ -43,6 +43,22 @@ test("Telegram Plan creation transparently falls back to a local draft when Code
   });
   assert.equal(result.source, "template");
   assert.match(formatTelegramPlanCreation(result), /unavailable/i);
+});
+
+test("Telegram explains that an existing Plan continues while a replacement draft is reviewed", () => {
+  const workspace = createInitialWorkspace();
+  const executing = { ...workspace.activePlan, status: "active" as const, title: "Current Shanghai Plan" };
+  const replacement = createPlanFromDraft({ ...generated, title: "Replacement Shanghai Plan" });
+  const replacementWorkspace = { ...workspace, activePlan: replacement, executionPlan: executing };
+
+  const notice = telegramExecutionContinuityNotice(replacementWorkspace);
+  const pages = formatTelegramPlanCreationPages({ source: "runtime", runtime: "codex", workspace: replacementWorkspace });
+
+  assert.match(notice ?? "", /Current Shanghai Plan.*still active/i);
+  assert.match(pages.join("\n"), /approved reminders and timeline continue/i);
+  assert.match(pages.join("\n"), /switches execution only after you confirm/i);
+  const { executionPlan: _executionPlan, ...workspaceWithoutExecution } = replacementWorkspace;
+  assert.equal(telegramExecutionContinuityNotice(workspaceWithoutExecution), undefined);
 });
 
 test("Telegram Plan summary includes task state and safely shortens an oversized mobile preview", () => {

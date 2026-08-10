@@ -18,7 +18,7 @@ import { DEFAULT_HANDOFF_SAFETY_SECONDS, DEFAULT_HANDOFF_WAIT_SECONDS, HANDOFF_D
 import { createOfficialSourceService, parseOfficialSourceRegistry } from "./official-sources.js";
 import { formatTransportChoiceAcknowledgement, parseTelegramCommand, shouldGenerateCompletePlan } from "./telegram-commands.js";
 import { formatTelegramNearbyFood, parseTelegramFoodPartyCallback, telegramFoodPartyMarkup } from "./telegram-food.js";
-import { completedTasksForRevision, createTelegramPlan, formatTelegramPlanCreationPages, formatTelegramPlanPages, planDraftForRevision, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
+import { completedTasksForRevision, createTelegramPlan, formatTelegramPlanCreationPages, formatTelegramPlanPages, planDraftForRevision, telegramExecutionContinuityNotice, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
 import { formatTelegramProfile, parseTelegramProfileCallback, telegramProfileChoiceMarkup, telegramProfileMarkup, telegramProfileTextPrompt, updateProfileText } from "./telegram-profile.js";
 import { fetchTelegramPlanWeather, formatTelegramWeather } from "./telegram-weather.js";
 import { assertWebAgentPlanUnchanged, formatWebAgentPlanReply, parseWebAgentTurn } from "./web-agent.js";
@@ -659,10 +659,12 @@ async function pollTelegram(): Promise<void> {
         const confirmation = telegramPlanConfirmationDecision(store.getWorkspace().activePlan, update.callbackData);
         if (confirmation !== "not_confirmation" && update.callbackId) {
           if (confirmation === "confirm") {
+            const previousExecution = store.getExecutionPlan();
             const confirmed = store.confirmPlan(store.getWorkspace().activePlan.id);
             await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: "Plan activated." });
             const profileNext = confirmed.profile.status === "incomplete" ? "\n\nYour Plan is active, but some policy-routing basics are still missing. Send /profile when convenient; this does not block other Plan work." : "";
-            await telegram.sendMessage({ chatId: pairing.binding.chatId, text: `Plan activated\n${confirmed.activePlan.title}\n\nApproved reminders and read-only preparation are now eligible to run. No booking, payment, ride, or other external action was started.${profileNext}` });
+            const switched = previousExecution && previousExecution.id !== confirmed.activePlan.id ? `\n\nThe previous executing Plan “${previousExecution.title}” is now in history. Its unfinished reminders no longer run.` : "";
+            await telegram.sendMessage({ chatId: pairing.binding.chatId, text: `Plan activated\n${confirmed.activePlan.title}\n\nApproved reminders and read-only preparation are now eligible to run. No booking, payment, ride, or other external action was started.${switched}${profileNext}` });
           } else if (confirmation === "already_active") {
             await telegram.answerCallbackQuery({ callbackId: update.callbackId, text: "This Plan is already active." });
           } else {
@@ -1048,7 +1050,7 @@ async function telegramCommandResponse(text: string | undefined): Promise<Telegr
       const actions = presented.actionItems.map((item) => `• ${item}`).join("\n");
       return [{ text: `China Pack preparation needs attention\n\n${presented.message}${actions ? `\n\n${actions}` : ""}\n\nThe current draft was preserved. Update the missing details in Telegram or Web, then send /prepare again.` }];
     }
-    return telegramPlanReplies(presented.workspace.activePlan, `China Pack prepared a new complete draft with ${presented.taskCount} Tasks and ${presented.reminderCount} Reminders. Review every page before confirming.`);
+    return telegramPlanReplies(presented.workspace.activePlan, withTelegramExecutionContinuity(presented.workspace, `China Pack prepared a new complete draft with ${presented.taskCount} Tasks and ${presented.reminderCount} Reminders. Review every page before confirming.`));
   }
   if (command.type === "profile") {
     store.clearTelegramProfileTextEdit();
@@ -1143,7 +1145,7 @@ async function telegramCommandResponse(text: string | undefined): Promise<Telegr
           return telegramPlanReplies(currentPlan, "The Plan changed while the revision was being prepared, so the older result was not saved. Review the current Plan below.");
         }
         store.finishPlanGenerationRun({ runId: run.id, status: "succeeded", outputPlanId: revised.activePlan.id });
-        return telegramPlanReplies(revised.activePlan, `${runtimeName(workspace.runtime.selectedKind)} revised the current Plan from your correction.`);
+        return telegramPlanReplies(revised.activePlan, withTelegramExecutionContinuity(revised, `${runtimeName(workspace.runtime.selectedKind)} revised the current Plan from your correction.`));
       }
       const result = await createTelegramPlan({
         request: command.request,
@@ -1180,6 +1182,11 @@ function telegramPlanReplies(plan: ReturnType<SqliteWorkspaceStore["getWorkspace
     text: index === 0 && intro ? `${intro}\n\n${page}` : page,
     ...(index === pages.length - 1 && replyMarkup ? { replyMarkup } : {})
   }));
+}
+
+function withTelegramExecutionContinuity(workspace: ReturnType<SqliteWorkspaceStore["getWorkspace"]>, intro: string): string {
+  const continuity = telegramExecutionContinuityNotice(workspace);
+  return continuity ? `${intro}\n\n${continuity}` : intro;
 }
 
 function runtimeName(kind: AgentRuntimeKind): string {
