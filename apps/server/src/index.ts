@@ -729,8 +729,8 @@ async function sendArrivalRouteFromSharedLocation(chatId: string, location: { la
   }
   const transport = selectArrivalTransport(plan, routeFacts, transportOverride);
   const selectedRoute = routeFacts.find((route) => route.mode === transport);
-  const result = formatArrivalRoute({ origin, destination, transport, ...(selectedRoute ? { route: selectedRoute } : {}) });
-  await telegram.sendMessage({ chatId, text: result.text, replyMarkup: { inline_keyboard: [[{ text: "Open route in Amap", url: result.handoffUrl }]] } });
+  const result = formatArrivalRoute({ origin, destination, transport, taxiRequested: preference === "taxi", ...(selectedRoute ? { route: selectedRoute } : {}) });
+  await telegram.sendMessage({ chatId, text: result.text, replyMarkup: { inline_keyboard: [[{ text: result.handoffLabel, url: result.handoffUrl }]] } });
 }
 
 async function sendNearbyFoodFromSharedLocation(chatId: string, location: { latitude: number; longitude: number }): Promise<void> {
