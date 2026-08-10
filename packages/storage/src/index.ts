@@ -380,6 +380,29 @@ export class SqliteWorkspaceStore {
     return rows.map((row) => this.planFromRow(row));
   }
 
+  /** Permanently removes one archived Plan. Current or executing Plans are protected. */
+  deleteHistoricalPlan(planId: string): boolean {
+    const row = this.database.prepare("SELECT is_current, is_execution FROM plans WHERE id = ?").get(planId) as { is_current: number; is_execution: number } | undefined;
+    if (!row) return false;
+    if (row.is_current || row.is_execution) throw new Error("The current or executing Plan cannot be deleted from history.");
+    return this.database.prepare("DELETE FROM plans WHERE id = ?").run(planId).changes > 0;
+  }
+
+  /** Persists a user-owned preparation checklist item from the Web workspace. */
+  setPlanTaskChecked(planId: string, taskId: string, checked: boolean): WorkspaceSnapshot {
+    const task = this.database.prepare(`SELECT tasks.owner, tasks.status
+      FROM tasks JOIN stages ON stages.id = tasks.stage_id JOIN plans ON plans.id = stages.plan_id
+      WHERE tasks.id = ? AND plans.id = ? AND plans.is_current = 1`).get(taskId, planId) as { owner: Task["owner"]; status: Task["status"] } | undefined;
+    if (!task) throw new Error("The current Plan task was not found.");
+    if (task.owner !== "user") throw new Error("Only user-owned preparation items can be checked here.");
+    const nextStatus: Task["status"] = checked ? "completed" : "waiting_user";
+    if (task.status !== nextStatus) {
+      this.database.prepare("UPDATE tasks SET status = ? WHERE id = ?").run(nextStatus, taskId);
+      this.database.prepare("UPDATE plans SET version = version + 1 WHERE id = ?").run(planId);
+    }
+    return this.getWorkspace();
+  }
+
   /** Returns the Plan whose reminders and timeline are currently allowed to execute. */
   getExecutionPlan(): Plan | undefined {
     const plan = this.database.prepare(`SELECT id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, created_at
