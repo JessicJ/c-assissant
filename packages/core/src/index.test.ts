@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { assessPolicyPreparation, compilePlanProposal, confirmPlan, createInitialWorkspace, createPlanFromDraft, createPlanFromRequest, recommendPlanTransport, type PlanCompilationProposal } from "./index.js";
+import { assessPolicyPreparation, compilePlanProposal, confirmPlan, createInitialWorkspace, createPlanFromDraft, createPlanFromRequest, isPreDepartureChecklistTask, recommendPlanTransport, type PlanCompilationProposal } from "./index.js";
 
 function compilationProposal(planId: string, planVersion: number): PlanCompilationProposal {
   return {
@@ -76,6 +76,14 @@ test("an arrival-triggered user Task waits for the arrival event before becoming
 
   assert.equal(plan.stages[0]?.tasks[0]?.status, "scheduled");
   assert.equal(plan.stages[0]?.tasks[0]?.activationTrigger, "arrival");
+});
+
+test("only carry items and pre-departure work qualify for checklist interaction", () => {
+  assert.equal(isPreDepartureChecklistTask({ title: "Pack passport and charger", owner: "user", dueLabel: "Any time" }, "应急资料"), true);
+  assert.equal(isPreDepartureChecklistTask({ title: "Set up WeChat", owner: "user", dueLabel: "Before arrival" }, "China arrival preparation"), true);
+  assert.equal(isPreDepartureChecklistTask({ title: "Choose airport transport", owner: "user", dueLabel: "Before leaving the airport" }, "Arrive in Shanghai"), false);
+  assert.equal(isPreDepartureChecklistTask({ title: "Visit the museum", owner: "user", dueLabel: "Day 2 at 10:00" }, "每日行程"), false);
+  assert.equal(isPreDepartureChecklistTask({ title: "Pack passport", owner: "external", dueLabel: "Before departure" }, "应急资料"), false);
 });
 
 test("a Plan preference takes precedence in an explainable transport suggestion", () => {

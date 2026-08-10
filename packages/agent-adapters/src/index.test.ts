@@ -131,7 +131,8 @@ test("Codex Plan context includes confirmed Profile identity without claiming po
   assert.match(prompt, /plan backward/i);
   assert.match(prompt, /1-2 must-do items per day/i);
   assert.match(prompt, /only time-bound travel nodes/i);
-  assert.match(prompt, /individually checkable user-owned Tasks/i);
+  assert.match(prompt, /Only packing or carry items and concrete work that must be completed before departure/i);
+  assert.match(prompt, /Do not present itinerary nodes, on-trip activities, general information, budgets, transport guidance, or post-arrival actions as checklist work/i);
   assert.match(prompt, /Never invent an app download URL/i);
 });
 
@@ -140,6 +141,7 @@ test("Plan revision context is complete but excludes Core and Connector state", 
   const prompt = buildPlanDraftPrompt({
     request: "Move the arrival date to September 2.",
     currentPlan,
+    completedTasks: [{ stageTitle: "Preparation", title: "Pack passport", dueLabel: "Before departure" }],
     profile: { preferredLanguage: "English", nationality: "Canada", gender: "woman", immigrationStatus: "tourist_visa" }
   });
 
@@ -147,5 +149,8 @@ test("Plan revision context is complete but excludes Core and Connector state", 
   assert.match(prompt, /Move the arrival date to September 2/);
   assert.match(prompt, /Attend an exhibition in Shanghai/);
   assert.match(prompt, /Preserve every unaffected known fact/);
+  assert.match(prompt, /User-confirmed completed Tasks/);
+  assert.match(prompt, /Pack passport/);
+  assert.match(prompt, /do not remind the user about it/i);
   assert.doesNotMatch(prompt, /sourceSnapshots|AMAP_API_KEY|TELEGRAM_BOT_TOKEN|plan-[0-9a-f-]{36}/);
 });

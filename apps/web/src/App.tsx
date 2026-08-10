@@ -170,7 +170,7 @@ function CurrentPlan({ plan, onRevise, onTaskToggle, onConfirm, confirming }: { 
 
 function PlanContentSection({ plan, stage, index, onTaskToggle }: { plan: Plan; stage: Plan["stages"][number]; index: number; onTaskToggle: (planId: string, taskId: string, checked: boolean) => Promise<void> }) {
   const kind = sectionKind(stage.title);
-  return <section className={`plan-content-section ${kind}`}><header><div><span>{String(index + 1).padStart(2, "0")}</span><h3>{stage.title}</h3></div><small>{stage.tasks.length} 项</small></header><p>{stage.description}</p>{kind === "itinerary" ? <ItineraryView tasks={stage.tasks} /> : kind === "reservations" ? <ReservationView tasks={stage.tasks} onToggle={(task, checked) => onTaskToggle(plan.id, task.id, checked)} /> : kind === "budget" ? <BudgetView tasks={stage.tasks} /> : kind === "transport" ? <TransportView tasks={stage.tasks} /> : kind === "overview" ? <OverviewView tasks={stage.tasks} /> : <ChecklistView plan={plan} tasks={stage.tasks} onToggle={(task, checked) => onTaskToggle(plan.id, task.id, checked)} />}</section>;
+  return <section className={`plan-content-section ${kind}`}><header><div><span>{String(index + 1).padStart(2, "0")}</span><h3>{stage.title}</h3></div><small>{stage.tasks.length} 项</small></header><p>{stage.description}</p>{kind === "itinerary" ? <ItineraryView tasks={stage.tasks} /> : kind === "reservations" ? <ReservationView stageTitle={stage.title} tasks={stage.tasks} onToggle={(task, checked) => onTaskToggle(plan.id, task.id, checked)} /> : kind === "budget" ? <BudgetView tasks={stage.tasks} /> : kind === "transport" ? <TransportView tasks={stage.tasks} /> : kind === "overview" ? <OverviewView tasks={stage.tasks} /> : <ChecklistView plan={plan} stageTitle={stage.title} tasks={stage.tasks} onToggle={(task, checked) => onTaskToggle(plan.id, task.id, checked)} />}</section>;
 }
 
 function OverviewView({ tasks }: { tasks: Task[] }) {
@@ -181,8 +181,8 @@ function ItineraryView({ tasks }: { tasks: Task[] }) {
   return <div className="journey-timeline">{tasks.map((task, index) => <article key={task.id}><div className="journey-marker"><span>{index + 1}</span></div><div><time>{task.dueLabel}</time><strong>{task.title}</strong>{task.description ? <p>{task.description}</p> : null}{task.reminder ? <em>已设置提醒</em> : null}</div></article>)}</div>;
 }
 
-function ReservationView({ tasks, onToggle }: { tasks: Task[]; onToggle: (task: Task, checked: boolean) => Promise<void> }) {
-  return <div className="reservation-table">{tasks.map((task) => <div key={task.id}><input type="checkbox" checked={task.status === "completed"} disabled={task.owner !== "user"} onChange={(event) => void onToggle(task, event.target.checked)} aria-label={`完成 ${task.title}`} /><div><strong>{task.title}</strong><small>{task.description ?? "记录订单号、当地时间、地址和退改规则"}</small></div><span>{task.dueLabel}</span></div>)}</div>;
+function ReservationView({ stageTitle, tasks, onToggle }: { stageTitle: string; tasks: Task[]; onToggle: (task: Task, checked: boolean) => Promise<void> }) {
+  return <div className="reservation-table">{tasks.map((task) => { const checkable = isPreDepartureChecklistTask(task, stageTitle); return <div key={task.id}>{checkable ? <input type="checkbox" checked={task.status === "completed"} onChange={(event) => void onToggle(task, event.target.checked)} aria-label={`完成 ${task.title}`} /> : <span className={`task-state ${task.status}`} />}<div><strong>{task.title}</strong><small>{task.description ?? "记录订单号、当地时间、地址和退改规则"}</small></div><span>{task.dueLabel}</span></div>; })}</div>;
 }
 
 function BudgetView({ tasks }: { tasks: Task[] }) {
@@ -193,8 +193,8 @@ function TransportView({ tasks }: { tasks: Task[] }) {
   return <div className="transport-grid">{tasks.map((task) => <article key={task.id}><span>⇢</span><div><strong>{task.title}</strong><small>{task.description ?? task.dueLabel}</small>{task.description ? <em>{task.dueLabel}</em> : null}</div></article>)}</div>;
 }
 
-function ChecklistView({ plan, tasks, onToggle }: { plan: Plan; tasks: Task[]; onToggle: (task: Task, checked: boolean) => Promise<void> }) {
-  return <div className="preparation-checklist">{tasks.map((task) => { const download = appDownload(task, plan.sources); const checked = task.status === "completed"; return <div className={checked ? "checked" : ""} key={task.id}>{task.owner === "user" ? <input type="checkbox" checked={checked} onChange={(event) => void onToggle(task, event.target.checked)} aria-label={`完成 ${task.title}`} /> : <span className={`task-state ${task.status}`} />}<div><strong>{task.title}</strong>{task.description ? <small>{task.description}</small> : null}<small>{task.dueLabel}</small></div>{download ? <a className="download-action" href={download.url} target="_blank" rel="noreferrer">{download.label} ↗</a> : null}</div>; })}</div>;
+function ChecklistView({ plan, stageTitle, tasks, onToggle }: { plan: Plan; stageTitle: string; tasks: Task[]; onToggle: (task: Task, checked: boolean) => Promise<void> }) {
+  return <div className="preparation-checklist">{tasks.map((task) => { const download = appDownload(task, plan.sources); const checkable = isPreDepartureChecklistTask(task, stageTitle); const checked = checkable && task.status === "completed"; return <div className={checked ? "checked" : ""} key={task.id}>{checkable ? <input type="checkbox" checked={checked} onChange={(event) => void onToggle(task, event.target.checked)} aria-label={`完成 ${task.title}`} /> : <span className={`task-state ${task.status}`} />}<div><strong>{task.title}</strong>{task.description ? <small>{task.description}</small> : null}<small>{task.dueLabel}</small></div>{download ? <a className="download-action" href={download.url} target="_blank" rel="noreferrer">{download.label} ↗</a> : null}</div>; })}</div>;
 }
 
 function sectionKind(title: string): "overview" | "itinerary" | "reservations" | "budget" | "transport" | "checklist" {
@@ -205,6 +205,18 @@ function sectionKind(title: string): "overview" | "itinerary" | "reservations" |
   if (/预算|budget|cost/.test(value)) return "budget";
   if (/交通方案|transport plan|transportation plan/.test(value)) return "transport";
   return "checklist";
+}
+
+function isPreDepartureChecklistTask(task: Pick<Task, "title" | "description" | "owner" | "dueLabel">, stageTitle = ""): boolean {
+  if (task.owner !== "user") return false;
+  const titleAndDetail = `${task.title} ${task.description ?? ""}`.toLocaleLowerCase();
+  const due = task.dueLabel.trim().toLocaleLowerCase();
+  const stage = stageTitle.toLocaleLowerCase();
+  if (/\b(pack|packing|bring|carry|luggage|baggage|clothing|medicine|medication|charger|adapter)\b|携带|打包|行李|物品清单|衣物|药品|充电器|转换插头/.test(titleAndDetail)) return true;
+  if (/before (departure|departing|arrival|travel|the trip|leaving home)|prior to (departure|travel|the trip)|出发前|行前|出行前|启程前|抵达前|到达前/.test(due)) return true;
+  if (!/^(before|prior to)\b|^(在)?.+(前|之前)$/.test(due)) return false;
+  if (/每日行程|daily itinerary|itinerary|arriv|arrival|exhibition|展会|抵达|到达/.test(stage) || /airport|hotel check-in|first exhibition|final exhibition|leaving the airport|机场|入住|展会/.test(due)) return false;
+  return /准备|行前|清单|预订|应急资料|prepar|essential|checklist|reservation|booking|document/.test(stage);
 }
 
 function appDownload(task: Task, sources: Plan["sources"]): { label: string; url: string } | null {

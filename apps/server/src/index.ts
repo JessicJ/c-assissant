@@ -18,7 +18,7 @@ import { DEFAULT_HANDOFF_SAFETY_SECONDS, DEFAULT_HANDOFF_WAIT_SECONDS, HANDOFF_D
 import { createOfficialSourceService, parseOfficialSourceRegistry } from "./official-sources.js";
 import { formatTransportChoiceAcknowledgement, parseTelegramCommand, shouldGenerateCompletePlan } from "./telegram-commands.js";
 import { formatTelegramNearbyFood, parseTelegramFoodPartyCallback, telegramFoodPartyMarkup } from "./telegram-food.js";
-import { createTelegramPlan, formatTelegramPlanCreationPages, formatTelegramPlanPages, planDraftForRevision, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
+import { completedTasksForRevision, createTelegramPlan, formatTelegramPlanCreationPages, formatTelegramPlanPages, planDraftForRevision, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
 import { formatTelegramProfile, parseTelegramProfileCallback, telegramProfileChoiceMarkup, telegramProfileMarkup, telegramProfileTextPrompt, updateProfileText } from "./telegram-profile.js";
 import { fetchTelegramPlanWeather, formatTelegramWeather } from "./telegram-weather.js";
 import { assertWebAgentPlanUnchanged, formatWebAgentPlanReply, parseWebAgentTurn } from "./web-agent.js";
@@ -360,7 +360,10 @@ server.post<{ Body: unknown }>("/api/agent/chat", async (request, reply) => {
     const runtime = selectedRuntimeAdapter(workspace.runtime.selectedKind);
     const draft = await runtime.generatePlanDraft({
       request: turn.message,
-      ...(turn.mode === "revise_plan" ? { currentPlan: planDraftForRevision(workspace.activePlan) } : {}),
+      ...(turn.mode === "revise_plan" ? {
+        currentPlan: planDraftForRevision(workspace.activePlan),
+        completedTasks: completedTasksForRevision(workspace.activePlan)
+      } : {}),
       profile: {
         preferredLanguage: workspace.profile.preferredLanguage,
         nationality: workspace.profile.nationality,
@@ -1121,6 +1124,7 @@ async function telegramCommandResponse(text: string | undefined): Promise<Telegr
           draft = await runtime.generatePlanDraft({
             request: command.request,
             currentPlan: planDraftForRevision(workspace.activePlan),
+            completedTasks: completedTasksForRevision(workspace.activePlan),
             profile: { preferredLanguage: workspace.profile.preferredLanguage, nationality: workspace.profile.nationality, gender: workspace.profile.gender, immigrationStatus: workspace.profile.immigrationStatus }
           });
         } catch (error) {
