@@ -131,13 +131,13 @@
 - 已建立 `schema_migrations` 基线、未来 schema 拒绝降级保护、启动完整性状态和经过 `VACUUM INTO` 后再次校验的本地私有备份；Web Settings 可由用户显式创建备份，文件权限为 `0600`。破坏性的自动恢复、数据库加密和数据保留策略仍需后续独立设计。
 - Telegram 配对只接受一次性、短时效 `/start` 指令，并且一套实例只能绑定一个私聊账号。服务运行时会持续读取已绑定私聊的消息，并持久化更新游标以避免重复处理；已激活 Plan 的结构化 Task Reminder 与预计首次抵达时间均可触发通知。Task Reminder 的暂时性发送故障最多重试两次，最终状态写入 Web Inbox；到期时会尝试刷新目的地天气，失败则无天气继续发送。用户点击“我还没到达”后，或五分钟没有回应后，才会出现 Telegram 的系统位置共享按钮；若当前 Plan 已保存具体住宿，GPS 坐标会即时转换为高德坐标，按本次交通偏好查询路线事实。公共交通或自动选择模式还会即时解析起终点的高德城市编码，以查询公交/地铁距离、时长和可用票价；随后发送用户自行打开的高德 HTTPS 路线链接。坐标不会写入 Profile 或数据库。用户可从 Web 显式解绑当前私聊账号；多阶段提醒已具备最小发送链路，但其他动态事实刷新和复杂条件仍未实现。
 - 项目名称已确定为 Landi；开源许可证和贡献治理方式尚未确定。
-- 尚未确定一键部署与全天在线方案。
-- 已增加单进程生产入口：`pnpm build && pnpm start` 由 Server 同时提供构建后的 Web 工作台、Core API、Telegram 轮询与 Reminder 调度，生产运行不再依赖 Vite；开机启动、崩溃拉起和远程一键部署仍待确定。
+- 本机 macOS 常驻方案已经落地并真实验证：当前用户级 LaunchAgent 在登录时启动 Landi，单进程同时承担 Web、Core API、Telegram 轮询和 Reminder 调度，并在一次人为结束进程后自动拉起。远程一键部署、Linux 和 Windows 仍是后续范围。
+- 已增加单进程生产入口：`pnpm build && pnpm start` 由 Server 同时提供构建后的 Web 工作台、Core API、Telegram 轮询与 Reminder 调度，生产运行不再依赖 Vite。
 - 已增加 macOS 当前用户级常驻服务安装器及 dry-run 预览：LaunchAgent 在登录时启动、异常退出后拉起单一生产进程，plist 不保存 Connector 或 Agent 凭据，卸载保留本地数据和日志。Linux/Windows 与远程托管部署仍待适配。
 
 ## 运行方法
 
-当前仓库已形成可运行的单用户本地 V1：Server 与 Web 使用 SQLite Workspace，可创建、修订、准备、完整审阅和确认 Plan；Telegram 可完成相同审阅确认、到期提醒、按需天气、附近餐饮及一次性定位路线交接。高德、QWeather、Telegram 和 Codex 已做过本地真实验证；Claude Code 保留同契约实现，待用户用真实已登录账号验证。V1 不执行交易型外部行动。
+当前仓库已形成可运行的单用户本地 V1：Server 与 Web 使用 SQLite Workspace，可创建、修订、准备、完整审阅和确认 Plan；Telegram 可完成相同审阅确认、到期提醒、按需天气、附近餐饮及一次性定位路线交接。高德、QWeather、Telegram 配对和 Codex Web 生产生成已做过本地真实验证；Claude Code 是无需付费账号实测的可选预览，不阻塞 `0.1.0`。Telegram 完整手机 Plan、到期提醒和高德路线跳转仍在最终真机验收中。V1 不执行交易型外部行动。
 
 阅读顺序：
 
@@ -150,7 +150,7 @@
 7. `docs/china-pack-v1.md`：China Pack V1 范围与第一条演示闭环。
 8. `docs/decisions-and-open-items.md`：已确认决策和待确认问题。
 
-基础环境是 Node.js 22 及以上版本和 pnpm。依赖安装完成后，可使用 `pnpm install`、`pnpm dev`、`pnpm build`、`pnpm typecheck`、`pnpm test` 和 `pnpm release:check`。`pnpm dev` 会启动本地 Server 与 Web，并在首次启动时创建 `data/c-assistant.sqlite`；`pnpm release:check` 不访问外部服务，可用于每次交接或发布前的完整本地验收。真实部署和外部服务配置仍不在这一阶段。
+基础环境是 Node.js 22 及以上版本和 pnpm。依赖安装完成后，可使用 `pnpm install`、`pnpm dev`、`pnpm build`、`pnpm typecheck`、`pnpm test` 和 `pnpm release:check`。`pnpm dev` 会启动本地 Server 与 Web，并在首次启动时创建 `data/c-assistant.sqlite`；`pnpm release:check` 不访问外部服务，可用于每次交接或发布前的完整本地验收。正式本机运行使用 `pnpm build && pnpm start`，macOS 可使用仓库提供的 LaunchAgent 安装脚本获得登录启动和异常拉起。
 
 ## 已知问题与风险
 
@@ -164,7 +164,7 @@
 - Telegram 附近餐饮目前只能依赖高德 POI 事实，无法验证营业状态、排队、桌位、菜单或外国人实际可用性；这些内容不会被推断。
 - Landi 不应存储 Codex 或 Claude Code 登录凭据，也不应把 Connector 密钥暴露给 Agent 或 Skill。
 - V1 不直接预订、叫车、点餐或支付；外部链接被打开也不能视为任务已经完成。
-- 全天在线依赖部署主机持续运行，目前没有确定的一键部署和进程守护方案。
+- “体感常驻”仍依赖部署主机处于开机登录状态；macOS 本机进程守护已完成，远程全天在线与跨平台一键部署尚未完成。
 - 当前远端默认工作分支为 `master`；是否迁移为 `main` 尚未决定。
 
 ## V1 后续建议
@@ -174,7 +174,7 @@
 1. 在手机上验证 Telegram 与高德 HTTPS 深链接；Claude Code 作为预览底座，真实草案验证等未来具备可用账号后再做，不阻塞 Codex `0.1.0` 实例。
 2. 确定开源许可证、贡献治理和版本发布方式。
 3. 在现有 schema 基线与已验证备份之上，设计显式恢复流程、数据库加密和数据保留策略；恢复不得自动覆盖当前 workspace。
-4. 选择一键部署、进程守护与全天在线方案，并增加配额/限额可视化。
+4. 在已验证的 macOS LaunchAgent 之外补充远程、Linux 和 Windows 一键部署，并增加配额/限额可视化。
 5. 在上海、北京、广州首批目录基础上按城市逐步扩展可追溯的当地特色饮食来源；没有可靠来源时继续明确降级。
 6. 评估 V1 后的 MCP Tool Gateway；只有出现受控 Agent 工具调用需求时才接入，且不得暴露 Connector 密钥。
 
