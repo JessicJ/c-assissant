@@ -114,12 +114,13 @@ export class ClaudeCodeRuntimeAdapter {
     if (version.code !== 0) return { kind: "claude-code", installed: false, authenticated: false, message: "Claude Code CLI is not available on this machine." };
 
     const login = await this.run("claude", ["auth", "status"]);
+    const authenticated = claudeAuthStatusIsLoggedIn(login);
     return {
       kind: "claude-code",
       installed: true,
-      authenticated: login.code === 0,
+      authenticated,
       version: version.stdout.trim() || undefined,
-      ...(login.code === 0 ? {} : { message: "Claude Code is installed but needs login before it can generate a Plan." })
+      ...(authenticated ? {} : { message: "Claude Code is installed but needs login before it can generate a Plan." })
     };
   }
 
@@ -140,9 +141,13 @@ export class ClaudeCodeRuntimeAdapter {
         "--tools",
         "",
         "--strict-mcp-config",
+        "--no-session-persistence",
         buildPlanDraftPrompt(input)
       ], { cwd: runDirectory, env: scrubbedEnvironment(this.environment), timeoutMs: 120_000 });
-      if (command.code !== 0) throw new RuntimeAdapterError("run_failed", "Claude Code could not generate a Plan draft right now.");
+      if (command.code !== 0) {
+        if (claudeAuthenticationFailed(command)) throw new RuntimeAdapterError("not_authenticated", "Claude Code login expired. Sign in again before generating a Plan.");
+        throw new RuntimeAdapterError("run_failed", "Claude Code could not generate a Plan draft right now.");
+      }
 
       return parsePlanDraft(parseClaudePrintResult(command.stdout));
     } catch (error) {
@@ -182,6 +187,21 @@ export function parseClaudePrintResult(value: string): string {
     throw new RuntimeAdapterError("invalid_output", "Claude Code did not return a Plan draft result.");
   }
   return parsed.result;
+}
+
+function claudeAuthStatusIsLoggedIn(result: RuntimeProcessResult): boolean {
+  if (result.code !== 0) return false;
+  try {
+    const parsed = JSON.parse(result.stdout) as unknown;
+    if (isRecord(parsed) && typeof parsed.loggedIn === "boolean") return parsed.loggedIn;
+  } catch {
+    // Older Claude Code versions may return a successful non-JSON status.
+  }
+  return true;
+}
+
+function claudeAuthenticationFailed(result: RuntimeProcessResult): boolean {
+  return /authentication_error|failed to authenticate|oauth access token has expired/i.test(`${result.stdout}\n${result.stderr}`);
 }
 
 const planDraftSchema = {

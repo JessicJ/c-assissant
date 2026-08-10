@@ -53,12 +53,41 @@ test("Claude Code Adapter runs one isolated no-tools Print-mode Plan draft witho
   const generation = calls.at(-1)!;
   assert.equal(generation.command, "claude");
   assert.deepEqual(generation.args.slice(0, 8), ["-p", "--output-format", "json", "--max-turns", "1", "--tools", "", "--strict-mcp-config"]);
+  assert.equal(generation.args.includes("--no-session-persistence"), true);
   assert.match(generation.args.at(-1) ?? "", /User request: I will attend an exhibition/i);
   assert.equal(generation.options?.env?.AMAP_API_KEY, undefined);
   assert.equal(generation.options?.env?.TELEGRAM_BOT_TOKEN, undefined);
   assert.equal(generation.options?.env?.ANTHROPIC_API_KEY, undefined);
   assert.equal(generation.options?.timeoutMs, 120_000);
   assert.equal(existsSync(generation.options?.cwd ?? ""), false);
+});
+
+test("Claude Code Adapter does not treat a logged-out JSON status as authenticated", async () => {
+  const run: RuntimeProcess = async (_command, args) => {
+    if (args[0] === "--version") return { code: 0, stdout: "2.1.85\n", stderr: "" };
+    return { code: 0, stdout: JSON.stringify({ loggedIn: false, authMethod: "none" }), stderr: "" };
+  };
+
+  const status = await new ClaudeCodeRuntimeAdapter({ run }).check();
+  assert.equal(status.installed, true);
+  assert.equal(status.authenticated, false);
+  assert.match(status.message ?? "", /needs login/i);
+});
+
+test("Claude Code Adapter classifies an expired OAuth token as needing login", async () => {
+  const run: RuntimeProcess = async (_command, args) => {
+    if (args[0] === "--version") return { code: 0, stdout: "2.1.85\n", stderr: "" };
+    if (args[0] === "auth") return { code: 0, stdout: JSON.stringify({ loggedIn: true }), stderr: "" };
+    return { code: 1, stdout: JSON.stringify({ is_error: true, result: "Failed to authenticate. OAuth access token has expired." }), stderr: "" };
+  };
+
+  await assert.rejects(
+    new ClaudeCodeRuntimeAdapter({ run }).generatePlanDraft({
+      request: "I will attend an exhibition in Shanghai.",
+      profile: { preferredLanguage: "English", nationality: "Canada", gender: "not_specified", immigrationStatus: "tourist_visa" }
+    }),
+    (error: unknown) => error instanceof RuntimeAdapterError && error.code === "not_authenticated" && /expired/i.test(error.message)
+  );
 });
 
 test("Codex Plan context includes confirmed Profile identity without claiming policy eligibility", () => {
