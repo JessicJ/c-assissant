@@ -49,6 +49,13 @@ export function planDraftForRevision(plan: Plan): GeneratedPlanDraft {
   };
 }
 
+/** Exposes only user-confirmed completion facts needed for safe Plan revision decisions. */
+export function completedTasksForRevision(plan: Plan): Array<{ stageTitle: string; title: string; dueLabel: string }> {
+  return plan.stages.flatMap((stage) => stage.tasks
+    .filter((task) => task.status === "completed")
+    .map((task) => ({ stageTitle: stage.title, title: task.title, dueLabel: task.dueLabel })));
+}
+
 export function telegramPlanRequestMode(workspace: WorkspaceSnapshot, explicitNew: boolean): TelegramPlanRequestMode {
   if (explicitNew || workspace.activePlan.status !== "draft") return "create";
   const id = workspace.activePlan.id;

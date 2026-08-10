@@ -413,16 +413,60 @@ test("SQLite persists Web preparation checklist changes only for user-owned curr
     nextAction: "Complete preparation.",
     stages: [{ title: "应急资料", description: "Prepare before travel.", tasks: [
       { title: "Pack passport", owner: "user", dueLabel: "Before departure" },
-      { title: "Open official app", owner: "external", dueLabel: "Before departure" }
+      { title: "Open official app", owner: "external", dueLabel: "Before departure" },
+      { title: "Choose airport transport", owner: "user", dueLabel: "Before leaving the airport" }
     ] }]
   }, "codex");
-  const [userTask, externalTask] = workspace.activePlan.stages[0]?.tasks ?? [];
+  const [userTask, externalTask, arrivalTask] = workspace.activePlan.stages[0]?.tasks ?? [];
 
   const checked = store.setPlanTaskChecked(workspace.activePlan.id, userTask?.id ?? "", true);
   assert.equal(checked.activePlan.stages[0]?.tasks[0]?.status, "completed");
   const unchecked = store.setPlanTaskChecked(workspace.activePlan.id, userTask?.id ?? "", false);
   assert.equal(unchecked.activePlan.stages[0]?.tasks[0]?.status, "waiting_user");
-  assert.throws(() => store.setPlanTaskChecked(workspace.activePlan.id, externalTask?.id ?? "", true), /user-owned/i);
+  assert.throws(() => store.setPlanTaskChecked(workspace.activePlan.id, externalTask?.id ?? "", true), /packing items and pre-departure tasks/i);
+  assert.throws(() => store.setPlanTaskChecked(workspace.activePlan.id, arrivalTask?.id ?? "", true), /packing items and pre-departure tasks/i);
+  store.close();
+});
+
+test("SQLite carries checked completion facts into a revised Plan without another reminder", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const workspace = store.createGeneratedPlan({
+    title: "Trip preparation",
+    location: "Shanghai, China",
+    dates: "October 2026",
+    knownInformation: [],
+    assumptions: [],
+    nextAction: "Prepare.",
+    stages: [{ title: "应急资料", description: "Prepare before travel.", tasks: [{
+      title: "Pack passport",
+      owner: "user",
+      dueLabel: "Before departure",
+      reminder: { scheduledAtLocal: "2026-10-01T09:00", timeZone: "Asia/Shanghai", purpose: "Pack the passport." }
+    }] }]
+  });
+  const originalTask = workspace.activePlan.stages[0]!.tasks[0]!;
+  const checked = store.setPlanTaskChecked(workspace.activePlan.id, originalTask.id, true);
+  const revised = store.reviseGeneratedPlan({
+    expectedPlanId: checked.activePlan.id,
+    expectedVersion: checked.activePlan.version,
+    draft: {
+      title: "Revised trip preparation",
+      location: "Shanghai, China",
+      dates: "October 2026",
+      knownInformation: [],
+      assumptions: [],
+      nextAction: "Continue preparing.",
+      stages: [{ title: "应急资料", description: "Prepare before travel.", tasks: [{
+        title: "Pack passport",
+        owner: "user",
+        dueLabel: "Before departure",
+        reminder: { scheduledAtLocal: "2026-10-01T09:00", timeZone: "Asia/Shanghai", purpose: "Pack the passport again." }
+      }] }]
+    }
+  });
+  const carried = revised.activePlan.stages[0]!.tasks[0]!;
+  assert.equal(carried.status, "completed");
+  assert.equal(carried.reminder, undefined);
   store.close();
 });
 

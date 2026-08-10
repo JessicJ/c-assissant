@@ -8,6 +8,7 @@ import {
   createPlanFromDraft,
   createPlanFromRequest,
   createDefaultPlanConfiguration,
+  isPreDepartureChecklistTask,
   type CreatePlanInput,
   type CountryPackSkillRun,
   type AgentRuntimeKind,
@@ -390,11 +391,13 @@ export class SqliteWorkspaceStore {
 
   /** Persists a user-owned preparation checklist item from the Web workspace. */
   setPlanTaskChecked(planId: string, taskId: string, checked: boolean): WorkspaceSnapshot {
-    const task = this.database.prepare(`SELECT tasks.owner, tasks.status
+    const task = this.database.prepare(`SELECT tasks.owner, tasks.status, tasks.title, tasks.description, tasks.due_label, stages.title AS stage_title
       FROM tasks JOIN stages ON stages.id = tasks.stage_id JOIN plans ON plans.id = stages.plan_id
-      WHERE tasks.id = ? AND plans.id = ? AND plans.is_current = 1`).get(taskId, planId) as { owner: Task["owner"]; status: Task["status"] } | undefined;
+      WHERE tasks.id = ? AND plans.id = ? AND plans.is_current = 1`).get(taskId, planId) as { owner: Task["owner"]; status: Task["status"]; title: string; description: string | null; due_label: string; stage_title: string } | undefined;
     if (!task) throw new Error("The current Plan task was not found.");
-    if (task.owner !== "user") throw new Error("Only user-owned preparation items can be checked here.");
+    if (!isPreDepartureChecklistTask({ owner: task.owner, title: task.title, ...(task.description ? { description: task.description } : {}), dueLabel: task.due_label }, task.stage_title)) {
+      throw new Error("Only packing items and pre-departure tasks can be checked here.");
+    }
     const nextStatus: Task["status"] = checked ? "completed" : "waiting_user";
     if (task.status !== nextStatus) {
       this.database.prepare("UPDATE tasks SET status = ? WHERE id = ?").run(nextStatus, taskId);
@@ -812,6 +815,7 @@ export class SqliteWorkspaceStore {
     }
     const plan = createPlanFromDraft(input.draft);
     plan.configuration = structuredClone(workspace.activePlan.configuration);
+    carryForwardCompletedTasks(workspace.activePlan, plan);
     this.savePlan(plan);
     this.addInbox({
       id: `plan-revised-${plan.id}`,
@@ -1884,6 +1888,40 @@ function taskRemindersEqual(left: TaskReminder, right: TaskReminder): boolean {
     && left.timeZone === right.timeZone
     && left.purpose === right.purpose
     && JSON.stringify(left.refreshFacts ?? []) === JSON.stringify(right.refreshFacts ?? []);
+}
+
+/** Keeps user-confirmed completion facts stable when an Agent replaces a draft. */
+function carryForwardCompletedTasks(previousPlan: Plan, replacementPlan: Plan): void {
+  const completed = previousPlan.stages.flatMap((stage) => stage.tasks
+    .filter((task) => task.status === "completed")
+    .map((task) => ({ stageTitle: stage.title, task })));
+
+  for (const item of completed) {
+    const sameStage = replacementPlan.stages.find((stage) => normalizedPlanLabel(stage.title) === normalizedPlanLabel(item.stageTitle));
+    const matchingTask = sameStage?.tasks.find((task) => normalizedPlanLabel(task.title) === normalizedPlanLabel(item.task.title))
+      ?? replacementPlan.stages.flatMap((stage) => stage.tasks).find((task) => normalizedPlanLabel(task.title) === normalizedPlanLabel(item.task.title));
+
+    if (matchingTask) {
+      matchingTask.status = "completed";
+      matchingTask.owner = item.task.owner;
+      delete matchingTask.reminder;
+      delete matchingTask.activationTrigger;
+      continue;
+    }
+
+    const targetStage = sameStage ?? replacementPlan.stages.at(-1);
+    if (!targetStage) continue;
+    const { id: _id, reminder: _reminder, activationTrigger: _activationTrigger, ...taskWithoutExecution } = structuredClone(item.task);
+    targetStage.tasks.push({
+      ...taskWithoutExecution,
+      id: `task-${randomUUID()}`,
+      status: "completed"
+    });
+  }
+}
+
+function normalizedPlanLabel(value: string): string {
+  return value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
 }
 
 function isLocalDateTime(value: string): boolean {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createInitialWorkspace, createPlanFromDraft } from "@c-assistant/core";
-import { createTelegramPlan, formatTelegramPlan, formatTelegramPlanCreation, formatTelegramPlanPages, planDraftForRevision, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
+import { completedTasksForRevision, createTelegramPlan, formatTelegramPlan, formatTelegramPlanCreation, formatTelegramPlanPages, planDraftForRevision, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
 
 const generated = {
   title: "Attend an exhibition in Shanghai",
@@ -125,6 +125,18 @@ test("Telegram revision context strips Core state while retaining the complete d
   assert.equal(context.stages.length, plan.stages.length);
   assert.equal(context.stages[2]?.tasks[0]?.activationTrigger, "arrival");
   assert.doesNotMatch(JSON.stringify(context), /plan-|stage-|task-|contentHash|configuration|sources/);
+});
+
+test("Telegram revision context carries only completed Task facts separately", () => {
+  const plan = createInitialWorkspace().activePlan;
+  const task = plan.stages[0]!.tasks[0]!;
+  task.status = "completed";
+
+  assert.deepEqual(completedTasksForRevision(plan), [{
+    stageTitle: plan.stages[0]!.title,
+    title: task.title,
+    dueLabel: task.dueLabel
+  }]);
 });
 
 test("plain text revises only a user-created draft while /new always creates", () => {

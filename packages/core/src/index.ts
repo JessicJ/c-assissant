@@ -53,6 +53,31 @@ export interface Stage {
   origin?: PlanCompilationOrigin;
 }
 
+/** Only packing/carry items and concrete pre-departure work belong in the Web checklist. */
+export function isPreDepartureChecklistTask(
+  task: Pick<Task, "title" | "description" | "owner" | "dueLabel">,
+  stageTitle = ""
+): boolean {
+  if (task.owner !== "user") return false;
+  const titleAndDetail = `${task.title} ${task.description ?? ""}`.toLocaleLowerCase();
+  const due = task.dueLabel.trim().toLocaleLowerCase();
+  const stage = stageTitle.toLocaleLowerCase();
+
+  const isCarryItem = /\b(pack|packing|bring|carry|luggage|baggage|clothing|medicine|medication|charger|adapter)\b|携带|打包|行李|物品清单|衣物|药品|充电器|转换插头/.test(titleAndDetail);
+  if (isCarryItem) return true;
+
+  const explicitlyBeforeDeparture = /before (departure|departing|arrival|travel|the trip|leaving home)|prior to (departure|travel|the trip)|出发前|行前|出行前|启程前|抵达前|到达前/.test(due);
+  if (explicitlyBeforeDeparture) return true;
+
+  const startsBefore = /^(before|prior to)\b|^(在)?.+(前|之前)$/.test(due);
+  if (!startsBefore) return false;
+  const postArrivalContext = /每日行程|daily itinerary|itinerary|arriv|arrival|exhibition|展会|抵达|到达/.test(stage)
+    || /airport|hotel check-in|first exhibition|final exhibition|leaving the airport|机场|入住|展会/.test(due);
+  if (postArrivalContext) return false;
+
+  return /准备|行前|清单|预订|应急资料|prepar|essential|checklist|reservation|booking|document/.test(stage);
+}
+
 export interface SourceReference {
   title: string;
   authority: string;
