@@ -8,7 +8,7 @@ The Node-side `chinaSkillRegistry` loads the internal `skill.json` files as runt
 
 `china-arrival-plan` `0.1.0` is the registered composite gate. All seven supporting modules exist; it orders supplied results and preserves their provenance, while still blocking any run with a missing required result. A separate version-bound adapter may convert a ready composition into an inert Core draft proposal; the Skill itself still cannot mutate a Plan.
 
-`local-food-guide` `0.1.0` provides bounded, bilingual destination food context only from traceable official-source facts. The first city catalog is Shanghai: five dish references from a Shanghai Municipal People's Government page are available only after a matching city and fresh snapshot, then compile into the complete Plan's known information with the official source. It does not choose restaurants or propose transactions; specific nearby places remain a separate, explicit flow.
+`local-food-guide` `0.1.0` provides bounded, bilingual destination food context only from traceable official-source facts. The first city catalogs cover Shanghai and Beijing with five references from each municipal-government English portal. They are available only after a matching city and fresh snapshot, then compile into the complete Plan's known information with the official source. It does not choose restaurants or propose transactions; specific nearby places remain a separate, explicit flow.
 
 `digital-life-setup` `0.1.0` maps Plan-derived capability needs to fresh, allowlisted first-party setup guidance. It retains Chinese names, provides English steps, skips user-confirmed completed items, and never receives account secrets or infers completion from a link handoff.
 

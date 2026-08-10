@@ -9,9 +9,9 @@ import { createChinaReferenceCatalog, listChinaDigitalLifeSourceIds, listChinaLo
 const snapshot = (sourceId: string, retrievedAt: string, suffix: string): SourceSnapshot => ({
   id: `snapshot-${sourceId}-${suffix}`,
   sourceId,
-  authority: sourceId === "china-mobile-foreign-sim" ? "China Mobile" : sourceId === "amap-mobile-official" ? "Amap" : sourceId === "wechat-official" ? "WeChat" : sourceId === "shanghai-official-iconic-foods-2026" ? "Shanghai Municipal People's Government" : "The State Council of the People's Republic of China",
+  authority: sourceId === "china-mobile-foreign-sim" ? "China Mobile" : sourceId === "amap-mobile-official" ? "Amap" : sourceId === "wechat-official" ? "WeChat" : sourceId === "shanghai-official-iconic-foods-2026" ? "Shanghai Municipal People's Government" : sourceId === "beijing-official-must-try-foods-2026" ? "People's Government of Beijing Municipality" : "The State Council of the People's Republic of China",
   titleOriginal: `Official ${sourceId}`,
-  url: sourceId === "china-mobile-foreign-sim" ? "https://www.10086.cn/support/service/foreign/" : sourceId === "amap-mobile-official" ? "https://mobile.amap.com/cn/Index.aspx" : sourceId === "wechat-official" ? "https://www.wechat.com/en" : sourceId === "shanghai-official-iconic-foods-2026" ? "https://english.shanghai.gov.cn/en-SpecialtyFood/20260511/594d417a429d426e8442a47336c47574.html" : "https://english.www.gov.cn/2025special/bizexpatsinchina2025",
+  url: sourceId === "china-mobile-foreign-sim" ? "https://www.10086.cn/support/service/foreign/" : sourceId === "amap-mobile-official" ? "https://mobile.amap.com/cn/Index.aspx" : sourceId === "wechat-official" ? "https://www.wechat.com/en" : sourceId === "shanghai-official-iconic-foods-2026" ? "https://english.shanghai.gov.cn/en-SpecialtyFood/20260511/594d417a429d426e8442a47336c47574.html" : sourceId === "beijing-official-must-try-foods-2026" ? "https://english.beijing.gov.cn/beijinginfo/videos/202606/t20260608_4691225.html" : "https://english.www.gov.cn/2025special/bizexpatsinchina2025",
   retrievedAt,
   contentHash: suffix.repeat(64),
   excerpt: `Sensitive retained page text ${suffix}`
@@ -50,6 +50,21 @@ test("China reference catalog exposes Shanghai food facts only with a matching c
   assert.deepEqual(createChinaReferenceCatalog({ snapshots: [], locationName: "上海市" }).localFood.facts, []);
   assert.deepEqual(listChinaLocalFoodSourceIds("上海市"), [sourceId]);
   assert.deepEqual(listChinaLocalFoodSourceIds("Shanghaishire"), []);
+});
+
+test("China reference catalog exposes the separate Beijing food catalog without cross-city leakage", () => {
+  const sourceId = "beijing-official-must-try-foods-2026";
+  const beijing = createChinaReferenceCatalog({ snapshots: [snapshot(sourceId, "2026-08-09T00:00:00.000Z", "f")], locationName: "北京市, China" });
+  assert.deepEqual(beijing.localFood.facts.map((fact) => fact.nameOriginal), ["北京烤鸭", "铜锅涮肉", "焦圈", "豆汁", "炸酱面"]);
+  assert.deepEqual(beijing.localFood.approvedSourceIds, [sourceId]);
+  assert.equal(beijing.localFood.sources[0]?.authority, "People's Government of Beijing Municipality");
+  assert.deepEqual(listChinaLocalFoodSourceIds("Beijing, China"), [sourceId]);
+  assert.deepEqual(listChinaLocalFoodSourceIds("Beijinger"), []);
+
+  const bothSnapshots = [snapshot("shanghai-official-iconic-foods-2026", "2026-08-09T00:00:00.000Z", "e"), snapshot(sourceId, "2026-08-09T00:00:00.000Z", "f")];
+  const beijingOnly = createChinaReferenceCatalog({ snapshots: bothSnapshots, locationName: "Beijing" });
+  assert.ok(beijingOnly.localFood.facts.every((fact) => fact.id.startsWith("beijing-")));
+  assert.deepEqual(beijingOnly.localFood.sources.map((source) => source.id), [sourceId]);
 });
 
 test("China reference catalog rejects unapproved or duplicate item definitions", () => {
