@@ -803,7 +803,7 @@ function App() {
                     <p>{stage.description}</p>
                     <div className="task-stack">
                       {stage.tasks.map((task) => (
-                        <PlanTaskRow task={task} key={task.id} />
+                        <PlanTaskRow task={task} planSources={plan.sources} key={task.id} />
                       ))}
                     </div>
                   </div>
@@ -852,7 +852,7 @@ function PlanView({ plan, policyPreparation, onActivate, confirming, amapQuery, 
       <h3>Assumptions to correct if needed</h3>
       <ul className="compact-list">{plan.assumptions.map((item) => <li key={item}>{item}</li>)}</ul>
       <h3>Stages and tasks</h3>
-      <div className="plan-stage-list">{plan.stages.map((stage, index) => <section key={stage.id}><div><span>0{index + 1}</span><strong>{stage.title}</strong></div><p>{stage.description}</p><div className="task-stack">{stage.tasks.map((task) => <PlanTaskRow task={task} key={task.id} cancellingReminder={cancellingReminderTaskId === task.id} onCancelReminder={onCancelReminder} />)}</div></section>)}</div>
+      <div className="plan-stage-list">{plan.stages.map((stage, index) => <section key={stage.id}><div><span>0{index + 1}</span><strong>{stage.title}</strong></div><p>{stage.description}</p><div className="task-stack">{stage.tasks.map((task) => <PlanTaskRow task={task} planSources={plan.sources} key={task.id} cancellingReminder={cancellingReminderTaskId === task.id} onCancelReminder={onCancelReminder} />)}</div></section>)}</div>
       {plan.status === "draft" ? <button className="primary-button" disabled={confirming} onClick={() => void onActivate()}>Confirm complete Plan</button> : null}
     </section>
     <PolicyPreparationCard assessment={policyPreparation} />
@@ -861,9 +861,15 @@ function PlanView({ plan, policyPreparation, onActivate, confirming, amapQuery, 
   </div>;
 }
 
-function PlanTaskRow({ task, cancellingReminder = false, onCancelReminder }: { task: Task; cancellingReminder?: boolean; onCancelReminder?: (taskId: string) => Promise<void> }) {
+function PlanTaskRow({ task, planSources, cancellingReminder = false, onCancelReminder }: { task: Task; planSources: WorkspaceSnapshot["activePlan"]["sources"]; cancellingReminder?: boolean; onCancelReminder?: (taskId: string) => Promise<void> }) {
   const dynamicFacts = task.reminder?.refreshFacts?.includes("weather") ? "Refresh at delivery: destination weather" : "Dynamic facts: none";
-  return <div className="task-row"><span className={`task-dot ${task.status}`} /><div className="task-copy"><span>{task.title}</span>{task.reminder ? <><small>Reminder purpose: {task.reminder.purpose}</small><small>{dynamicFacts}</small></> : null}</div><div className="task-timing"><small>{task.dueLabel}</small>{task.reminder ? <><small className="task-reminder">{task.reminder.scheduledAtLocal.replace("T", " ")} · {task.reminder.timeZone}</small>{onCancelReminder ? <button className="text-button" disabled={cancellingReminder} aria-label={`Cancel reminder for ${task.title}`} onClick={() => void onCancelReminder(task.id)}>{cancellingReminder ? "Cancelling…" : "Cancel reminder"}</button> : null}</> : null}</div></div>;
+  const officialSources = taskOfficialSources(task, planSources);
+  return <div className="task-row"><span className={`task-dot ${task.status}`} /><div className="task-copy"><span>{task.title}</span>{task.reminder ? <><small>Reminder purpose: {task.reminder.purpose}</small><small>{dynamicFacts}</small></> : null}{officialSources.length ? <small className="task-sources">Official basis: {officialSources.map((source, index) => <span key={`${source.sourceSnapshotId ?? source.url}:${source.contentHash ?? ""}`}>{index ? " · " : ""}<a href={source.url} target="_blank" rel="noreferrer">{source.title}</a></span>)}</small> : null}</div><div className="task-timing"><small>{task.dueLabel}</small>{task.reminder ? <><small className="task-reminder">{task.reminder.scheduledAtLocal.replace("T", " ")} · {task.reminder.timeZone}</small>{onCancelReminder ? <button className="text-button" disabled={cancellingReminder} aria-label={`Cancel reminder for ${task.title}`} onClick={() => void onCancelReminder(task.id)}>{cancellingReminder ? "Cancelling…" : "Cancel reminder"}</button> : null}</> : null}</div></div>;
+}
+
+function taskOfficialSources(task: Task, planSources: WorkspaceSnapshot["activePlan"]["sources"]) {
+  const evidence = new Set((task.origin?.sourceEvidence ?? []).map((item) => `${item.sourceSnapshotId}:${item.contentHash}`));
+  return planSources.filter((source) => source.sourceSnapshotId && source.contentHash && evidence.has(`${source.sourceSnapshotId}:${source.contentHash}`));
 }
 
 function PolicyPreparationCard({ assessment }: { assessment: PolicyPreparationAssessment | null }) {
