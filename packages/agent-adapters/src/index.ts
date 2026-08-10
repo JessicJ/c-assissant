@@ -172,8 +172,9 @@ export function parsePlanDraft(value: string): GeneratedPlanDraft {
   } catch {
     throw new RuntimeAdapterError("invalid_output", "Codex returned a Plan draft in an unexpected format.");
   }
-  if (!isPlanDraft(parsed)) throw new RuntimeAdapterError("invalid_output", "Codex returned a Plan draft that does not match Landi's contract.");
-  return parsed;
+  const normalized = normalizePlanDraftNulls(parsed);
+  if (!isPlanDraft(normalized)) throw new RuntimeAdapterError("invalid_output", "Codex returned a Plan draft that does not match Landi's contract.");
+  return normalized;
 }
 
 export function parseClaudePrintResult(value: string): string {
@@ -204,7 +205,7 @@ function claudeAuthenticationFailed(result: RuntimeProcessResult): boolean {
   return /authentication_error|failed to authenticate|oauth access token has expired/i.test(`${result.stdout}\n${result.stderr}`);
 }
 
-const planDraftSchema = {
+export const planDraftSchema = {
   type: "object",
   additionalProperties: false,
   required: ["title", "location", "dates", "knownInformation", "assumptions", "nextAction", "stages"],
@@ -233,22 +234,24 @@ const planDraftSchema = {
             items: {
               type: "object",
               additionalProperties: false,
-              required: ["title", "owner", "dueLabel"],
+              required: ["title", "owner", "dueLabel", "activationTrigger", "reminder"],
               properties: {
                 title: { type: "string", minLength: 1, maxLength: 200 },
                 owner: { type: "string", enum: ["assistant", "user", "external"] },
                 dueLabel: { type: "string", minLength: 1, maxLength: 160 },
-                activationTrigger: { type: "string", enum: ["arrival"] },
+                activationTrigger: { anyOf: [{ type: "string", enum: ["arrival"] }, { type: "null" }] },
                 reminder: {
-                  type: "object",
-                  additionalProperties: false,
-                  required: ["scheduledAtLocal", "timeZone", "purpose", "refreshFacts"],
-                  properties: {
-                    scheduledAtLocal: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}$" },
-                    timeZone: { type: "string", minLength: 3, maxLength: 80 },
-                    purpose: { type: "string", minLength: 1, maxLength: 500 },
-                    refreshFacts: { type: "array", maxItems: 1, uniqueItems: true, items: { type: "string", enum: ["weather"] } }
-                  }
+                  anyOf: [{
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["scheduledAtLocal", "timeZone", "purpose", "refreshFacts"],
+                    properties: {
+                      scheduledAtLocal: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}$" },
+                      timeZone: { type: "string", minLength: 3, maxLength: 80 },
+                      purpose: { type: "string", minLength: 1, maxLength: 500 },
+                      refreshFacts: { type: "array", maxItems: 1, items: { type: "string", enum: ["weather"] } }
+                    }
+                  }, { type: "null" }]
                 }
               }
             }
@@ -281,6 +284,7 @@ Rules:
 - Do not claim a policy requirement or cite an unofficial source. Official-source research happens in another Skill.
 - Include user-owned Tasks for real-world choices and external-owned Tasks for actions inside another application.
 - When one task is specifically intended to begin at the expected arrival time, set its activationTrigger to "arrival". Do not add that marker to any other task.
+- The structured schema requires activationTrigger and reminder on every Task. Use null when either optional value does not apply; Landi removes those nulls before saving the draft.
 - Add a reminder only when the user supplied enough facts for a concrete local date, time, and IANA time zone, or when that moment follows safely from an explicit dated event. Never invent a date, time, or departure time zone. Use YYYY-MM-DDTHH:mm and a short English purpose that explains why the reminder should run; do not freeze final notification copy.
 - Every reminder must include refreshFacts. Use ["weather"] only when current destination weather can materially change this Task's immediate packing, departure, outdoor, or transport decision. Use [] for documents, apps, payments, policy checks, and all other Tasks. Do not infer or request unsupported dynamic facts.
 - A reminder in the draft is only a proposal. It will not run until the user reviews and confirms the complete Plan.
@@ -291,6 +295,26 @@ Rules:
 function isPlanDraft(value: unknown): value is GeneratedPlanDraft {
   if (!isRecord(value) || !isString(value.title) || !isString(value.location) || !isString(value.dates) || !isString(value.nextAction) || !isStringArray(value.knownInformation) || !isStringArray(value.assumptions) || !Array.isArray(value.stages) || value.stages.length === 0) return false;
   return value.stages.every((stage) => isRecord(stage) && isString(stage.title) && isString(stage.description) && Array.isArray(stage.tasks) && stage.tasks.length > 0 && stage.tasks.every((task) => isRecord(task) && isString(task.title) && isString(task.dueLabel) && (task.owner === "assistant" || task.owner === "user" || task.owner === "external") && (task.activationTrigger === undefined || task.activationTrigger === "arrival") && (task.reminder === undefined || isTaskReminder(task.reminder))));
+}
+
+function normalizePlanDraftNulls(value: unknown): unknown {
+  if (!isRecord(value) || !Array.isArray(value.stages)) return value;
+  return {
+    ...value,
+    stages: value.stages.map((stage) => {
+      if (!isRecord(stage) || !Array.isArray(stage.tasks)) return stage;
+      return {
+        ...stage,
+        tasks: stage.tasks.map((task) => {
+          if (!isRecord(task)) return task;
+          const normalized = { ...task };
+          if (normalized.activationTrigger === null) delete normalized.activationTrigger;
+          if (normalized.reminder === null) delete normalized.reminder;
+          return normalized;
+        })
+      };
+    })
+  };
 }
 
 function isTaskReminder(value: unknown): boolean {
