@@ -246,6 +246,8 @@ export interface WorkspaceSnapshot {
   profile: Profile;
   runtime: RuntimeSelection;
   activePlan: Plan;
+  /** Present only while a replacement draft is under review and an older Plan remains in execution. */
+  executionPlan?: Plan;
   inbox: InboxItem[];
   sourceSnapshots: SourceSnapshot[];
   system: {
