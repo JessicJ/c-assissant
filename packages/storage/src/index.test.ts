@@ -15,11 +15,12 @@ test("SQLite records its schema baseline and creates a verified private backup",
     const store = new SqliteWorkspaceStore(databasePath);
     store.updateProfile({ displayName: "Backup owner", preferredLanguage: "English", nationality: "Canada", gender: "not_specified", immigrationStatus: "tourist_visa" });
     const maintenance = store.getDatabaseMaintenanceStatus();
-    assert.deepEqual({ schemaVersion: maintenance.schemaVersion, latest: maintenance.latestSchemaVersion, integrity: maintenance.integrity }, { schemaVersion: 4, latest: 4, integrity: "ok" });
+    assert.deepEqual({ schemaVersion: maintenance.schemaVersion, latest: maintenance.latestSchemaVersion, integrity: maintenance.integrity }, { schemaVersion: 5, latest: 5, integrity: "ok" });
     assert.equal(maintenance.migrations[0]?.name, "v1-local-workspace-baseline");
     assert.equal(maintenance.migrations[1]?.name, "country-pack-source-evidence-links");
     assert.equal(maintenance.migrations[2]?.name, "telegram-one-route-transport-override");
     assert.equal(maintenance.migrations[3]?.name, "telegram-route-handoff-timeline");
+    assert.equal(maintenance.migrations[4]?.name, "separate-plan-review-and-execution");
 
     const backup = store.createBackup(new Date("2026-08-07T12:34:56.000Z"));
     assert.equal(backup.integrity, "ok");
@@ -41,7 +42,7 @@ test("SQLite refuses to open a workspace created by a newer schema", () => {
     const future = new DatabaseSync(databasePath);
     future.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, applied_at TEXT NOT NULL); INSERT INTO schema_migrations VALUES (999, 'future', '2026-08-07T00:00:00.000Z');");
     future.close();
-    assert.throws(() => new SqliteWorkspaceStore(databasePath), /supports schema 4.*schema 999/i);
+    assert.throws(() => new SqliteWorkspaceStore(databasePath), /supports schema 5.*schema 999/i);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -55,7 +56,7 @@ test("SQLite upgrades a schema-one workspace with source-evidence link tables", 
     old.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, applied_at TEXT NOT NULL); INSERT INTO schema_migrations VALUES (1, 'v1-local-workspace-baseline', '2026-08-07T00:00:00.000Z');");
     old.close();
     const store = new SqliteWorkspaceStore(databasePath);
-    assert.equal(store.getDatabaseMaintenanceStatus().schemaVersion, 4);
+    assert.equal(store.getDatabaseMaintenanceStatus().schemaVersion, 5);
     const tables = new DatabaseSync(databasePath, { readOnly: true });
     const names = tables.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%run_sources' ORDER BY name").all().map((row) => (row as { name: string }).name);
     assert.deepEqual(names, ["country_pack_skill_run_sources", "plan_compilation_run_sources"]);
@@ -377,6 +378,30 @@ test("SQLite revises only the expected draft and preserves its Plan-scoped confi
   store.close();
 });
 
+test("SQLite turns an active Plan revision into a replacement draft without interrupting execution", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const active = store.confirmPlan(store.getWorkspace().activePlan.id).activePlan;
+  const revised = store.reviseGeneratedPlan({
+    expectedPlanId: active.id,
+    expectedVersion: active.version,
+    draft: {
+      title: "Adjusted China Plan",
+      location: active.location,
+      dates: active.dates,
+      knownInformation: ["The user requested a complete adjustment."],
+      assumptions: [],
+      nextAction: "Review the complete replacement.",
+      stages: [{ title: "Adjusted stage", description: "Review it.", tasks: [{ title: "Adjusted task", owner: "user", dueLabel: "After confirmation" }] }]
+    }
+  });
+
+  assert.equal(revised.activePlan.status, "draft");
+  assert.equal(revised.executionPlan?.id, active.id);
+  assert.equal(store.getExecutionPlan()?.id, active.id);
+  assert.equal(store.listHistoricalPlans().some((plan) => plan.id === active.id), false);
+  store.close();
+});
+
 test("SQLite keeps an Amap accommodation candidate inside the current Plan", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const plan = store.getWorkspace().activePlan;
@@ -592,7 +617,7 @@ test("SQLite cancels a Task reminder and rejects a stale in-memory delivery atte
   store.close();
 });
 
-test("SQLite rejects a reminder attempt from a Plan that is no longer current", () => {
+test("SQLite keeps the executing Plan alive while a replacement draft is reviewed, then switches atomically", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const oldWorkspace = store.createGeneratedPlan({
     title: "Old Plan",
@@ -610,10 +635,21 @@ test("SQLite rejects a reminder attempt from a Plan that is no longer current", 
   const reminderKey = `task-reminder:${oldTask.id}:${dueAt}`;
   assert.equal(store.claimTelegramTaskReminderAttempt({ planId: oldPlan.id, reminderKey, taskId: oldTask.id, dueAt, reminder: oldTask.reminder!, now: dueAt }).claimed, true);
   const run = store.startTaskReminderRun({ planId: oldPlan.id, taskId: oldTask.id, reminderKey, dueAt, attemptNumber: 1, startedAt: dueAt });
-  store.createPlan({ request: "Create a newer Plan for Hangzhou." });
+  const replacement = store.createPlan({ request: "Create a newer Plan for Hangzhou." });
 
-  assert.equal(store.claimTelegramTaskReminderAttempt({ planId: oldPlan.id, reminderKey, taskId: oldTask.id, dueAt, reminder: oldTask.reminder!, now: dueAt }).claimed, false);
+  assert.equal(replacement.activePlan.status, "draft");
+  assert.equal(replacement.executionPlan?.id, oldPlan.id);
+  assert.equal(store.getExecutionPlan()?.id, oldPlan.id);
+  assert.equal(store.listHistoricalPlans().some((plan) => plan.id === oldPlan.id), false);
+  assert.equal(store.listRecentTaskReminderRuns().find((candidate) => candidate.id === run.id)?.status, "running");
+
+  const activatedReplacement = store.confirmPlan(replacement.activePlan.id);
+  assert.equal(activatedReplacement.activePlan.status, "active");
+  assert.equal(activatedReplacement.executionPlan, undefined);
+  assert.equal(store.getExecutionPlan()?.id, replacement.activePlan.id);
+  assert.equal(store.listHistoricalPlans().some((plan) => plan.id === oldPlan.id), true);
   assert.equal(store.listRecentTaskReminderRuns().find((candidate) => candidate.id === run.id)?.status, "cancelled");
+  assert.equal(store.claimTelegramTaskReminderAttempt({ planId: oldPlan.id, reminderKey: `${reminderKey}:after-switch`, taskId: oldTask.id, dueAt, reminder: oldTask.reminder!, now: dueAt }).claimed, false);
   store.close();
 });
 

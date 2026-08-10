@@ -234,7 +234,7 @@ export interface TelegramTaskReminderFailureResult {
 const TASK_REMINDER_CATCH_UP_MS = 30 * 60_000;
 const TASK_REMINDER_ATTEMPT_LEASE_MS = 60_000;
 const TASK_REMINDER_RETRY_DELAYS_MS = [60_000, 5 * 60_000] as const;
-const CURRENT_SCHEMA_VERSION = 4;
+const CURRENT_SCHEMA_VERSION = 5;
 
 export interface DatabaseMaintenanceStatus {
   schemaVersion: number;
@@ -340,6 +340,7 @@ export class SqliteWorkspaceStore {
     const runtime = this.database.prepare("SELECT selected_runtime FROM runtime_settings WHERE id = 1").get() as RuntimeSettingsRow | undefined;
     const activePlan = this.getCurrentPlan();
     if (!profile || !runtime || !activePlan) throw new Error("The local workspace is not initialized.");
+    const executionPlan = this.getExecutionPlan();
 
     return {
       profile: {
@@ -352,6 +353,7 @@ export class SqliteWorkspaceStore {
       },
       runtime: { selectedKind: runtime.selected_runtime },
       activePlan,
+      ...(executionPlan && executionPlan.id !== activePlan.id ? { executionPlan } : {}),
       inbox: (this.database.prepare("SELECT id, tone, title, body, timestamp FROM inbox_items ORDER BY created_at DESC, rowid DESC").all() as unknown as InboxRow[]).map((row) => ({
         id: row.id,
         tone: row.tone,
@@ -374,8 +376,15 @@ export class SqliteWorkspaceStore {
   listHistoricalPlans(limit = 20): Plan[] {
     const safeLimit = Number.isInteger(limit) && limit > 0 && limit <= 100 ? limit : 20;
     const rows = this.database.prepare(`SELECT id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, created_at
-      FROM plans WHERE is_current = 0 ORDER BY created_at DESC, rowid DESC LIMIT ?`).all(safeLimit) as unknown as PlanRow[];
+      FROM plans WHERE is_current = 0 AND is_execution = 0 ORDER BY created_at DESC, rowid DESC LIMIT ?`).all(safeLimit) as unknown as PlanRow[];
     return rows.map((row) => this.planFromRow(row));
+  }
+
+  /** Returns the Plan whose reminders and timeline are currently allowed to execute. */
+  getExecutionPlan(): Plan | undefined {
+    const plan = this.database.prepare(`SELECT id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, created_at
+      FROM plans WHERE is_execution = 1 ORDER BY created_at DESC LIMIT 1`).get() as PlanRow | undefined;
+    return plan ? this.planFromRow(plan) : undefined;
   }
 
   getTelegramPairingStatus(): TelegramPairingStatus {
@@ -495,9 +504,9 @@ export class SqliteWorkspaceStore {
     const nowMs = Date.parse(now);
     if (!planId || !reminderKey || !taskId || !Number.isFinite(dueAtMs) || !Number.isFinite(nowMs)) throw new Error("A Task reminder attempt needs a Plan, key, Task, due time, and current time.");
     if (nowMs < dueAtMs || nowMs > dueAtMs + TASK_REMINDER_CATCH_UP_MS) return { claimed: false };
-    const workspace = this.getWorkspace();
-    if (workspace.activePlan.id !== planId || workspace.activePlan.status !== "active") return { claimed: false };
-    const currentReminder = workspace.activePlan.stages.flatMap((stage) => stage.tasks).find((task) => task.id === taskId)?.reminder;
+    const executionPlan = this.getExecutionPlan();
+    if (executionPlan?.id !== planId || executionPlan.status !== "active") return { claimed: false };
+    const currentReminder = executionPlan.stages.flatMap((stage) => stage.tasks).find((task) => task.id === taskId)?.reminder;
     if (!currentReminder || !taskRemindersEqual(currentReminder, input.reminder)) return { claimed: false };
     const existing = this.database.prepare(`SELECT task_id, due_at, status, attempt_count, next_attempt_at
       FROM telegram_task_reminder_deliveries WHERE plan_id = ? AND reminder_key = ?`).get(planId, reminderKey) as TelegramTaskReminderDeliveryRow | undefined;
@@ -518,12 +527,12 @@ export class SqliteWorkspaceStore {
   }
 
   recordTelegramTaskReminderDelivered(input: { planId: string; reminderKey: string; taskId: string; taskTitle: string; reminder: TaskReminder; deliveredAt?: string }): void {
-    const workspace = this.getWorkspace();
+    const executionPlan = this.getExecutionPlan();
     const taskTitle = input.taskTitle.trim();
     if (!taskTitle || !input.reminder.purpose.trim()) throw new Error("A delivered Task reminder needs its delivery-time Task context.");
-    const currentTask = workspace.activePlan.stages.flatMap((stage) => stage.tasks).find((candidate) => candidate.id === input.taskId);
+    const currentTask = executionPlan?.stages.flatMap((stage) => stage.tasks).find((candidate) => candidate.id === input.taskId);
     const currentReminder = currentTask?.reminder;
-    const currentMatch = workspace.activePlan.id === input.planId && workspace.activePlan.status === "active" && Boolean(currentReminder && taskRemindersEqual(currentReminder, input.reminder));
+    const currentMatch = executionPlan?.id === input.planId && executionPlan.status === "active" && Boolean(currentReminder && taskRemindersEqual(currentReminder, input.reminder));
     const deliveredAt = input.deliveredAt ?? new Date().toISOString();
     if (!Number.isFinite(Date.parse(deliveredAt))) throw new Error("A delivered Task reminder needs a valid delivery time.");
     this.database.exec("BEGIN");
@@ -554,9 +563,9 @@ export class SqliteWorkspaceStore {
     const row = this.database.prepare(`SELECT task_id, due_at, status, attempt_count, next_attempt_at
       FROM telegram_task_reminder_deliveries WHERE plan_id = ? AND reminder_key = ?`).get(input.planId, input.reminderKey) as TelegramTaskReminderDeliveryRow | undefined;
     if (!row || row.task_id !== input.taskId || row.status !== "attempting") throw new Error("The Task reminder delivery attempt is not active.");
-    const workspace = this.getWorkspace();
-    const currentReminder = workspace.activePlan.id === input.planId ? workspace.activePlan.stages.flatMap((stage) => stage.tasks).find((task) => task.id === input.taskId)?.reminder : undefined;
-    const currentMatch = workspace.activePlan.status === "active" && Boolean(currentReminder && taskRemindersEqual(currentReminder, input.reminder));
+    const executionPlan = this.getExecutionPlan();
+    const currentReminder = executionPlan?.id === input.planId ? executionPlan.stages.flatMap((stage) => stage.tasks).find((task) => task.id === input.taskId)?.reminder : undefined;
+    const currentMatch = executionPlan?.status === "active" && Boolean(currentReminder && taskRemindersEqual(currentReminder, input.reminder));
     if (!currentMatch) {
       this.database.prepare(`UPDATE telegram_task_reminder_deliveries
         SET status = 'failed', next_attempt_at = NULL, last_failure_code = 'reminder_cancelled', updated_at = ?
@@ -577,7 +586,7 @@ export class SqliteWorkspaceStore {
       this.database.prepare(`UPDATE telegram_task_reminder_deliveries
         SET status = 'failed', next_attempt_at = NULL, last_failure_code = ?, updated_at = ?
         WHERE plan_id = ? AND reminder_key = ? AND status = 'attempting'`).run(failureCode, failedAt, input.planId, input.reminderKey);
-      const task = this.getWorkspace().activePlan.stages.flatMap((stage) => stage.tasks).find((candidate) => candidate.id === input.taskId);
+      const task = this.getExecutionPlan()?.stages.flatMap((stage) => stage.tasks).find((candidate) => candidate.id === input.taskId);
       this.addInbox({
         id: `task-reminder-failed-${input.planId}-${input.reminderKey}`,
         tone: "attention",
@@ -693,8 +702,7 @@ export class SqliteWorkspaceStore {
 
   /** Marks only an explicitly arrival-triggered task as ready; completion stays user-owned. */
   activateArrivalTask(planId: string): Task | undefined {
-    const workspace = this.getWorkspace();
-    if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
+    if (this.getExecutionPlan()?.id !== planId) throw new Error(`Plan ${planId} was not found.`);
     const selected = this.database.prepare(`SELECT t.id, t.title, t.owner, t.status, t.due_label, t.activation_trigger
       FROM tasks t JOIN stages s ON s.id = t.stage_id
       WHERE s.plan_id = ? AND t.activation_trigger = 'arrival' AND t.status IN ('scheduled', 'waiting_user')
@@ -721,8 +729,7 @@ export class SqliteWorkspaceStore {
 
   /** Completion requires an explicit user action and only accepts a ready task in the current Plan. */
   completeReadyTask(planId: string, taskId: string): Task | undefined {
-    const workspace = this.getWorkspace();
-    if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
+    if (this.getExecutionPlan()?.id !== planId) throw new Error(`Plan ${planId} was not found.`);
     const selected = this.database.prepare(`SELECT t.id, t.title, t.owner, t.status, t.due_label, t.activation_trigger
       FROM tasks t JOIN stages s ON s.id = t.stage_id
       WHERE s.plan_id = ? AND t.id = ? AND t.status = 'ready'`).get(planId, taskId.trim()) as TaskRow | undefined;
@@ -777,7 +784,7 @@ export class SqliteWorkspaceStore {
 
   reviseGeneratedPlan(input: { draft: GeneratedPlanDraft; runtime?: AgentRuntimeKind; expectedPlanId: string; expectedVersion: number }): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
-    if (workspace.activePlan.status !== "draft" || workspace.activePlan.id !== input.expectedPlanId || workspace.activePlan.version !== input.expectedVersion) {
+    if (workspace.activePlan.id !== input.expectedPlanId || workspace.activePlan.version !== input.expectedVersion) {
       throw new Error("The Plan changed while its revision was being prepared.");
     }
     const plan = createPlanFromDraft(input.draft);
@@ -927,12 +934,26 @@ export class SqliteWorkspaceStore {
   confirmPlan(planId: string): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
     const confirmed = confirmPlan(workspace, planId);
-    this.database.prepare("UPDATE plans SET status = ?, next_action = ? WHERE id = ?").run(
-      confirmed.activePlan.status,
-      confirmed.activePlan.nextAction,
-      planId
-    );
-    this.addInbox(confirmed.inbox[0]!);
+    const previousExecution = this.getExecutionPlan();
+    this.database.exec("BEGIN");
+    try {
+      if (previousExecution && previousExecution.id !== planId) {
+        const switchedAt = new Date().toISOString();
+        this.database.prepare(`UPDATE task_reminder_runs SET status = 'cancelled', finished_at = ?, updated_at = ?
+          WHERE plan_id = ? AND status IN ('running', 'retry_wait')`).run(switchedAt, switchedAt, previousExecution.id);
+      }
+      this.database.prepare("UPDATE plans SET is_execution = 0 WHERE is_execution = 1").run();
+      this.database.prepare("UPDATE plans SET status = ?, next_action = ?, is_execution = 1 WHERE id = ? AND is_current = 1").run(
+        confirmed.activePlan.status,
+        confirmed.activePlan.nextAction,
+        planId
+      );
+      this.addInbox(confirmed.inbox[0]!);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
     return this.getWorkspace();
   }
 
@@ -989,7 +1010,8 @@ export class SqliteWorkspaceStore {
     if (!["arrival_route", "nearby_food"].includes(input.purpose)) throw new Error("Choose a supported Telegram location purpose.");
     const startedAt = input.startedAt ?? new Date().toISOString();
     if (!Number.isFinite(Date.parse(startedAt))) throw new Error("Telegram location use needs a valid start time.");
-    if (this.getWorkspace().activePlan.id !== input.planId) throw new Error(`Plan ${input.planId} was not found.`);
+    const workspace = this.getWorkspace();
+    if (workspace.activePlan.id !== input.planId && workspace.executionPlan?.id !== input.planId) throw new Error(`Plan ${input.planId} was not found.`);
     if (input.transportOverride && !["taxi", "public_transit", "walking"].includes(input.transportOverride)) throw new Error("Choose a supported temporary transport override.");
     if (input.transportOverride && input.purpose !== "arrival_route") throw new Error("A temporary transport override is only valid for an arrival route.");
     this.database.prepare("INSERT INTO telegram_location_intent (id, purpose, plan_id, started_at, transport_override) VALUES (1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET purpose = excluded.purpose, plan_id = excluded.plan_id, started_at = excluded.started_at, transport_override = excluded.transport_override").run(input.purpose, input.planId, startedAt, input.transportOverride ?? null);
@@ -1217,10 +1239,11 @@ export class SqliteWorkspaceStore {
 
   updatePlanTransportPreference(planId: string, input: PlanTransportPreferenceInput): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
-    if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
+    const plan = workspace.activePlan.id === planId ? workspace.activePlan : workspace.executionPlan?.id === planId ? workspace.executionPlan : undefined;
+    if (!plan) throw new Error(`Plan ${planId} was not found.`);
     if (!["plan_recommended", "taxi", "public_transit", "walking"].includes(input.preference)) throw new Error("Choose a supported transport preference.");
     const configuration: PlanConfiguration = {
-      ...workspace.activePlan.configuration,
+      ...plan.configuration,
       transport: { preference: input.preference }
     };
     this.database.prepare("UPDATE plans SET configuration_json = ?, version = version + 1 WHERE id = ?").run(JSON.stringify(configuration), planId);
@@ -1236,12 +1259,13 @@ export class SqliteWorkspaceStore {
 
   updatePlanTravelContext(planId: string, input: PlanTravelContextInput): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
-    if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
+    const plan = workspace.activePlan.id === planId ? workspace.activePlan : workspace.executionPlan?.id === planId ? workspace.executionPlan : undefined;
+    if (!plan) throw new Error(`Plan ${planId} was not found.`);
     const partySize = input.partySize;
     if (partySize !== undefined && (!Number.isInteger(partySize) || partySize < 1 || partySize > 20)) throw new Error("Party size must be a whole number from 1 to 20.");
     if (!["unknown", "light", "standard", "heavy"].includes(input.luggage)) throw new Error("Choose a supported luggage level.");
     const configuration: PlanConfiguration = {
-      ...workspace.activePlan.configuration,
+      ...plan.configuration,
       travelContext: {
         ...(partySize === undefined ? {} : { partySize }),
         luggage: input.luggage
@@ -1321,6 +1345,7 @@ export class SqliteWorkspaceStore {
         configuration_json TEXT NOT NULL,
         sources_json TEXT NOT NULL,
         is_current INTEGER NOT NULL DEFAULT 0,
+        is_execution INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS stages (
@@ -1522,6 +1547,11 @@ export class SqliteWorkspaceStore {
     if (!planColumns.some((column) => column.name === "configuration_json")) {
       this.database.exec("ALTER TABLE plans ADD COLUMN configuration_json TEXT NOT NULL DEFAULT '{\"accommodation\":{\"status\":\"not_set\"}}'");
     }
+    if (!planColumns.some((column) => column.name === "is_execution")) this.database.exec("ALTER TABLE plans ADD COLUMN is_execution INTEGER NOT NULL DEFAULT 0");
+    this.database.exec(`UPDATE plans SET is_execution = 1
+      WHERE is_current = 1 AND status = 'active' AND NOT EXISTS (SELECT 1 FROM plans WHERE is_execution = 1);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_execution ON plans(is_execution) WHERE is_execution = 1;
+      PRAGMA optimize;`);
     const taskColumns = this.database.prepare("PRAGMA table_info(tasks)").all() as unknown as Array<{ name: string }>;
     if (!taskColumns.some((column) => column.name === "activation_trigger")) this.database.exec("ALTER TABLE tasks ADD COLUMN activation_trigger TEXT");
     if (!taskColumns.some((column) => column.name === "reminder_json")) this.database.exec("ALTER TABLE tasks ADD COLUMN reminder_json TEXT");
@@ -1541,6 +1571,7 @@ export class SqliteWorkspaceStore {
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (2, 'country-pack-source-evidence-links', ?)").run(migrationTime);
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (3, 'telegram-one-route-transport-override', ?)").run(migrationTime);
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (4, 'telegram-route-handoff-timeline', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (5, 'separate-plan-review-and-execution', ?)").run(migrationTime);
   }
 
   private seedIfEmpty(): void {
@@ -1565,12 +1596,9 @@ export class SqliteWorkspaceStore {
   private savePlan(plan: Plan): void {
     this.database.exec("BEGIN");
     try {
-      const supersededAt = new Date().toISOString();
-      this.database.prepare(`UPDATE task_reminder_runs SET status = 'cancelled', finished_at = ?, updated_at = ?
-        WHERE plan_id IN (SELECT id FROM plans WHERE is_current = 1) AND status IN ('running', 'retry_wait')`).run(supersededAt, supersededAt);
       this.database.prepare("UPDATE plans SET is_current = 0 WHERE is_current = 1").run();
-      this.database.prepare(`INSERT INTO plans (id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, is_current, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`).run(
+      this.database.prepare(`INSERT INTO plans (id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, is_current, is_execution, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?)`).run(
         plan.id,
         plan.version,
         plan.title,

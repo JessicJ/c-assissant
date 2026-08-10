@@ -121,6 +121,7 @@
 - 已实现到达任务的显式完成闭环：只有绑定 Telegram 用户点击“我已完成此步骤”时，当前 Plan 内的 `ready` 任务才会改为 `completed`，并记录为用户确认；不会把打开高德或其他第三方应用当作完成回执。
 - 已实现路线交接后的保守时间推进：Telegram 成功发送高德路线卡后只记录事实 `handoff_offered`，以 10 分钟等车缓冲、高德路线时长和 10 分钟安全余量计算预计抵达。到时自动发送下一环节指引；正常情况无需确认上车或到达，用户仅在偏离计划时点击 `I haven't arrived` 延后 15 分钟并可选择一次性定位重算。`expected_waiting`、`expected_in_transit`、`expected_arrived` 始终是推测状态，不会伪装成事实或自动完成 Task。
 - Web Plans 已增加只读历史视图：旧 Plan 的阶段、Task、当时的假设、下一步和来源可完整展开查看，但历史视图不能激活提醒、修改当前 Plan 或执行外部动作。新的视觉重构原型保存在 `codex/web-workspace-redesign-wip`，因会移除 V1 关键入口而未合并到正式分支。
+- Plan 审阅与执行已拆分：创建或修订完整替代草稿时，旧的已激活 Plan 继续承担 Reminder、预计抵达和路线时间线；Web 会明确显示仍在运行的 Plan。只有用户确认完整替代草稿时，Core 才原子切换执行指针、取消旧 Plan 尚未完成的提醒 Run，并把旧 Plan 放入只读历史。草稿存在本身不会中断现实中的当前行程。
 - Telegram 的 `/plan` 已提供当前完整 Plan：已知信息、需要纠正的假设、阶段、任务状态、提醒策略和下一步都会显示；超过单条消息安全长度时自动分页，确认按钮只附在最后一页。
 - Claude Code Adapter 已实现并通过契约测试、接入用户可选的预览底座，但当前没有可用付费账号完成真实端到端验证；`0.1.0` 正式支持已真实验证的 Codex，Claude Code 不作为本次发布阻塞项，也不得对外声称已真实验证。Plan 生成、Task Reminder、Country Pack 编译和逐 Skill 已具备最小 Run 审计。
 - 本地 MCP Tool Gateway 调整为 V1 后续项：V1 的 Codex/Claude Code 只做无工具结构化草案，所有 Connector 调用由 Core 的受限工作流执行，避免把密钥或任意工具权限交给 Agent。

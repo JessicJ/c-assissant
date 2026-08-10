@@ -21,6 +21,7 @@ This document separates accepted product decisions from questions that still req
 - Core asks only when a reliable Plan or current action lacks a critical fact.
 - The final confirmation screen presents the complete Plan without a diff or highlighted changes.
 - Confirming a Plan activates the exact version and declared automation scope.
+- A replacement draft never interrupts the currently executing Plan. Review state and execution state use separate pointers; reminders and timelines switch only when the user confirms the complete replacement.
 - Expected Events may trigger reversible preparation and action cards; they do not become occurred Events without evidence.
 - Ordinary route handoffs advance from conservative expected timing by default, with an `I haven't arrived` exception action. Expected journey states remain projections and never become confirmed facts or authorize critical actions.
 - Exact GPS requires an explicit user share, is scoped to the current Task, and is not stored in Profile.
