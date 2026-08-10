@@ -26,7 +26,7 @@ export function formatArrivalRoute(input: { origin: AmapPlace; destination: Amap
   const handoff = createAmapNavigationHandoff({ origin: input.origin, destination: input.destination, transport: input.transport });
   const transportLabel = input.taxiRequested ? "Taxi estimate (using Amap's driving route)" : input.transport === "driving" ? "Driving" : input.transport === "walking" ? "Walking" : "Public transit";
   const routeFact = input.route ? `\nRoute fact: ${formatDistance(input.route.distanceMeters)}${input.route.durationSeconds === undefined ? "" : ` · about ${formatDuration(input.route.durationSeconds)}`}${input.route.taxiCostYuan === undefined ? "" : ` · estimated taxi fare ¥${input.route.taxiCostYuan}`}${input.route.transitCostYuan === undefined ? "" : ` · estimated transit fare ¥${input.route.transitCostYuan}`}.` : "\nOpen Amap to get the current live route.";
-  const taxiBoundary = input.taxiRequested ? "\n\nAmap's public link can open only a driving route, not its taxi-order page. After opening Amap, switch to Taxi, verify the pickup point, and confirm the order yourself." : "";
+  const taxiBoundary = input.taxiRequested ? "\n\nContinue in Amap:\n1. Tap the button below.\n2. If a web route opens, tap 打开高德APP (Open Amap App).\n3. At the top, tap 打车 (Taxi).\n4. Verify the pickup point and destination, then choose the vehicle types you want.\n5. Tap 立即打车 (Call now) only when you are ready to request the ride." : "";
   return {
     text: `Arrival route ready\nTo: ${input.destination.name}\nChosen route mode: ${transportLabel}.${routeFact}${taxiBoundary}\n\nLandi has not hailed a ride, made a booking, or started payment.`,
     handoffUrl: handoff.url,

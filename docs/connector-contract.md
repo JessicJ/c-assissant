@@ -139,7 +139,7 @@ interface ExternalHandoff {
 
 V1 does not claim completion after a user opens Amap or Ctrip. Core may ask for confirmation only when knowing completion changes later execution.
 
-The documented Amap URI handoff supports route planning, not taxi ordering. A taxi choice may use current driving-route facts and the provider's taxi estimate, but its HTTPS action opens a driving route. Telegram must tell the user to switch to Taxi and confirm the pickup and order inside Amap; Landi must not label this as a direct taxi-page handoff or infer that a ride was hailed.
+The documented Amap URI handoff supports route planning, not taxi ordering. A taxi choice may use current driving-route facts and the provider's taxi estimate, but its HTTPS action opens a driving route. Telegram therefore guides the user through the observed handoff: open the HTTPS route, tap `打开高德APP` (Open Amap App) when the H5 page appears, tap `打车` (Taxi), verify pickup and destination, choose vehicle types, and tap `立即打车` (Call now) only when ready. Landi must not label this as a direct taxi-page handoff or infer that a ride was hailed.
 
 ## Security and observability
 

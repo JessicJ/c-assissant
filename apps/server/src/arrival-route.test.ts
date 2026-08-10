@@ -34,12 +34,14 @@ test("arrival route copy makes the Amap handoff and its boundary explicit", () =
   assert.match(result.handoffUrl, /^https:\/\/uri\.amap\.com\/navigation/);
 });
 
-test("a taxi request discloses that Amap's public handoff is not a taxi order page", () => {
+test("a taxi request guides the user from Amap's web route to its taxi confirmation", () => {
   const origin = { id: "", name: "Shared current location", address: "", location: "121.455,31.249", type: "Temporary location", city: "", district: "" };
   const destination = { id: "stay-1", name: "Riverside Hotel", address: "1 River Road", location: "121.456,31.250", type: "Accommodation", city: "Shanghai", district: "Jing'an" };
   const result = formatArrivalRoute({ origin, destination, transport: "driving", taxiRequested: true, route: { mode: "driving", origin: origin.location, destination: destination.location, distanceMeters: 2_400, durationSeconds: 720, taxiCostYuan: 18, strategy: "amap_recommended" } });
-  assert.match(result.text, /public link can open only a driving route/i);
-  assert.match(result.text, /switch to Taxi/i);
+  assert.match(result.text, /打开高德APP \(Open Amap App\)/i);
+  assert.match(result.text, /打车 \(Taxi\)/i);
+  assert.match(result.text, /立即打车 \(Call now\)/i);
+  assert.match(result.text, /only when you are ready/i);
   assert.equal(result.handoffLabel, "Open driving route in Amap");
 });
 
