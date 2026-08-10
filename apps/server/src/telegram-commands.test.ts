@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { formatTransportPreferenceAcknowledgement, parseTelegramCommand, requestsCompletePlan, shouldGenerateCompletePlan } from "./telegram-commands.js";
+import { formatTransportChoiceAcknowledgement, parseTelegramCommand, requestsCompletePlan, shouldGenerateCompletePlan } from "./telegram-commands.js";
 
 test("plain Telegram text becomes an implicit Plan request", () => {
   assert.deepEqual(parseTelegramCommand("I will attend an exhibition in Shanghai in September."), {
@@ -20,12 +20,13 @@ test("new Plan command remains available for an explicit request", () => {
 });
 
 test("local transport preferences do not create or render a complete Plan", () => {
-  assert.deepEqual(parseTelegramCommand("i perfer taxi"), { type: "set_transport_preference", preference: "taxi" });
-  assert.deepEqual(parseTelegramCommand("I prefer public transit"), { type: "set_transport_preference", preference: "public_transit" });
-  assert.deepEqual(parseTelegramCommand("我想走路"), { type: "set_transport_preference", preference: "walking" });
-  assert.deepEqual(parseTelegramCommand("我想打车"), { type: "set_transport_preference", preference: "taxi" });
-  assert.match(formatTransportPreferenceAcknowledgement("taxi", true), /No new Plan was created/i);
-  assert.match(formatTransportPreferenceAcknowledgement("taxi", true), /share your location/i);
+  assert.deepEqual(parseTelegramCommand("i perfer taxi"), { type: "transport_choice", preference: "taxi", scope: "unspecified" });
+  assert.deepEqual(parseTelegramCommand("I prefer public transit"), { type: "transport_choice", preference: "public_transit", scope: "unspecified" });
+  assert.deepEqual(parseTelegramCommand("我想走路"), { type: "transport_choice", preference: "walking", scope: "unspecified" });
+  assert.deepEqual(parseTelegramCommand("我这次想打车"), { type: "transport_choice", preference: "taxi", scope: "current_action" });
+  assert.deepEqual(parseTelegramCommand("I always prefer taxi for this trip"), { type: "transport_choice", preference: "taxi", scope: "plan" });
+  assert.match(formatTransportChoiceAcknowledgement("taxi", "current_action", true), /saved Plan preference is unchanged/i);
+  assert.match(formatTransportChoiceAcknowledgement("taxi", "current_action", true), /share your location/i);
 });
 
 test("explicit whole-Plan changes and /new still use the complete Plan path", () => {

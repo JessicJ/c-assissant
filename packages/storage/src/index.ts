@@ -41,6 +41,7 @@ import {
   type TaskReminderRunStatus,
   type TelegramBinding,
   type TelegramPairingStatus,
+  type TransportPreference,
   type WorkspaceSnapshot
 } from "@c-assistant/core";
 
@@ -196,6 +197,7 @@ interface TelegramLocationIntentRow {
   purpose: TelegramLocationIntentPurpose;
   plan_id: string;
   started_at: string;
+  transport_override: Exclude<TransportPreference, "plan_recommended"> | null;
 }
 
 interface TelegramTaskReminderDeliveryRow {
@@ -219,7 +221,7 @@ export interface TelegramTaskReminderFailureResult {
 const TASK_REMINDER_CATCH_UP_MS = 30 * 60_000;
 const TASK_REMINDER_ATTEMPT_LEASE_MS = 60_000;
 const TASK_REMINDER_RETRY_DELAYS_MS = [60_000, 5 * 60_000] as const;
-const CURRENT_SCHEMA_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 3;
 
 export interface DatabaseMaintenanceStatus {
   schemaVersion: number;
@@ -905,20 +907,22 @@ export class SqliteWorkspaceStore {
     this.database.prepare("DELETE FROM telegram_profile_edit_state WHERE id = 1").run();
   }
 
-  startTelegramLocationIntent(input: { purpose: TelegramLocationIntentPurpose; planId: string; startedAt?: string }): void {
+  startTelegramLocationIntent(input: { purpose: TelegramLocationIntentPurpose; planId: string; transportOverride?: Exclude<TransportPreference, "plan_recommended">; startedAt?: string }): void {
     if (!["arrival_route", "nearby_food"].includes(input.purpose)) throw new Error("Choose a supported Telegram location purpose.");
     const startedAt = input.startedAt ?? new Date().toISOString();
     if (!Number.isFinite(Date.parse(startedAt))) throw new Error("Telegram location use needs a valid start time.");
     if (this.getWorkspace().activePlan.id !== input.planId) throw new Error(`Plan ${input.planId} was not found.`);
-    this.database.prepare("INSERT INTO telegram_location_intent (id, purpose, plan_id, started_at) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET purpose = excluded.purpose, plan_id = excluded.plan_id, started_at = excluded.started_at").run(input.purpose, input.planId, startedAt);
+    if (input.transportOverride && !["taxi", "public_transit", "walking"].includes(input.transportOverride)) throw new Error("Choose a supported temporary transport override.");
+    if (input.transportOverride && input.purpose !== "arrival_route") throw new Error("A temporary transport override is only valid for an arrival route.");
+    this.database.prepare("INSERT INTO telegram_location_intent (id, purpose, plan_id, started_at, transport_override) VALUES (1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET purpose = excluded.purpose, plan_id = excluded.plan_id, started_at = excluded.started_at, transport_override = excluded.transport_override").run(input.purpose, input.planId, startedAt, input.transportOverride ?? null);
   }
 
-  getTelegramLocationIntent(now = new Date().toISOString()): { purpose: TelegramLocationIntentPurpose; planId: string } | undefined {
+  getTelegramLocationIntent(now = new Date().toISOString()): { purpose: TelegramLocationIntentPurpose; planId: string; transportOverride?: Exclude<TransportPreference, "plan_recommended"> } | undefined {
     const nowMs = Date.parse(now);
     if (!Number.isFinite(nowMs)) throw new Error("Telegram location use needs a valid current time.");
-    const row = this.database.prepare("SELECT purpose, plan_id, started_at FROM telegram_location_intent WHERE id = 1").get() as TelegramLocationIntentRow | undefined;
+    const row = this.database.prepare("SELECT purpose, plan_id, started_at, transport_override FROM telegram_location_intent WHERE id = 1").get() as TelegramLocationIntentRow | undefined;
     if (!row) return undefined;
-    if (nowMs - Date.parse(row.started_at) <= 15 * 60_000) return { purpose: row.purpose, planId: row.plan_id };
+    if (nowMs - Date.parse(row.started_at) <= 15 * 60_000) return { purpose: row.purpose, planId: row.plan_id, ...(row.transport_override ? { transportOverride: row.transport_override } : {}) };
     this.clearTelegramLocationIntent();
     return undefined;
   }
@@ -1374,7 +1378,8 @@ export class SqliteWorkspaceStore {
         id INTEGER PRIMARY KEY CHECK (id = 1),
         purpose TEXT NOT NULL CHECK (purpose IN ('arrival_route', 'nearby_food')),
         plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
-        started_at TEXT NOT NULL
+        started_at TEXT NOT NULL,
+        transport_override TEXT CHECK (transport_override IN ('taxi', 'public_transit', 'walking'))
       );
       CREATE TABLE IF NOT EXISTS telegram_processed_updates (
         update_id INTEGER PRIMARY KEY,
@@ -1437,10 +1442,13 @@ export class SqliteWorkspaceStore {
     const profileColumns = this.database.prepare("PRAGMA table_info(profiles)").all() as unknown as Array<{ name: string }>;
     if (!profileColumns.some((column) => column.name === "gender")) this.database.exec("ALTER TABLE profiles ADD COLUMN gender TEXT NOT NULL DEFAULT 'not_specified'");
     if (!profileColumns.some((column) => column.name === "immigration_status")) this.database.exec("ALTER TABLE profiles ADD COLUMN immigration_status TEXT NOT NULL DEFAULT 'unknown'");
+    const locationIntentColumns = this.database.prepare("PRAGMA table_info(telegram_location_intent)").all() as unknown as Array<{ name: string }>;
+    if (!locationIntentColumns.some((column) => column.name === "transport_override")) this.database.exec("ALTER TABLE telegram_location_intent ADD COLUMN transport_override TEXT CHECK (transport_override IN ('taxi', 'public_transit', 'walking'))");
     this.database.prepare("INSERT OR IGNORE INTO runtime_settings (id, selected_runtime, updated_at) VALUES (1, 'codex', ?)").run(new Date().toISOString());
     const migrationTime = new Date().toISOString();
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (1, 'v1-local-workspace-baseline', ?)").run(migrationTime);
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (2, 'country-pack-source-evidence-links', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (3, 'telegram-one-route-transport-override', ?)").run(migrationTime);
   }
 
   private seedIfEmpty(): void {

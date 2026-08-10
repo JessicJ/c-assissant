@@ -8,7 +8,7 @@ export type TelegramCommand =
   | { type: "profile" }
   | { type: "weather" }
   | { type: "food"; partySize?: number }
-  | { type: "set_transport_preference"; preference: Exclude<TransportPreference, "plan_recommended"> }
+  | { type: "transport_choice"; preference: Exclude<TransportPreference, "plan_recommended">; scope: "current_action" | "plan" | "unspecified" }
   | { type: "start" }
   | { type: "create_plan"; request: string; explicit: boolean }
   | { type: "unknown_command" };
@@ -29,13 +29,22 @@ export function parseTelegramCommand(text: string | undefined): TelegramCommand 
   if (explicit) return { type: "create_plan", request: explicit, explicit: true };
   if (normalized.startsWith("/")) return { type: "unknown_command" };
   const transportPreference = parseTransportPreference(normalized);
-  if (transportPreference && !requestsCompletePlan(normalized)) return { type: "set_transport_preference", preference: transportPreference };
+  if (transportPreference && !requestsCompletePlan(normalized)) return { type: "transport_choice", preference: transportPreference, scope: parseTransportScope(normalized) };
   return { type: "create_plan", request: normalized, explicit: false };
 }
 
-export function formatTransportPreferenceAcknowledgement(preference: Exclude<TransportPreference, "plan_recommended">, offersCurrentRoute: boolean): string {
+export function formatTransportChoiceAcknowledgement(preference: Exclude<TransportPreference, "plan_recommended">, scope: "current_action" | "plan", offersCurrentRoute: boolean): string {
   const label = preference === "public_transit" ? "public transit" : preference;
-  return `This Plan now prefers ${label} for transport choices. No new Plan was created, and no ride or navigation was started.${offersCurrentRoute ? "\n\nTo refresh the current arrival route with this choice, share your location below. It will be used once and will not be saved." : ""}`;
+  if (scope === "current_action") return `For this route, Landi will use ${label}. Your saved Plan preference is unchanged. No new Plan was created, and no ride or navigation was started.${offersCurrentRoute ? "\n\nShare your location below to prepare this one route. It will be used once and will not be saved." : ""}`;
+  return `This Plan now prefers ${label} for future transport choices in this Plan. No new Plan was created, and no ride or navigation was started.${offersCurrentRoute ? "\n\nTo refresh the current arrival route with this choice, share your location below. It will be used once and will not be saved." : ""}`;
+}
+
+function parseTransportScope(value: string): "current_action" | "plan" | "unspecified" {
+  if (/\b(?:for\s+)?(?:this|the)\s+(?:whole\s+|entire\s+)?(?:plan|trip|journey|stay)\b|\b(?:throughout|for)\s+(?:my\s+|the\s+)?(?:trip|journey|stay)\b|\b(?:from\s+now\s+on|always)\b/i.test(value)
+    || /(?:本次|这个|整个|全程).{0,4}(?:计划|行程|旅行)|(?:以后|今后|一直|总是).{0,6}(?:打车|坐出租车|坐地铁|公共交通|步行|走路)/u.test(value)) return "plan";
+  if (/\b(?:this\s+time|right\s+now|now|for\s+this\s+(?:ride|route|journey|leg))\b/i.test(value)
+    || /(?:这次|这趟|这一程|这一段|现在|马上)/u.test(value)) return "current_action";
+  return "unspecified";
 }
 
 function parseTransportPreference(value: string): Exclude<TransportPreference, "plan_recommended"> | undefined {
