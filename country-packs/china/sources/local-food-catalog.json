@@ -84,6 +84,48 @@
           "sourceId": "beijing-official-must-try-foods-2026"
         }
       ]
+    },
+    {
+      "id": "guangzhou",
+      "aliases": ["Guangzhou", "广州"],
+      "approvedSourceIds": ["guangzhou-official-cantonese-foods-2025"],
+      "facts": [
+        {
+          "id": "guangzhou-cantonese-dim-sum",
+          "nameOriginal": "广式点心",
+          "nameEnglish": "Cantonese dim sum",
+          "descriptionEnglish": "A cherished Guangzhou morning tradition enjoyed with tea, with examples including shrimp dumplings, siu mai, egg tarts, and char siu bao.",
+          "sourceId": "guangzhou-official-cantonese-foods-2025"
+        },
+        {
+          "id": "guangzhou-wonton-noodles",
+          "nameOriginal": "云吞面",
+          "nameEnglish": "Wonton noodles",
+          "descriptionEnglish": "A popular Guangzhou breakfast using chewy jook-sing noodles with wontons and a deeply flavored broth.",
+          "sourceId": "guangzhou-official-cantonese-foods-2025"
+        },
+        {
+          "id": "guangzhou-cantonese-soup",
+          "nameOriginal": "广式老火汤",
+          "nameEnglish": "Cantonese-style soup",
+          "descriptionEnglish": "A central part of Guangzhou dining culture, commonly prepared from fresh ingredients in a slowly developed broth.",
+          "sourceId": "guangzhou-official-cantonese-foods-2025"
+        },
+        {
+          "id": "guangzhou-juejuebao",
+          "nameOriginal": "啫啫煲",
+          "nameEnglish": "Juejuebao (sizzling claypot dish)",
+          "descriptionEnglish": "A sizzling claypot dish whose ingredients continue cooking and releasing their aroma when the lid is lifted.",
+          "sourceId": "guangzhou-official-cantonese-foods-2025"
+        },
+        {
+          "id": "guangzhou-beef-chow-fun",
+          "nameOriginal": "干炒牛河",
+          "nameEnglish": "Beef chow fun",
+          "descriptionEnglish": "Shahe rice noodles stir-fried at high heat with beef, onions, and bean sprouts, often enjoyed as a late-night dish.",
+          "sourceId": "guangzhou-official-cantonese-foods-2025"
+        }
+      ]
     }
   ]
 }

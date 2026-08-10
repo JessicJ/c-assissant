@@ -70,5 +70,14 @@
     "allowedDomains": ["english.beijing.gov.cn", "beijing.gov.cn"],
     "topics": ["local_food", "beijing", "daily_life"],
     "language": "en"
+  },
+  {
+    "id": "guangzhou-official-cantonese-foods-2025",
+    "authority": "Guangzhou International — official city portal",
+    "title": "Flavors of Guangzhou: A Cantonese culinary adventure",
+    "url": "https://www.eguangzhou.gov.cn/gzspecialreports/intlblocks/fun/cuisine/content/post_31934.html",
+    "allowedDomains": ["www.eguangzhou.gov.cn", "eguangzhou.gov.cn", "gz.gov.cn"],
+    "topics": ["local_food", "guangzhou", "daily_life"],
+    "language": "en"
   }
 ]
