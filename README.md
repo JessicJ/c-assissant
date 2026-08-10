@@ -19,6 +19,15 @@ pnpm install
 pnpm dev
 ```
 
+For a long-running local instance, build once and run the single production process:
+
+```bash
+pnpm build
+pnpm start
+```
+
+Open `http://127.0.0.1:8787/`. The production process serves the built Web workspace together with the Core API, Telegram polling, and Reminder scheduler; Vite is not required at runtime.
+
 Open the local URL printed by Vite. The Server health check is available at `http://127.0.0.1:8787/health` by default.
 
 Useful verification commands:

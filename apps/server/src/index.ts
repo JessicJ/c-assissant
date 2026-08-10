@@ -1,4 +1,5 @@
 import cors from "@fastify/cors";
+import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -34,6 +35,9 @@ const server = Fastify({ logger: true });
 const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const envPath = fileURLToPath(new URL("../../../.env", import.meta.url));
 const officialSourceRegistryPath = resolve(projectRoot, "country-packs", "china", "sources", "official-source-registry.json");
+const webDistPath = resolve(projectRoot, "apps", "web", "dist");
+const webAssetsPath = resolve(webDistPath, "assets");
+const webIndexPath = resolve(webDistPath, "index.html");
 if (existsSync(envPath)) process.loadEnvFile(envPath);
 const databasePath = process.env.C_ASSISTANT_DATA_PATH || resolve(projectRoot, "data", "c-assistant.sqlite");
 const store = new SqliteWorkspaceStore(databasePath);
@@ -72,9 +76,22 @@ const localWebOrigin = /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/;
 await server.register(cors, {
   origin: (origin, callback) => callback(null, !origin || localWebOrigin.test(origin))
 });
+if (existsSync(webAssetsPath)) {
+  await server.register(fastifyStatic, {
+    root: webAssetsPath,
+    prefix: "/assets/"
+  });
+}
 server.addHook("onRequest", async (request, reply) => {
   const origin = request.headers.origin;
   if (origin && !localWebOrigin.test(origin)) return reply.code(403).send({ error: "This local instance accepts browser changes only from its local Web workspace." });
+});
+
+server.get("/", async (_request, reply) => {
+  if (!existsSync(webIndexPath)) {
+    return reply.code(503).type("text/plain; charset=utf-8").send("The Landi Web workspace has not been built. Run pnpm build first.");
+  }
+  return reply.type("text/html; charset=utf-8").send(readFileSync(webIndexPath, "utf8"));
 });
 
 server.get("/health", async () => ({
