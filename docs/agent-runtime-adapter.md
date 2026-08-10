@@ -1,6 +1,6 @@
 # Agent Runtime Adapter
 
-Landi may run on either Codex or Claude Code. Core treats them as replaceable execution runtimes behind one contract.
+Landi has one Runtime Adapter contract for Codex and Claude Code. Codex is the real-account-verified runtime for `0.1.0`; Claude Code remains an opt-in preview with contract tests but without real-account release validation.
 
 ## Ownership boundary
 
@@ -71,7 +71,7 @@ Implementation references:
 - Claude Code supports non-interactive `claude -p`, JSON output, and a non-destructive `claude auth status` login check: [Claude Code CLI usage](https://code.claude.com/docs/en/cli-usage)
 - Claude Code setup: [Claude Code getting started](https://docs.anthropic.com/en/docs/claude-code/getting-started)
 
-The Codex adapter has a real structured-output proof of concept. The Claude Code adapter now has the same bounded local implementation and contract tests, but still needs a real logged-in end-to-end validation before Claude Code is declared supported for V1.
+The Codex adapter has a real structured-output proof of concept. The Claude Code adapter has the same bounded local implementation and contract tests, but no available paid account was used for a real end-to-end validation. It is therefore labelled preview and is not part of the supported `0.1.0` release claim.
 
 ## Scheduling and concurrency
 

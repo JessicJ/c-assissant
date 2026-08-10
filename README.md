@@ -8,7 +8,7 @@ The project is not limited to tourism. The long-term direction includes daily li
 
 ## Current status
 
-The repository now contains the complete local V1 implementation slice: a Core HTTP service and scheduler, a Web workspace, local SQLite persistence, Profile and Plan editing, Codex/Claude Code Plan drafting, the complete internal China Pack orchestration path, approved official-source refresh and traceability, Amap and QWeather facts, Telegram pairing/Plan review/reminders/location handoff, and explicit Plan activation. The user selects one runtime per instance; neither runtime login credentials nor Connector secrets are stored in domain data or passed to Skills. V1 remains intentionally bounded: it does not decide regulated eligibility from page text, place orders, book accommodation, hail rides, or pay.
+The repository now contains the complete local V1 implementation slice: a Core HTTP service and scheduler, a Web workspace, local SQLite persistence, Profile and Plan editing, verified Codex Plan drafting, a preview Claude Code adapter, the complete internal China Pack orchestration path, approved official-source refresh and traceability, Amap and QWeather facts, Telegram pairing/Plan review/reminders/location handoff, and explicit Plan activation. The user selects one runtime per instance; neither runtime login credentials nor Connector secrets are stored in domain data or passed to Skills. Claude Code has contract coverage but no real-account V1 release validation, so Codex is the supported runtime for `0.1.0`. V1 remains intentionally bounded: it does not decide regulated eligibility from page text, place orders, book accommodation, hail rides, or pay.
 
 ## Run the local demo
 
@@ -99,7 +99,7 @@ China Pack now supplies the first source-backed digital-life reference catalog. 
 - Web workspace: the full desktop-grade product interface.
 - Telegram: mobile conversation, proactive reminders, quick actions, and one-tap location sharing.
 - Core: profiles, plans, tasks, reminders, events, runs, confirmations, and source evidence.
-- Agent runtime: the user chooses Codex or Claude Code and signs in with their own account.
+- Agent runtime: Codex is verified for `0.1.0`; Claude Code remains an opt-in preview until a real-account run is validated.
 - China Country Pack: internal modular Skills published externally as one complete pack.
 - Amap: V1 location facts, discovery, routing, and action handoff foundation.
 - Skill Runtime: validates internal manifests, binds stable entrypoints, rejects duplicate IDs and invalid SkillResult envelopes, and exposes each Country Pack through one registry.
