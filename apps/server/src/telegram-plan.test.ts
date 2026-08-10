@@ -121,6 +121,8 @@ test("Telegram Plan summary maps Task evidence to readable official source links
 
 test("Telegram confirmation is bound to the current draft Plan version", () => {
   const plan = createInitialWorkspace().activePlan;
+  plan.assumptions = [];
+  plan.nextAction = "Review and confirm the complete Plan.";
   const markup = telegramPlanConfirmationMarkup(plan);
   const callbackData = markup?.inline_keyboard[0]?.[0]?.callback_data;
 
@@ -131,6 +133,13 @@ test("Telegram confirmation is bound to the current draft Plan version", () => {
   assert.equal(telegramPlanConfirmationDecision({ ...plan, status: "active" }, callbackData), "already_active");
   assert.equal(telegramPlanConfirmationMarkup({ ...plan, status: "active" }), undefined);
   assert.equal(telegramPlanConfirmationDecision(plan, "arrival_not_here"), "not_confirmation");
+});
+
+test("Telegram does not offer complete confirmation while one critical answer is missing", () => {
+  const plan = createInitialWorkspace().activePlan;
+  plan.assumptions = ["The exact arrival date is unknown."];
+  plan.nextAction = "What date will you arrive?";
+  assert.equal(telegramPlanConfirmationMarkup(plan), undefined);
 });
 
 test("Telegram revision context strips Core state while retaining the complete draft", () => {

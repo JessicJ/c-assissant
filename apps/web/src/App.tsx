@@ -8,6 +8,7 @@ type View = "plans" | "settings";
 type PlanTab = "current" | "history";
 type ComposerMode = "new_plan" | "revise_plan";
 type ChatMessage = { id: string; role: "assistant" | "user"; text: string };
+type AgentChatResponse = { reply?: string; workspace?: WorkspaceSnapshot; followUpQuestion?: string; readyForReview?: boolean; error?: string };
 type LocalConfiguration = {
   amap: { configured: boolean };
   qweather: { configured: boolean; host: string };
@@ -139,7 +140,7 @@ export default function App() {
       {view === "plans" ? <PlansWorkspace currentPlan={currentPlan} executionPlan={workspace.executionPlan ?? null} history={visibleHistory} tab={planTab} confirming={confirmingPlan} onTab={setPlanTab} onCreate={() => openComposer("new_plan")} onRevise={() => openComposer("revise_plan")} onDelete={deleteHistoricalPlan} onTaskToggle={togglePlanTask} onConfirm={confirmCurrentPlan} /> : null}
       {view === "settings" ? <SettingsWorkspace workspace={workspace} configuration={configuration} checks={runtimeChecks} onWorkspace={setWorkspace} onConfiguration={setConfiguration} onChecks={setRuntimeChecks} onError={setError} /> : null}
     </section>
-    {composerOpen ? <ComposerDialog mode={composerMode} currentPlan={currentPlan} onClose={() => setComposerOpen(false)} onPlanCreated={async (next) => { await handlePlanCreated(next); setComposerOpen(false); }} onError={setError} /> : null}
+    {composerOpen ? <ComposerDialog mode={composerMode} currentPlan={currentPlan} onClose={() => setComposerOpen(false)} onPlanCreated={handlePlanCreated} onError={setError} /> : null}
   </main>;
 }
 
@@ -156,10 +157,11 @@ function ExecutionPlanNotice({ plan }: { plan: Plan }) {
 }
 
 function EmptyPlan({ onCreate }: { onCreate: () => void }) {
-  return <section className="empty-plan"><span>✦</span><h2>从一个想法开始你的中国计划</h2><p>告诉 Landi 目的地、日期、核心目标、优先级和预算，AI 会整理成一份完整方案。</p><button className="primary-action" onClick={onCreate}>制定计划</button></section>;
+  return <section className="empty-plan"><span>✦</span><h2>从一个想法开始你的中国计划</h2><p>先告诉 Landi 大致日期、要做的事情和地点。计划骨架会立即生成，其他关键信息再通过简短问答逐步补齐。</p><button className="primary-action" onClick={onCreate}>制定计划</button></section>;
 }
 
 function CurrentPlan({ plan, onRevise, onTaskToggle, onConfirm, confirming }: { plan: Plan; onRevise: () => void; onTaskToggle: (planId: string, taskId: string, checked: boolean) => Promise<void>; onConfirm: (planId: string) => Promise<void>; confirming: boolean }) {
+  const refinementQuestion = planRefinementQuestion(plan);
   const checklistItems = plan.stages.flatMap((stage) => stage.tasks
     .filter((task) => isPreDepartureChecklistTask(task, stage.title))
     .map((task) => ({ task, stageTitle: stage.title })));
@@ -174,14 +176,26 @@ function CurrentPlan({ plan, onRevise, onTaskToggle, onConfirm, confirming }: { 
   const leadSectionCount = Number(checklistItems.length > 0) + Number(timelineTasks.length > 0);
   return <article className="current-plan-card">
     <header className="plan-hero"><div><span className={`plan-status ${plan.status}`}>{plan.status === "draft" ? "待确认草稿" : "执行中"}</span><h2>{plan.title}</h2><div className="plan-meta"><span>⌖ {plan.location}</span><span>◷ {plan.dates}</span></div></div></header>
-    <section className="plan-sections">
+    <PlanGrounding plan={plan} onContinue={onRevise} />
+    {plan.status === "draft" && refinementQuestion ? <PlanSkeleton plan={plan} /> : <><section className="plan-sections">
       {checklistItems.length ? <FeaturedChecklist plan={plan} index={0} items={checklistItems} onTaskToggle={onTaskToggle} /> : null}
       {timelineTasks.length ? <FeaturedTimeline index={checklistItems.length ? 1 : 0} tasks={timelineTasks} /> : null}
       {remainingStages.map((stage, index) => <PlanContentSection key={stage.id} plan={plan} stage={stage} index={index + leadSectionCount} onTaskToggle={onTaskToggle} />)}
     </section>
-    <section className="plan-evidence"><div className="section-title"><p>官方证据</p><span>直接关联到计划内容</span></div>{plan.sources.length ? <div className="evidence-list">{plan.sources.map((source) => <a href={source.url} target="_blank" rel="noreferrer" key={`${source.url}-${source.retrievedAt}`}><span>官方</span><div><strong>{source.title}</strong><small>{source.authority} · {source.retrievedAt}</small></div><b>↗</b></a>)}</div> : <div className="evidence-empty">暂无官方证据</div>}</section>
-    <footer className="plan-footer"><div><strong>{plan.status === "draft" ? "确认完整计划" : "需要调整吗？"}</strong><span>{plan.status === "draft" ? "确认后才会启用提醒和执行；若已有计划正在运行，它会在此时进入历史计划。" : "修改会先生成完整替代草稿；当前计划继续运行到你确认替代草稿。"}</span></div><div className="plan-footer-actions"><button className="secondary-action" onClick={onRevise}>修改当前计划</button>{plan.status === "draft" ? <button className="primary-action" disabled={confirming} onClick={() => void onConfirm(plan.id)}>{confirming ? "确认中…" : "确认并启用计划"}</button> : null}</div></footer>
+    <section className="plan-evidence"><div className="section-title"><p>官方证据</p><span>直接关联到计划内容</span></div>{plan.sources.length ? <div className="evidence-list">{plan.sources.map((source) => <a href={source.url} target="_blank" rel="noreferrer" key={`${source.url}-${source.retrievedAt}`}><div><strong>{source.title}</strong><small>{source.authority} · {source.retrievedAt}</small></div><b>↗</b></a>)}</div> : <div className="evidence-empty">暂无官方证据</div>}</section></>}
+    <footer className="plan-footer"><div><strong>{plan.status === "draft" ? refinementQuestion ? "先补齐当前关键信息" : "确认完整计划" : "需要调整吗？"}</strong><span>{plan.status === "draft" ? refinementQuestion ? "每次只回答一个问题；已有草稿会持续保存，其他部分不受影响。" : "确认后只会启用信息充分的提醒和执行任务。" : "修改会先生成替代草稿；当前计划继续运行到你确认替代草稿。"}</span></div><div className="plan-footer-actions"><button className="secondary-action" onClick={onRevise}>{plan.status === "draft" && refinementQuestion ? "继续完善计划" : "修改当前计划"}</button>{plan.status === "draft" ? <button className="primary-action" disabled={confirming || Boolean(refinementQuestion)} title={refinementQuestion ?? undefined} onClick={() => void onConfirm(plan.id)}>{confirming ? "确认中…" : refinementQuestion ? "补齐后可确认" : "确认并启用计划"}</button> : null}</div></footer>
   </article>;
+}
+
+function PlanSkeleton({ plan }: { plan: Plan }) {
+  return <section className="plan-skeleton"><header><div><span>Plan 骨架</span><h3>框架已保存，细节正在逐步补齐</h3></div><small>{plan.stages.length} 个部分</small></header><p>这些部分已经建立，但不会在信息不足时用大量“待确认”事项填满页面。</p><div>{plan.stages.map((stage, index) => <article key={stage.id}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{stage.title}</strong><small>{stage.description}</small></div></article>)}</div></section>;
+}
+
+function PlanGrounding({ plan, onContinue }: { plan: Plan; onContinue: () => void }) {
+  const known = plan.knownInformation.slice(0, 4);
+  const missing = plan.assumptions.slice(0, 3);
+  const question = planRefinementQuestion(plan);
+  return <section className="plan-grounding"><div><span>已知信息</span>{known.length ? <ul>{known.map((item) => <li key={item}>{item}</li>)}</ul> : <p>暂时只有你的初始目标，后续回答会自动补充到这里。</p>}</div><div className={question ? "needs-input" : "ready"}><span>{question ? "下一步补齐" : "可以完整审阅"}</span>{question ? <><p>{question}</p><small>{missing.length > 1 ? `另有 ${missing.length - 1} 项信息会在后续按需补充；不会一次全部询问。` : "回答后会立即更新当前草稿。"}</small><button type="button" onClick={onContinue}>继续回答</button></> : <p>关键事实已经足够。其他来源核验或非关键假设不会阻止你审阅计划。</p>}</div></section>;
 }
 
 function FeaturedChecklist({ plan, index, items, onTaskToggle }: { plan: Plan; index: number; items: Array<{ task: Task; stageTitle: string }>; onTaskToggle: (planId: string, taskId: string, checked: boolean) => Promise<void> }) {
@@ -274,13 +288,15 @@ function HistoricalPlans({ plans, onDelete }: { plans: Plan[]; onDelete: (plan: 
 
 function ComposerDialog({ mode, currentPlan, onClose, onPlanCreated, onError }: { mode: ComposerMode; currentPlan: Plan | null; onClose: () => void; onPlanCreated: (workspace: WorkspaceSnapshot) => Promise<void>; onError: (message: string) => void }) {
   useEffect(() => { const close = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); }; window.addEventListener("keydown", close); return () => window.removeEventListener("keydown", close); }, [onClose]);
-  return <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="composer-dialog" role="dialog" aria-modal="true" aria-labelledby="composer-title"><header><h2 id="composer-title">{mode === "new_plan" ? "告诉 Landi 你的新目标" : `想怎样调整“${currentPlan?.title ?? "当前计划"}”？`}</h2><button className="close-button" onClick={onClose} aria-label="关闭">×</button></header><p>{mode === "new_plan" ? "新计划会先成为待确认草稿；当前计划继续运行，直到你确认完整新计划。" : "修改会生成完整替代草稿；确认前不会中断当前计划。"}</p><PlanComposer mode={mode} onPlanCreated={onPlanCreated} onError={onError} /></section></div>;
+  return <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="composer-dialog" role="dialog" aria-modal="true" aria-labelledby="composer-title"><header><h2 id="composer-title">{mode === "new_plan" ? "和 Landi 一起制定计划" : `继续完善“${currentPlan?.title ?? "当前计划"}”`}</h2><button className="close-button" onClick={onClose} aria-label="关闭">×</button></header><p>先生成可用骨架，再一次补充一个关键事实。你可以随时稍后继续，已经回答的内容会保存在当前草稿中。</p><PlanComposer mode={mode} onPlanCreated={onPlanCreated} onComplete={onClose} onError={onError} /></section></div>;
 }
 
-function PlanComposer({ mode, onPlanCreated, onError }: { mode: ComposerMode; onPlanCreated: (workspace: WorkspaceSnapshot) => Promise<void>; onError: (message: string) => void }) {
-  const welcome = mode === "new_plan" ? "你好。请告诉我目的地和日期、旅行的核心目标、事项优先级、预算与固定活动；信息不确定也可以，我会先标出需要确认的部分。" : "告诉我当前计划哪里需要修改，我会保留有效信息并重新整理完整计划。";
+function PlanComposer({ mode, onPlanCreated, onComplete, onError }: { mode: ComposerMode; onPlanCreated: (workspace: WorkspaceSnapshot) => Promise<void>; onComplete: () => void; onError: (message: string) => void }) {
+  const welcome = mode === "new_plan" ? "告诉我大致日期、要做的事情和地点就可以。我会先建立计划骨架，然后每次只问一个最关键的问题。" : "告诉我需要修改的内容，或者直接回答当前计划的下一个问题。我会保留其他有效信息。";
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [activeMode, setActiveMode] = useState<ComposerMode>(mode);
+  const [readyForReview, setReadyForReview] = useState(false);
   const [listening, setListening] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: "welcome", role: "assistant", text: welcome }]);
   const [permissionOpen, setPermissionOpen] = useState(false);
@@ -291,7 +307,7 @@ function PlanComposer({ mode, onPlanCreated, onError }: { mode: ComposerMode; on
   const voiceEnabled = localStorage.getItem("landi.voice") !== "off";
 
   function cancelVoice() { const recognition = recognitionRef.current; if (!recognition) return; recognition.onresult = null; recognition.onend = null; recognition.onerror = null; recognition.abort(); recognitionRef.current = null; }
-  useEffect(() => { cancelVoice(); setListening(false); setInput(""); setMessages([{ id: crypto.randomUUID(), role: "assistant", text: welcome }]); }, [mode]);
+  useEffect(() => { cancelVoice(); setListening(false); setInput(""); setActiveMode(mode); setReadyForReview(false); setMessages([{ id: crypto.randomUUID(), role: "assistant", text: welcome }]); }, [mode]);
   useEffect(() => () => cancelVoice(), []);
 
   function startVoice() {
@@ -324,12 +340,12 @@ function PlanComposer({ mode, onPlanCreated, onError }: { mode: ComposerMode; on
     const message = input.trim(); if (!message || busy) return;
     if (listening) { recognitionRef.current?.stop(); setListening(false); }
     setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", text: message }]); setInput(""); setBusy(true);
-    try { const response = await fetch("/api/agent/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode, message }) }); const payload = await response.json() as { reply?: string; workspace?: WorkspaceSnapshot; error?: string }; if (!response.ok || !payload.workspace) throw new Error(payload.error ?? "Landi 暂时无法生成计划。"); setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: payload.reply ?? "计划已经准备好了。" }]); await onPlanCreated(payload.workspace); }
+    try { const response = await fetch("/api/agent/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: activeMode, message }) }); const payload = await response.json() as AgentChatResponse; if (!response.ok || !payload.workspace) throw new Error(payload.error ?? "Landi 暂时无法生成计划。"); setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: payload.reply ?? "计划已经保存。" }]); setActiveMode("revise_plan"); setReadyForReview(Boolean(payload.readyForReview)); await onPlanCreated(payload.workspace); }
     catch (caught) { const messageText = caught instanceof Error ? caught.message : "Landi 暂时无法响应。"; setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: messageText }]); onError(messageText); }
     finally { setBusy(false); }
   }
 
-  return <div className="plan-composer"><div className="conversation" aria-live="polite">{messages.map((message) => <div className={`chat-bubble ${message.role}`} key={message.id}><span>{message.role === "assistant" ? "Landi" : "你"}</span><p>{message.text}</p></div>)}{busy ? <div className="chat-bubble assistant thinking"><span>Landi</span><p><i /><i /><i /></p></div> : null}</div><div className={`chat-input ${listening ? "listening" : ""}`}><textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder={listening ? "正在聆听…" : mode === "new_plan" ? "描述你的新计划…" : "告诉 Landi 需要修改什么…"} rows={2} maxLength={1500} disabled={busy} /><div className="composer-actions"><span>{input.length}/1500</span>{voiceEnabled ? <button className={listening ? "voice-button active" : "voice-button"} onClick={() => void toggleVoice()} type="button"><b>●</b>{listening ? "停止" : "语音"}</button> : null}<button className="send-button" onClick={() => void send()} disabled={busy || !input.trim()} aria-label="发送">↑</button></div></div>{permissionOpen ? <div className="permission-backdrop"><section className="permission-dialog" role="alertdialog" aria-modal="true" aria-labelledby="permission-title"><span>●</span><h3 id="permission-title">麦克风权限未开启</h3><p>开启后即可使用语音输入。点击下方按钮，浏览器会显示麦克风授权窗口。</p>{permissionMessage ? <small>{permissionMessage}</small> : null}<div><button className="permission-cancel" onClick={() => setPermissionOpen(false)}>稍后</button><button className="permission-primary" onClick={() => void requestPermission()} disabled={permissionBusy}>{permissionBusy ? "正在打开…" : "开启麦克风权限"}</button></div></section></div> : null}</div>;
+  return <div className="plan-composer"><div className="conversation" aria-live="polite">{messages.map((message) => <div className={`chat-bubble ${message.role}`} key={message.id}><span>{message.role === "assistant" ? "Landi" : "你"}</span><p>{message.text}</p></div>)}{busy ? <div className="chat-bubble assistant thinking"><span>Landi</span><p><i /><i /><i /></p></div> : null}</div>{readyForReview ? <div className="review-ready"><div><strong>关键信息已足够</strong><span>现在展示完整计划，确认后才会启用可执行任务和提醒。</span></div><button type="button" onClick={onComplete}>查看完整计划</button></div> : <div className={`chat-input ${listening ? "listening" : ""}`}><textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder={listening ? "正在聆听…" : activeMode === "new_plan" ? "例如：9 月去上海参加展会" : "回答上一个问题，或补充你的要求…"} rows={2} maxLength={1500} disabled={busy} /><div className="composer-actions"><span>{input.length}/1500</span>{voiceEnabled ? <button className={listening ? "voice-button active" : "voice-button"} onClick={() => void toggleVoice()} type="button"><b>●</b>{listening ? "停止" : "语音"}</button> : null}<button className="send-button" onClick={() => void send()} disabled={busy || !input.trim()} aria-label="发送">↑</button></div></div>}{permissionOpen ? <div className="permission-backdrop"><section className="permission-dialog" role="alertdialog" aria-modal="true" aria-labelledby="permission-title"><span>●</span><h3 id="permission-title">麦克风权限未开启</h3><p>开启后即可使用语音输入。点击下方按钮，浏览器会显示麦克风授权窗口。</p>{permissionMessage ? <small>{permissionMessage}</small> : null}<div><button className="permission-cancel" onClick={() => setPermissionOpen(false)}>稍后</button><button className="permission-primary" onClick={() => void requestPermission()} disabled={permissionBusy}>{permissionBusy ? "正在打开…" : "开启麦克风权限"}</button></div></section></div> : null}</div>;
 }
 
 function SettingsWorkspace({ workspace, configuration, checks, onWorkspace, onConfiguration, onChecks, onError }: { workspace: WorkspaceSnapshot; configuration: LocalConfiguration | null; checks: RuntimeCheck[]; onWorkspace: (workspace: WorkspaceSnapshot) => void; onConfiguration: (configuration: LocalConfiguration) => void; onChecks: (checks: RuntimeCheck[]) => void; onError: (message: string) => void }) {
@@ -366,4 +382,19 @@ function PreferenceSettings() {
 }
 
 function isStarterPlan(plan: Plan): boolean { return plan.title === "Attend an exhibition in Shanghai" && plan.version === 1; }
+function questionLike(value: string): boolean { return /[?？]\s*$/.test(value.trim()); }
+function planRefinementQuestion(plan: Pick<Plan, "title" | "location" | "dates" | "assumptions" | "nextAction">): string | null {
+  if (questionLike(plan.nextAction) && !/review|confirm|核对|审阅|确认完整计划/i.test(plan.nextAction)) return plan.nextAction.trim();
+  const answerable = plan.assumptions.filter((item) => !/official source|official guidance|policy entitlement|provider availability|not been verified|requires source-backed|官方来源|官方指引|政策适用|尚未核验|尚未验证/i.test(item));
+  const joined = answerable.join(" ").toLocaleLowerCase();
+  if (!joined) return null;
+  const chinese = /[\u3400-\u9fff]/.test(`${plan.title} ${plan.location} ${plan.dates} ${answerable.join(" ")}`);
+  if (/date|day|departure|return|日期|出发|返程/.test(joined)) return chinese ? "你预计哪一天抵达，哪一天离开？大致日期也可以。" : "What date do you expect to arrive, and when will you leave? Approximate dates are fine.";
+  if (/venue|event location|exhibition|场馆|展会地点|活动地点/.test(joined)) return chinese ? "这次主要活动、展会或办事地点在哪里？发送名称或地址都可以。" : "Where is the main event, exhibition, or place you need to visit? A name or address is enough.";
+  if (/accommodation|hotel|stay|住宿|酒店/.test(joined)) return chinese ? "住宿已经订好了吗？如果有，请告诉我名称或地址；如果没有，我会按通勤条件推荐区域。" : "Have you booked accommodation? If yes, send its name or address; if not, I can recommend an area based on access.";
+  if (/arrival|airport|station|terminal|抵达|机场|车站|航站楼/.test(joined)) return chinese ? "你将从哪个机场或车站抵达，大约几点到？" : "Which airport or station will you arrive at, and at about what time?";
+  if (/travell?er|party|people|luggage|baggage|同行|人数|行李/.test(joined)) return chinese ? "这次有几个人同行，行李大概有多少？" : "How many people are travelling, and roughly how much luggage will you have?";
+  if (/budget|currency|preference|priority|预算|币种|偏好|优先/.test(joined)) return chinese ? "这次计划更重视预算、便利还是舒适？如果有预算范围也可以一起告诉我。" : "For this Plan, do you care most about budget, convenience, or comfort? You can also share a budget range.";
+  return null;
+}
 function formatDate(value: string): string { const date = new Date(value); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric" }).format(date); }

@@ -20,6 +20,7 @@ This document separates accepted product decisions from questions that still req
 - Users complete booking, ordering, ride hailing, and payment in external applications.
 - Official policies must be current, traceable, and evaluated against the user's relevant status.
 - Core asks only when a reliable Plan or current action lacks a critical fact.
+- Plan drafting starts from approximate date, purpose, and place, saves a usable skeleton immediately, and asks at most one high-value user-answerable question per turn. Missing information remains an assumption and blocks only dependent Tasks; it is not converted into a questionnaire-style Task list.
 - The final confirmation screen presents the complete Plan without a diff or highlighted changes.
 - Confirming a Plan activates the exact version and declared automation scope.
 - A replacement draft never interrupts the currently executing Plan. Review state and execution state use separate pointers; reminders and timelines switch only when the user confirms the complete replacement.
