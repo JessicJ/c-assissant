@@ -34,5 +34,5 @@ This checklist separates reproducible repository evidence from real-account and 
 
 - [x] Add the owner-approved Apache-2.0 license and declare it consistently across all workspace manifests.
 - [x] Keep the V1 Web interface consistently English; preserve the unfinished Chinese draft separately without shipping it.
-- [ ] Run `pnpm release:check` on the exact release commit.
+- [x] Run `pnpm release:check` on the exact release commit.
 - [ ] Push the release commit, verify GitHub Actions, and create tag `v0.1.0` with the matching release notes.
