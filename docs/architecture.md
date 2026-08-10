@@ -4,6 +4,12 @@
 
 Landi is a country-neutral regional assistant runtime. It turns a user's situation into a persistent plan, timed tasks, evidence-backed guidance, and low-friction action handoffs.
 
+## Reality divergence rule
+
+Core advances ordinary, reversible guidance from the confirmed Plan and a conservative time projection by default. The user intervenes only when reality diverges from that projection. Time-insensitive guidance may be delivered early; payment, cancellation, booking confirmation, Task completion, and other critical or irreversible actions always require an observable fact or explicit confirmation.
+
+Handoff facts and projections are separate. A Telegram URL message can confirm `handoff_offered`, but it cannot confirm that the link was opened, a ride was hailed, the user boarded, or the destination was reached. `expected_waiting`, `expected_in_transit`, and `expected_arrived` are derived labels only. They must never be stored, displayed, or acted on as confirmed journey facts.
+
 The first public extension unit is the complete `china` Country Pack. Individual Skills remain internal modules in V1 and are not installed separately by normal users.
 
 ## Runtime topology

@@ -184,6 +184,19 @@ interface TelegramArrivalCheckinRow {
   location_received_at: string | null;
 }
 
+interface TelegramRouteHandoffRow {
+  plan_id: string;
+  offered_at: string;
+  opened_at: string | null;
+  route_duration_seconds: number;
+  wait_buffer_seconds: number;
+  safety_margin_seconds: number;
+  expected_arrival_at: string;
+  guidance_sent_at: string | null;
+  delay_count: number;
+  last_delayed_at: string | null;
+}
+
 export type TelegramProfileTextField = "displayName" | "preferredLanguage" | "nationality";
 
 interface TelegramProfileEditRow {
@@ -221,7 +234,7 @@ export interface TelegramTaskReminderFailureResult {
 const TASK_REMINDER_CATCH_UP_MS = 30 * 60_000;
 const TASK_REMINDER_ATTEMPT_LEASE_MS = 60_000;
 const TASK_REMINDER_RETRY_DELAYS_MS = [60_000, 5 * 60_000] as const;
-const CURRENT_SCHEMA_VERSION = 3;
+const CURRENT_SCHEMA_VERSION = 4;
 
 export interface DatabaseMaintenanceStatus {
   schemaVersion: number;
@@ -243,6 +256,20 @@ export interface TelegramArrivalCheckinState {
   checkInSentAt: string;
   locationRequestedAt?: string;
   locationReceivedAt?: string;
+}
+
+/** Confirmed handoff delivery facts and timing inputs only; journey state is derived elsewhere. */
+export interface TelegramRouteHandoffState {
+  planId: string;
+  offeredAt: string;
+  openedAt?: string;
+  routeDurationSeconds: number;
+  waitBufferSeconds: number;
+  safetyMarginSeconds: number;
+  expectedArrivalAt: string;
+  guidanceSentAt?: string;
+  delayCount: number;
+  lastDelayedAt?: string;
 }
 
 export class SqliteWorkspaceStore {
@@ -611,6 +638,49 @@ export class SqliteWorkspaceStore {
   markTelegramArrivalLocationReceived(planId: string, receivedAt: string): void {
     if (!planId.trim() || !Number.isFinite(Date.parse(receivedAt))) throw new Error("Telegram arrival location receipt needs a Plan and valid time.");
     this.database.prepare("UPDATE telegram_arrival_checkins SET location_received_at = ? WHERE plan_id = ?").run(receivedAt, planId.trim());
+  }
+
+  recordTelegramRouteHandoffOffered(input: { planId: string; offeredAt: string; routeDurationSeconds: number; waitBufferSeconds: number; safetyMarginSeconds: number; expectedArrivalAt: string }): TelegramRouteHandoffState {
+    const values = [input.routeDurationSeconds, input.waitBufferSeconds, input.safetyMarginSeconds];
+    if (!input.planId.trim() || !Number.isFinite(Date.parse(input.offeredAt)) || !Number.isFinite(Date.parse(input.expectedArrivalAt)) || !values.every((value) => Number.isInteger(value) && value >= 0)) {
+      throw new Error("A Telegram route handoff needs valid Plan and timing facts.");
+    }
+    this.database.prepare(`INSERT INTO telegram_route_handoffs
+      (plan_id, offered_at, opened_at, route_duration_seconds, wait_buffer_seconds, safety_margin_seconds, expected_arrival_at, guidance_sent_at, delay_count, last_delayed_at)
+      VALUES (?, ?, NULL, ?, ?, ?, ?, NULL, 0, NULL)
+      ON CONFLICT(plan_id) DO UPDATE SET offered_at = excluded.offered_at, opened_at = NULL, route_duration_seconds = excluded.route_duration_seconds,
+        wait_buffer_seconds = excluded.wait_buffer_seconds, safety_margin_seconds = excluded.safety_margin_seconds,
+        expected_arrival_at = excluded.expected_arrival_at, guidance_sent_at = NULL, delay_count = 0, last_delayed_at = NULL`).run(
+      input.planId.trim(), input.offeredAt, input.routeDurationSeconds, input.waitBufferSeconds, input.safetyMarginSeconds, input.expectedArrivalAt
+    );
+    return this.getTelegramRouteHandoff(input.planId)!;
+  }
+
+  getTelegramRouteHandoff(planId: string): TelegramRouteHandoffState | undefined {
+    const row = this.database.prepare(`SELECT plan_id, offered_at, opened_at, route_duration_seconds, wait_buffer_seconds, safety_margin_seconds,
+      expected_arrival_at, guidance_sent_at, delay_count, last_delayed_at FROM telegram_route_handoffs WHERE plan_id = ?`).get(planId.trim()) as TelegramRouteHandoffRow | undefined;
+    return row ? telegramRouteHandoffFromRow(row) : undefined;
+  }
+
+  claimTelegramRouteArrivalGuidance(planId: string, now = new Date().toISOString()): TelegramRouteHandoffState | undefined {
+    if (!planId.trim() || !Number.isFinite(Date.parse(now))) throw new Error("Route arrival guidance needs a Plan and valid time.");
+    const result = this.database.prepare(`UPDATE telegram_route_handoffs SET guidance_sent_at = ?
+      WHERE plan_id = ? AND guidance_sent_at IS NULL AND expected_arrival_at <= ?`).run(now, planId.trim(), now);
+    return result.changes === 1 ? this.getTelegramRouteHandoff(planId) : undefined;
+  }
+
+  releaseTelegramRouteArrivalGuidance(planId: string, guidanceSentAt: string): boolean {
+    if (!planId.trim() || !Number.isFinite(Date.parse(guidanceSentAt))) throw new Error("Route arrival guidance release needs a Plan and valid claim time.");
+    const result = this.database.prepare("UPDATE telegram_route_handoffs SET guidance_sent_at = NULL WHERE plan_id = ? AND guidance_sent_at = ?").run(planId.trim(), guidanceSentAt);
+    return result.changes === 1;
+  }
+
+  delayTelegramRouteArrivalGuidance(planId: string, delayedAt = new Date().toISOString(), delaySeconds = 15 * 60): TelegramRouteHandoffState | undefined {
+    if (!planId.trim() || !Number.isFinite(Date.parse(delayedAt)) || !Number.isInteger(delaySeconds) || delaySeconds <= 0) throw new Error("A route delay needs valid Plan and timing values.");
+    const expectedArrivalAt = new Date(Date.parse(delayedAt) + delaySeconds * 1_000).toISOString();
+    const result = this.database.prepare(`UPDATE telegram_route_handoffs SET expected_arrival_at = ?, guidance_sent_at = NULL,
+      delay_count = delay_count + 1, last_delayed_at = ? WHERE plan_id = ? AND guidance_sent_at IS NOT NULL`).run(expectedArrivalAt, delayedAt, planId.trim());
+    return result.changes === 1 ? this.getTelegramRouteHandoff(planId) : undefined;
   }
 
   /** Marks only an explicitly arrival-triggered task as ready; completion stays user-owned. */
@@ -1411,6 +1481,18 @@ export class SqliteWorkspaceStore {
         location_requested_at TEXT,
         location_received_at TEXT
       );
+      CREATE TABLE IF NOT EXISTS telegram_route_handoffs (
+        plan_id TEXT PRIMARY KEY REFERENCES plans(id) ON DELETE CASCADE,
+        offered_at TEXT NOT NULL,
+        opened_at TEXT,
+        route_duration_seconds INTEGER NOT NULL CHECK (route_duration_seconds >= 0),
+        wait_buffer_seconds INTEGER NOT NULL CHECK (wait_buffer_seconds >= 0),
+        safety_margin_seconds INTEGER NOT NULL CHECK (safety_margin_seconds >= 0),
+        expected_arrival_at TEXT NOT NULL,
+        guidance_sent_at TEXT,
+        delay_count INTEGER NOT NULL DEFAULT 0 CHECK (delay_count >= 0),
+        last_delayed_at TEXT
+      );
       CREATE INDEX IF NOT EXISTS idx_plans_current ON plans(is_current, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_stages_plan_order ON stages(plan_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_tasks_stage_order ON tasks(stage_id, sort_order);
@@ -1425,6 +1507,7 @@ export class SqliteWorkspaceStore {
       CREATE INDEX IF NOT EXISTS idx_telegram_pairing_requests_active ON telegram_pairing_requests(consumed_at, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_telegram_task_reminders_due ON telegram_task_reminder_deliveries(status, next_attempt_at);
       CREATE INDEX IF NOT EXISTS idx_telegram_arrival_checkins_follow_up ON telegram_arrival_checkins(location_requested_at, location_received_at, check_in_sent_at);
+      CREATE INDEX IF NOT EXISTS idx_telegram_route_handoffs_due ON telegram_route_handoffs(guidance_sent_at, expected_arrival_at);
       PRAGMA optimize;
     `);
     const planColumns = this.database.prepare("PRAGMA table_info(plans)").all() as unknown as Array<{ name: string }>;
@@ -1449,6 +1532,7 @@ export class SqliteWorkspaceStore {
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (1, 'v1-local-workspace-baseline', ?)").run(migrationTime);
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (2, 'country-pack-source-evidence-links', ?)").run(migrationTime);
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (3, 'telegram-one-route-transport-override', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (4, 'telegram-route-handoff-timeline', ?)").run(migrationTime);
   }
 
   private seedIfEmpty(): void {
@@ -1812,6 +1896,21 @@ function taskReminderRunFromRow(row: TaskReminderRunRow): TaskReminderRun {
     startedAt: row.started_at,
     ...(row.finished_at ? { finishedAt: row.finished_at } : {}),
     updatedAt: row.updated_at
+  };
+}
+
+function telegramRouteHandoffFromRow(row: TelegramRouteHandoffRow): TelegramRouteHandoffState {
+  return {
+    planId: row.plan_id,
+    offeredAt: row.offered_at,
+    ...(row.opened_at ? { openedAt: row.opened_at } : {}),
+    routeDurationSeconds: row.route_duration_seconds,
+    waitBufferSeconds: row.wait_buffer_seconds,
+    safetyMarginSeconds: row.safety_margin_seconds,
+    expectedArrivalAt: row.expected_arrival_at,
+    ...(row.guidance_sent_at ? { guidanceSentAt: row.guidance_sent_at } : {}),
+    delayCount: row.delay_count,
+    ...(row.last_delayed_at ? { lastDelayedAt: row.last_delayed_at } : {})
   };
 }
 

@@ -15,10 +15,11 @@ test("SQLite records its schema baseline and creates a verified private backup",
     const store = new SqliteWorkspaceStore(databasePath);
     store.updateProfile({ displayName: "Backup owner", preferredLanguage: "English", nationality: "Canada", gender: "not_specified", immigrationStatus: "tourist_visa" });
     const maintenance = store.getDatabaseMaintenanceStatus();
-    assert.deepEqual({ schemaVersion: maintenance.schemaVersion, latest: maintenance.latestSchemaVersion, integrity: maintenance.integrity }, { schemaVersion: 3, latest: 3, integrity: "ok" });
+    assert.deepEqual({ schemaVersion: maintenance.schemaVersion, latest: maintenance.latestSchemaVersion, integrity: maintenance.integrity }, { schemaVersion: 4, latest: 4, integrity: "ok" });
     assert.equal(maintenance.migrations[0]?.name, "v1-local-workspace-baseline");
     assert.equal(maintenance.migrations[1]?.name, "country-pack-source-evidence-links");
     assert.equal(maintenance.migrations[2]?.name, "telegram-one-route-transport-override");
+    assert.equal(maintenance.migrations[3]?.name, "telegram-route-handoff-timeline");
 
     const backup = store.createBackup(new Date("2026-08-07T12:34:56.000Z"));
     assert.equal(backup.integrity, "ok");
@@ -40,7 +41,7 @@ test("SQLite refuses to open a workspace created by a newer schema", () => {
     const future = new DatabaseSync(databasePath);
     future.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, applied_at TEXT NOT NULL); INSERT INTO schema_migrations VALUES (999, 'future', '2026-08-07T00:00:00.000Z');");
     future.close();
-    assert.throws(() => new SqliteWorkspaceStore(databasePath), /supports schema 3.*schema 999/i);
+    assert.throws(() => new SqliteWorkspaceStore(databasePath), /supports schema 4.*schema 999/i);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -54,7 +55,7 @@ test("SQLite upgrades a schema-one workspace with source-evidence link tables", 
     old.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, applied_at TEXT NOT NULL); INSERT INTO schema_migrations VALUES (1, 'v1-local-workspace-baseline', '2026-08-07T00:00:00.000Z');");
     old.close();
     const store = new SqliteWorkspaceStore(databasePath);
-    assert.equal(store.getDatabaseMaintenanceStatus().schemaVersion, 3);
+    assert.equal(store.getDatabaseMaintenanceStatus().schemaVersion, 4);
     const tables = new DatabaseSync(databasePath, { readOnly: true });
     const names = tables.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%run_sources' ORDER BY name").all().map((row) => (row as { name: string }).name);
     assert.deepEqual(names, ["country_pack_skill_run_sources", "plan_compilation_run_sources"]);
@@ -765,5 +766,29 @@ test("SQLite stores arrival follow-up state without storing shared coordinates",
   const state = store.getTelegramArrivalCheckin(planId);
   assert.equal(state?.locationReceivedAt, "2026-09-01T00:05:30.000Z");
   assert.deepEqual(Object.keys(state ?? {}).sort(), ["checkInSentAt", "locationReceivedAt", "locationRequestedAt"]);
+  store.close();
+});
+
+test("SQLite records a handoff offer and re-arms guidance after an explicit delay", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const planId = store.getWorkspace().activePlan.id;
+  const offered = store.recordTelegramRouteHandoffOffered({
+    planId,
+    offeredAt: "2026-08-10T06:00:00.000Z",
+    routeDurationSeconds: 2_100,
+    waitBufferSeconds: 600,
+    safetyMarginSeconds: 600,
+    expectedArrivalAt: "2026-08-10T06:55:00.000Z"
+  });
+  assert.equal(offered.openedAt, undefined);
+  assert.equal(store.claimTelegramRouteArrivalGuidance(planId, "2026-08-10T06:54:59.000Z"), undefined);
+  assert.equal(store.claimTelegramRouteArrivalGuidance(planId, "2026-08-10T06:55:00.000Z")?.guidanceSentAt, "2026-08-10T06:55:00.000Z");
+  assert.equal(store.claimTelegramRouteArrivalGuidance(planId, "2026-08-10T06:55:01.000Z"), undefined);
+  const delayed = store.delayTelegramRouteArrivalGuidance(planId, "2026-08-10T06:56:00.000Z");
+  assert.equal(delayed?.expectedArrivalAt, "2026-08-10T07:11:00.000Z");
+  assert.equal(delayed?.delayCount, 1);
+  assert.equal(delayed?.guidanceSentAt, undefined);
+  assert.equal(store.delayTelegramRouteArrivalGuidance(planId, "2026-08-10T06:57:00.000Z"), undefined);
+  assert.deepEqual(Object.keys(offered).sort(), ["delayCount", "expectedArrivalAt", "offeredAt", "planId", "routeDurationSeconds", "safetyMarginSeconds", "waitBufferSeconds"].sort());
   store.close();
 });

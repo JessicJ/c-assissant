@@ -141,6 +141,8 @@ V1 does not claim completion after a user opens Amap or Ctrip. Core may ask for 
 
 The documented Amap URI handoff supports route planning, not taxi ordering. A taxi choice may use current driving-route facts and the provider's taxi estimate, but its HTTPS action opens a driving route. Telegram therefore guides the user through the observed handoff: open the HTTPS route, tap `打开高德APP` (Open Amap App) when the H5 page appears, tap `打车` (Taxi), verify pickup and destination, choose vehicle types, and tap `立即打车` (Call now) only when ready. Landi must not label this as a direct taxi-page handoff or infer that a ride was hailed.
 
+An ordinary Telegram URL button does not report a click to the bot. Current local instances therefore record `handoff_offered` only after Telegram accepts the message. `handoff_opened` is reserved for a future observable HTTPS redirect or Mini App event and must not be synthesized. The expected follow-up time may be calculated from the offer time, a conservative waiting buffer, the provider's route duration, and a safety margin. Such timing can trigger ordinary guidance with an `I haven't arrived` escape hatch, but never a critical action or factual completion.
+
 ## Security and observability
 
 - Credentials are injected into the Connector process and redacted from logs.
