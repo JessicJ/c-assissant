@@ -52,7 +52,7 @@ test("a failed weather refresh returns a safe classification without inventing f
       weather: async (): Promise<ConnectorResult<QWeatherWeatherSnapshot>> => { throw new Error("Weather must not run without a resolved place."); }
     }
   });
-  assert.deepEqual(result, { status: "unavailable", stage: "amap", code: "network_error" });
+  assert.deepEqual(result, { status: "unavailable", stage: "maps", code: "network_error" });
 });
 
 test("a Task reminder weather refresh drops an unapproved attribution link", async () => {

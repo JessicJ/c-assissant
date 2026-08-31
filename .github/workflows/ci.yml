@@ -36,3 +36,9 @@ jobs:
 
       - name: Run release checks
         run: pnpm release:check
+
+      - name: Install Chromium for browser tests
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run browser tests
+        run: pnpm test:browser:ci

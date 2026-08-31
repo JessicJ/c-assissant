@@ -10,7 +10,9 @@ The project is not limited to tourism. The long-term direction includes daily li
 
 ## Current status
 
-The repository now contains the complete local V1 implementation slice: a Core HTTP service and scheduler, a Web workspace, local SQLite persistence, Profile and Plan editing, verified Codex Plan drafting, a preview Claude Code adapter, the complete internal China Pack orchestration path, approved official-source refresh and traceability, Amap and QWeather facts, Telegram pairing/Plan review/reminders/location handoff, and explicit Plan activation. The user selects one runtime per instance; neither runtime login credentials nor Connector secrets are stored in domain data or passed to Skills. Claude Code has contract coverage but no real-account V1 release validation, so Codex is the supported runtime for `0.1.0`. V1 remains intentionally bounded: it does not decide regulated eligibility from page text, place orders, book accommodation, hail rides, or pay.
+Provider decision (August 2026): runtime place, route, nearby discovery, and weather calls use Google Maps Platform. Uber owns taxi handoff. Google Weather is used only where that API supports the requested coordinates; an unsupported location is a non-blocking degraded capability, with no regional weather fallback. Amap and QWeather are paused; their historical connector code and references remain only while provider-neutral naming is migrated.
+
+The repository now contains the complete local V1 implementation slice: a country-neutral Core HTTP service and scheduler, a Web workspace, local SQLite persistence, Profile and Plan editing, verified Codex Plan drafting, a preview Claude Code adapter, the first internal China Pack, approved official-source refresh and traceability, global Google place/route facts and coverage-dependent Google weather facts, Telegram pairing/Plan review/reminders/location handoff, Uber ride handoff, and explicit Plan activation. The user selects one runtime per instance; neither runtime login credentials nor Connector secrets are stored in domain data or passed to Skills. Claude Code has contract coverage but no real-account V1 release validation, so Codex is the supported runtime for `0.1.0`. V1 remains intentionally bounded: it does not decide regulated eligibility from page text, place orders, book accommodation, hail rides, or pay.
 
 ## Run the local demo
 
@@ -39,7 +41,7 @@ pnpm run service:install:macos
 
 The LaunchAgent starts at login and restarts after an unexpected exit. Its plist contains no Connector or Agent credentials. `pnpm run service:remove:macos` removes only the service registration and keeps local data, `.env`, and logs.
 
-Open the local URL printed by Vite. The Server health check is available at `http://127.0.0.1:8787/health` by default.
+Open the local URL printed by Vite. Root-level `pnpm dev` uses `http://127.0.0.1:8877/health` for development so it can run alongside the production service on `8787`.
 
 Useful verification commands:
 
@@ -47,34 +49,37 @@ Useful verification commands:
 pnpm build
 pnpm typecheck
 pnpm test
+pnpm test:browser
 pnpm release:check
 ```
 
-`pnpm release:check` runs a credential-free structural and tracked-file safety preflight followed by the complete build, typecheck, and test suite. It does not contact Telegram, Amap, QWeather, Codex, or Claude Code. The same gate runs in GitHub Actions on pull requests and pushes to `master` or `main`.
+`pnpm release:check` runs a credential-free structural and tracked-file safety preflight followed by the complete build, typecheck, and unit/integration test suite. `pnpm test:browser` builds the product and runs the isolated Chromium planning-flow test with a temporary SQLite database; it does not call an Agent runtime or Connector. GitHub Actions runs both gates on pull requests and pushes to `master` or `main`.
 
-The local instance creates `data/c-assistant.sqlite` on first start. If `AMAP_API_KEY` is set in the ignored `.env` file, the Plan screen can validate place-search facts, show nearby restaurant and accommodation POI and distance facts around a selected place, and compare driving, walking, and public-transit route facts. A user can also enter an already chosen stay by name and address; Amap resolves its location before it is saved inside that Plan. Driving can be handed to the user's Amap app without hailing a ride; Amap's documented public URI does not open its taxi-order page, so taxi handoff currently opens a driving-route estimate and instructs the user to switch to Taxi and confirm manually. The other route types remain factual comparisons until device handoffs are verified. A stay is marked as confirmed only after the user explicitly says they completed an external booking. Nearby results are factual candidates, not ranked recommendations, and the app does not order, reserve, or pay. If QWeather's ignored `QWEATHER_API_KEY` and `QWEATHER_API_HOST` are configured, it is the preferred source for current conditions, a three-day forecast, and cautious packing or transport prompts. When QWeather is unavailable, direct Web and Telegram weather checks may fall back to lower-detail Amap city weather; missing precipitation, UV, and feels-like values are never invented, and fallback facts do not enter packing or transport decisions. If `TELEGRAM_BOT_TOKEN` is configured there, the Settings screen can explicitly verify the bot identity without exposing the token. In Settings, choose the locally logged-in Codex or Claude Code CLI; the Plan composer and paired Telegram account then create a schema-validated draft only after an explicit user request.
+The local instance creates `data/c-assistant.sqlite` on first start. `GOOGLE_MAPS_API_KEY` is the single active location/weather credential and must have Places API (New), Routes API, and Weather API enabled with billing, quotas, and server-side restrictions. Google supplies global place discovery, geocoding, and driving/walking/transit route facts. Google Weather supplies weather only for locations within its own coverage. Taxi actions open Uber's rider experience with the one-time device pickup coordinate and Plan destination text; the user reviews the live fare, vehicle, payment method, and final request in Uber, while Landi never hails or pays. `UBER_CLIENT_ID` is optional public attribution and must never contain a client secret or access token. Amap and QWeather are paused and their old environment values are ignored; their connector implementations remain temporarily for compatibility tests only. If `TELEGRAM_BOT_TOKEN` is configured, the Settings flow can verify and pair the bot without exposing its token.
 
-Settings starts with one instance-readiness summary for the Profile, selected Agent Runtime, Amap, QWeather, and Telegram pairing, and presents one next setup action at a time. An unselected Runtime does not block readiness. Settings also shows the local SQLite schema and integrity state. `Create local backup` writes a consistent, verified `0600` snapshot under `data/backups` (or beside a custom database path). Backups contain the local workspace state but no Codex/Claude Code login credentials or Connector keys. Restore is intentionally not automatic because replacing the active workspace is destructive.
+Configure a replacement Google key locally with `pnpm configure:google`. The interactive command hides terminal input, verifies Places API (New), Routes API, and Weather API before saving, and writes only to the ignored local `.env` with private file permissions. Do not paste a production key into chat, source code, a shell argument, or a tracked file.
 
-The Web workspace also provides a persistent `Ask Agent` panel at the top of Today as its primary desktop interaction. Each turn explicitly creates a new complete Plan draft or revises the current draft through the selected local Codex/Claude Code Runtime; success switches directly to the complete Plan review. It is not an unrestricted chat endpoint: input is bounded, unknown modes are rejected, the result remains unconfirmed, and a Plan changed while the Runtime is working cannot be overwritten by the stale result.
+Settings readiness is calculated from the Profile, selected Agent Runtime, Google Maps Platform, and Telegram pairing, and presents one next setup action at a time. An unselected Runtime does not block readiness. Settings also shows the local SQLite schema and integrity state. `Create local backup` writes a consistent, verified `0600` snapshot under `data/backups` (or beside a custom database path). Backups contain the local workspace state but no Codex/Claude Code login credentials or Connector keys. Restore is intentionally not automatic because replacing the active workspace is destructive.
+
+The Web workspace uses a conversational planning flow rather than a questionnaire. A new request first becomes a server-backed Planning Session; Landi collects the destination, timing, and objective, then presents one versioned proposal. The user can keep chatting to revise that proposal, and only explicit confirmation of the latest version can invoke the selected local Codex/Claude Code Runtime to create a complete draft Plan. Draft revision remains bounded and version-safe, so a stale Runtime result cannot overwrite newer Plan changes.
 
 In the paired Telegram chat, complete Plans are paginated without omission and only the final page carries the version-bound confirmation button. Ordinary text revises a current user-created draft, while `/new <request>` explicitly starts a separate Plan. Once a Plan is active, local intents do not silently create or display another complete Plan: supported intents such as `I prefer taxi` update only this Plan's temporary transport preference and can offer a one-use arrival-route location handoff. An unsupported local request leaves the active Plan unchanged; complete Plan generation requires `/new` or an explicit whole-Plan request. Revision failure leaves the existing draft unchanged, and stale Runtime results cannot overwrite a Plan that changed while they were running.
 
-`/prepare` runs the current draft through the complete China Country Pack path. It refreshes only approved source IDs when their cache is stale, links current National Immigration Administration evidence to the exact draft, collects normalized Amap/QWeather facts, invokes the seven supporting Skills plus the composite Skill, and atomically saves the next inert draft version. A blocked run returns concise missing details and preserves the existing Plan; a successful run sends the full updated Plan for review and confirmation.
+`/prepare` resolves the single destination country from Google Maps' normalized country fact and runs the matching China or Japan Country Pack. It never selects a Pack from a city-name substring. Each Pack refreshes only its own approved source IDs, links exact snapshots to the draft, collects normalized Google place/route/weather facts, invokes its declared supporting Skills and composite, and atomically saves the next inert draft version. Unknown or ambiguous country facts fail closed. A blocked run preserves the existing Plan; a successful run still requires full review and confirmation.
 
 `/profile` lets the paired user complete long-term basics without switching to Web. Text entry is captured only after the user chooses a specific field and expires after 15 minutes; enum fields use allowlisted buttons. Partial setup remains visibly incomplete and does not imply any policy eligibility.
 
-`/weather` performs an explicit read-only weather check for the current Plan location through Amap and QWeather. It returns current and dated three-day facts with attribution, but creates no Reminder and stores no weather result in Profile or Plan. During an active arrival route, an unscoped message such as `I prefer taxi` applies only to the next route and leaves the saved Plan preference unchanged. A user must explicitly say the choice is for the whole Plan or trip before Landi persists it.
+`/weather` performs an explicit read-only weather check for the current Plan location through Google Places and Google Weather. Where supported, it returns current and dated three-day facts with attribution; an unsupported location is reported explicitly without guessing or trying a regional provider. The command creates no Reminder and stores no weather result in Profile or Plan. During an active arrival route, an unscoped message such as `I prefer taxi` applies only to the next route and leaves the saved Plan preference unchanged. A user must explicitly say the choice is for the whole Plan or trip before Landi persists it.
 
-`/food` provides the first Telegram food-discovery loop. It uses the Plan's party size (or asks once), then displays Telegram's explicit location-share control. That location is accepted only for the current Plan and named purpose for 15 minutes, converted for Amap, used once to retrieve nearby restaurant and distance facts, and never persisted. Results preserve Amap's provider order and hand the user to an HTTPS Amap place page; Landi does not independently rank, order, reserve, or pay.
+`/food` provides the first Telegram food-discovery loop. It uses the Plan's party size (or asks once), then displays Telegram's explicit location-share control. That location is accepted only for the current Plan and named purpose for 15 minutes, used once to retrieve Google Places restaurant and straight-line distance facts, and never persisted. Results hand the user to an HTTPS Google Maps place page; Landi does not independently rank, order, reserve, or pay.
 
-This flow now invokes the first executable internal China Pack Skill, `food-nearby` `0.1.0`, after Amap normalization. The versioned Skill emits structured facts and handoff proposals; Telegram only renders them. The Skill remains internal and cannot be installed separately from the complete China Country Pack.
+This flow invokes the internal China Pack Skill `food-nearby` `0.1.0` over normalized Google Maps facts. The versioned Skill emits structured facts and Google Maps handoff proposals; Telegram only renders them. The Skill remains internal and cannot be installed separately from the complete China Country Pack.
 
-The Web accommodation flow invokes `housing-area-recommendation` `0.1.0` after Amap normalization. Its first slice explains candidates relative to one selected Plan anchor using nearby-place distance, and clearly separates that fact from a real commute or a complete area recommendation. Live inventory, price, booking, quality, and foreign-guest eligibility remain unverified.
+The accommodation flow invokes `housing-area-recommendation` `0.1.0` over normalized Google Maps facts. Its first slice explains candidates relative to one selected Plan anchor using nearby-place distance, and clearly separates that fact from a real commute or a complete area recommendation. Live inventory, price, booking, quality, and foreign-guest eligibility remain unverified.
 
-Web route comparison and Telegram arrival routing invoke `transport-planner` `0.1.0` through the complete China Country Pack. It combines current Amap route facts with this Plan's preference, party, luggage, and matched weather, without a fixed walking-distance threshold or any automatic travel action.
+Route comparison and Telegram arrival routing invoke `transport-planner` `0.1.0` through the complete China Country Pack. It combines current Google Maps route facts with this Plan's preference, party, luggage, and matched weather, without a fixed walking-distance threshold or any automatic travel action.
 
-Weather interpretation is centralized in `weather-and-packing` `0.1.0` for Web, Telegram, and reminder delivery. It preserves QWeather provenance, uses exact-date matching for reminder forecasts, and returns only cautious packing prompts without silently changing a Plan.
+Weather interpretation is centralized in `weather-and-packing` `0.1.0` for Web, Telegram, and reminder delivery. It preserves Google Weather provenance, uses exact-date matching for reminder forecasts, and returns only cautious packing prompts without silently changing a Plan. If the location is unsupported or weather is temporarily unavailable, the Skill degrades without blocking the remaining Plan.
 
 The production policy evidence gate now runs through `policy-applicability` `0.1.0`. It sees only minimized Profile/Plan facts and official snapshot metadata, and reports readiness for separate review without interpreting policy or deciding eligibility.
 
@@ -92,27 +97,31 @@ The deterministic China arrival orchestrator runs credential-free normalized inp
 
 Web exposes this workflow on the Plan screen, and Telegram exposes it through `/prepare`. Both show a complete updated Plan only after a successful atomic save; a source-backed Task names its readable official basis, and Telegram maps it to a numbered original-source link without exposing internal snapshot IDs or hashes. No Task or Reminder becomes active until the user confirms that exact Plan version.
 
-The production China fact collector resolves the Plan destination through Amap, fetches QWeather facts and nearby accommodation candidates, and obtains driving, walking, and transit facts only when this Plan already contains a chosen accommodation coordinate. It includes only immutable official snapshots explicitly linked to the current Plan and accepts food/digital-life reference catalogs as injected Country Pack data. It does not invent a route origin, use a fixed nearby radius, read environment variables, or expose provider failure text.
+The production China fact collector resolves the Plan destination, weather, nearby accommodation candidates, and driving/walking/transit facts through Google Maps Platform only when this Plan contains the required anchors. It includes only immutable official snapshots explicitly linked to the current Plan and accepts food/digital-life reference catalogs as injected Country Pack data. It does not invent a route origin, read environment variables, or expose provider failure text.
 
 China Pack now supplies the first source-backed digital-life reference catalog. It covers China Mobile SIM setup, WeChat, Amap, and Alipay across connectivity, communication, navigation, and payment preparation. Catalog text is inert: the runtime loader emits an item only when an approved current snapshot exists, chooses the newest snapshot per source, and strips retained page excerpts before Skill invocation.
 
 ## Product shape
 
 - Web workspace: the full desktop-grade product interface.
-- Telegram: mobile conversation, proactive reminders, quick actions, and one-tap location sharing.
+- Telegram: default mobile conversation, proactive reminders, quick actions, and one-tap location sharing.
+- WhatsApp Business Platform: optional messaging Connector; proactive messages outside the user-opened service window require an approved utility template.
 - Core: profiles, plans, tasks, reminders, events, runs, confirmations, and source evidence.
 - Agent runtime: Codex is verified for `0.1.0`; Claude Code remains an opt-in preview until a real-account run is validated.
-- China Country Pack: internal modular Skills published externally as one complete pack.
-- Amap: V1 location facts, discovery, routing, and action handoff foundation.
+- China and Japan Country Packs: isolated internal modular Skills, each published externally as one complete pack.
+- Google Maps Platform: global V1 place, discovery, routing, and non-taxi handoff foundation; weather is used where Google Weather has coverage.
+- Uber: user-confirmed taxi handoff.
 - Skill Runtime: validates internal manifests, binds stable entrypoints, rejects duplicate IDs and invalid SkillResult envelopes, and exposes each Country Pack through one registry.
 
 ```text
-Web / Telegram
+Web / Telegram / optional WhatsApp
   ├── Codex or Claude Code (tool-free structured Plan draft)
   └── Landi Core
-          ├── Skill Runtime → China Country Pack
-          └── restricted Connectors → Amap / QWeather / official sources / Telegram
+          ├── Skill Runtime → resolved China or Japan Country Pack
+          └── restricted Connectors → Google Maps Platform / Uber / official sources / Telegram
 ```
+
+Configure the optional WhatsApp Connector with `pnpm configure:whatsapp`. The interactive command hides the access token and App Secret while typing, verifies the configured phone identity, generates a Webhook verification token, and writes the values only to the ignored local `.env`. Do not paste WhatsApp credentials into chat, source files, or commits.
 
 ## V1 principles
 
@@ -145,16 +154,19 @@ country-packs/
 docs/                     Architecture and contract documents
 ```
 
-## Architecture documents
+## Design documents
 
-- [System architecture](docs/architecture.md)
-- [Core data model](docs/core-data-model.md)
-- [Skill Contract](docs/skill-contract.md)
-- [Connector Contract](docs/connector-contract.md)
-- [Agent Runtime Adapter Contract](docs/agent-runtime-adapter.md)
-- [Web workspace](docs/web-workspace.md)
-- [China Pack V1](docs/china-pack-v1.md)
-- [Decisions and open items](docs/decisions-and-open-items.md)
+Start with the [Landi design document index](docs/README.md). The primary project-design path is:
+
+- [Product Baseline](docs/landi-product-baseline.md)
+- [Long-Term Travel Assistant Roadmap](docs/travel-assistant-development-roadmap.md)
+- [System Architecture](docs/architecture.md)
+- [Core Data Model](docs/core-data-model.md)
+- [Travel Planning and Execution Flow](docs/travel-planning-and-execution-flow.md)
+- [Regional Capability Design: China V1](docs/china-pack-v1.md)
+- [Regional Capability Design: Japan V1](docs/japan-pack-v1.md)
+
+Skill, Connector, and Agent Runtime contracts remain available as contributor references from the design index. Earlier workspace plans, release evidence, and decision logs are retained as project records rather than current top-level design.
 
 ## Planned technical baseline
 
@@ -163,7 +175,8 @@ docs/                     Architecture and contract documents
 - SQLite for single-user instance state
 - React and Vite for the Web workspace
 - HTTP plus Server-Sent Events for Web updates
-- Telegram Bot API for mobile interaction
+- Telegram Bot API for default mobile interaction
+- optional WhatsApp Business Platform Connector
 - A future MCP-based local Tool Gateway for controlled Agent tools; V1 keeps Agent drafting tool-free and runs Connectors through Core
 
 ## Scope note

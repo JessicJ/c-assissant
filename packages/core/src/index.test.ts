@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { assessPolicyPreparation, compilePlanProposal, confirmPlan, createInitialWorkspace, createPlanFromDraft, createPlanFromRequest, isPreDepartureChecklistTask, recommendPlanTransport, type PlanCompilationProposal } from "./index.js";
+import { assessPolicyPreparation, compilePlanProposal, confirmPlan, createInitialWorkspace, createPlanFromDraft, createPlanFromRequest, inferStagePresentationKind, isPreDepartureChecklistTask, planPresentationIntegrityIssues, recommendPlanTransport, resolveCurrentPlanDestination, type PlanCompilationProposal, type PlanPresentation } from "./index.js";
 
 function compilationProposal(planId: string, planVersion: number): PlanCompilationProposal {
   return {
@@ -31,6 +31,134 @@ test("a confirmed demo Plan becomes active and leaves an inbox receipt", () => {
 
   assert.equal(confirmed.activePlan.status, "active");
   assert.equal(confirmed.inbox[0]?.tone, "ready");
+});
+
+const multiCityPresentation: PlanPresentation = {
+  kind: "itinerary",
+  summary: "Paris followed by London.",
+  startDate: "2026-10-06",
+  endDate: "2026-10-12",
+  cities: ["Paris", "London"],
+  places: [],
+  routeSegments: [],
+  days: [
+    { id: "paris-1", label: "October 6", date: "2026-10-06", city: "Paris", placeIds: [] },
+    { id: "paris-2", label: "October 7", date: "2026-10-07", city: "Paris", placeIds: [] },
+    { id: "london-1", label: "October 9", date: "2026-10-09", city: "London", placeIds: [] }
+  ]
+};
+
+test("formal itinerary integrity rejects missing coordinates and candidate assignment overlap", () => {
+  const presentation: PlanPresentation = {
+    kind: "itinerary",
+    summary: "Paris",
+    startDate: "2026-10-06",
+    endDate: "2026-10-06",
+    days: [{ id: "day-1", label: "October 6", date: "2026-10-06", city: "Paris", placeIds: ["louvre"], candidates: ["louvre"], stops: [{ placeId: "louvre", order: 1 }] }],
+    places: [{ id: "louvre", name: "Louvre", locationLabel: "Paris", city: "Paris", category: "museum", priority: "must", whyWorthIt: "Art", plan: "Visit", detailSections: [], sourceRefs: [] }],
+    routeSegments: []
+  };
+  const issues = planPresentationIntegrityIssues(presentation);
+  assert.equal(issues.some((issue) => /also a candidate/.test(issue)), true);
+  assert.equal(issues.some((issue) => /persistent coordinates/.test(issue)), true);
+});
+
+test("formal itinerary integrity requires an executable daily timeline and explained movement", () => {
+  const presentation: PlanPresentation = {
+    kind: "itinerary",
+    summary: "A timed Paris day.",
+    startDate: "2026-10-06",
+    endDate: "2026-10-06",
+    days: [{
+      id: "day-1", label: "October 6", date: "2026-10-06", city: "Paris",
+      title: "Historic Paris", summary: "Follow one compact central axis with a midday rest.",
+      placeIds: ["notre-dame", "luxembourg"],
+      stops: [{ placeId: "notre-dame", order: 1 }, { placeId: "luxembourg", order: 2, time: "14:00" }]
+    }],
+    places: [
+      { id: "notre-dame", name: "Notre-Dame", locationLabel: "Paris", city: "Paris", coordinates: [48.853, 2.349], category: "landmark", priority: "must", whyWorthIt: "Historic anchor", plan: "Visit", detailSections: [], sourceRefs: [] },
+      { id: "luxembourg", name: "Luxembourg Gardens", locationLabel: "Paris", city: "Paris", coordinates: [48.846, 2.337], category: "garden", priority: "preferred", whyWorthIt: "Rest stop", plan: "Pause", detailSections: [], sourceRefs: [] }
+    ],
+    routeSegments: [{ id: "route-1", dayId: "day-1", originPlaceId: "notre-dame", destinationPlaceId: "luxembourg", mode: "unknown", verification: "needs_verification", sourceRefs: [] }]
+  };
+  const issues = planPresentationIntegrityIssues(presentation);
+  assert.equal(issues.some((issue) => /every scheduled stop.*HH:mm/.test(issue)), true);
+  assert.equal(issues.some((issue) => /explain why its scheduled sequence/.test(issue)), true);
+  assert.equal(issues.some((issue) => /planned transport mode/.test(issue)), true);
+  assert.equal(issues.some((issue) => /planned duration/.test(issue)), true);
+  assert.equal(issues.some((issue) => /movement label/.test(issue)), true);
+  assert.equal(issues.some((issue) => /movement and its evidence status/.test(issue)), true);
+  assert.equal(issues.some((issue) => /realistic visit duration/.test(issue)), true);
+});
+
+test("formal itinerary integrity checks that visits and movement fit between start times", () => {
+  const presentation: PlanPresentation = {
+    kind: "itinerary", summary: "A feasible museum morning.", startDate: "2026-10-06", endDate: "2026-10-06",
+    days: [{ id: "day-1", label: "October 6", date: "2026-10-06", city: "Paris", title: "Two museums", summary: "Visit one collection before moving to the next.", placeIds: ["a", "b"], stops: [{ placeId: "a", order: 1, time: "10:00" }, { placeId: "b", order: 2, time: "11:00" }], routeReview: { sequenceRationale: "Keep two nearby museums together." } }],
+    places: [
+      { id: "a", name: "Museum A", locationLabel: "Paris", city: "Paris", coordinates: [48.85, 2.34], category: "museum", priority: "must", durationMinutes: 50, whyWorthIt: "Art", plan: "Visit", detailSections: [], sourceRefs: [] },
+      { id: "b", name: "Museum B", locationLabel: "Paris", city: "Paris", coordinates: [48.86, 2.35], category: "museum", priority: "preferred", durationMinutes: 60, whyWorthIt: "Design", plan: "Visit", detailSections: [], sourceRefs: [] }
+    ],
+    routeSegments: [{ id: "a-b", dayId: "day-1", originPlaceId: "a", destinationPlaceId: "b", mode: "walking", verification: "needs_verification", durationMinutes: 20, label: "Walk to Museum B", detail: "Allow twenty minutes and refresh before leaving.", sourceRefs: [] }]
+  };
+  const issues = planPresentationIntegrityIssues(presentation);
+  assert.equal(issues.some((issue) => /does not leave enough time/.test(issue)), true);
+  presentation.days[0]!.stops![1]!.time = "11:10";
+  assert.equal(planPresentationIntegrityIssues(presentation).some((issue) => /does not leave enough time/.test(issue)), false);
+});
+
+test("current destination stays on the first city before a multi-city trip", () => {
+  assert.deepEqual(resolveCurrentPlanDestination(multiCityPresentation, { now: new Date("2026-09-20T12:00:00Z") }), {
+    city: "Paris", dayId: "paris-1", basis: "first_destination"
+  });
+});
+
+test("current destination ignores an origin-only airport day", () => {
+  const presentation: PlanPresentation = {
+    kind: "itinerary", summary: "New York departure followed by Paris.", startDate: "2026-10-10", endDate: "2026-10-12",
+    places: [
+      { id: "jfk", name: "JFK", locationLabel: "New York", city: "New York City", coordinates: [40.64, -73.77], category: "International airport", priority: "must", whyWorthIt: "Departure", plan: "Fly", detailSections: [], sourceRefs: [] },
+      { id: "louvre", name: "Louvre", locationLabel: "Paris", city: "Paris", coordinates: [48.86, 2.34], category: "museum", priority: "must", whyWorthIt: "Art", plan: "Visit", detailSections: [], sourceRefs: [] }
+    ],
+    routeSegments: [],
+    days: [
+      { id: "departure", label: "October 10", date: "2026-10-10", city: "New York City", placeIds: ["jfk"] },
+      { id: "paris", label: "October 11", date: "2026-10-11", city: "Paris", placeIds: ["louvre"] }
+    ]
+  };
+  assert.deepEqual(resolveCurrentPlanDestination(presentation, { now: new Date("2026-08-19T12:00:00Z") }), {
+    city: "Paris", dayId: "paris", basis: "first_destination"
+  });
+});
+
+test("current destination follows the dated itinerary stage when no arrival events exist", () => {
+  assert.equal(resolveCurrentPlanDestination(multiCityPresentation, { now: new Date("2026-10-08T12:00:00Z") })?.city, "Paris");
+  assert.equal(resolveCurrentPlanDestination(multiCityPresentation, { now: new Date("2026-10-09T12:00:00Z") })?.city, "London");
+});
+
+test("confirmed arrivals keep weather on Paris until London is actually reached", () => {
+  const parisArrival = { city: "Paris", arrivedAt: "2026-10-06T09:00:00Z", confirmed: true };
+  assert.equal(resolveCurrentPlanDestination(multiCityPresentation, { now: new Date("2026-10-09T10:00:00Z"), arrivals: [parisArrival] })?.city, "Paris");
+  assert.equal(resolveCurrentPlanDestination(multiCityPresentation, {
+    now: new Date("2026-10-09T14:00:00Z"),
+    arrivals: [parisArrival, { city: "London", arrivedAt: "2026-10-09T13:00:00Z", confirmed: true }]
+  })?.city, "London");
+});
+
+test("Core normalizes legacy stage titles into stable presentation kinds once", () => {
+  assert.equal(inferStagePresentationKind("每日行程"), "itinerary");
+  assert.equal(inferStagePresentationKind("Budget and contingency"), "budget");
+  assert.equal(inferStagePresentationKind("Emergency information"), "details");
+  const plan = createPlanFromDraft({
+    title: "Typed workspace",
+    location: "Lisbon, Portugal",
+    dates: "October 2026",
+    knownInformation: ["A five-day trip."],
+    assumptions: [],
+    nextAction: "Review.",
+    stages: [{ title: "Custom route", description: "A route.", presentationKind: "transport", tasks: [{ title: "Airport transfer", owner: "external", dueLabel: "Arrival" }] }]
+  });
+  assert.equal(plan.stages[0]?.presentationKind, "transport");
 });
 
 test("a natural-language request creates a draft Plan with transparent assumptions", () => {
@@ -158,6 +286,15 @@ test("policy preparation asks for personal facts before it can be reviewed", () 
     "official_source.nia-english"
   ]);
   assert.match(assessment.warning, /does not determine/i);
+});
+
+test("policy preparation treats no visa yet as a confirmed fact that needs official guidance", () => {
+  const workspace = createInitialWorkspace();
+  workspace.profile = { ...workspace.profile, nationality: "Canada", immigrationStatus: "no_visa", status: "ready" };
+  const assessment = assessPolicyPreparation({ profile: workspace.profile, plan: workspace.activePlan, sourceSnapshots: [], now: new Date("2026-08-07T00:00:00.000Z") });
+  assert.match(assessment.knownInformation.join(" "), /No China visa or residence permit has been obtained yet/i);
+  assert.equal(assessment.missingInformation.some((item) => item.field === "profile.immigrationStatus"), false);
+  assert.equal(assessment.missingInformation.some((item) => item.field === "official_source.nia-english"), true);
 });
 
 test("policy preparation is ready only when confirmed facts have fresh official evidence", () => {

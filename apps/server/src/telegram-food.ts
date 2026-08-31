@@ -1,4 +1,4 @@
-import { createAmapPlaceHandoff, type AmapNearbyPlace, type TelegramReplyMarkup } from "@c-assistant/connectors";
+import { createGoogleMapsPlaceHandoff, type NearbyPlaceFact, type TelegramReplyMarkup } from "@c-assistant/connectors";
 import type { FoodNearbySkillResult } from "@c-assistant/china-country-pack";
 
 export function parseTelegramFoodPartyCallback(value: string | undefined): { planId: string; version: number; partySize: number } | undefined {
@@ -19,17 +19,17 @@ export function telegramFoodPartyMarkup(planId: string, version: number): Telegr
   };
 }
 
-export function formatTelegramNearbyFood(input: { result: FoodNearbySkillResult; places: AmapNearbyPlace[]; partySize: number }): { text: string; replyMarkup?: TelegramReplyMarkup } {
+export function formatTelegramNearbyFood(input: { result: FoodNearbySkillResult; places: NearbyPlaceFact[]; partySize: number }): { text: string; replyMarkup?: TelegramReplyMarkup } {
   if (input.result.status !== "success" || input.result.facts.length === 0) {
-    return { text: `Amap returned no nearby restaurant candidates for this location (party size: ${input.partySize}). No distance limit was imposed by Landi. Your shared coordinates were not saved.` };
+    return { text: `Google Maps returned no nearby restaurant candidates for this location (party size: ${input.partySize}). No distance limit was imposed by Landi. Your shared coordinates were not saved.` };
   }
   const facts = input.result.facts.map((place) => `${place.position}. ${place.name}\n${formatDistance(place.distanceMeters)} · ${place.address}\n${place.type}`);
   const handoffs = input.result.actionCards.flatMap((card) => {
     const place = input.places.find((candidate) => candidate.id === card.candidateId);
-    return place ? [{ text: `Open ${input.result.facts.find((fact) => fact.id === place.id)?.position ?? "place"} in Amap`, url: createAmapPlaceHandoff({ place }).url }] : [];
+    return place ? [{ text: `Open ${input.result.facts.find((fact) => fact.id === place.id)?.position ?? "place"} in Google Maps`, url: createGoogleMapsPlaceHandoff({ place }).url }] : [];
   });
   return {
-    text: `Nearby food for ${input.partySize} ${input.partySize === 1 ? "person" : "people"}\n\nAmap returned these candidates in provider distance order. Landi has not ranked them or checked table availability.\n\n${facts.join("\n\n")}\n\nOpen a candidate in Amap to inspect it and take the next action yourself. No order, reservation, or payment was started. The shared coordinates were not saved.`,
+    text: `Nearby food for ${input.partySize} ${input.partySize === 1 ? "person" : "people"}\n\nGoogle Maps returned these candidates with straight-line distance facts. Landi has not ranked them or checked table availability.\n\n${facts.join("\n\n")}\n\nOpen a candidate in Google Maps to inspect it and take the next action yourself. No order, reservation, or payment was started. The shared coordinates were not saved.`,
     ...(handoffs.length ? { replyMarkup: { inline_keyboard: handoffs.map((button) => [button]) } } : {})
   };
 }

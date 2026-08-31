@@ -24,27 +24,29 @@ test("a one-route override wins without changing the saved Plan preference", () 
   assert.equal(plan.configuration.transport.preference, "plan_recommended");
 });
 
-test("arrival route copy makes the Amap handoff and its boundary explicit", () => {
+test("arrival route copy makes the Google Maps handoff and its boundary explicit", () => {
   const origin = { id: "", name: "Shared current location", address: "", location: "121.455,31.249", type: "Temporary location", city: "", district: "" };
   const destination = { id: "stay-1", name: "Riverside Hotel", address: "1 River Road", location: "121.456,31.250", type: "Accommodation", city: "Shanghai", district: "Jing'an" };
   const result = formatArrivalRoute({ origin, destination, transport: "driving", route: { mode: "driving", origin: origin.location, destination: destination.location, distanceMeters: 2_400, durationSeconds: 720, taxiCostYuan: 18, strategy: "amap_recommended" } });
   assert.match(result.text, /2\.4 km/);
   assert.match(result.text, /not hailed a ride/i);
-  assert.equal(result.handoffLabel, "Open route in Amap");
-  assert.match(result.handoffUrl, /^https:\/\/uri\.amap\.com\/navigation/);
+  assert.equal(result.handoffLabel, "Open route in Google Maps");
+  assert.match(result.handoffUrl, /^https:\/\/www\.google\.com\/maps\/dir/);
 });
 
-test("a taxi request guides the user from Amap's web route to its taxi confirmation", () => {
+test("a taxi request hands off to Uber while keeping Amap route facts separate", () => {
   const origin = { id: "", name: "Shared current location", address: "", location: "121.455,31.249", type: "Temporary location", city: "", district: "" };
   const destination = { id: "stay-1", name: "Riverside Hotel", address: "1 River Road", location: "121.456,31.250", type: "Accommodation", city: "Shanghai", district: "Jing'an" };
-  const result = formatArrivalRoute({ origin, destination, transport: "driving", taxiRequested: true, route: { mode: "driving", origin: origin.location, destination: destination.location, distanceMeters: 2_400, durationSeconds: 720, taxiCostYuan: 18, strategy: "amap_recommended" } });
-  assert.match(result.text, /打开高德APP \(Open Amap App\)/i);
-  assert.match(result.text, /打车 \(Taxi\)/i);
-  assert.match(result.text, /立即打车 \(Call now\)/i);
+  const result = formatArrivalRoute({ origin, destination, transport: "driving", taxiRequested: true, uberPickup: { latitude: 31.249, longitude: 121.455 }, route: { mode: "driving", origin: origin.location, destination: destination.location, distanceMeters: 2_400, durationSeconds: 720, taxiCostYuan: 18, strategy: "amap_recommended" } });
+  assert.match(result.text, /Continue in Uber/i);
+  assert.match(result.text, /live fare/i);
+  assert.match(result.text, /Confirm the ride in Uber/i);
   assert.match(result.text, /only when you are ready/i);
   assert.match(result.text, /do not need to confirm boarding or arrival/i);
   assert.match(result.text, /I haven't arrived/i);
-  assert.equal(result.handoffLabel, "Open driving route in Amap");
+  assert.equal(result.handoffLabel, "Open Uber");
+  assert.match(result.handoffUrl, /^https:\/\/m\.uber\.com\/looking/);
+  assert.doesNotMatch(result.handoffUrl, /uri\.amap\.com/);
 });
 
 test("arrival route copy includes a public-transit fare when Amap provides one", () => {

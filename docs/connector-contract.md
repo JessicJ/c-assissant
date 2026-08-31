@@ -1,5 +1,9 @@
 # Connector Contract
 
+> Contributor reference. This contract defines how Landi obtains external facts and hands actions to provider applications. It is not part of the primary product-design reading path.
+
+Current provider decision: Google Maps Platform is the active global place, route, and nearby-discovery provider; Google Weather is used only within its own coverage, and unsupported locations degrade without a regional fallback. Uber is the taxi handoff. Amap and QWeather are paused. Their sections below are retained as historical contracts only and do not describe an active runtime dependency.
+
 Connectors isolate external systems from Skills and Core. A Skill asks for a capability; the active Country Pack maps that capability to a provider.
 
 ## Boundary
@@ -51,6 +55,14 @@ interface ConnectorResult<T> {
 
 Core decides whether to retry, degrade the experience, ask the user, or create a follow-up Task.
 
+## Messaging Connector contract
+
+Telegram and WhatsApp implement the same minimal outbound capability contract: a channel identity, configuration status, and normalized text delivery receipt. Provider-specific controls remain typed extensions rather than leaking into Core.
+
+Telegram is the default channel. WhatsApp is optional and may be left completely unconfigured without affecting Setup readiness. Its configuration progresses through `webhook_pending`, `template_pending`, and `available` states. WhatsApp free-form text is refused unless Core supplies a still-active user-opened 24-hour service window; proactive reminders use a named, approved template. Incoming WhatsApp webhooks must pass `X-Hub-Signature-256` HMAC verification before text, location, button/list replies, or delivery states are normalized. Neither access tokens, webhook secrets, verify tokens, nor raw webhook bodies may enter Profile, Plan, Skill input, or Agent runtime context.
+
+The first inbound slice binds one international WhatsApp number in private instance configuration. A signed `wamid` is claimed once in SQLite before its text enters the shared bounded Plan/command handler, and Plan-generation Runs retain `trigger: whatsapp`. Other senders and duplicate deliveries are acknowledged but ignored. URL handoffs are rendered as text; callback confirmation and location controls explicitly remain Web/Telegram-only until native WhatsApp action state is implemented.
+
 ## Capability naming
 
 Capabilities are stable product concepts, not provider method names. Examples:
@@ -74,7 +86,7 @@ Capabilities are stable product concepts, not provider method names. Examples:
 
 Provider-specific response fields remain inside the Connector and are normalized before reaching Skills.
 
-## Amap Connector
+## Google Maps Connector
 
 V1 capabilities:
 
@@ -84,7 +96,7 @@ V1 capabilities:
 - weather lookup where the API supports the required area and horizon;
 - map/search handoff links.
 
-Amap supplies location and route facts. It does not decide which neighborhood, restaurant, hotel area, or transport option is best for the user. Those decisions belong to Skills using Plan context.
+Google Maps supplies global location and route facts. It does not decide which neighborhood, restaurant, hotel area, or transport option is best for the user. Those decisions belong to Skills using Plan context.
 
 The Connector must preserve enough provider identifiers to produce stable handoffs, but provider payloads must not leak into long-term Profile data.
 
@@ -137,9 +149,9 @@ interface ExternalHandoff {
 }
 ```
 
-V1 does not claim completion after a user opens Amap or Ctrip. Core may ask for confirmation only when knowing completion changes later execution.
+V1 does not claim completion after a user opens Google Maps, Uber, or another external app. Core may ask for confirmation only when knowing completion changes later execution.
 
-The documented Amap URI handoff supports route planning, not taxi ordering. A taxi choice may use current driving-route facts and the provider's taxi estimate, but its HTTPS action opens a driving route. Telegram therefore guides the user through the observed handoff: open the HTTPS route, tap `打开高德APP` (Open Amap App) when the H5 page appears, tap `打车` (Taxi), verify pickup and destination, choose vehicle types, and tap `立即打车` (Call now) only when ready. Landi must not label this as a direct taxi-page handoff or infer that a ride was hailed.
+Google Maps Platform is the global source of place and route facts used for planning and conservative arrival timing. A taxi action opens Uber's mobile rider experience with the device's one-time WGS-84 pickup coordinate and the Plan destination text. The user must verify pickup, destination, availability, live fare, vehicle type, payment method, and the final request in Uber. Landi must not infer that opening the link hailed a ride, and it never sends Uber a client secret, access token, or payment credential. `UBER_CLIENT_ID` is optional public application attribution only; the V1 handoff does not require a privileged Ride Requests API integration. Amap and QWeather are paused and receive no runtime calls.
 
 An ordinary Telegram URL button does not report a click to the bot. Current local instances therefore record `handoff_offered` only after Telegram accepts the message. `handoff_opened` is reserved for a future observable HTTPS redirect or Mini App event and must not be synthesized. The expected follow-up time may be calculated from the offer time, a conservative waiting buffer, the provider's route duration, and a safety margin. Such timing can trigger ordinary guidance with an `I haven't arrived` escape hatch, but never a critical action or factual completion.
 

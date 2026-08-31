@@ -3,6 +3,9 @@ import type { LuggageLevel, PlanCompilationProposal, SourceEvidenceRef, Transpor
 import type { TransportMode, TransportRouteFact, TransportWeatherFact } from "@c-assistant/core/transport";
 import type { SkillStatus } from "@c-assistant/skill-runtime";
 
+export type MapFactProvider = "google_maps" | "amap";
+export type WeatherFactProvider = "google_weather" | "qweather";
+
 export type FoodNearbySkillStatus = "success" | "needs_input" | "degraded" | "failed";
 
 export interface FoodNearbyCandidateInput {
@@ -28,17 +31,19 @@ export interface FoodNearbySkillResult {
   proposedPlanChanges: [];
   proposedTasks: [];
   proposedReminders: [];
-  actionCards: Array<{ kind: "external_handoff"; provider: "amap"; candidateId: string; completion: "unknown_until_user_confirms" }>;
-  sources: Array<{ provider: "amap"; observedAt: string }>;
+  actionCards: Array<{ kind: "external_handoff"; provider: MapFactProvider; candidateId: string; completion: "unknown_until_user_confirms" }>;
+  sources: Array<{ provider: MapFactProvider; observedAt: string }>;
   warnings: string[];
   needsInput?: { field: "partySize"; reason: string };
 }
 
 /**
  * First deterministic China Pack Skill implementation. It converts approved
- * Amap facts into a bounded result; it deliberately makes no restaurant rank.
+ * provider facts into a bounded result; it deliberately makes no restaurant rank.
  */
-export function runFoodNearbySkill(input: { partySize?: number; candidates: FoodNearbyCandidateInput[]; observedAt: string }): FoodNearbySkillResult {
+export function runFoodNearbySkill(input: { partySize?: number; candidates: FoodNearbyCandidateInput[]; observedAt: string; provider?: MapFactProvider }): FoodNearbySkillResult {
+  const provider = input.provider ?? "amap";
+  const providerName = provider === "google_maps" ? "Google Maps" : "Amap";
   const base = {
     skill: { id: "food-nearby" as const, version: "0.1.0" as const },
     assumptions: [],
@@ -46,7 +51,7 @@ export function runFoodNearbySkill(input: { partySize?: number; candidates: Food
     proposedPlanChanges: [] as [],
     proposedTasks: [] as [],
     proposedReminders: [] as [],
-    sources: [{ provider: "amap" as const, observedAt: input.observedAt }]
+    sources: [{ provider, observedAt: input.observedAt }]
   };
   if (input.partySize === undefined) {
     return {
@@ -66,18 +71,18 @@ export function runFoodNearbySkill(input: { partySize?: number; candidates: Food
   const facts = valid.slice(0, 5).map((candidate, index) => ({ ...candidate, position: index + 1 }));
   const warnings = [
     "Provider order is preserved; Landi has not independently ranked these places.",
-    "Opening Amap does not prove an order, reservation, payment, visit, or completion."
+    `Opening ${providerName} does not prove an order, reservation, payment, visit, or completion.`
   ];
   if (valid.length !== input.candidates.length) warnings.push("Malformed provider candidates were omitted.");
   if (facts.length === 0) {
-    return { ...base, status: "degraded", summary: `Amap returned no usable nearby food candidates for ${input.partySize} ${input.partySize === 1 ? "person" : "people"}.`, facts, actionCards: [], warnings };
+    return { ...base, status: "degraded", summary: `${providerName} returned no usable nearby food candidates for ${input.partySize} ${input.partySize === 1 ? "person" : "people"}.`, facts, actionCards: [], warnings };
   }
   return {
     ...base,
     status: "success",
-    summary: `Amap returned ${facts.length} nearby food candidates for ${input.partySize} ${input.partySize === 1 ? "person" : "people"}.`,
+    summary: `${providerName} returned ${facts.length} nearby food candidates for ${input.partySize} ${input.partySize === 1 ? "person" : "people"}.`,
     facts,
-    actionCards: facts.map((fact) => ({ kind: "external_handoff", provider: "amap", candidateId: fact.id, completion: "unknown_until_user_confirms" })),
+    actionCards: facts.map((fact) => ({ kind: "external_handoff", provider, candidateId: fact.id, completion: "unknown_until_user_confirms" })),
     warnings
   };
 }
@@ -103,17 +108,19 @@ export interface HousingAreaSkillResult {
   proposedPlanChanges: [];
   proposedTasks: [];
   proposedReminders: [];
-  actionCards: Array<{ kind: "external_handoff"; provider: "amap"; candidateId: string; completion: "unknown_until_user_confirms" }>;
-  sources: Array<{ provider: "amap"; observedAt: string }>;
+  actionCards: Array<{ kind: "external_handoff"; provider: MapFactProvider; candidateId: string; completion: "unknown_until_user_confirms" }>;
+  sources: Array<{ provider: MapFactProvider; observedAt: string }>;
   warnings: string[];
   needsInput?: { field: "centreName"; reason: string };
 }
 
 /** First access-oriented slice; area-level judgment waits for multi-anchor route facts. */
-export function runHousingAreaRecommendationSkill(input: { centreName?: string; candidates: FoodNearbyCandidateInput[]; observedAt: string }): HousingAreaSkillResult {
+export function runHousingAreaRecommendationSkill(input: { centreName?: string; candidates: FoodNearbyCandidateInput[]; observedAt: string; provider?: MapFactProvider }): HousingAreaSkillResult {
   const identity = { id: "housing-area-recommendation" as const, version: "0.1.0" as const };
   const noChanges = { proposedPlanChanges: [] as [], proposedTasks: [] as [], proposedReminders: [] as [] };
   const centreName = input.centreName?.trim();
+  const provider = input.provider ?? "amap";
+  const providerName = provider === "google_maps" ? "Google Maps" : "Amap";
   if (!centreName) {
     return { skill: identity, ...noChanges, status: "needs_input", summary: "Choose the Plan place that accommodation access should be compared with.", facts: [], assumptions: [], recommendations: [], actionCards: [], sources: [], warnings: [], needsInput: { field: "centreName", reason: "A stay location needs a venue, workplace, school, or other Plan anchor for an explainable comparison." } };
   }
@@ -123,11 +130,11 @@ export function runHousingAreaRecommendationSkill(input: { centreName?: string; 
   const valid = input.candidates.filter(isValidCandidate);
   const facts = valid.slice(0, 5).map((candidate, index) => ({ ...candidate, position: index + 1 }));
   const warnings = [
-    "Amap distance is a location fact, not a door-to-door commute or proof that this is the best area.",
+    `${providerName} distance is a location fact, not a door-to-door commute or proof that this is the best area.`,
     "Live price, inventory, booking, payment, and foreign-guest eligibility have not been verified."
   ];
   if (valid.length !== input.candidates.length) warnings.push("Malformed provider candidates were omitted.");
-  if (facts.length === 0) return { skill: identity, ...noChanges, status: "degraded", summary: `Amap returned no usable accommodation candidates near ${centreName}.`, facts, assumptions: [], recommendations: [], actionCards: [], sources: [{ provider: "amap", observedAt: input.observedAt }], warnings };
+  if (facts.length === 0) return { skill: identity, ...noChanges, status: "degraded", summary: `${providerName} returned no usable accommodation candidates near ${centreName}.`, facts, assumptions: [], recommendations: [], actionCards: [], sources: [{ provider, observedAt: input.observedAt }], warnings };
   return {
     skill: identity,
     ...noChanges,
@@ -137,11 +144,11 @@ export function runHousingAreaRecommendationSkill(input: { centreName?: string; 
     assumptions: ["The selected centre is a useful access anchor for this Plan."],
     recommendations: facts.slice(0, 3).map((fact) => ({
       candidateId: fact.id,
-      reason: `${formatSkillDistance(fact.distanceMeters)} from ${centreName} by Amap nearby-place distance. Compare an actual route before choosing.`,
+      reason: `${formatSkillDistance(fact.distanceMeters)} from ${centreName} by ${providerName} nearby-place distance. Compare an actual route before choosing.`,
       limitations: [...warnings]
     })),
-    actionCards: facts.map((fact) => ({ kind: "external_handoff", provider: "amap", candidateId: fact.id, completion: "unknown_until_user_confirms" })),
-    sources: [{ provider: "amap", observedAt: input.observedAt }],
+    actionCards: facts.map((fact) => ({ kind: "external_handoff", provider, candidateId: fact.id, completion: "unknown_until_user_confirms" })),
+    sources: [{ provider, observedAt: input.observedAt }],
     warnings
   };
 }
@@ -160,8 +167,8 @@ export interface TransportPlannerSkillResult {
   proposedPlanChanges: [];
   proposedTasks: [];
   proposedReminders: [];
-  actionCards: Array<{ kind: "external_handoff"; provider: "amap"; mode: TransportMode; completion: "unknown_until_user_confirms" }>;
-  sources: Array<{ provider: "amap" | "qweather"; observedAt: string }>;
+  actionCards: Array<{ kind: "external_handoff"; provider: MapFactProvider; mode: TransportMode; completion: "unknown_until_user_confirms" }>;
+  sources: Array<{ provider: MapFactProvider | WeatherFactProvider; observedAt: string }>;
   warnings: string[];
   needsInput?: { field: "routeFacts"; reason: string };
 }
@@ -175,6 +182,8 @@ export function runTransportPlannerSkill(input: {
   routeObservedAt: string;
   weather?: TransportWeatherFact;
   weatherObservedAt?: string;
+  mapProvider?: MapFactProvider;
+  weatherProvider?: WeatherFactProvider;
 }): TransportPlannerSkillResult {
   const identity = { id: "transport-planner" as const, version: "0.1.0" as const };
   const noChanges = { proposedPlanChanges: [] as [], proposedTasks: [] as [], proposedReminders: [] as [] };
@@ -204,8 +213,10 @@ export function runTransportPlannerSkill(input: {
     ...(input.weather ? { weather: input.weather } : {})
   });
   const recommendations = recommendation.mode ? [{ mode: recommendation.mode, reasons: recommendation.reasons }] : [];
-  const sources: TransportPlannerSkillResult["sources"] = [{ provider: "amap", observedAt: input.routeObservedAt }];
-  if (input.weather && input.weatherObservedAt) sources.push({ provider: "qweather", observedAt: input.weatherObservedAt });
+  const mapProvider = input.mapProvider ?? "amap";
+  const weatherProvider = input.weatherProvider ?? "qweather";
+  const sources: TransportPlannerSkillResult["sources"] = [{ provider: mapProvider, observedAt: input.routeObservedAt }];
+  if (input.weather && input.weatherObservedAt) sources.push({ provider: weatherProvider, observedAt: input.weatherObservedAt });
   return {
     skill: identity,
     status: "success",
@@ -214,7 +225,7 @@ export function runTransportPlannerSkill(input: {
     assumptions: input.weather ? ["The supplied weather fact was already matched to the expected arrival date."] : [],
     recommendations,
     ...noChanges,
-    actionCards: recommendation.mode ? [{ kind: "external_handoff", provider: "amap", mode: recommendation.mode, completion: "unknown_until_user_confirms" }] : [],
+    actionCards: recommendation.mode ? [{ kind: "external_handoff", provider: mapProvider, mode: recommendation.mode, completion: "unknown_until_user_confirms" }] : [],
     sources,
     warnings: [...recommendation.limitations, "No ride, booking, navigation session, or payment has been started."]
   };
@@ -253,22 +264,54 @@ export interface WeatherAndPackingSkillResult {
   proposedTasks: [];
   proposedReminders: [];
   actionCards: [];
-  sources: Array<{ provider: "qweather"; observedAt: string; url?: string }>;
+  sources: Array<{ provider: "qweather" | "google_weather"; observedAt: string; url?: string }>;
   warnings: string[];
 }
 
-/** Converts QWeather-normalized facts into cautious, source-bound packing prompts. */
-export function runWeatherAndPackingSkill(input: {
+export type WeatherAndPackingSkillInput = {
   locationName: string;
   current: WeatherPackingCurrentFact;
   daily: WeatherPackingDailyFact[];
   retrievedAt: string;
   attributionUrl?: string;
   targetDate?: string;
-}): WeatherAndPackingSkillResult {
+  provider?: "qweather" | "google_weather";
+  availability?: "available";
+} | {
+  locationName: string;
+  retrievedAt: string;
+  provider?: "qweather" | "google_weather";
+  availability: "not_supported" | "unavailable";
+  reasonCode?: string;
+};
+
+/** Converts normalized weather facts into cautious, source-bound packing prompts. */
+export function runWeatherAndPackingSkill(input: WeatherAndPackingSkillInput): WeatherAndPackingSkillResult {
   const identity = { id: "weather-and-packing" as const, version: "0.1.0" as const };
   const noChanges = { proposedPlanChanges: [] as [], proposedTasks: [] as [], proposedReminders: [] as [], actionCards: [] as [] };
-  const sourceUrl = approvedQWeatherUrl(input.attributionUrl);
+  const provider = input.provider ?? "qweather";
+  if (input.availability === "not_supported" || input.availability === "unavailable") {
+    const valid = input.locationName.trim().length > 0 && Number.isFinite(Date.parse(input.retrievedAt));
+    if (!valid) return { skill: identity, ...noChanges, status: "failed", summary: "The weather availability input did not pass the Skill contract.", facts: [], assumptions: [], recommendations: [], sources: [], warnings: ["No packing guidance was produced from malformed weather availability context."] };
+    const limitation = input.availability === "not_supported"
+      ? `Weather facts are not supported for ${input.locationName} by the configured provider.`
+      : `Weather facts are temporarily unavailable for ${input.locationName}.`;
+    return {
+      skill: identity,
+      ...noChanges,
+      status: "degraded",
+      summary: `${limitation} The rest of the Plan can continue without weather guidance.`,
+      facts: [],
+      assumptions: [],
+      recommendations: [],
+      sources: [{ provider, observedAt: input.retrievedAt }],
+      warnings: [limitation, "No weather-sensitive packing recommendation or weather-dependent transport adjustment was produced."]
+    };
+  }
+  if (!("current" in input) || !("daily" in input)) {
+    return { skill: identity, ...noChanges, status: "failed", summary: "The weather input did not pass the Skill contract.", facts: [], assumptions: [], recommendations: [], sources: [], warnings: ["No packing guidance was produced from incomplete weather context."] };
+  }
+  const sourceUrl = approvedWeatherUrl(input.attributionUrl, provider);
   if (!validWeatherPackingInput(input)) {
     return { skill: identity, ...noChanges, status: "failed", summary: "The weather input did not pass the Skill contract.", facts: [], assumptions: [], recommendations: [], sources: [], warnings: ["No packing guidance was produced from malformed or untraceable weather context."] };
   }
@@ -297,7 +340,7 @@ export function runWeatherAndPackingSkill(input: {
     facts,
     assumptions: [],
     recommendations,
-    sources: [{ provider: "qweather", observedAt: input.retrievedAt, ...(sourceUrl ? { url: sourceUrl } : {}) }],
+    sources: [{ provider, observedAt: input.retrievedAt, ...(sourceUrl ? { url: sourceUrl } : {}) }],
     warnings
   };
 }
@@ -323,11 +366,14 @@ function validWeatherPackingInput(input: { locationName: string; current: Weathe
       && [day.highC, day.lowC, day.precipitationMm, day.uvIndex].every(Number.isFinite) && day.precipitationMm >= 0 && day.uvIndex >= 0);
 }
 
-function approvedQWeatherUrl(value: string | undefined): string | undefined {
+function approvedWeatherUrl(value: string | undefined, provider: "qweather" | "google_weather"): string | undefined {
   if (!value) return undefined;
   try {
     const url = new URL(value);
-    return url.protocol === "https:" && (url.hostname === "qweather.com" || url.hostname.endsWith(".qweather.com")) ? url.toString() : undefined;
+    const approved = provider === "google_weather"
+      ? url.hostname === "weather.google.com" || url.hostname.endsWith(".google.com")
+      : url.hostname === "qweather.com" || url.hostname.endsWith(".qweather.com");
+    return url.protocol === "https:" && approved ? url.toString() : undefined;
   } catch {
     return undefined;
   }
@@ -366,7 +412,7 @@ const POLICY_EVIDENCE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000;
 /** Evidence gate only. It never reads policy text or decides personal eligibility. */
 export function runPolicyApplicabilitySkill(input: {
   nationality?: string;
-  immigrationStatus: "unknown" | "short_term_visitor" | "tourist_visa" | "student_visa" | "work_visa" | "residence_permit" | "other";
+  immigrationStatus: "unknown" | "no_visa" | "short_term_visitor" | "tourist_visa" | "student_visa" | "work_visa" | "residence_permit" | "other";
   location?: string;
   dates?: string;
   evidence: PolicyEvidenceInput[];
@@ -375,14 +421,14 @@ export function runPolicyApplicabilitySkill(input: {
   const identity = { id: "policy-applicability" as const, version: "0.1.0" as const };
   const noChanges = { recommendations: [] as [], proposedPlanChanges: [] as [], proposedTasks: [] as [], proposedReminders: [] as [], actionCards: [] as [] };
   const nowMs = Date.parse(input.now);
-  const validContext = Number.isFinite(nowMs) && ["unknown", "short_term_visitor", "tourist_visa", "student_visa", "work_visa", "residence_permit", "other"].includes(input.immigrationStatus);
+  const validContext = Number.isFinite(nowMs) && ["unknown", "no_visa", "short_term_visitor", "tourist_visa", "student_visa", "work_visa", "residence_permit", "other"].includes(input.immigrationStatus);
   if (!validContext) return { skill: identity, ...noChanges, status: "failed", summary: "The policy preparation input did not pass the Skill contract.", facts: [], assumptions: [], sources: [], warnings: ["No policy or eligibility conclusion was produced."], needsInput: [], nextAction: "Correct the malformed preparation context before continuing." };
 
   const facts: string[] = [];
   const needsInput: PolicyApplicabilitySkillResult["needsInput"] = [];
   if (isConfirmedPolicyValue(input.nationality)) facts.push(`Nationality: ${input.nationality!.trim()}`);
   else needsInput.push({ field: "profile.nationality", label: "Nationality", reason: "Official immigration guidance can depend on nationality." });
-  if (input.immigrationStatus !== "unknown") facts.push("China visa or residence status is recorded.");
+  if (input.immigrationStatus !== "unknown") facts.push(input.immigrationStatus === "no_visa" ? "No China visa or residence permit has been obtained yet." : "China visa or residence status is recorded.");
   else needsInput.push({ field: "profile.immigrationStatus", label: "China visa or residence status", reason: "Choose the status you know, or update it when it becomes clear." });
   if (isConfirmedPolicyValue(input.location)) facts.push(`Plan destination: ${input.location!.trim()}`);
   else needsInput.push({ field: "plan.location", label: "Plan destination", reason: "A location is needed to prepare local policy research." });

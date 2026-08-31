@@ -1,5 +1,7 @@
 # Agent Runtime Adapter
 
+> Contributor reference. This contract defines bounded Agent Runtime integration for Landi. It is not part of the primary product-design reading path.
+
 Landi has one Runtime Adapter contract for Codex and Claude Code. Codex is the real-account-verified runtime for `0.1.0`; Claude Code remains an opt-in preview with contract tests but without real-account release validation.
 
 ## Ownership boundary

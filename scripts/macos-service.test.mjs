@@ -18,5 +18,5 @@ test("macOS service plist starts one production process and contains no Connecto
   assert.match(plist, /Landi &amp; Pack/);
   assert.match(plist, /<key>RunAtLoad<\/key>\s*<true\/>/);
   assert.match(plist, /<key>KeepAlive<\/key>\s*<true\/>/);
-  assert.doesNotMatch(plist, /AMAP_API_KEY|QWEATHER_API_KEY|TELEGRAM_BOT_TOKEN|ANTHROPIC_API_KEY/);
+  assert.doesNotMatch(plist, /GOOGLE_MAPS_API_KEY|AMAP_API_KEY|QWEATHER_API_KEY|TELEGRAM_BOT_TOKEN|WHATSAPP_|ANTHROPIC_API_KEY/);
 });

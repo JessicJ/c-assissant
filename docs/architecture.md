@@ -1,113 +1,282 @@
-# System architecture
+# Landi System Architecture
 
-## Product definition
+## System purpose
 
-Landi is a country-neutral regional assistant runtime. It turns a user's situation into a persistent plan, timed tasks, evidence-backed guidance, and low-friction action handoffs.
+Landi is a single-user, long-running travel assistant. It combines conversational planning, structured Plan storage, source-backed regional preparation, scheduled assistance, and user-approved Plan adjustment.
 
-## Reality divergence rule
-
-Core advances ordinary, reversible guidance from the confirmed Plan and a conservative time projection by default. The user intervenes only when reality diverges from that projection. Time-insensitive guidance may be delivered early; payment, cancellation, booking confirmation, Task completion, and other critical or irreversible actions always require an observable fact or explicit confirmation.
-
-Handoff facts and projections are separate. A Telegram URL message can confirm `handoff_offered`, but it cannot confirm that the link was opened, a ride was hailed, the user boarded, or the destination was reached. `expected_waiting`, `expected_in_transit`, and `expected_arrived` are derived labels only. They must never be stored, displayed, or acted on as confirmed journey facts.
-
-The first public extension unit is the complete `china` Country Pack. Individual Skills remain internal modules in V1 and are not installed separately by normal users.
+The system is designed so that no Agent process needs to remain alive to preserve travel state. Core and Storage own continuity; Agent Runtimes perform bounded reasoning runs when needed.
 
 ## Runtime topology
 
 ```text
-User
-├── Web workspace
-└── Telegram
-        ↓
-Core application services
-├── Profile and Plans
-├── Task and Reminder scheduler
-├── Event processing
-├── Confirmation and risk enforcement
-├── Source evidence and versioning
-└── Inbox and channel delivery
-        ├── Skill Runtime → China Country Pack composition
-        ├── restricted Connectors → Amap / QWeather / official sources / Telegram
-        └── Agent Runtime Adapter → Codex or Claude Code (tool-free Plan drafting in V1)
+Web browser                     Telegram
+     |                              |
+     +--------------+---------------+
+                    |
+              Landi Server
+                    |
+        +-----------+------------+
+        |           |            |
+       Core     Scheduler     API/Channels
+        |           |            |
+        +-----------+------------+
+                    |
+              Local Storage
+                 SQLite
+                    |
+       +------------+-------------+
+       |            |             |
+ Agent Runtimes  Country Packs  Connectors
 ```
 
-## Architectural boundaries
+One production Server process hosts:
+
+- the built Web application;
+- the Core HTTP API;
+- Telegram polling and delivery;
+- Reminder scheduling;
+- current weather and venue monitoring;
+- Connector access;
+- local persistence.
+
+The Roadmap moves the current fixed monitoring loops toward durable, database-backed Monitoring Jobs.
+
+## Major components
+
+### Web
+
+Web is the primary planning and Plan-management surface.
+
+Responsibilities:
+
+- run conversational Planning Sessions;
+- present and revise planning proposals;
+- review and activate complete Plans;
+- render itinerary maps, days, Places, routes, preparation, and sources;
+- apply direct structured Plan edits;
+- review impact and replacement drafts;
+- manage Profile, history, runtime selection, Connectors, and local data.
+
+Web never owns the authoritative Plan. It reads and writes through Server APIs.
+
+### Telegram
+
+Telegram is the primary mobile-assistance surface after activation.
+
+Responsibilities:
+
+- deliver time-sensitive Reminders and travel alerts;
+- accept contextual natural-language requests;
+- collect explicit arrival, deviation, location-share, and completion actions;
+- present compact Plan review and version-bound confirmations;
+- hand irreversible actions to maps, booking services, payment services, or ride applications.
+
+Telegram identity and delivery state remain local to the user’s instance.
+
+### Server
+
+Server is the composition and delivery boundary.
+
+Responsibilities:
+
+- expose validated APIs;
+- translate channel input into Core operations;
+- call Agent Runtime adapters;
+- collect normalized Connector facts;
+- invoke Country Pack workflows;
+- run Reminder and monitoring loops;
+- sanitize failures before returning them to product surfaces.
+
+Server may coordinate work but cannot bypass Core version and state checks.
 
 ### Core
 
-Core owns all durable state and side effects. It decides when a Skill runs, what context it receives, whether its output is valid, and whether a proposed action is inside the user's confirmed Plan scope.
+Core owns domain behavior.
 
-Core is country-neutral. No China-specific policy, provider, language, or workflow may be hard-coded into Core.
+Responsibilities:
 
-### Country Pack
+- Planning Session and proposal rules;
+- Plan structure and integrity;
+- Plan version and lifecycle rules;
+- Task and Reminder semantics;
+- current-destination resolution;
+- change impact and replacement behavior;
+- confirmation scope;
+- compilation of validated regional proposals.
 
-A Country Pack defines local workflows, official-source policy, provider mappings, language presentation, and Skills for one country. It is the public release unit.
+Core is provider-neutral. It receives normalized facts and structured proposals rather than provider SDK responses.
 
-### Skill
+### Storage
 
-A Skill is a verifiable business capability. It receives a minimized context and approved tools, then returns a structured proposal or result. It cannot write Core state or send messages directly.
+Storage owns durable local state and concurrency protection.
 
-The implemented Skill Runtime loads Country Pack manifests into a duplicate-safe registry, verifies entrypoint bindings, and validates the shared result envelope and Skill identity/version before a caller can consume it. China Pack has a deterministic, credential-free orchestrator that invokes all seven supporting Skills in declared order over normalized facts and fails closed on critical missing input. The package converts only a ready, version-matched composite into a country-neutral proposal, and Core compiles it only against the exact current draft Plan version. A production fact collector converts Amap, QWeather, Plan-linked immutable official snapshots, and injected Country Pack reference catalogs into normalized input without receiving credentials. Server assembles source preparation, collection, orchestration and SQLite compare-and-write behind one workflow used by Web and Telegram. Successful saves retain minimized compilation and per-Skill Runs plus exact official snapshot ID/hash links; dependent Tasks retain the same bounded provenance while the result remains a draft and inert.
+Responsibilities:
 
-Reference catalogs separate stable Country Pack guidance from freshness evidence. A catalog item names a capability, preserves the original Chinese product name, and provides bounded English steps tied to an approved source ID. At runtime, the loader joins it to the newest immutable snapshot for that exact source, strips the retained excerpt, and lets the Skill's freshness policy decide whether the item is usable. A JSON catalog alone can never satisfy a current-source requirement.
+- SQLite schema migrations;
+- Profile, Planning Session, Plan, Stage, Task, and Reminder persistence;
+- current and executing Plan pointers;
+- source snapshots and evidence links;
+- Run and delivery audit;
+- compare-and-write protection for Plan versions;
+- Reminder retry and deduplication state;
+- backup and integrity checks.
 
-### Connector
-
-A Connector implements a capability against an external provider. It returns normalized facts or performs a narrowly defined channel/handoff operation. It does not make product decisions.
+Future Storage work adds durable Travel Events, Monitoring Jobs, and Travel Attention records.
 
 ### Agent Runtime Adapter
 
-An Adapter asks Codex or Claude Code for a schema-constrained Plan draft. Runtime-specific commands, permissions, and output handling stay inside the Adapter. V1 executes Country Pack Skills deterministically inside the trusted local process rather than through the Agent runtime.
+An Agent Runtime Adapter performs one bounded reasoning or generation run.
 
-## Interaction and scheduled execution
+Responsibilities:
 
-Interactive and scheduled work use the same execution path:
+- verify installation and login state;
+- execute in an isolated working directory;
+- provide only minimized, approved context;
+- enforce structured output;
+- validate the result before returning it;
+- exclude Connector credentials and sensitive runtime state.
+
+Agent Runtimes do not own scheduling, long-term memory, Plan activation, or Connector credentials.
+
+### Country Pack
+
+A Country Pack adds regional preparation and local capability without changing the generic Plan lifecycle.
+
+Responsibilities:
+
+- register regional Skills;
+- define approved official sources;
+- transform normalized provider facts into structured proposals;
+- compose supporting Skill results;
+- preserve evidence provenance and limitations.
+
+Country Packs cannot activate a Plan or write directly to Storage.
+
+V1 includes coexisting `china` and `japan` packs. Server selects one Pack only from the normalized destination-country fact returned by the global map provider; a city name or free-text substring is not sufficient. Missing, ambiguous, unsupported, or multi-country facts fail closed and require confirmation. Official-source discovery and refresh use only the selected Pack's allowlist, preventing China policy evidence from entering Japan work and Japan evidence from entering China work.
+
+### Skill
+
+A Skill performs one specialized transformation inside a Country Pack workflow.
+
+A Skill:
+
+- accepts minimized structured input;
+- returns a versioned structured result;
+- declares sources, assumptions, warnings, and failure state;
+- has no direct database, messaging, scheduling, or credential access.
+
+### Connector
+
+A Connector communicates with an external provider.
+
+Examples include:
+
+- place search and route facts;
+- weather observations and forecasts;
+- Telegram delivery;
+- official-source retrieval;
+- external route or ride handoff.
+
+Connectors return normalized facts or typed failures. They do not make product decisions, generate travel recommendations, or mark Tasks complete.
+
+## Planning flow
 
 ```text
-Web or Telegram request ─┐
-                         ├── Task → Run → Skill → validated result → Core
-Reminder or Event ───────┘
+Web message
+  -> Planning Session update
+  -> Structured facts and next question
+  -> Versioned planning proposal
+  -> Traveler approval
+  -> Agent Runtime generation
+  -> Connector and Country Pack enrichment
+  -> Core integrity validation
+  -> Atomic draft Plan persistence
+  -> Traveler activation
 ```
 
-This prevents a split where a capability works in chat but cannot run as a scheduled task.
+No complete Plan exists before the generation boundary. No Task or Reminder becomes active before Plan activation.
 
-## Product clients
+## Active Plan execution
 
-The Web workspace is the complete desktop-grade product interface. Telegram is the mobile and proactive-service interface. Both use the same Core and state.
+```text
+Active Plan
+  -> Core resolves due work
+  -> Scheduler claims a Reminder or monitoring check
+  -> Server requests current normalized facts
+  -> Core decides whether the result matters
+  -> Storage records result and audit
+  -> Telegram or Web receives user-facing output when needed
+```
 
-Technical diagnostics are not part of the Web product. CLI and local logs contain connector health, raw Agent output, retries, and stack traces. The Web only shows user-understandable status and recovery actions.
+The current implementation has separate loops for Task Reminders, arrival behavior, itinerary departures, weather, and venues. The target architecture preserves those capabilities behind one durable scheduling model.
+
+## Plan adjustment flow
+
+```text
+Traveler request or Travel Attention
+  -> Version-bound impact assessment
+  -> Traveler review
+  -> Replacement generation
+  -> Revalidation of affected facts
+  -> Atomic replacement draft persistence
+  -> Traveler activation
+  -> Execution pointer and future work switch versions
+```
+
+An older active Plan continues execution while a replacement draft is under review. Concurrent Plan changes invalidate stale generation results.
+
+## Evidence flow
+
+```text
+Approved source definition
+  -> Connector retrieval
+  -> Immutable SourceSnapshot
+  -> Normalized Skill input
+  -> Skill and compilation provenance
+  -> Plan, Task, and Run evidence references
+  -> User-visible original source link
+```
+
+Evidence preparation does not itself establish personal eligibility or policy applicability. Policy conclusions require a separate, source-bound review.
+
+## State and trust boundaries
+
+### Authoritative state
+
+SQLite is authoritative for:
+
+- Profile;
+- Planning Sessions;
+- Plans and versions;
+- Tasks and Reminders;
+- execution pointers;
+- source evidence;
+- minimized Run and delivery state.
+
+Browser state, conversation text, Agent memory, and external-app screens are not authoritative.
+
+### Sensitive data
+
+- Runtime login credentials remain in the official local runtime.
+- Connector credentials remain in the Server environment.
+- Skills and Agent Runtimes receive normalized facts, not credentials.
+- Exact location is short-lived and action-scoped.
+- Plan-scoped travel details do not automatically enter Profile.
+
+### Irreversible actions
+
+Booking, ordering, payment, and ride confirmation occur in external applications. Landi may prepare or hand off the action but must not claim completion without explicit confirmation or reliable evidence.
 
 ## Deployment model
 
-The initial architecture supports a local-first personal instance:
+The current deployment target is one local instance per traveler.
 
-```text
-User computer
-├── Core and scheduler
-├── selected Agent runtime
-├── SQLite
-├── Web server
-└── Telegram Bot process
-```
+Supported path:
 
-The runtime host may later move to a personal cloud instance without changing the Web, Telegram, Core, Country Pack, or Skill contracts. The official always-on deployment model remains an open decision.
+- Node.js and SQLite on the traveler’s machine;
+- one production Server process;
+- local Runtime login;
+- local Connector configuration;
+- macOS background service support.
 
-## Autonomy principle
-
-The system should minimize user effort:
-
-1. Generate the complete Plan immediately.
-2. Explain assumptions, recommendations, tradeoffs, Tasks, Reminders, and sources.
-3. Let the user confirm and activate the complete Plan version once.
-4. Execute approved, reversible work automatically.
-5. Ask only when information is critical, authorization is missing, or an action is irreversible.
-
-Expected Events may trigger read-only preparation, refreshed routes, and action cards. Actual occurrence is required only when the next action depends on the user's real state.
-
-## Storage strategy
-
-- SQLite stores Profile, Plans, Tasks, Reminders, Events, Runs, Confirmations, and indexes for SourceSnapshots.
-- Country Packs, Skills, source policies, and contracts are ordinary version-controlled files.
-- Evidence snapshots store the minimum material required to verify a conclusion or detect a source change.
-- Secrets are isolated from both data and Agent workspaces.
-- Exact task-scoped GPS is not retained as long-term profile history.
+Future deployment work may add Linux, Windows, or hosted operation, but it must preserve single-user data isolation, local ownership, version safety, and credential boundaries.

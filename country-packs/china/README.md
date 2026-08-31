@@ -24,9 +24,9 @@ The first executable internal module is `food-nearby` `0.1.0`. Server invokes it
 
 `housing-area-recommendation` `0.1.0` adds the first access-oriented accommodation comparison to Web. It explains nearby stay candidates relative to a user-selected Plan anchor, while explicitly deferring full area choice until route facts and preferences are available.
 
-`transport-planner` `0.1.0` turns current Amap route facts and this Plan's confirmed preference, party, luggage, and date-matched QWeather fact into an explainable preliminary mode. It uses relative route duration instead of a fixed walking-distance threshold and never starts travel.
+`transport-planner` `0.1.0` turns current provider-neutral route facts and this Plan's confirmed preference, party, luggage, and optional date-matched weather fact into an explainable preliminary mode. It uses relative route duration instead of a fixed walking-distance threshold and never starts travel.
 
-`weather-and-packing` `0.1.0` is the shared weather interpretation path for Web, Telegram `/weather`, and delivery-time reminder refresh. It emits only cautious packing prompts from traceable QWeather facts and never presents a non-matching observation as a dated forecast.
+`weather-and-packing` `0.1.0` is the shared weather interpretation path for Web, Telegram `/weather`, and delivery-time reminder refresh. It emits only cautious packing prompts from traceable normalized facts, never presents a non-matching observation as a dated forecast, and degrades without blocking the Plan when the provider does not cover a location.
 
 `policy-applicability` `0.1.0` now owns the production evidence-preparation gate. It receives only minimized identity and Plan fields plus official snapshot metadata; `success` means ready for a separate source-backed review, never eligible or approved.
 

@@ -5,11 +5,11 @@
   "visibility": "internal",
   "entrypoint": "runTransportPlannerSkill",
   "requiredInputs": ["preference", "luggage", "routeFacts", "routeObservedAt"],
-  "optionalInputs": ["partySize", "weather", "weatherObservedAt"],
+  "optionalInputs": ["partySize", "weather", "weatherObservedAt", "mapProvider", "weatherProvider"],
   "permittedProfileFields": [],
   "permittedPlanFields": ["configuration.transport", "configuration.travelContext", "configuration.arrival"],
   "capabilities": ["route.compare", "weather.read", "handoff.map"],
-  "sources": { "providers": ["amap", "qweather"], "freshness": "request_time_or_matched_forecast" },
+  "sources": { "providers": ["google_maps", "google_weather", "amap", "qweather"], "freshness": "request_time_or_matched_forecast" },
   "risk": { "information": "ordinary", "action": "external_handoff" },
   "executionPolicy": "external_handoff",
   "failure": { "missingRoutes": "needs_input", "malformedInput": "failed" }

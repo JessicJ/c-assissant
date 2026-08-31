@@ -10,14 +10,13 @@ test("reports a fully ready Codex instance without requiring Claude Code", () =>
       { kind: "codex", installed: true, authenticated: true },
       { kind: "claude-code", installed: true, authenticated: false }
     ],
-    amapConfigured: true,
-    qweatherConfigured: true,
+    googleConfigured: true,
     telegramConfigured: true,
     telegramPaired: true
   });
 
   assert.equal(result.status, "ready");
-  assert.equal(result.readyCount, 5);
+  assert.equal(result.readyCount, 4);
   assert.match(result.nextAction, /Create a Plan/);
 });
 
@@ -26,8 +25,7 @@ test("explains that the selected installed runtime needs login", () => {
     profileStatus: "ready",
     selectedRuntime: "claude-code",
     runtimeChecks: [{ kind: "claude-code", installed: true, authenticated: false }],
-    amapConfigured: true,
-    qweatherConfigured: true,
+    googleConfigured: true,
     telegramConfigured: true,
     telegramPaired: true
   });
@@ -42,12 +40,11 @@ test("guides a configured Telegram bot to the pairing step", () => {
     profileStatus: "ready",
     selectedRuntime: "codex",
     runtimeChecks: [{ kind: "codex", installed: true, authenticated: true }],
-    amapConfigured: true,
-    qweatherConfigured: true,
+    googleConfigured: true,
     telegramConfigured: true,
     telegramPaired: false
   });
 
-  assert.equal(result.readyCount, 4);
+  assert.equal(result.readyCount, 3);
   assert.equal(result.nextAction, "The bot is configured; pair your private Telegram account.");
 });

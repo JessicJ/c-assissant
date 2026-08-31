@@ -5,10 +5,11 @@
   "visibility": "internal",
   "entrypoint": "runHousingAreaRecommendationSkill",
   "requiredInputs": ["centreName", "candidates", "observedAt"],
+  "optionalInputs": ["provider"],
   "permittedProfileFields": [],
   "permittedPlanFields": ["location", "configuration.accommodation"],
   "capabilities": ["place.nearby", "handoff.map"],
-  "sources": { "provider": "amap", "freshness": "request_time" },
+  "sources": { "providers": ["google_maps", "amap"], "freshness": "request_time" },
   "risk": { "information": "ordinary", "action": "external_handoff" },
   "executionPolicy": "external_handoff",
   "failure": { "missingCentre": "needs_input", "noCandidates": "degraded", "malformedInput": "failed" }
