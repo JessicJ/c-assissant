@@ -110,6 +110,7 @@ export function compilePlanProposal(plan: Plan, proposal: PlanCompilationProposa
     id: `stage-${randomUUID()}`,
     title: proposal.stage.title.trim(),
     description: proposal.stage.description.trim(),
+    presentationKind: "details",
     tasks: compiledTasks,
     origin: stageOrigin
   };

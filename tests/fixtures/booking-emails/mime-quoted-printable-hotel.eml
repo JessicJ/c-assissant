@@ -1,0 +1,23 @@
+From: bookings@example-hotel.test
+To: traveler@example.test
+Subject: =?UTF-8?Q?Shinjuku_Garden_Hotel_=E4=BA=88=E7=B4=84=E7=A2=BA=E8=AA=8D?=
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="hotel-boundary"
+
+--hotel-boundary
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+=E4=BA=88=E7=B4=84=E7=A2=BA=E8=AA=8D
+=E3=83=9B=E3=83=86=E3=83=AB: Shinjuku Garden Hotel
+=E4=BD=8F=E6=89=80: 3-12-8 Shinjuku, Tokyo
+=E3=83=81=E3=82=A7=E3=83=83=E3=82=AF=E3=82=A4=E3=83=B3: 2026=E5=B9=B410=E6=9C=8809=E6=97=A5 15:00
+=E3=83=81=E3=82=A7=E3=83=83=E3=82=AF=E3=82=A2=E3=82=A6=E3=83=88: 2026=E5=B9=B410=E6=9C=8813=E6=97=A5 11:00
+
+--hotel-boundary
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+<html><body><h1>=E4=BA=88=E7=B4=84=E7=A2=BA=E8=AA=8D</h1><p>=E3=83=9B=E3=83=86=E3=83=AB: Shinjuku Garden Hotel</p><p>=E4=BD=8F=E6=89=80: 3-12-8 Shinjuku, Tokyo</p><p>=E3=83=81=E3=82=A7=E3=83=83=E3=82=AF=E3=82=A4=E3=83=B3: 2026=E5=B9=B410=E6=9C=8809=E6=97=A5 15:00</p><p>=E3=83=81=E3=82=A7=E3=83=83=E3=82=AF=E3=82=A2=E3=82=A6=E3=83=88: 2026=E5=B9=B410=E6=9C=8813=E6=97=A5 11:00</p></body></html>
+
+--hotel-boundary--

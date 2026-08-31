@@ -20,6 +20,8 @@ const genderLabels: Record<ProfileGender, string> = {
 
 const immigrationLabels: Record<ImmigrationStatus, string> = {
   unknown: "Not sure yet",
+  not_obtained: "Visa or residence permit not obtained yet",
+  no_visa: "No visa or residence permit yet",
   short_term_visitor: "Short-term visitor",
   tourist_visa: "Tourist visa",
   student_visa: "Student visa",
@@ -55,7 +57,7 @@ export function parseTelegramProfileCallback(value: string | undefined): Telegra
   if (choice) return { type: "choose", field: choice };
   const gender = value?.match(/^profile_set:gender:(not_specified|woman|man|nonbinary|prefer_not_to_say)$/)?.[1] as ProfileGender | undefined;
   if (gender) return { type: "set_gender", value: gender };
-  const immigrationStatus = value?.match(/^profile_set:immigrationStatus:(unknown|short_term_visitor|tourist_visa|student_visa|work_visa|residence_permit|other)$/)?.[1] as ImmigrationStatus | undefined;
+  const immigrationStatus = value?.match(/^profile_set:immigrationStatus:(unknown|no_visa|short_term_visitor|tourist_visa|student_visa|work_visa|residence_permit|other)$/)?.[1] as ImmigrationStatus | undefined;
   if (immigrationStatus) return { type: "set_immigration_status", value: immigrationStatus };
   return { type: "unknown" };
 }

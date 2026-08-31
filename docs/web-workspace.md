@@ -1,4 +1,6 @@
-# Web Workspace
+# Legacy Web Workspace Notes
+
+> Project record. This file preserves detailed interface decisions from an earlier implementation phase. It is not a top-level design source. Current product behavior is defined by `landi-product-baseline.md`, and the complete cross-channel flow is defined by `travel-planning-and-execution-flow.md`.
 
 The Web workspace is Landi's desktop product surface. It replaces a desktop client; it is not an engineering dashboard.
 
@@ -14,22 +16,29 @@ Source-backed generated Tasks show an `Official basis` link resolved from the ex
 
 Conversation is globally available and shares Core context with Telegram.
 
+After a Plan exists, **Adjust Plan** opens a persistent right-side conversation drawer over the same workspace instead of returning to a questionnaire or separate document. The drawer keeps Plan-specific conversation locally across closes. On mobile it becomes a full-width conversation surface. A generated replacement draft appears immediately in the workspace while an older active Plan continues executing until the replacement is explicitly confirmed.
+
 ## Plan experience
 
-A Plan has four views:
+Travel Plans with a structured itinerary open directly in the native interactive trip surface. That surface is the Landi renderer for the `interactive-trip-planner` result contract; it is not an iframe and does not create or download a standalone HTML guide. It provides a real Leaflet/OpenStreetMap map, all-trip and continuous-day navigation, ordered stops, adjacent movement evidence, same-day candidates, search and filters, one shared place-detail surface, priority and day assignment changes, undo, refresh recovery, and a natural-language “ask Landi to rearrange” handoff prefilled into the existing revision conversation. Xiaohongshu import is not part of this product path.
 
-- **Overview** — purpose, known information used, assumptions, status, and next actions.
-- **Timeline** — Stages, Tasks, expected Events, and Reminders.
+Non-spatial Plans and legacy presentations continue to use the modular views below.
+
+A Plan workspace has five embedded views:
+
+- **Plan** — purpose, known information, route or phase sequence, Stages, and next actions.
+- **Preparation** — user-checkable packing, documents, bookings, and digital setup.
 - **Decisions** — selected transport, accommodation area, unresolved choices, and reasons.
+- **Reminders** — proposed or active automation with local time and time zone.
 - **Sources** — official sources, retrieval dates, applicability summaries, and freshness warnings.
 
 The current Plan screen also shows an **evidence preparation** card. It tells the user which saved facts or approved official snapshot are still needed before a separate policy review can begin. “Ready for review” is never presented as an eligibility or policy conclusion.
 
-Initial generation follows a bounded intake rather than an open questionnaire. The new-Plan dialog first collects the destination, arrival date, departure date or an explicit open-ended stay, and purpose, together with useful Plan-scoped execution preferences. Only after those basics are submitted does the selected Runtime generate a concrete complete Plan. The result begins with the information used to generate it and allows a one-sentence correction.
+Initial generation uses a server-backed conversational Planning Session rather than a questionnaire. Landi collects only route-shaping facts, presents a version-bound proposal, and generates a complete Plan only after explicit proposal confirmation. Refreshing the browser restores the current session.
 
 Before activation, the user sees the complete final Plan in normal presentation. One confirmation activates that exact Plan version and its declared automation scope. Later material changes create a new version that must be confirmed when they exceed the existing scope.
 
-The current Plan view lists every Stage and Task. When an Agent draft contains a valid structured reminder proposal, Web shows its local time, time zone, purpose, and whether destination weather will be refreshed at delivery. No undeclared dynamic fact is fetched; older reminders without a declaration show that none will be refreshed. The reminder is inert while the Plan remains a draft. After Plan activation it becomes eligible for Telegram delivery at the proposed time. The user can cancel that reminder directly beside the Task; Web removes it from the current Plan and shows the resulting Inbox receipt. Successful delivery and terminal failure are also copied to Web Inbox; transient failures can be retried at most twice inside the 30-minute delivery window.
+The Plan view renders each Stage from its explicit persisted `presentationKind`, not from title-language heuristics. The Preparation, Decisions, Reminders, and Sources views keep their domain content separate while remaining inside the same Plan page. When an Agent draft contains a valid structured reminder proposal, Web shows its local time, time zone, purpose, and activation state. No undeclared dynamic fact is fetched. The reminder is inert while the Plan remains a draft; after activation it becomes eligible for delivery through the configured channel.
 
 ## Interaction rules
 

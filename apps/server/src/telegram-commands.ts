@@ -8,6 +8,8 @@ export type TelegramCommand =
   | { type: "profile" }
   | { type: "weather" }
   | { type: "food"; partySize?: number }
+  | { type: "go" }
+  | { type: "arrival_update"; city: string }
   | { type: "transport_choice"; preference: Exclude<TransportPreference, "plan_recommended">; scope: "current_action" | "plan" | "unspecified" }
   | { type: "start" }
   | { type: "create_plan"; request: string; explicit: boolean }
@@ -22,15 +24,70 @@ export function parseTelegramCommand(text: string | undefined): TelegramCommand 
   if (/^\/prepare(?:@[-_A-Za-z0-9]+)?$/i.test(normalized)) return { type: "prepare" };
   if (/^\/profile(?:@[-_A-Za-z0-9]+)?$/i.test(normalized)) return { type: "profile" };
   if (/^\/weather(?:@[-_A-Za-z0-9]+)?$/i.test(normalized)) return { type: "weather" };
+  if (/^\/go(?:@[-_A-Za-z0-9]+)?$/i.test(normalized)) return { type: "go" };
   const food = normalized.match(/^\/food(?:@[-_A-Za-z0-9]+)?(?:\s+(\d+))?$/i);
   if (food) return { type: "food", ...(food[1] ? { partySize: Number(food[1]) } : {}) };
   if (/^\/start(?:@[-_A-Za-z0-9]+)?(?:\s|$)/i.test(normalized)) return { type: "start" };
   const explicit = normalized.match(/^\/new(?:@[-_A-Za-z0-9]+)?\s+(.+)$/is)?.[1]?.trim();
   if (explicit) return { type: "create_plan", request: explicit, explicit: true };
   if (normalized.startsWith("/")) return { type: "unknown_command" };
+  const arrivalCity = parseNaturalArrivalCity(normalized);
+  if (arrivalCity) return { type: "arrival_update", city: arrivalCity };
+  if (isNaturalPlanView(normalized)) return { type: "plan" };
+  if (isNaturalWeatherRequest(normalized)) return { type: "weather" };
+  if (isNaturalNearbyFoodRequest(normalized)) return { type: "food" };
   const transportPreference = parseTransportPreference(normalized);
   if (transportPreference && !requestsCompletePlan(normalized)) return { type: "transport_choice", preference: transportPreference, scope: parseTransportScope(normalized) };
   return { type: "create_plan", request: normalized, explicit: false };
+}
+
+function parseNaturalArrivalCity(value: string): string | undefined {
+  const english = value.match(/^(?:i|we)(?:'ve|\s+have)?\s+(?:just\s+)?arrived\s+(?:in|at)\s+(.+?)[.!]?$/i)?.[1];
+  const chinese = value.match(/^(?:我|我们)(?:已经|刚刚|刚)?(?:到达|到)(?:了)?\s*(.+?)[。！!?？]?$/u)?.[1]?.replace(/了$/u, "");
+  const city = (english ?? chinese)?.trim();
+  return city && city.length <= 120 ? city : undefined;
+}
+
+function isNaturalPlanView(value: string): boolean {
+  return /^(?:show|open|display)(?:\s+me)?\s+(?:my(?:\s+current)?|the\s+current|current|the)\s+plan[.!?]?$/i.test(value)
+    || /^what(?:'s| is)\s+(?:on\s+)?my\s+plan[?]?$/i.test(value)
+    || /^(?:打开|显示|查看|看看)(?:一下)?(?:我的|当前)?(?:旅行|行程)?计划[。！!?？]?$/u.test(value);
+}
+
+function isNaturalWeatherRequest(value: string): boolean {
+  return /^(?:what(?:'s| is)|how(?:'s| is))\s+(?:the\s+)?weather(?:\s+(?:now|today|there|here))?[?]?$/i.test(value)
+    || /^(?:weather|temperature)(?:\s+(?:now|today|there|here))?[?]?$/i.test(value)
+    || /^(?:will|is)\s+it\s+(?:rain(?:ing)?|snow(?:ing)?)(?:\s+(?:now|today|there|here))?[?]?$/i.test(value)
+    || /^(?:(?:现在|今天|当地|目的地)的?)?(?:天气|气温)(?:怎么样|如何|多少|是什么)?[。！!?？]?$/u.test(value)
+    || /^(?:现在|今天|当地|目的地)?(?:会|在)?(?:下雨|下雪)吗[？?]?$/u.test(value);
+}
+
+function isNaturalNearbyFoodRequest(value: string): boolean {
+  return /^(?:where|what)\s+(?:can|should|could)\s+(?:i|we)\s+(?:eat|have\s+(?:breakfast|lunch|dinner))\s+(?:nearby|near\s+me|around\s+here)[?]?$/i.test(value)
+    || /^(?:find|show)(?:\s+me)?\s+(?:some\s+)?(?:nearby|near\s+me)\s+(?:food|restaurants?)(?:\s+now)?[.!?]?$/i.test(value)
+    || /^(?:nearby|near\s+me)\s+(?:food|restaurants?)[?]?$/i.test(value)
+    || /^(?:附近|周边)(?:现在)?(?:有什么)?(?:餐厅|饭店|吃的|美食|吃什么)[？?]?$/u.test(value)
+    || /^(?:现在)?(?:附近|周边)(?:哪里|有什么地方)(?:可以)?吃(?:饭|东西)?[？?]?$/u.test(value);
+}
+
+function isNaturalUberTestRequest(value: string): boolean {
+  return /^(?:test|check|try)(?:\s+(?:whether|if|the))?\s+uber(?:\s+(?:works|availability|nearby|here|now))?[.!?]?$/i.test(value)
+    || /^(?:can|could)\s+(?:i|we)\s+(?:get|call|use)\s+uber(?:\s+(?:here|now|nearby))?[?]?$/i.test(value)
+    || /^(?:test|check|try)(?:\s+(?:whether|if|the))?\s+uber\s+[-+\d.,\s]+[.!?]?$/i.test(value)
+    || /^(?:测试|试试|看看|查查)(?:一下)?(?:现在|这里|附近)?(?:能不能|可不可以|是否)?(?:叫|打|用)?\s*uber[。！!?？]?$/iu.test(value)
+    || /^(?:测试|试试|看看|查查)(?:一下)?(?:现在|这里|附近)?(?:能不能|可不可以|是否)?(?:叫|打|用)?\s*uber\s*[-+\d.,，\s]+[。！!?？]?$/iu.test(value)
+    || /^(?:现在|这里|附近)?(?:能不能|可不可以|是否)(?:叫|打|用)?\s*uber[？?]?$/iu.test(value);
+}
+
+function parseLocationText(value: string | undefined): { latitude: number; longitude: number } | undefined {
+  const match = value?.match(/(-?\d+(?:\.\d+)?)\s*[,，]\s*(-?\d+(?:\.\d+)?)/);
+  if (!match) return undefined;
+  const first = Number(match[1]);
+  const second = Number(match[2]);
+  if (!Number.isFinite(first) || !Number.isFinite(second)) return undefined;
+  if (Math.abs(first) <= 90 && Math.abs(second) <= 180) return { latitude: first, longitude: second };
+  if (Math.abs(first) <= 180 && Math.abs(second) <= 90) return { latitude: second, longitude: first };
+  return undefined;
 }
 
 export function formatTransportChoiceAcknowledgement(preference: Exclude<TransportPreference, "plan_recommended">, scope: "current_action" | "plan", offersCurrentRoute: boolean): string {

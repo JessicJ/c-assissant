@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { AmapBasicWeatherSnapshot, AmapGeocodedPlace, ConnectorResult, QWeatherWeatherSnapshot } from "@c-assistant/connectors";
+import type { AmapGeocodedPlace, ConnectorResult, QWeatherWeatherSnapshot } from "@c-assistant/connectors";
 import { fetchTelegramPlanWeather, formatTelegramWeather } from "./telegram-weather.js";
 
 const snapshot: QWeatherWeatherSnapshot = {
@@ -43,21 +43,4 @@ test("Telegram weather does not call providers for an unconfirmed Plan location"
 
 test("Telegram weather drops non-QWeather attribution links", () => {
   assert.doesNotMatch(formatTelegramWeather({ ...snapshot, attributionUrl: "https://example.com/weather" }), /example\.com/);
-});
-
-test("Telegram labels lower-detail Amap weather as a display-only fallback", () => {
-  const fallback: AmapBasicWeatherSnapshot = {
-    source: "amap",
-    location: { name: "上海市", province: "上海", adcode: "310000" },
-    current: { observedAt: "2026-08-08 11:00:00", condition: "多云", temperatureC: 30, humidityPercent: 68, windDirection: "东", windScale: "3" },
-    daily: [{ date: "2026-08-08", conditionDay: "多云", conditionNight: "晴", highC: 32, lowC: 26, windDirectionDay: "东", windDirectionNight: "东南", windScaleDay: "3", windScaleNight: "2" }],
-    retrievedAt: "2026-08-08T03:01:00.000Z",
-    attributionUrl: "https://lbs.amap.com/api/webservice/guide/api/weatherinfo",
-    limitations: ["Precipitation, UV, and feels-like facts are unavailable."]
-  };
-  const text = formatTelegramWeather(fallback);
-  assert.match(text, /Basic weather/);
-  assert.match(text, /Source: Amap/);
-  assert.match(text, /does not.*produce packing and transport advice/);
-  assert.doesNotMatch(text, /precipitation 0|feels like/);
 });

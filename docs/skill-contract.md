@@ -1,5 +1,7 @@
 # Skill Contract
 
+> Contributor reference. This contract defines how regional Skills participate in the Landi project. It is not part of the primary product-design reading path.
+
 ## Definition
 
 A Skill is a versioned, testable business capability. It receives minimized, validated context and approved tools, then returns a structured result.

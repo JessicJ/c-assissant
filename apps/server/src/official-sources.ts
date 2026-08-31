@@ -29,11 +29,11 @@ export function createOfficialSourceService(reader: OfficialSourceReader, store:
 export function parseOfficialSourceRegistry(value: unknown): OfficialSourceDefinition[] {
   if (!Array.isArray(value)) throw new Error("The official-source registry must be an array.");
   return value.map((entry) => {
-    if (!isRecord(entry) || !isString(entry.id) || !isString(entry.authority) || !isString(entry.title) || !isString(entry.url) || !Array.isArray(entry.allowedDomains) || !entry.allowedDomains.every(isString) || !Array.isArray(entry.topics) || !entry.topics.every(isString) || (entry.language !== "en" && entry.language !== "zh" && entry.language !== "multilingual")) {
+    if (!isRecord(entry) || !isString(entry.id) || !isString(entry.authority) || !isString(entry.title) || !isString(entry.url) || !Array.isArray(entry.allowedDomains) || !entry.allowedDomains.every(isString) || !Array.isArray(entry.topics) || !entry.topics.every(isString) || (entry.language !== "en" && entry.language !== "zh" && entry.language !== "multilingual") || (entry.refreshHours !== undefined && (typeof entry.refreshHours !== "number" || !Number.isInteger(entry.refreshHours) || entry.refreshHours < 1))) {
       throw new Error("The official-source registry contains an invalid entry.");
     }
     if (!isApprovedRegistryUrl(entry.url, entry.allowedDomains)) throw new Error("The official-source registry must use approved HTTPS URLs.");
-    return { id: entry.id, authority: entry.authority, title: entry.title, url: entry.url, allowedDomains: entry.allowedDomains, topics: entry.topics, language: entry.language };
+    return { id: entry.id, authority: entry.authority, title: entry.title, url: entry.url, allowedDomains: entry.allowedDomains, topics: entry.topics, language: entry.language, ...(typeof entry.refreshHours === "number" ? { refreshHours: entry.refreshHours } : {}) };
   });
 }
 

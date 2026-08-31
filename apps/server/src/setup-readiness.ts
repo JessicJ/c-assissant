@@ -1,6 +1,6 @@
 import type { RuntimeCheck, RuntimeKind } from "@c-assistant/agent-adapters";
 
-export type SetupReadinessItemId = "profile" | "runtime" | "amap" | "qweather" | "telegram";
+export type SetupReadinessItemId = "profile" | "runtime" | "google" | "telegram";
 
 export interface SetupReadinessItem {
   id: SetupReadinessItemId;
@@ -21,8 +21,7 @@ export function assessSetupReadiness(input: {
   profileStatus: "incomplete" | "ready";
   selectedRuntime: RuntimeKind;
   runtimeChecks: RuntimeCheck[];
-  amapConfigured: boolean;
-  qweatherConfigured: boolean;
+  googleConfigured: boolean;
   telegramConfigured: boolean;
   telegramPaired: boolean;
 }): SetupReadiness {
@@ -47,16 +46,10 @@ export function assessSetupReadiness(input: {
           : `${runtimeName} is not installed on this computer.`
     },
     {
-      id: "amap",
-      label: "Amap",
-      status: input.amapConfigured ? "ready" : "needs_attention",
-      detail: input.amapConfigured ? "Location and route facts are configured." : "Add an Amap Web service key for location and route facts."
-    },
-    {
-      id: "qweather",
-      label: "QWeather",
-      status: input.qweatherConfigured ? "ready" : "needs_attention",
-      detail: input.qweatherConfigured ? "Weather facts are configured." : "Add a QWeather key and API host for weather facts."
+      id: "google",
+      label: "Google Maps Platform",
+      status: input.googleConfigured ? "ready" : "needs_attention",
+      detail: input.googleConfigured ? "Global place and route facts are configured; weather is available where Google Weather has coverage." : "Add a restricted Google Maps Platform key with Places, Routes, and Weather APIs enabled."
     },
     {
       id: "telegram",

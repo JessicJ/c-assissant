@@ -16,11 +16,13 @@
     "@c-assistant/connectors": "workspace:*",
     "@c-assistant/core": "workspace:*",
     "@vitejs/plugin-react": "^4.3.4",
-    "vite": "^6.0.5",
+    "leaflet": "^1.9.4",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "vite": "^6.0.5"
   },
   "devDependencies": {
+    "@types/leaflet": "^1.9.22",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2"
   }

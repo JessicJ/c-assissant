@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createInitialWorkspace, createPlanFromDraft } from "@c-assistant/core";
-import { completedTasksForRevision, createTelegramPlan, formatTelegramPlan, formatTelegramPlanCreation, formatTelegramPlanCreationPages, formatTelegramPlanPages, formatTelegramWorkspacePlanPages, planDraftForRevision, telegramExecutionContinuityNotice, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
+import { completedTasksForRevision, formatTelegramPlan, formatTelegramPlanChangeProposal, formatTelegramPlanPages, formatTelegramWorkspacePlanPages, parseTelegramPlanChangeAction, planDraftForRevision, telegramExecutionContinuityNotice, telegramPlanChangeMarkup, telegramPlanConfirmationDecision, telegramPlanConfirmationMarkup, telegramPlanRequestMode } from "./telegram-plan.js";
 
 const generated = {
   title: "Attend an exhibition in Shanghai",
@@ -15,36 +15,6 @@ const generated = {
   }]
 };
 
-test("Telegram Plan creation saves a Codex draft when the local runtime succeeds", async () => {
-  let templateSaved = false;
-  const result = await createTelegramPlan({
-    request: "Attend an exhibition in Shanghai.",
-    runtime: "codex",
-    generate: async () => generated,
-    saveGenerated: (draft) => ({ ...createInitialWorkspace(), activePlan: createPlanFromDraft(draft) }),
-    saveTemplate: () => {
-      templateSaved = true;
-      return createInitialWorkspace();
-    }
-  });
-  assert.equal(result.source, "runtime");
-  assert.equal(templateSaved, false);
-  assert.match(formatTelegramPlanCreation(result), /Codex created/i);
-  assert.match(formatTelegramPlanCreation(result), /Known information/);
-});
-
-test("Telegram Plan creation transparently falls back to a local draft when Codex fails", async () => {
-  const result = await createTelegramPlan({
-    request: "Attend an exhibition in Shanghai.",
-    runtime: "codex",
-    generate: async () => { throw new Error("Codex unavailable"); },
-    saveGenerated: () => createInitialWorkspace(),
-    saveTemplate: () => createInitialWorkspace()
-  });
-  assert.equal(result.source, "template");
-  assert.match(formatTelegramPlanCreation(result), /unavailable/i);
-});
-
 test("Telegram explains that an existing Plan continues while a replacement draft is reviewed", () => {
   const workspace = createInitialWorkspace();
   const executing = { ...workspace.activePlan, status: "active" as const, title: "Current Shanghai Plan" };
@@ -52,7 +22,7 @@ test("Telegram explains that an existing Plan continues while a replacement draf
   const replacementWorkspace = { ...workspace, activePlan: replacement, executionPlan: executing };
 
   const notice = telegramExecutionContinuityNotice(replacementWorkspace);
-  const pages = formatTelegramPlanCreationPages({ source: "runtime", runtime: "codex", workspace: replacementWorkspace });
+  const pages = formatTelegramWorkspacePlanPages(replacementWorkspace);
 
   assert.match(notice ?? "", /Current Shanghai Plan.*still active/i);
   assert.match(pages.join("\n"), /approved reminders and timeline continue/i);
@@ -144,13 +114,29 @@ test("Telegram keeps complete confirmation available when only an optional refin
 
 test("Telegram revision context strips Core state while retaining the complete draft", () => {
   const plan = createInitialWorkspace().activePlan;
+  plan.presentation = { kind: "timeline", summary: "A preserved interactive timeline.", days: [], places: [], routeSegments: [] };
   plan.sources = [{ title: "Source", authority: "Authority", url: "https://example.com", retrievedAt: "2026-08-01T00:00:00.000Z", contentHash: "a".repeat(64) }];
   const context = planDraftForRevision(plan);
 
   assert.equal(context.title, plan.title);
   assert.equal(context.stages.length, plan.stages.length);
   assert.equal(context.stages[2]?.tasks[0]?.activationTrigger, "arrival");
-  assert.doesNotMatch(JSON.stringify(context), /plan-|stage-|task-|contentHash|configuration|sources/);
+  assert.deepEqual(context.presentation, plan.presentation);
+  assert.notEqual(context.presentation, plan.presentation);
+  assert.doesNotMatch(JSON.stringify({ ...context, presentation: undefined }), /plan-|stage-|task-|contentHash|configuration|sources/);
+});
+
+test("Telegram Plan change controls stay callback-safe and parse confirmation or cancellation", () => {
+  const proposalId = "tg-change-123e4567-e89b-12d3-a456-426614174000";
+  const markup = telegramPlanChangeMarkup(proposalId);
+  const confirm = markup.inline_keyboard[0]![0]!.callback_data;
+  const cancel = markup.inline_keyboard[0]![1]!.callback_data;
+  assert.ok(confirm.length <= 64);
+  assert.ok(cancel.length <= 64);
+  assert.deepEqual(parseTelegramPlanChangeAction(confirm), { action: "confirm", proposalId });
+  assert.deepEqual(parseTelegramPlanChangeAction(cancel), { action: "cancel", proposalId });
+  assert.deepEqual(parseTelegramPlanChangeAction("confirm_plan:nope"), { action: "not_change" });
+  assert.match(formatTelegramPlanChangeProposal("I want Italian food", { impact: "low", summary: "Review it.", reasons: [], affectedAreas: ["itinerary"] }), /current Plan has not changed/i);
 });
 
 test("Telegram revision context carries only completed Task facts separately", () => {

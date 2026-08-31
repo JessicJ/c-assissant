@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import test from "node:test";
 
-import { AmapConnector, createAmapDrivingHandoff, createAmapNavigationHandoff, createAmapPlaceHandoff, OfficialSourceConnector, QWeatherConnector, TelegramConnector } from "./index.js";
+import { AmapConnector, createAmapDrivingHandoff, createAmapNavigationHandoff, createAmapPlaceHandoff, createGoogleMapsNavigationHandoff, createGoogleMapsPlaceHandoff, createUberRideHandoff, GoogleMapsConnector, GoogleWeatherConnector, OfficialSourceConnector, QWeatherConnector, TelegramConnector, WhatsAppConnector } from "./index.js";
 
 const officialSources = [{
   id: "immigration",
@@ -66,6 +67,91 @@ test("Amap connector reports an unconfigured key without making a request", asyn
   const connector = new AmapConnector({ apiKey: "" });
   const result = await connector.drivingRoute({ origin: "121.4,31.2", destination: "121.5,31.3" });
   assert.equal(result.status, "not_configured");
+});
+
+test("Google Maps normalizes Places and route facts without exposing its key", async () => {
+  const requested: string[] = [];
+  const connector = new GoogleMapsConnector({
+    apiKey: "google-test-key",
+    fetcher: async (input) => {
+      requested.push(String(input));
+      if (String(input).includes("places.googleapis.com")) return new Response(JSON.stringify({ places: [{ id: "place-1", displayName: { text: "Example Hotel" }, formattedAddress: "1 Example Road", location: { latitude: 31.23, longitude: 121.47 }, primaryType: "lodging", addressComponents: [{ longText: "Shanghai", types: ["locality"] }, { longText: "China", types: ["country"] }], businessStatus: "CLOSED_TEMPORARILY" }] }));
+      return new Response(JSON.stringify({ routes: [{ distanceMeters: 2400, duration: "720s", polyline: { encodedPolyline: "_p~iF~ps|U_ulLnnqC_mqNvxq`@" } }] }));
+    }
+  });
+  const places = await connector.searchPlaces({ query: "Example Hotel" });
+  const route = await connector.drivingRoute({ origin: "121.46,31.22", destination: "121.47,31.23" });
+  assert.equal(places.provider, "google_maps");
+  assert.equal(places.data?.[0]?.name, "Example Hotel");
+  assert.equal(places.data?.[0]?.provider, "google_maps");
+  assert.equal(places.data?.[0]?.country, "China");
+  assert.equal(places.data?.[0]?.businessStatus, "temporarily_closed");
+  assert.equal(route.data?.provider, "google_maps");
+  assert.equal(route.data?.durationSeconds, 720);
+  assert.deepEqual(route.data?.geometry, [[-120.2, 38.5], [-120.95, 40.7], [-126.453, 43.252]]);
+  assert.equal(route.data?.strategy, "google_maps_recommended");
+  assert.doesNotMatch(JSON.stringify({ places, route, requested }), /google-test-key/);
+});
+
+test("Google Weather normalizes current and three-day facts", async () => {
+  const connector = new GoogleWeatherConnector({
+    apiKey: "google-weather-key",
+    fetcher: async (input) => {
+      if (String(input).includes("currentConditions")) {
+        return new Response(JSON.stringify({ currentTime: "2026-08-12T08:00:00Z", timeZone: { id: "Asia/Shanghai" }, weatherCondition: { type: "CLOUDY", description: { text: "Cloudy" } }, temperature: { degrees: 29 }, feelsLikeTemperature: { degrees: 31 }, relativeHumidity: 70, precipitation: { qpf: { quantity: 0 } } }));
+      }
+      return new Response(JSON.stringify({ timeZone: { id: "Asia/Shanghai" }, forecastDays: [{ displayDate: { year: 2026, month: 8, day: 12 }, daytimeForecast: { weatherCondition: { description: { text: "Rain" } }, precipitation: { qpf: { quantity: 3 } }, uvIndex: 6 }, nighttimeForecast: { weatherCondition: { description: { text: "Cloudy" } }, precipitation: { qpf: { quantity: 1 } } }, maxTemperature: { degrees: 32 }, minTemperature: { degrees: 25 } }] }));
+    }
+  });
+  const result = await connector.weather({ coordinates: "121.47,31.23", locationName: "Shanghai" });
+  assert.equal(result.provider, "google_weather");
+  assert.equal(result.data?.provider, "google_weather");
+  assert.equal(result.data?.daily[0]?.precipitationMm, 4);
+  assert.equal(result.data?.daily[0]?.uvIndex, 6);
+  assert.doesNotMatch(JSON.stringify(result), /google-weather-key/);
+});
+
+test("Google Weather classifies a location coverage 404 as unsupported", async () => {
+  const connector = new GoogleWeatherConnector({ apiKey: "google-weather-key", fetcher: async () => new Response(JSON.stringify({ error: { code: 404 } }), { status: 404 }) });
+  const result = await connector.weather({ coordinates: "121.47,31.23", locationName: "Unsupported location" });
+  assert.equal(result.status, "unsupported");
+  assert.equal(result.failure?.code, "http_404");
+  assert.match(result.failure?.message ?? "", /does not provide weather facts/i);
+  assert.doesNotMatch(JSON.stringify(result), /google-weather-key/);
+});
+
+test("Google Maps handoffs use portable HTTPS URLs", () => {
+  const origin = { id: "", name: "Current location", address: "", location: "121.46,31.22", type: "point", city: "", district: "" };
+  const destination = { id: "place-1", name: "Example Hotel", address: "1 Example Road", location: "121.47,31.23", type: "lodging", city: "Shanghai", district: "" };
+  const legacyRoute = new URL(createGoogleMapsNavigationHandoff({ origin, destination, transport: "transit" }).url);
+  const googlePlace = new URL(createGoogleMapsPlaceHandoff({ place: { ...destination, provider: "google_maps" } }).url);
+  assert.match(legacyRoute.toString(), /^https:\/\/www\.google\.com\/maps\/dir/);
+  assert.equal(legacyRoute.searchParams.has("destination_place_id"), false);
+  assert.equal(googlePlace.searchParams.get("query_place_id"), "place-1");
+});
+
+test("Uber ride handoff uses device GPS and destination text without requiring a secret", () => {
+  const handoff = createUberRideHandoff({
+    pickup: { latitude: 31.2304, longitude: 121.4737 },
+    destination: { name: "Riverside Hotel", address: "1 River Road, Shanghai" }
+  });
+  const url = new URL(handoff.url);
+  assert.equal(handoff.provider, "uber");
+  assert.equal(url.origin, "https://m.uber.com");
+  assert.equal(url.pathname, "/looking");
+  assert.deepEqual(JSON.parse(url.searchParams.get("pickup") ?? "{}"), { latitude: 31.2304, longitude: 121.4737, addressLine1: "Current location" });
+  assert.deepEqual(JSON.parse(url.searchParams.get("drop[0]") ?? "{}"), { addressLine1: "Riverside Hotel", addressLine2: "1 River Road, Shanghai" });
+  assert.equal(url.searchParams.has("client_id"), false);
+});
+
+test("Uber ride handoff includes an explicitly configured public client ID", () => {
+  const handoff = createUberRideHandoff({
+    pickup: { latitude: 31.2304, longitude: 121.4737 },
+    destination: { name: "Riverside Hotel", address: "1 River Road, Shanghai" },
+    clientId: "public-client-id"
+  });
+  assert.equal(new URL(handoff.url).searchParams.get("client_id"), "public-client-id");
+  assert.doesNotMatch(handoff.url, /client_secret|server_token|access_token/i);
 });
 
 test("Amap walking route returns distance and duration facts", async () => {
@@ -431,4 +517,81 @@ test("Telegram does not make a request when no bot token is configured", async (
   const result = await connector.getMe();
   assert.equal(result.status, "not_configured");
   assert.equal(requests, 0);
+});
+
+test("WhatsApp remains optional and reports actionable readiness states without exposing secrets", () => {
+  const absent = new WhatsAppConnector({});
+  assert.equal(absent.configurationStatus().status, "not_configured");
+
+  const outboundOnly = new WhatsAppConnector({ accessToken: "wa-access-token", phoneNumberId: "phone-1" });
+  const webhookPending = outboundOnly.configurationStatus();
+  assert.equal(webhookPending.status, "degraded");
+  assert.equal(webhookPending.data?.state, "webhook_pending");
+
+  const templatePending = new WhatsAppConnector({ accessToken: "wa-access-token", phoneNumberId: "phone-1", appSecret: "wa-app-secret", verifyToken: "wa-verify-token" }).configurationStatus();
+  assert.equal(templatePending.data?.state, "template_pending");
+
+  const ready = new WhatsAppConnector({ accessToken: "wa-access-token", phoneNumberId: "phone-1", appSecret: "wa-app-secret", verifyToken: "wa-verify-token", reminderTemplateName: "landi_reminder" }).configurationStatus();
+  assert.equal(ready.status, "available");
+  assert.equal(ready.data?.state, "available");
+  assert.doesNotMatch(JSON.stringify({ webhookPending, templatePending, ready }), /wa-access-token|wa-app-secret|wa-verify-token/);
+});
+
+test("WhatsApp verifies its phone and separates service-window text from proactive templates", async () => {
+  const requests: Array<{ url: string; body: string }> = [];
+  const connector = new WhatsAppConnector({
+    accessToken: "wa-access-token",
+    phoneNumberId: "phone-1",
+    appSecret: "wa-app-secret",
+    verifyToken: "wa-verify-token",
+    reminderTemplateName: "landi_reminder",
+    fetcher: async (input, init) => {
+      const url = String(input);
+      requests.push({ url, body: String(init?.body ?? "") });
+      if (url.includes("fields=")) return new Response(JSON.stringify({ id: "phone-1", display_phone_number: "+1 555 0100", verified_name: "Landi", quality_rating: "GREEN" }));
+      return new Response(JSON.stringify({ contacts: [{ wa_id: "15550100" }], messages: [{ id: "wamid.1" }] }));
+    }
+  });
+
+  const identity = await connector.verifyPhoneNumber();
+  assert.equal(identity.data?.verifiedName, "Landi");
+
+  const expired = await connector.sendText({ to: "+1 (555) 0100", text: "Free-form reminder", serviceWindowExpiresAt: "2020-01-01T00:00:00Z" });
+  assert.equal(expired.status, "unsupported");
+  assert.equal(expired.failure?.code, "template_required");
+
+  const text = await connector.sendText({ to: "+1 (555) 0100", text: "How can I help?", serviceWindowExpiresAt: "2099-01-01T00:00:00Z" });
+  const template = await connector.sendTemplate({ to: "15550100", templateName: "landi_reminder", languageCode: "en_US", bodyParameters: ["Bring your passport"] });
+  assert.equal(text.data?.messageId, "wamid.1");
+  assert.equal(template.data?.messageId, "wamid.1");
+  assert.ok(requests.some((request) => /"type":"text"/.test(request.body)));
+  assert.ok(requests.some((request) => /"type":"template"/.test(request.body)));
+  assert.doesNotMatch(JSON.stringify({ identity, text, template, requests }), /wa-access-token/);
+});
+
+test("WhatsApp accepts only signed webhooks and normalizes text, location, actions, and delivery state", () => {
+  const appSecret = "wa-app-secret";
+  const connector = new WhatsAppConnector({ accessToken: "wa-access-token", phoneNumberId: "phone-1", appSecret, verifyToken: "wa-verify-token", reminderTemplateName: "landi_reminder" });
+  const challenge = connector.verifyWebhookChallenge({ mode: "subscribe", verifyToken: "wa-verify-token", challenge: "challenge-123" });
+  assert.equal(challenge.data, "challenge-123");
+
+  const rawBody = JSON.stringify({ object: "whatsapp_business_account", entry: [{ changes: [{ field: "messages", value: {
+    contacts: [{ wa_id: "15550100", profile: { name: "Avery" } }],
+    messages: [
+      { id: "wamid.text", from: "15550100", timestamp: "1786665600", type: "text", text: { body: "Hello Landi" } },
+      { id: "wamid.location", from: "15550100", timestamp: "1786665601", type: "location", location: { latitude: 48.85, longitude: 2.35 } },
+      { id: "wamid.button", from: "15550100", timestamp: "1786665602", type: "interactive", interactive: { button_reply: { id: "not_arrived", title: "I haven't arrived" } } }
+    ],
+    statuses: [{ id: "wamid.outbound", recipient_id: "15550100", status: "delivered", timestamp: "1786665603" }]
+  } }] }] });
+  const signature = `sha256=${createHmac("sha256", appSecret).update(rawBody).digest("hex")}`;
+  assert.equal(connector.receiveWebhook({ rawBody, signature: "sha256=" + "0".repeat(64) }).status, "unauthorized");
+  const result = connector.receiveWebhook({ rawBody, signature });
+  assert.equal(result.status, "available");
+  assert.equal(result.data?.messages[0]?.text, "Hello Landi");
+  assert.deepEqual(result.data?.messages[1]?.location, { latitude: 48.85, longitude: 2.35 });
+  assert.equal(result.data?.messages[2]?.actionId, "not_arrived");
+  assert.equal(result.data?.deliveryStatuses[0]?.status, "delivered");
+  assert.match(result.data?.messages[0]?.serviceWindowExpiresAt ?? "", /^2026-/);
+  assert.doesNotMatch(JSON.stringify(result), /wa-app-secret|wa-access-token/);
 });

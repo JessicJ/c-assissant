@@ -53,15 +53,15 @@ const referenceCatalog = () => ({
 test("production China fact collector normalizes Plan-scoped provider facts without credentials", async () => {
   const routeCalls: string[] = [];
   const collector = createChinaArrivalFactCollector({
-    amap: amapReader(routeCalls),
-    qweather: { weather: async () => available("qweather", weather) },
+    maps: amapReader(routeCalls),
+    weather: { weather: async () => available("qweather", weather) },
     sourceSnapshots: () => [unlinkedSnapshot, linkedSnapshot],
     referenceCatalog
   });
   const facts = await collector.collect({ plan: planWithFacts(), profile: { nationality: "Canada", immigrationStatus: "tourist_visa" }, now });
   assert.deepEqual(routeCalls.sort(), ["driving", "transit", "walking"]);
   assert.deepEqual(facts.policyEvidence.map((item) => item.id), [linkedSnapshot.id]);
-  assert.equal(facts.weather.targetDate, "2026-09-01");
+  assert.equal("targetDate" in facts.weather ? facts.weather.targetDate : undefined, "2026-09-01");
   assert.equal(facts.transport.weather?.precipitationMm, 3);
   assert.equal(facts.transport.routeFacts.length, 3);
   assert.equal(facts.schedule.arrivalAt, "2026-09-01T10:00:00+08:00");
@@ -73,8 +73,8 @@ test("production China fact collector does not invent a transport origin before 
   const plan = planWithFacts();
   plan.configuration.accommodation = { status: "not_set" };
   const collector = createChinaArrivalFactCollector({
-    amap: amapReader(routeCalls),
-    qweather: { weather: async () => available("qweather", weather) },
+    maps: amapReader(routeCalls),
+    weather: { weather: async () => available("qweather", weather) },
     sourceSnapshots: () => [linkedSnapshot],
     referenceCatalog
   });
@@ -83,12 +83,28 @@ test("production China fact collector does not invent a transport origin before 
   assert.deepEqual(facts.transport.routeFacts, []);
 });
 
+test("production China fact collector preserves an unsupported weather region as a non-blocking limitation", async () => {
+  const collector = createChinaArrivalFactCollector({
+    maps: amapReader([]),
+    weather: { weather: async () => ({ status: "degraded", provider: "google_weather", observedAt: now, failure: { code: "http_404", message: "provider detail", retryable: false } }) },
+    sourceSnapshots: () => [linkedSnapshot],
+    referenceCatalog
+  });
+  const plan = planWithFacts();
+  plan.configuration.accommodation = { status: "not_set" };
+  const facts = await collector.collect({ plan, profile: { nationality: "Canada", immigrationStatus: "tourist_visa" }, now });
+  assert.equal(facts.weather.availability, "not_supported");
+  assert.equal(facts.weather.reasonCode, "http_404");
+  assert.equal(facts.transport.weather, undefined);
+  assert.doesNotMatch(JSON.stringify(facts), /provider detail/);
+});
+
 test("production China fact collector returns a sanitized typed provider failure", async () => {
   const amap = amapReader([]);
   amap.geocodeAddress = async () => ({ status: "unauthorized", provider: "amap", observedAt: now, failure: { code: "key=secret-value", message: "AMAP_API_KEY=secret-value", retryable: false } });
   const collector = createChinaArrivalFactCollector({
-    amap,
-    qweather: { weather: async () => { throw new Error("weather must not run"); } },
+    maps: amap,
+    weather: { weather: async () => { throw new Error("weather must not run"); } },
     sourceSnapshots: () => [],
     referenceCatalog
   });

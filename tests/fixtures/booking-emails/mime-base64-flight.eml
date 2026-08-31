@@ -1,0 +1,8 @@
+From: flights@example-air.test
+To: traveler@example.test
+Subject: Flight confirmation
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: base64
+
+VW5pdGVkIE1lcmlkaWFuIEFpcndheXMKQm9va2luZyBjb25maXJtYXRpb24KCkZsaWdodDogVUEgMTIzCkRlcGFydHVyZTogMjAyNi0xMC0wOFQxMDowMApEZXBhcnR1cmUgYWlycG9ydDogU0ZPCkFycml2YWw6IDIwMjYtMTAtMDlUMTQ6MzAKQXJyaXZhbCBhaXJwb3J0OiBITkQK

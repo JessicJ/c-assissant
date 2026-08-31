@@ -35,7 +35,7 @@ export function assessPolicyPreparation(input: { profile: Profile; plan: Plan; s
   }
 
   if (input.profile.immigrationStatus !== "unknown") {
-    knownInformation.push("China visa or residence status is recorded.");
+    knownInformation.push(input.profile.immigrationStatus === "no_visa" ? "No China visa or residence permit has been obtained yet." : "China visa or residence status is recorded.");
   } else {
     missingInformation.push({ field: "profile.immigrationStatus", label: "China visa or residence status", reason: "Choose the status you know, or update it when it becomes clear." });
   }

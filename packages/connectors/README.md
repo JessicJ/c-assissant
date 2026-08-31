@@ -1,6 +1,6 @@
 # Connectors
 
-Normalized provider adapters. The implemented Connectors are Amap, QWeather, and a deliberately limited Telegram bot connector.
+Normalized provider adapters. Active V1 runtime providers are Google Maps, Google Weather, Telegram, official sources, and Uber handoff generation. WhatsApp Business Platform is an optional messaging Connector. Amap and QWeather remain as paused compatibility implementations.
 
 It currently supports:
 
@@ -10,8 +10,8 @@ It currently supports:
 - user-controlled Amap app route handoff built from Amap POI IDs and coordinates;
 - explicit configuration and provider-failure states.
 
-Telegram currently supports local configuration-state reporting and an explicit `getMe` identity verification. It keeps `TELEGRAM_BOT_TOKEN` in the server process, returns no token to the Web client, and has no polling, pairing, message delivery, or reminder scheduling yet.
+Telegram supports configuration and identity verification, polling, text and action delivery, callback acknowledgements, and explicit location requests. WhatsApp supports non-blocking readiness states, phone identity verification, service-window text, approved-template delivery, challenge verification, signed webhook validation, and normalized text/location/action/delivery events. WhatsApp remains optional; its access token and webhook secrets stay in the Server process and are stripped from Agent child environments.
 
-QWeather receives country-pack coordinates and returns normalised current conditions and a three-day forecast. The China Pack uses Amap geocoding to resolve a city or region to the GCJ-02 coordinates required by QWeather in mainland China. Its API Key is sent only in an HTTP header by the local server; the browser receives only the normalised facts, a retrieval time, and attribution URL.
+Google Weather receives WGS-84 coordinates and returns normalized current conditions and a short daily forecast where supported. An HTTP 404 coverage response becomes connector status `unsupported`, distinct from temporary unavailability. The local server sends the key directly to Google; Skills and Agent runtimes receive only normalized facts or a safe failure classification. Amap and QWeather behavior is retained for compatibility tests but is not called by the active runtime.
 
 Neither Connector makes recommendations, hails rides, performs payments, books services, or exposes credentials to the Web client. Official-source Connectors remain future work.

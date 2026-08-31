@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@playwright/test':
+        specifier: ^1.62.1
+        version: 1.62.1
       concurrently:
         specifier: ^9.1.2
         version: 9.2.4
@@ -29,6 +32,9 @@ importers:
       '@c-assistant/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@c-assistant/japan-country-pack':
+        specifier: workspace:*
+        version: link:../../country-packs/japan
       '@c-assistant/storage':
         specifier: workspace:*
         version: link:../../packages/storage
@@ -66,6 +72,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: ^4.3.4
         version: 4.7.0(supports-color@8.1.1)(vite@6.4.3(@types/node@22.20.1)(tsx@4.23.7))
+      leaflet:
+        specifier: ^1.9.4
+        version: 1.9.4
       react:
         specifier: ^19.0.0
         version: 19.2.8
@@ -76,6 +85,9 @@ importers:
         specifier: ^6.0.5
         version: 6.4.3(@types/node@22.20.1)(tsx@4.23.7)
     devDependencies:
+      '@types/leaflet':
+        specifier: ^1.9.22
+        version: 1.9.22
       '@types/react':
         specifier: ^19.0.2
         version: 19.2.18
@@ -84,6 +96,22 @@ importers:
         version: 19.2.4(@types/react@19.2.18)
 
   country-packs/china:
+    dependencies:
+      '@c-assistant/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@c-assistant/skill-runtime':
+        specifier: workspace:*
+        version: link:../../packages/skill-runtime
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.7
+
+  country-packs/japan:
     dependencies:
       '@c-assistant/core':
         specifier: workspace:*
@@ -609,6 +637,11 @@ packages:
   '@pinojs/redact@0.4.0':
     resolution: {integrity: sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg==}
 
+  '@playwright/test@1.62.1':
+    resolution: {integrity: sha512-DTcUc8qii+cpHvtOwggMtBRMjKZHXYWdw8syRYu2vtzuq4Wxphqq4NfCs5Zt44L6mA8rfDfj+PHnxFc/FeK6mQ==}
+    engines: {node: '>=20'}
+    hasBin: true
+
   '@rolldown/pluginutils@1.0.0-beta.27':
     resolution: {integrity: sha512-+d0F4MKMCbeVUJwG96uQ4SgAznZNSq93I3V+9NHA4OpvqG8mRCpGdKmK8l/dl02h2CCDHwW2FqilnTyDcAnqjA==}
 
@@ -764,6 +797,12 @@ packages:
 
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
+
+  '@types/geojson@7946.0.16':
+    resolution: {integrity: sha512-6C8nqWur3j98U6+lXDfTUWIfgvZU+EumvpHKcYjujKH7woYyLj2sUmff0tRhrqM7BohUw7Pz3ZB1jj2gW9Fvmg==}
+
+  '@types/leaflet@1.9.22':
+    resolution: {integrity: sha512-h3lhECYEKDasG7LFHu+GiHqAvsgLuQvlJvVZzJDGONo3sEL+wUOqSFLnwkZlK0qVxnxbuGFW8iBlJNYs5wgndA==}
 
   '@types/node@22.20.1':
     resolution: {integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==}
@@ -949,6 +988,11 @@ packages:
     resolution: {integrity: sha512-f2JHn75x2JlwUwLenZypgczR7YWMb/uO9BvUXtus+JMgkbIkLADd38cI4EiV+OQqrGo1Zlq6V8wnqMJ8e62wUQ==}
     engines: {node: '>=20'}
 
+  fsevents@2.3.2:
+    resolution: {integrity: sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==}
+    engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
+    os: [darwin]
+
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
@@ -1003,6 +1047,9 @@ packages:
     resolution: {integrity: sha512-XmOWe7eyHYH14cLdVPoyg+GOH3rYX++KpzrylJwSW98t3Nk+U8XOl8FWKOgwtzdb8lXGf6zYwDUzeHMWfxasyg==}
     engines: {node: '>=6'}
     hasBin: true
+
+  leaflet@1.9.4:
+    resolution: {integrity: sha512-nxS1ynzJOmOlHp+iL3FyWqK89GtNL8U8rvlMOsQdTTssxZwCXh8N2NB3GDQOL+YR3XnWyZAxwQixURb+FA74PA==}
 
   light-my-request@6.6.0:
     resolution: {integrity: sha512-CHYbu8RtboSIoVsHZ6Ye4cj4Aw/yg2oAFimlF7mNvfDV192LR7nDiKtSIfCuLT7KokPSTn/9kfVLm5OGN0A28A==}
@@ -1068,6 +1115,16 @@ packages:
 
   pino@10.3.1:
     resolution: {integrity: sha512-r34yH/GlQpKZbU1BvFFqOjhISRo1MNx1tWYsYvmj6KIRHSPMT2+yHOEb1SG6NMvRoHRF0a07kCOox/9yakl1vg==}
+    hasBin: true
+
+  playwright-core@1.62.1:
+    resolution: {integrity: sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==}
+    engines: {node: '>=20'}
+    hasBin: true
+
+  playwright@1.62.1:
+    resolution: {integrity: sha512-0M+L3LAD8/nm554LOla9Ayx0j0tmFZ0FBcoQ7F1VuVHpM/XpiC8RcDzBQB8W5+hA8L22THxELzeF+2WcUzvcLg==}
+    engines: {node: '>=20'}
     hasBin: true
 
   postcss@8.5.25:
@@ -1639,6 +1696,10 @@ snapshots:
 
   '@pinojs/redact@0.4.0': {}
 
+  '@playwright/test@1.62.1':
+    dependencies:
+      playwright: 1.62.1
+
   '@rolldown/pluginutils@1.0.0-beta.27': {}
 
   '@rollup/rollup-android-arm-eabi@4.62.4':
@@ -1738,6 +1799,12 @@ snapshots:
       '@babel/types': 7.29.8
 
   '@types/estree@1.0.9': {}
+
+  '@types/geojson@7946.0.16': {}
+
+  '@types/leaflet@1.9.22':
+    dependencies:
+      '@types/geojson': 7946.0.16
 
   '@types/node@22.20.1':
     dependencies:
@@ -1974,6 +2041,9 @@ snapshots:
       fast-querystring: 1.1.2
       safe-regex2: 5.1.1
 
+  fsevents@2.3.2:
+    optional: true
+
   fsevents@2.3.3:
     optional: true
 
@@ -2014,6 +2084,8 @@ snapshots:
   json-schema-traverse@1.0.0: {}
 
   json5@2.2.3: {}
+
+  leaflet@1.9.4: {}
 
   light-my-request@6.6.0:
     dependencies:
@@ -2077,6 +2149,14 @@ snapshots:
       safe-stable-stringify: 2.5.0
       sonic-boom: 4.2.1
       thread-stream: 4.2.0
+
+  playwright-core@1.62.1: {}
+
+  playwright@1.62.1:
+    dependencies:
+      playwright-core: 1.62.1
+    optionalDependencies:
+      fsevents: 2.3.2
 
   postcss@8.5.25:
     dependencies:

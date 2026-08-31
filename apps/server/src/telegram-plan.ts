@@ -1,32 +1,10 @@
-import type { AgentRuntimeKind, GeneratedPlanDraft, Plan, WorkspaceSnapshot } from "@c-assistant/core";
+import type { GeneratedPlanDraft, Plan, WorkspaceSnapshot } from "@c-assistant/core";
 import { planRefinementState } from "./plan-refinement.js";
 
 export type TelegramPlanConfirmationDecision = "confirm" | "already_active" | "stale" | "not_confirmation";
 export type TelegramPlanConfirmationMarkup = { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
 export type TelegramPlanRequestMode = "create" | "revise";
-
-export interface TelegramPlanCreation {
-  source: "runtime" | "template";
-  runtime: AgentRuntimeKind;
-  workspace: WorkspaceSnapshot;
-}
-
-/** Uses the local runtime when available, but always leaves a reviewable draft. */
-export async function createTelegramPlan(input: {
-  request: string;
-  runtime: AgentRuntimeKind;
-  generate: () => Promise<GeneratedPlanDraft>;
-  saveGenerated: (draft: GeneratedPlanDraft) => WorkspaceSnapshot;
-  saveTemplate: () => WorkspaceSnapshot;
-}): Promise<TelegramPlanCreation> {
-  let draft: GeneratedPlanDraft;
-  try {
-    draft = await input.generate();
-  } catch {
-    return { source: "template", runtime: input.runtime, workspace: input.saveTemplate() };
-  }
-  return { source: "runtime", runtime: input.runtime, workspace: input.saveGenerated(draft) };
-}
+export type TelegramPlanChangeAction = { action: "confirm" | "cancel"; proposalId: string } | { action: "not_change" };
 
 export function planDraftForRevision(plan: Plan): GeneratedPlanDraft {
   return {
@@ -36,11 +14,13 @@ export function planDraftForRevision(plan: Plan): GeneratedPlanDraft {
     knownInformation: [...plan.knownInformation],
     assumptions: [...plan.assumptions],
     nextAction: plan.nextAction,
+    ...(plan.presentation ? { presentation: structuredClone(plan.presentation) } : {}),
     stages: plan.stages.map((stage) => ({
       title: stage.title,
       description: stage.description,
       tasks: stage.tasks.map((task) => ({
         title: task.title,
+        ...(task.description ? { description: task.description } : {}),
         owner: task.owner,
         dueLabel: task.dueLabel,
         ...(task.activationTrigger ? { activationTrigger: task.activationTrigger } : {}),
@@ -48,6 +28,25 @@ export function planDraftForRevision(plan: Plan): GeneratedPlanDraft {
       }))
     }))
   };
+}
+
+export function telegramPlanChangeMarkup(proposalId: string): TelegramPlanConfirmationMarkup {
+  return { inline_keyboard: [[
+    { text: "Preview replacement Plan", callback_data: `confirm_change:${proposalId}` },
+    { text: "Keep current Plan", callback_data: `cancel_change:${proposalId}` }
+  ]] };
+}
+
+export function parseTelegramPlanChangeAction(callbackData: string | undefined): TelegramPlanChangeAction {
+  const match = callbackData?.match(/^(confirm|cancel)_change:(tg-change-[0-9a-f-]{36})$/);
+  if (!match) return { action: "not_change" };
+  return { action: match[1] as "confirm" | "cancel", proposalId: match[2]! };
+}
+
+export function formatTelegramPlanChangeProposal(request: string, impact: Pick<import("@c-assistant/core").PlanChangeImpactPreview, "impact" | "summary" | "reasons" | "affectedAreas">): string {
+  const areas = impact.affectedAreas.join(", ");
+  const reasons = impact.reasons.length ? `\n${impact.reasons.map((reason) => `• ${reason}`).join("\n")}` : "";
+  return `Proposed Plan change\n\n“${oneLine(request, 600)}”\n\nImpact: ${impact.impact}\nAffected: ${areas}\n${impact.summary}${reasons}\n\nThe current Plan has not changed. Choose whether Landi should generate a complete replacement draft for review.`;
 }
 
 /** Exposes only user-confirmed completion facts needed for safe Plan revision decisions. */
@@ -62,21 +61,6 @@ export function telegramPlanRequestMode(workspace: WorkspaceSnapshot, explicitNe
   const id = workspace.activePlan.id;
   const currentDraftWasUserCreated = workspace.inbox.some((item) => item.id === `plan-generated-${id}` || item.id === `plan-created-${id}` || item.id === `plan-revised-${id}`);
   return currentDraftWasUserCreated ? "revise" : "create";
-}
-
-export function formatTelegramPlanCreation(result: TelegramPlanCreation): string {
-  const plan = result.workspace.activePlan;
-  const runtime = result.runtime === "claude-code" ? "Claude Code" : "Codex";
-  const origin = result.source === "runtime" ? `${runtime} created a complete Plan draft` : `${runtime} is unavailable, so Landi created a local template draft`;
-  const continuity = telegramExecutionContinuityNotice(result.workspace);
-  return truncateTelegramText(`${origin}.${continuity ? `\n\n${continuity}` : ""}\n\n${formatTelegramPlan(plan)}`);
-}
-
-export function formatTelegramPlanCreationPages(result: TelegramPlanCreation): string[] {
-  const runtime = result.runtime === "claude-code" ? "Claude Code" : "Codex";
-  const origin = result.source === "runtime" ? `${runtime} created a complete Plan draft.` : `${runtime} is unavailable, so Landi created a local template draft.`;
-  const continuity = telegramExecutionContinuityNotice(result.workspace);
-  return paginateTelegramText(`${origin}${continuity ? `\n\n${continuity}` : ""}\n\n${telegramPlanText(result.workspace.activePlan)}`);
 }
 
 /** Explains the review/execution split without presenting inferred state as fact. */

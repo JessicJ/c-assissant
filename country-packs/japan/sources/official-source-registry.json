@@ -1,0 +1,82 @@
+[
+  {
+    "id": "jp-mofa-visa-exemption",
+    "authority": "Ministry of Foreign Affairs of Japan",
+    "title": "Exemption of Visa (Short-Term Stay)",
+    "url": "https://www.mofa.go.jp/j_info/visit/visa/short/novisa.html",
+    "allowedDomains": ["www.mofa.go.jp", "mofa.go.jp"],
+    "topics": ["immigration", "visa", "short_term_stay"],
+    "language": "en",
+    "refreshHours": 168
+  },
+  {
+    "id": "jp-mofa-visa-faq",
+    "authority": "Ministry of Foreign Affairs of Japan",
+    "title": "Frequently Asked Questions — VISA",
+    "url": "https://www.mofa.go.jp/j_info/visit/visa/faq.html",
+    "allowedDomains": ["www.mofa.go.jp", "mofa.go.jp"],
+    "topics": ["immigration", "visa", "entry"],
+    "language": "en",
+    "refreshHours": 168
+  },
+  {
+    "id": "jp-visit-japan-web",
+    "authority": "Digital Agency, Government of Japan",
+    "title": "Visit Japan Web",
+    "url": "https://services.digital.go.jp/en/visit-japan-web/",
+    "allowedDomains": ["services.digital.go.jp", "digital.go.jp"],
+    "topics": ["arrival", "digital_life", "immigration", "customs"],
+    "language": "en",
+    "refreshHours": 720
+  },
+  {
+    "id": "jp-jnto-ic-cards",
+    "authority": "Japan National Tourism Organization",
+    "title": "IC Travel Cards (Suica, PASMO and others)",
+    "url": "https://www.japan.travel/en/plan/ic-card/",
+    "allowedDomains": ["www.japan.travel", "japan.travel"],
+    "topics": ["transport", "payment", "digital_life"],
+    "language": "en",
+    "refreshHours": 720
+  },
+  {
+    "id": "jp-jreast-welcome-suica",
+    "authority": "East Japan Railway Company",
+    "title": "Welcome Suica",
+    "url": "https://www.jreast.co.jp/en/multi/welcomesuica/welcomesuica.html",
+    "allowedDomains": ["www.jreast.co.jp", "jreast.co.jp"],
+    "topics": ["transport", "payment", "tokyo"],
+    "language": "en",
+    "refreshHours": 720
+  },
+  {
+    "id": "jp-jnto-emergencies",
+    "authority": "Japan National Tourism Organization",
+    "title": "Staying Safe in Japan",
+    "url": "https://www.japan.travel/en/plan/emergencies/",
+    "allowedDomains": ["www.japan.travel", "japan.travel"],
+    "topics": ["emergency", "safety", "digital_life"],
+    "language": "en",
+    "refreshHours": 720
+  },
+  {
+    "id": "jp-haneda-access",
+    "authority": "Japan Airport Terminal Co., Ltd. / Tokyo International Air Terminal Corporation",
+    "title": "Haneda Airport Passenger Terminal — Access",
+    "url": "https://tokyo-haneda.com/en/access/index.html",
+    "allowedDomains": ["tokyo-haneda.com", "www.tokyo-haneda.com"],
+    "topics": ["airport", "arrival", "transport", "tokyo"],
+    "language": "en",
+    "refreshHours": 720
+  },
+  {
+    "id": "jp-go-tokyo-food",
+    "authority": "Tokyo Convention & Visitors Bureau",
+    "title": "Tokyo Local Food",
+    "url": "https://www.gotokyo.org/en/see-and-do/drinking-and-dining/tokyo-local-food/index.html",
+    "allowedDomains": ["www.gotokyo.org", "gotokyo.org"],
+    "topics": ["local_food", "culture", "tokyo"],
+    "language": "en",
+    "refreshHours": 720
+  }
+]

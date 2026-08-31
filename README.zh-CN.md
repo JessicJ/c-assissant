@@ -6,18 +6,20 @@ Landi 的目标不是只做旅行问答，而是帮助来到某个国家或地�
 
 Landi 采用 [Apache License 2.0](LICENSE) 开源许可证。
 
-项目已完成一条本地 V1 闭环：Web 工作台、Core HTTP 服务与调度器、本地 SQLite、Profile、Plan、已真实验证的 Codex 草案、Claude Code 预览适配器、中国 Country Pack 完整编排、官方来源刷新与追溯、高德/QWeather 事实、Telegram 配对/完整审阅/提醒/定位交接和 Plan 确认已经连通。Claude Code 已有契约测试，但没有可用付费账号完成真实 V1 验收，因此 `0.1.0` 正式支持 Codex，Claude Code 只作为自愿启用的预览能力。两种底座的登录凭据与 Connector 密钥都不会写入领域数据或传给 Skill。V1 仍保持明确边界：不根据网页正文替用户作受监管资格结论，也不点餐、订房、叫车或支付。
+项目已完成一条本地 V1 闭环：Web 工作台、Core HTTP 服务与调度器、本地 SQLite、Profile、Plan、已真实验证的 Codex 草案、Claude Code 预览适配器、中国 Country Pack 完整编排、官方来源刷新与追溯、Google 地点/路线及覆盖范围内的天气事实、Telegram 配对/完整审阅/提醒/定位交接和 Plan 确认已经连通。Claude Code 已有契约测试，但没有可用付费账号完成真实 V1 验收，因此 `0.1.0` 正式支持 Codex，Claude Code 只作为自愿启用的预览能力。两种底座的登录凭据与 Connector 密钥都不会写入领域数据或传给 Skill。V1 仍保持明确边界：不根据网页正文替用户作受监管资格结论，也不点餐、订房、叫车或支付。
 
 ## 已确定的产品形态
 
 - 每位用户一套实例，使用自己的 Codex 或 Claude Code 账号。
-- Telegram 是移动端入口，负责对话、提醒、定位请求和快捷操作。
+- Telegram 是默认移动端入口，负责对话、提醒、定位请求和快捷操作；WhatsApp Business Platform 是不影响实例就绪的可选 Connector。
 - Web 工作台是完整桌面端入口，不是运维后台。
 - Core 保存长期 Profile、当前 Plan、Task、Reminder、Event、Run 等结构化状态。
 - Agent 每次按需运行，不承担常驻进程、定时调度或长期记忆。
-- China Country Pack 对外整体发布，内部由独立 Skills 组成并由 Core 自动编排。
-- Amap（高德）作为 V1 吃、住、行的位置事实与行动交接底座。
+- China 与 Japan Country Pack 分别对外整体发布，内部由隔离、可测试的 Skills 组成并由 Core 自动编排。
+- Google Maps Platform 作为 V1 地点、周边发现、路线事实与非打车行动交接底座；Uber 负责打车交接。
 - 预订、叫车、支付等不可逆动作在第三方应用中由用户完成。
+
+可选 WhatsApp Connector 使用 `pnpm configure:whatsapp` 配置。交互命令会隐藏访问口令和 App Secret 的输入、验证号码身份、生成 Webhook Verify Token，并且只写入 Git 忽略的本机 `.env`。不要把 WhatsApp 凭据粘贴到聊天、源码或提交中。
 
 ## 核心原则
 
@@ -54,7 +56,7 @@ pnpm install
 pnpm dev
 ```
 
-打开 Vite 输出的本地地址即可查看 Web 工作台。默认健康检查地址是 `http://127.0.0.1:8787/health`。
+打开 Vite 输出的本地地址即可查看 Web 工作台。根目录 `pnpm dev` 使用 `http://127.0.0.1:8877/health` 作为开发健康检查，避免与默认运行在 `8787` 的常驻生产服务冲突。
 
 长期运行时先构建，再只启动一个 Landi 服务进程：
 
@@ -80,23 +82,26 @@ pnpm run service:install:macos
 pnpm build
 pnpm typecheck
 pnpm test
+pnpm test:browser
 pnpm release:check
 ```
 
-`pnpm release:check` 会先执行不访问外部账号的结构与 Git 跟踪文件安全预检，再执行完整构建、类型检查与测试；它不会调用 Telegram、高德、QWeather、Codex 或 Claude Code。Pull Request 以及向 `master`/`main` 的推送会在 GitHub Actions 中执行同一验收入口。
+`pnpm release:check` 会先执行不访问外部账号的结构与 Git 跟踪文件安全预检，再执行完整构建、类型检查与单元/集成测试。`pnpm test:browser` 会构建产品，并用隔离的临时 SQLite 数据库运行 Chromium 规划流程测试；不会调用 Agent Runtime 或 Connector。Pull Request 以及向 `master`/`main` 的推送会在 GitHub Actions 中执行两类验收。
 
-首次启动会在 `data/c-assistant.sqlite` 创建本地数据库。配置本地 `.env` 后，高德可提供地点、周边餐饮与住宿、驾车、步行和公共交通事实，并把路线交接给用户自行打开；QWeather 可提供实况和三天预报。QWeather 不可用时，即时查询可降级显示高德基础天气；高德未提供的降水量、UV 和体感温度不会被猜测，降级结果也不会进入打包或交通决策。住宿只有在用户明确表示已完成第三方预订后才会标记为已确认，系统不会点餐、预订、叫车或支付。
+首次启动会在 `data/c-assistant.sqlite` 创建本地数据库。配置本地 `.env` 后，Google Maps Platform 可提供地点、周边餐饮与住宿、驾车、步行和公共交通事实，并把非打车路线交接给用户自行打开；Uber 负责打车交接。Google Weather 仅在其支持的坐标范围内提供天气；不支持某个地点时会明确降级，不猜测天气、不切换地区型天气服务，也不阻塞 Plan 的其余部分。住宿只有在用户明确表示已完成第三方预订后才会标记为已确认，系统不会点餐、预订、叫车或支付。
 
 Settings 会显示 SQLite schema 与完整性状态，并允许用户显式创建经过再次校验的本地备份。备份保存到 `data/backups`（自定义数据库则保存在其旁边），权限为 `0600`，不包含 Codex/Claude Code 登录凭据或 Connector 密钥。恢复会覆盖当前 workspace，因此 V1 不自动执行恢复。
 
 配置 `TELEGRAM_BOT_TOKEN` 后，可在 Settings 验证 Bot 并创建一次性私聊配对链接。长期 Profile 是创建 Plan 的前置条件；Telegram 用户需要先通过 `/profile` 完成资料。首次普通文本或 `/new <事项>` 会使用本机已登录且在 Settings 选定的 Codex 或 Claude Code，结合已确认的 Profile 生成待确认 Plan；身份字段只作计划上下文，不能作为政策资格结论。用户创建的 Plan 仍为草案时，后续普通文本会作为一句话修订，`/new` 则始终新建独立 Plan。Plan 激活后，局部意图不会擅自创建或展示另一份完整 Plan：例如 `I prefer taxi` 只更新本次 Plan 的临时交通偏好，并可为当前抵达路线提供一次性定位按钮；暂不支持的局部请求会保持当前 Plan 不变。只有 `/new` 或明确表达创建新计划、修改整个计划时，才进入完整 Plan 生成和展示。修订失败不会用模板覆盖原草案。新草案和 `/plan` 都会把完整 Plan 自动分页发送到 Telegram，确认按钮只出现在最后一页，并绑定当前 Plan ID 与版本；旧按钮不能确认已替换或已修改的草案。Web 工作台也保留同一套完整审阅和确认能力。
 
-Web Plan 页面或 Telegram `/prepare` 会刷新已批准且缓存过期的官方来源，收集高德和 QWeather 当前事实，依次运行 China Pack 的七个 supporting Skills 与组合 Skill，并原子保存新的完整草稿版本。首批当地特色饮食目录覆盖上海、北京和广州；只有地点匹配且存在对应官方英文城市门户的新鲜快照时，五项保留中文原名的英文介绍才会进入完整 Plan 并附原文来源。每个依赖官方资料的 Task、编排 Run 和逐 Skill Run 都会保留准确的快照 ID 与内容指纹，但不复制官方正文；不存在或指纹不符的证据会让写入整体回滚。Web 会在对应 Task 下显示可读的官方依据链接，Telegram 则用编号把 Task 指向完整计划末尾的原文来源，不向用户展示内部 ID 或哈希。缺少住宿路线、Profile 或时间等关键事实时，只返回需要补充的项目并保留原草稿；成功后仍必须完整审阅并确认，Task 和 Reminder 才会激活。
+Web Plan 页面或 Telegram `/prepare` 会刷新已批准且缓存过期的官方来源，收集 Google 地点、路线以及可用的天气事实，依次运行 China Pack 的七个 supporting Skills 与组合 Skill，并原子保存新的完整草稿版本。目的地不在 Google Weather 覆盖范围内时，天气 Skill 降级，但不会因此阻塞其余 Plan 编译。首批当地特色饮食目录覆盖上海、北京和广州；只有地点匹配且存在对应官方英文城市门户的新鲜快照时，五项保留中文原名的英文介绍才会进入完整 Plan 并附原文来源。每个依赖官方资料的 Task、编排 Run 和逐 Skill Run 都会保留准确的快照 ID 与内容指纹，但不复制官方正文；不存在或指纹不符的证据会让写入整体回滚。Web 会在对应 Task 下显示可读的官方依据链接，Telegram 则用编号把 Task 指向完整计划末尾的原文来源，不向用户展示内部 ID 或哈希。缺少住宿路线、Profile 或时间等关键事实时，只返回需要补充的项目并保留原草稿；成功后仍必须完整审阅并确认，Task 和 Reminder 才会激活。
+
+东京演示由 Japan Country Pack V1 支持。Server 只依据 Google Maps 返回的规范化国家事实选择 Pack，不根据自由文本里是否出现 “Tokyo” 猜测。Japan Pack 使用独立 `jp-` 官方来源白名单，要求国籍、旅行目的、停留时间、日期和用户确认的护照状态，并把 MOFA、Visit Japan Web、JNTO、JR East、羽田机场与 GO TOKYO 的快照 ID/哈希绑定到 Plan、Task 和 Run。缺失或过期的政策证据会 fail closed；缺失天气、住宿或路线事实会明确降级。90/30/7 天、72 小时、抵达、返程和结束节点会成为待确认草稿中的 Task/Reminder；现有后台只会自动刷新显式声明的天气，政策复查仍是用户显式执行的 Task。Japan Pack 不判断签证资格，也不预订、付款、买票或自动叫车。
 
 `/profile` 可直接在 Telegram 查看和补充长期基础资料。资料未完成时不能创建 Plan；姓名、语言和国籍只有在用户先点选字段后才会读取下一条文本，15 分钟自动失效；性别和来华签证/居留状态使用白名单按钮。命令与定位消息不会被误保存，资料不完整时也不会被错误标记为 ready，更不会被当作政策资格结论。
 
-Web 首次打开且 Profile 未完成时，会显示不可跳过的个人基础设置弹窗。用户需要保存称呼、偏好语言、国籍、性别选择和来华身份后才能进入工作台。点击“制定计划”会打开本次 Plan 的结构化基础信息表单，至少收集目的地、抵达日期、离开日期或明确的开放式停留、此行目的；同时可填写抵达机场/车站和时间、人数、行李、住宿状态、交通偏好、优先目标及其他要求。提交前不会调用 Agent 或创建草稿；提交后才由选定 Runtime 生成具体完整 Plan。生成后的非关键未知项继续采用一次一个问题的渐进补充方式。
+Web 首次打开且 Profile 未完成时，会显示不可跳过的个人基础设置弹窗。用户需要保存称呼、偏好语言、国籍、性别选择和来华身份后才能进入工作台。点击“制定计划”后不再填写旅行问卷，而是像聊天一样说明目的地、大致时间和最重要的目标。Landi 先保存 Planning Session，并在信息足够时展示一份版本化提案；用户可以继续对话修改方向，只有确认最新版本提案后，选定 Runtime 才会生成具体完整 Plan。关闭弹窗后，同一会话仍可在当前计划页继续。
 
-`/weather` 可按当前 Plan 地点显式查询天气：高德负责解析地点，QWeather 优先返回实况和带日期的三天预报，并保留官方来源与抓取时间。QWeather 不可用且地点具有有效高德行政区编码时，只降级显示高德基础事实并标注能力限制。地点未确认或两个服务均失败时不会猜测；查询不会创建 Reminder，也不会把天气写入 Profile 或 Plan。
+`/weather` 可按当前 Plan 地点显式查询天气：Google Maps 负责解析地点，Google Weather 在覆盖范围内返回实况和带日期的三天预报，并保留来源与抓取时间。地点不受支持时会明确告知，不会猜测或调用高德、QWeather 等地区型兜底；查询不会创建 Reminder，也不会把天气写入 Profile 或 Plan。
 
-Plan 激活并设置预计抵达时间后，Bot 会在该时刻发送到达提醒。“我还没到达”或五分钟无回应才会触发一次明确的位置请求；共享 GPS 只用于当次高德路线计算，不写入 Profile 或数据库。到达只把明确标记的任务推进为 ready，只有用户点击“我已完成此步骤”才会记为 completed。所有 Connector 凭据都留在本地 Server，不显示在 Web，也不传给 Agent。
+Plan 激活并设置预计抵达时间后，Bot 会在该时刻发送到达提醒。“我还没到达”或五分钟无回应才会触发一次明确的位置请求；共享 GPS 只用于当次路线计算，不写入 Profile 或数据库。到达只把明确标记的任务推进为 ready，只有用户点击“我已完成此步骤”才会记为 completed。所有 Connector 凭据都留在本地 Server，不显示在 Web，也不传给 Agent。

@@ -63,7 +63,7 @@ function collectActionItems(result: Extract<ChinaPlanWorkflowResult, { status: "
     }
   }
   if (values.length) return values.slice(0, 8);
-  if (result.reasonCode === "fact_collection_failed") return ["Check the Amap and QWeather configuration, then try again."];
+  if (result.reasonCode === "fact_collection_failed") return ["Check the Google Maps Platform key, enabled Places/Routes/Weather APIs, billing, restrictions, and quotas, then try again."];
   if (result.reasonCode === "plan_changed") return ["Review the newest draft, then prepare it again."];
   return ["Review the current Profile and Plan details, correct anything missing, then try again."];
 }

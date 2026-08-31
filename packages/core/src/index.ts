@@ -1,21 +1,133 @@
 import { randomUUID } from "node:crypto";
 import type { PlanCompilationOrigin } from "./plan-compiler.js";
+import type { DestinationArrivalEvent } from "./current-destination.js";
+import type { TripBlueprint } from "./trip-blueprint.js";
 
 export { recommendPlanTransport, type TransportMode, type TransportRecommendation, type TransportRouteFact } from "./transport.js";
 export { assessPolicyPreparation, type PolicyPreparationAssessment, type PolicyPreparationItem, type PolicyPreparationStatus } from "./policy-applicability.js";
 export { compilePlanProposal, type PlanCompilationAudit, type PlanCompilationBlockReason, type PlanCompilationDecision, type PlanCompilationOrigin, type PlanCompilationProposal, type PlanCompilationTaskProposal, type SourceEvidenceRef } from "./plan-compiler.js";
+export { resolveCurrentPlanDestination, type CurrentPlanDestination, type DestinationArrivalEvent } from "./current-destination.js";
+export {
+  BLUEPRINT_PLAN_COMPILER_VERSION,
+  compileTripBlueprint,
+  type BlueprintPlanCompilation,
+  type BlueprintPlanCompilerInput
+} from "./blueprint-plan-compiler.js";
+export {
+  SKILL_IMPORTER_VERSION,
+  importSkillItinerary,
+  importSkillResearchBatches,
+  mergeResearchSetCheckpoint,
+  type BlueprintImportContext,
+  type ResearchImportContext,
+  type SkillActionRequirementArtifact,
+  type SkillItineraryArtifact,
+  type SkillResearchBatchArtifact,
+  type SkillResearchEventArtifact,
+  type SkillResearchPlaceArtifact,
+  type SkillResearchSourceArtifact
+} from "./skill-importer.js";
+export {
+  TRIP_BLUEPRINT_SCHEMA_VERSION,
+  assertResearchSetIntegrity,
+  assertTripBlueprintIntegrity,
+  researchSetIntegrityIssues,
+  tripBlueprintIntegrityIssues,
+  type BlueprintActionRequirement,
+  type BlueprintBookingConstraint,
+  type BlueprintBookingConstraintStrength,
+  type BlueprintBookingSegment,
+  type BlueprintBookingSegmentType,
+  type BlueprintBookingType,
+  type BlueprintDayKind,
+  type BlueprintEvidenceRef,
+  type BlueprintEvidenceStatus,
+  type BlueprintEvent,
+  type BlueprintGeneration,
+  type BlueprintGenerationEvent,
+  type BlueprintGenerationFailure,
+  type BlueprintGenerationStage,
+  type BlueprintGenerationStatus,
+  type BlueprintIntegrityOptions,
+  type BlueprintItineraryDay,
+  type BlueprintMovement,
+  type BlueprintMovementMode,
+  type BlueprintPlace,
+  type BlueprintPlacePriority,
+  type BlueprintProposalRef,
+  type BlueprintSource,
+  type BlueprintStop,
+  type PlanBlueprintLineage,
+  type ResearchBatch,
+  type ResearchSet,
+  type SkillLineage,
+  type TripBlueprint
+} from "./trip-blueprint.js";
 
 export type PlanStatus = "draft" | "active" | "completed" | "cancelled";
 export type TaskStatus = "scheduled" | "ready" | "running" | "waiting_user" | "blocked" | "completed" | "skipped" | "failed" | "cancelled";
 export type TaskActivationTrigger = "arrival";
 export type ProfileGender = "not_specified" | "woman" | "man" | "nonbinary" | "prefer_not_to_say";
-export type ImmigrationStatus = "unknown" | "short_term_visitor" | "tourist_visa" | "student_visa" | "work_visa" | "residence_permit" | "other";
+export type ImmigrationStatus = "unknown" | "not_obtained" | "no_visa" | "short_term_visitor" | "tourist_visa" | "student_visa" | "work_visa" | "residence_permit" | "other";
 export type AgentRuntimeKind = "codex" | "claude-code";
 export type RunStatus = "running" | "succeeded" | "failed" | "fallback";
-export type RunTrigger = "web" | "telegram";
+export type RunTrigger = "web" | "telegram" | "whatsapp";
 export type TransportPreference = "plan_recommended" | "taxi" | "public_transit" | "walking";
 export type LuggageLevel = "unknown" | "light" | "standard" | "heavy";
 export type TaskReminderDynamicFact = "weather";
+export type TaskPreparationCategory = "packing_item" | "documents" | "digital" | "booking" | "other_predeparture" | "not_applicable";
+export type StagePresentationKind = "overview" | "itinerary" | "reservations" | "budget" | "transport" | "details";
+export type PlanningSessionStatus = "collecting" | "proposal_ready" | "proposal_confirmed" | "generating" | "draft_ready" | "failed" | "abandoned";
+export type PlanningFactSource = "user" | "profile" | "inferred";
+
+export interface PlanningMessage {
+  id: string;
+  role: "assistant" | "user";
+  text: string;
+  createdAt: string;
+}
+
+export interface PlanningFact {
+  key: string;
+  value: string;
+  source: PlanningFactSource;
+  confirmed: boolean;
+  updatedAt: string;
+}
+
+export interface PlanningUnknown {
+  key: string;
+  question: string;
+  impact: "high" | "dependent";
+  status: "open" | "deferred";
+}
+
+export interface PlanningProposal {
+  version: number;
+  title: string;
+  objective: string;
+  theme: string;
+  segments: string[];
+  skeleton: string[];
+  tradeoffs: string[];
+  assumptions: string[];
+  decisionPoints: string[];
+}
+
+export interface PlanningSession {
+  id: string;
+  status: PlanningSessionStatus;
+  objectiveType: "travel" | "relocation" | "event" | "other";
+  messages: PlanningMessage[];
+  facts: PlanningFact[];
+  unresolved: PlanningUnknown[];
+  deferred: PlanningUnknown[];
+  proposal?: PlanningProposal;
+  confirmedProposalVersion?: number;
+  outputPlanId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface TaskReminder {
   /** Local wall-clock time in YYYY-MM-DDTHH:mm form. */
@@ -36,10 +148,14 @@ export interface Task {
   owner: "assistant" | "user" | "external";
   status: TaskStatus;
   dueLabel: string;
+  /** Explicit presentation semantics; avoids guessing categories from prose. */
+  preparationCategory?: TaskPreparationCategory;
   /** An explicit event marker; Core must never infer this from a task title. */
   activationTrigger?: TaskActivationTrigger;
   /** A proposed reminder remains inert until this exact Plan version is confirmed. */
   reminder?: TaskReminder;
+  /** Stable Action Requirement identity used to preserve completion across Blueprint revisions. */
+  requirementId?: string;
   /** Version-bound provenance for a task compiled from a Country Pack proposal. */
   origin?: PlanCompilationOrigin;
 }
@@ -48,17 +164,240 @@ export interface Stage {
   id: string;
   title: string;
   description: string;
+  /** Stable rendering semantics. Older in-memory fixtures may omit it; persisted Plans always restore it. */
+  presentationKind?: StagePresentationKind;
   tasks: Task[];
   /** Allows a later compilation to replace this exact generated stage safely. */
   origin?: PlanCompilationOrigin;
 }
 
+export type PlanPlacePriority = "must" | "preferred" | "nearby" | "archive" | "pending" | "recheck" | "booked";
+export type PlanRouteMode = "walking" | "transit" | "driving" | "rail" | "flight" | "unknown";
+export type PlanRouteVerification = "needs_verification" | "verified" | "stale";
+
+export interface PlanPlace {
+  id: string;
+  name: string;
+  localizedName?: string;
+  locationLabel: string;
+  coordinates?: [number, number];
+  city?: string;
+  area?: string;
+  category: string;
+  priority: PlanPlacePriority;
+  contentTier?: "deep" | "standard" | "compact";
+  visitRole?: string;
+  durationMinutes?: number;
+  whyWorthIt: string;
+  plan: string;
+  tip?: string;
+  detailSections: Array<{ title: string; body?: string; items?: string[] }>;
+  officialUrl?: string;
+  bookingUrl?: string;
+  /** Venue admission decision researched by Landi; the user only owns slot selection and payment. */
+  reservation?: {
+    requirement: "required" | "recommended" | "not_required" | "unknown";
+    verification: "verified" | "needs_recheck";
+    note: string;
+    checkedAt?: string;
+  };
+  mapUrl?: string;
+  experienceUrl?: string;
+  evidenceSources?: Array<{
+    title: string;
+    url: string;
+    type?: string;
+    role?: string;
+    language?: string;
+    supports?: string[];
+    checkedAt?: string;
+    status?: string;
+  }>;
+  sourceRefs: string[];
+}
+
+export interface ItineraryDay {
+  id: string;
+  label: string;
+  placeIds: string[];
+  date?: string;
+  shortLabel?: string;
+  city?: string;
+  title?: string;
+  summary?: string;
+  color?: string;
+  capacity?: number;
+  anchors?: string[];
+  candidates?: string[];
+  stops?: Array<{ placeId: string; order: number; time?: string; role?: string }>;
+  /** Current accommodation to the first scheduled place; host-managed after the user saves a stay. */
+  accommodationDeparture?: {
+    accommodationName: string;
+    accommodationAddress: string;
+    destinationPlaceId: string;
+    mode: "walking" | "transit" | "driving";
+    verification: "verified" | "needs_verification";
+    durationMinutes?: number;
+    distanceMeters?: number;
+    checkedAt?: string;
+  };
+  /** GeoJSON coordinate order: [longitude, latitude]. */
+  routeGeometry?: Array<[number, number]>;
+  routeGeometryMode?: string;
+  routeGeometryReviewedAt?: string;
+  routeReview?: {
+    fixedConstraints?: string[];
+    sequenceRationale?: string;
+    intentionalDetours?: string[];
+    routingMethod?: string;
+  };
+}
+
+export interface PlanRouteSegment {
+  id: string;
+  originPlaceId: string;
+  destinationPlaceId: string;
+  mode: PlanRouteMode;
+  verification: PlanRouteVerification;
+  durationMinutes?: number;
+  distanceMeters?: number;
+  checkedAt?: string;
+  sourceRefs: string[];
+  dayId?: string;
+  label?: string;
+  detail?: string;
+  breakRoute?: boolean;
+}
+
+/** Exploration data for itinerary-shaped Plans. It never replaces executable Stages and Tasks. */
+export interface PlanPresentation {
+  kind: "itinerary" | "timeline";
+  summary: string;
+  language?: string;
+  startDate?: string;
+  endDate?: string;
+  cities?: string[];
+  days: ItineraryDay[];
+  places: PlanPlace[];
+  routeSegments: PlanRouteSegment[];
+}
+
+/** Returns structural defects that make an itinerary unsafe to publish as a formal Plan. */
+export function planPresentationIntegrityIssues(presentation: PlanPresentation, options: { executionReady?: boolean } = {}): string[] {
+  if (presentation.kind !== "itinerary") return [];
+  const executionReady = options.executionReady ?? true;
+  const issues: string[] = [];
+  const isoDate = /^\d{4}-\d{2}-\d{2}$/;
+  if (!presentation.startDate || !isoDate.test(presentation.startDate)) issues.push("itinerary.startDate must be a machine-readable date");
+  if (!presentation.endDate || !isoDate.test(presentation.endDate)) issues.push("itinerary.endDate must be a machine-readable date");
+
+  const placeById = new Map(presentation.places.map((place) => [place.id, place] as const));
+  const dayById = new Map(presentation.days.map((day) => [day.id, day] as const));
+  const seenDates = new Set<string>();
+  for (const day of presentation.days) {
+    if (!day.date || !isoDate.test(day.date)) issues.push(`day ${day.id} must have a machine-readable date`);
+    else if (seenDates.has(day.date)) issues.push(`day ${day.id} duplicates itinerary date ${day.date}`);
+    else seenDates.add(day.date);
+    if (!day.city?.trim()) issues.push(`day ${day.id} must identify its destination city`);
+    if (executionReady && !day.title?.trim()) issues.push(`day ${day.id} must have a traveler-facing title`);
+    if (executionReady && !day.summary?.trim()) issues.push(`day ${day.id} must explain the day's planning rationale`);
+    if (executionReady && day.placeIds.length === 0) issues.push(`day ${day.id} must contain at least one scheduled place`);
+    if (new Set(day.placeIds).size !== day.placeIds.length) issues.push(`day ${day.id} contains duplicate scheduled places`);
+    const candidates = day.candidates ?? [];
+    if (new Set(candidates).size !== candidates.length) issues.push(`day ${day.id} contains duplicate candidates`);
+    if (candidates.some((placeId) => day.placeIds.includes(placeId))) issues.push(`day ${day.id} schedules a place that is also a candidate`);
+    if (day.capacity !== undefined && day.placeIds.length > day.capacity) issues.push(`day ${day.id} exceeds its declared capacity`);
+    for (const placeId of [...day.placeIds, ...candidates]) if (!placeById.has(placeId)) issues.push(`day ${day.id} references unknown place ${placeId}`);
+    for (const placeId of day.placeIds) {
+      const place = placeById.get(placeId);
+      if (!place) continue;
+      if (!place.coordinates || !validLatitudeLongitude(place.coordinates)) issues.push(`scheduled place ${placeId} needs persistent coordinates`);
+      if (!place.city?.trim()) issues.push(`scheduled place ${placeId} must identify its city`);
+      else if (day.city && !normalizedLocation(day.city).includes(normalizedLocation(place.city))) issues.push(`scheduled place ${placeId} does not match day ${day.id} city`);
+      if (executionReady && placeRequiresVisitDuration(place) && (!place.durationMinutes || place.durationMinutes < 1)) issues.push(`scheduled place ${placeId} must include a realistic visit duration`);
+    }
+    const stops = day.stops ?? [];
+    if (stops.length !== day.placeIds.length || stops.some((stop, index) => stop.placeId !== day.placeIds[index] || stop.order !== index + 1)) issues.push(`day ${day.id} stops must exactly match scheduled order`);
+    if (executionReady) {
+      const stopMinutes = stops.map((stop) => itineraryClockMinutes(stop.time));
+      if (stops.some((stop, index) => stopMinutes[index] === undefined)) issues.push(`day ${day.id} every scheduled stop must have a local HH:mm start time`);
+      else if (stopMinutes.some((minutes, index) => index > 0 && minutes! <= stopMinutes[index - 1]!)) issues.push(`day ${day.id} scheduled stop times must be strictly increasing`);
+      if (day.placeIds.length > 1 && !day.routeReview?.sequenceRationale?.trim()) issues.push(`day ${day.id} must explain why its scheduled sequence is practical`);
+    }
+  }
+
+  const routeKeys = new Set<string>();
+  const routeByKey = new Map<string, PlanRouteSegment>();
+  for (const segment of presentation.routeSegments) {
+    const day = segment.dayId ? dayById.get(segment.dayId) : undefined;
+    if (!day) {
+      issues.push(`route ${segment.id} must reference an itinerary day`);
+      continue;
+    }
+    const originIndex = day.placeIds.indexOf(segment.originPlaceId);
+    const destinationIndex = day.placeIds.indexOf(segment.destinationPlaceId);
+    if (originIndex < 0 || destinationIndex !== originIndex + 1) issues.push(`route ${segment.id} must connect adjacent scheduled places`);
+    if (executionReady && segment.mode === "unknown") issues.push(`route ${segment.id} must specify a planned transport mode`);
+    if (executionReady && (!segment.durationMinutes || segment.durationMinutes < 1)) issues.push(`route ${segment.id} must include a planned duration`);
+    if (executionReady && !segment.label?.trim()) issues.push(`route ${segment.id} must have a traveler-facing movement label`);
+    if (executionReady && !segment.detail?.trim()) issues.push(`route ${segment.id} must explain the movement and its evidence status`);
+    const routeKey = `${day.id}\0${segment.originPlaceId}\0${segment.destinationPlaceId}`;
+    routeKeys.add(routeKey);
+    routeByKey.set(routeKey, segment);
+  }
+  for (const day of presentation.days) {
+    for (let index = 0; index < day.placeIds.length - 1; index += 1) {
+      const key = `${day.id}\0${day.placeIds[index]}\0${day.placeIds[index + 1]}`;
+      if (!routeKeys.has(key)) issues.push(`day ${day.id} is missing a route between adjacent scheduled places`);
+      if (!executionReady) continue;
+      const origin = placeById.get(day.placeIds[index]!);
+      const route = routeByKey.get(key);
+      const start = itineraryClockMinutes(day.stops?.[index]?.time);
+      const nextStart = itineraryClockMinutes(day.stops?.[index + 1]?.time);
+      const visitMinutes = origin?.durationMinutes ?? (origin && !placeRequiresVisitDuration(origin) ? 0 : undefined);
+      if (start !== undefined && nextStart !== undefined && visitMinutes !== undefined && route?.durationMinutes) {
+        const minimumNextStart = start + visitMinutes + route.durationMinutes;
+        if (nextStart < minimumNextStart) issues.push(`day ${day.id} does not leave enough time between ${origin?.id ?? "the current stop"} and ${day.placeIds[index + 1]} for the planned visit and movement`);
+      }
+    }
+  }
+  return [...new Set(issues)];
+}
+
+function placeRequiresVisitDuration(place: PlanPlace): boolean {
+  return !/(?:accommodation|hotel|transport|airport|station)/i.test(`${place.category} ${place.visitRole ?? ""}`);
+}
+
+function itineraryClockMinutes(value?: string): number | undefined {
+  const match = /^(\d{2}):(\d{2})$/.exec(value ?? "");
+  if (!match) return undefined;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return undefined;
+  return hours * 60 + minutes;
+}
+
+export function assertPlanPresentationIntegrity(presentation: PlanPresentation, options: { executionReady?: boolean } = {}): void {
+  const issues = planPresentationIntegrityIssues(presentation, options);
+  if (issues.length) throw new Error(`The generated Plan presentation failed its integrity gate: ${issues.join("; ")}.`);
+}
+
+function validLatitudeLongitude(coordinates: [number, number]): boolean {
+  const [latitude, longitude] = coordinates;
+  return Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 && Number.isFinite(longitude) && longitude >= -180 && longitude <= 180;
+}
+
+function normalizedLocation(value: string): string {
+  return value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+}
+
 /** Only packing/carry items and concrete pre-departure work belong in the Web checklist. */
 export function isPreDepartureChecklistTask(
-  task: Pick<Task, "title" | "description" | "owner" | "dueLabel">,
+  task: Pick<Task, "title" | "description" | "owner" | "dueLabel"> & Partial<Pick<Task, "preparationCategory">>,
   stageTitle = ""
 ): boolean {
   if (task.owner !== "user") return false;
+  if (task.preparationCategory) return task.preparationCategory !== "not_applicable";
   const titleAndDetail = `${task.title} ${task.description ?? ""}`.toLocaleLowerCase();
   const due = task.dueLabel.trim().toLocaleLowerCase();
   const stage = stageTitle.toLocaleLowerCase();
@@ -159,8 +498,111 @@ export interface Plan {
   nextAction: string;
   configuration: PlanConfiguration;
   stages: Stage[];
+  presentation?: PlanPresentation;
   sources: SourceReference[];
   createdAt: string;
+}
+
+export interface PlanChangeSet {
+  id: string;
+  planId: string;
+  baseVersion: number;
+  appliedVersion: number;
+  kind: "reorder_task";
+  impact: "low";
+  status: "applied" | "undone";
+  stageId: string;
+  taskId: string;
+  fromIndex: number;
+  toIndex: number;
+  affectedTaskIds: string[];
+  createdAt: string;
+  undoneAt?: string;
+}
+
+export interface PlanChangeImpactPreview {
+  planId: string;
+  baseVersion: number;
+  impact: "low" | "high";
+  summary: string;
+  reasons: string[];
+  affectedAreas: Array<"dates" | "destination" | "accommodation" | "fixed_commitments" | "party" | "reminders" | "itinerary">;
+  requiresConfirmation: boolean;
+  createsReplacementDraft: boolean;
+}
+
+export type PlanRevalidationScope = "route_facts" | "time_estimates" | "official_sources" | "reminders" | "accommodation_options";
+
+/** Immutable handover evidence from one Plan version to a reviewable replacement draft. */
+export interface PlanReplacementAudit {
+  id: string;
+  sourcePlanId: string;
+  sourcePlanVersion: number;
+  replacementPlanId: string;
+  replacementPlanVersion: number;
+  impact: PlanChangeImpactPreview["impact"];
+  affectedAreas: PlanChangeImpactPreview["affectedAreas"];
+  revalidationScopes: PlanRevalidationScope[];
+  preservedCompletedTasks: Array<{
+    sourceTaskId: string;
+    replacementTaskId: string;
+    title: string;
+  }>;
+  createdAt: string;
+}
+
+export type TravelBookingType = "accommodation" | "flight" | "train" | "rental_car" | "event" | "tour" | "ticket" | "restaurant" | "other";
+export type TravelBookingStatus = "pending" | "confirmed" | "cancelled" | "needs_review";
+export type BookingConstraintStrength = "hard" | "soft" | "ignored";
+export type BookingSegmentType = "flight_leg" | "train_leg" | "hotel_stay" | "rental_pickup" | "rental_return" | "event_window" | "other";
+
+export interface BookingSegment {
+  id: string;
+  segmentType: BookingSegmentType;
+  title: string;
+  status: TravelBookingStatus;
+  startAtLocal?: string;
+  startTimeZone?: string;
+  endAtLocal?: string;
+  endTimeZone?: string;
+  origin?: string;
+  destination?: string;
+  location?: string;
+  constraintStrength: BookingConstraintStrength;
+  fixedCommitment: boolean;
+  needsReviewReasons: string[];
+}
+
+export interface TravelBooking {
+  id: string;
+  planningSessionId?: string;
+  planId?: string;
+  planVersionCreated?: number;
+  type: TravelBookingType;
+  status: TravelBookingStatus;
+  title: string;
+  providerName?: string;
+  source: "user" | "imported_email" | "imported_text";
+  sourceHash: string;
+  sourceLabel: string;
+  importedAt: string;
+  updatedAt: string;
+  constraintStrength: BookingConstraintStrength;
+  segments: BookingSegment[];
+  notes?: string;
+}
+
+export interface BookingImportPreview {
+  sourceHash: string;
+  sourceLabel: string;
+  duplicate: boolean;
+  possibleDuplicate: boolean;
+  bookings: TravelBooking[];
+}
+
+export interface BookingImportInput {
+  sourceLabel?: string;
+  content: string;
 }
 
 export interface InboxItem {
@@ -271,8 +713,16 @@ export interface WorkspaceSnapshot {
   profile: Profile;
   runtime: RuntimeSelection;
   activePlan: Plan;
+  /** The versioned itinerary source of truth for a Blueprint-compiled current Plan. */
+  activeBlueprint?: TripBlueprint;
+  planningSession?: PlanningSession;
+  latestPlanChange?: PlanChangeSet;
+  /** Present when the current draft was generated as a replacement for another Plan version. */
+  latestPlanReplacement?: PlanReplacementAudit;
   /** Present only while a replacement draft is under review and an older Plan remains in execution. */
   executionPlan?: Plan;
+  /** Explicit, Plan-scoped arrival confirmations used to resolve the current destination without continuous GPS. */
+  destinationArrivals: DestinationArrivalEvent[];
   inbox: InboxItem[];
   sourceSnapshots: SourceSnapshot[];
   system: {
@@ -330,13 +780,19 @@ export interface GeneratedPlanDraft {
   knownInformation: string[];
   assumptions: string[];
   nextAction: string;
+  presentation?: PlanPresentation;
+  sources?: Array<Pick<SourceReference, "title" | "authority" | "url" | "retrievedAt">>;
   stages: Array<{
     title: string;
     description: string;
+    /** Runtime-generated drafts must provide this; host-created compatibility drafts are normalized on ingestion. */
+    presentationKind?: StagePresentationKind;
       tasks: Array<{
         title: string;
+        description?: string;
         owner: Task["owner"];
         dueLabel: string;
+        preparationCategory?: TaskPreparationCategory;
         activationTrigger?: TaskActivationTrigger;
         reminder?: TaskReminder;
     }>;
@@ -371,6 +827,7 @@ export function createInitialWorkspace(): WorkspaceSnapshot {
       assumptions: ["Arrival airport and accommodation are not confirmed yet.", "Transport preferences will be kept inside this Plan."],
       nextAction: "Review and confirm this Plan to activate its reminder scope."
     },
+    destinationArrivals: [],
     inbox: [
       {
         id: "welcome",
@@ -429,6 +886,7 @@ export function createPlanFromRequest({ request }: CreatePlanInput): Plan {
         id: `stage-${randomUUID()}`,
         title: "Clarify essentials",
         description: "Confirm the details that make local guidance reliable.",
+        presentationKind: "details",
         tasks: [
           {
             id: `task-${randomUUID()}`,
@@ -443,6 +901,7 @@ export function createPlanFromRequest({ request }: CreatePlanInput): Plan {
         id: `stage-${randomUUID()}`,
         title: "Before departure",
         description: "Prepare information and local-life decisions for this Plan.",
+        presentationKind: "details",
         tasks: [
           {
             id: `task-${randomUUID()}`,
@@ -457,6 +916,7 @@ export function createPlanFromRequest({ request }: CreatePlanInput): Plan {
         id: `stage-${randomUUID()}`,
         title: "Arrival",
         description: "Hand off the planned route when location services are connected.",
+        presentationKind: "itinerary",
         tasks: [
           {
             id: `task-${randomUUID()}`,
@@ -490,23 +950,38 @@ export function createPlanFromDraft(draft: GeneratedPlanDraft): Plan {
       id: `stage-${randomUUID()}`,
       title: stage.title,
       description: stage.description,
+      presentationKind: stage.presentationKind ?? inferStagePresentationKind(stage.title),
       tasks: stage.tasks.map((task) => ({
         id: `task-${randomUUID()}`,
         title: task.title,
+        ...(task.description ? { description: task.description } : {}),
         owner: task.owner,
         status: task.activationTrigger ? "scheduled" : task.owner === "user" ? "waiting_user" : "scheduled",
         dueLabel: task.dueLabel,
+        ...(task.preparationCategory ? { preparationCategory: task.preparationCategory } : {}),
         ...(task.activationTrigger ? { activationTrigger: task.activationTrigger } : {}),
         ...(task.reminder ? { reminder: task.reminder } : {})
       }))
     })),
-    sources: [],
+    ...(draft.presentation ? { presentation: structuredClone(draft.presentation) } : {}),
+    sources: draft.sources ? draft.sources.map((source) => ({ ...source })) : [],
     createdAt: new Date().toISOString()
   };
 }
 
 export function createDefaultPlanConfiguration(): PlanConfiguration {
   return { accommodation: { status: "not_set" }, arrival: {}, transport: { preference: "plan_recommended" }, travelContext: { luggage: "unknown" } };
+}
+
+/** Compatibility normalization at the ingestion boundary; presentation code must use the stored kind. */
+export function inferStagePresentationKind(title: string): StagePresentationKind {
+  const value = title.trim().toLocaleLowerCase();
+  if (/每日行程|daily itinerary|day.by.day|itinerary/.test(value)) return "itinerary";
+  if (/总行程|trip overview|journey overview|overview/.test(value)) return "overview";
+  if (/预订|reservation|booking/.test(value)) return "reservations";
+  if (/预算|budget|cost/.test(value)) return "budget";
+  if (/交通方案|transport plan|transportation plan|transport/.test(value)) return "transport";
+  return "details";
 }
 
 

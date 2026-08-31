@@ -1,0 +1,23 @@
+{
+  "id": "japan",
+  "name": "Japan Country Pack",
+  "version": "0.1.0",
+  "status": "implementation",
+  "public_installation": "complete_pack_only",
+  "defaultTimeZone": "Asia/Tokyo",
+  "internal_skills": [
+    "japan-arrival-plan",
+    "japan-policy-applicability",
+    "japan-weather-and-packing",
+    "japan-housing-area-recommendation",
+    "japan-transport-planner",
+    "japan-local-food-guide",
+    "japan-digital-life-setup",
+    "japan-arrival-preparation"
+  ],
+  "providers": {
+    "location_base": "google_maps",
+    "weather": "google_weather_when_supported",
+    "official_sources": "japan_allowlisted_snapshots"
+  }
+}

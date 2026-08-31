@@ -1,0 +1,71 @@
+/* Final presentation layer for the embedded LANDI travel journal. */
+.trip-app { grid-template-columns: minmax(420px, 42%) minmax(0, 1fr); background: var(--trip-surface); }
+.trip-app.is-detail-browse { grid-template-columns: minmax(660px, 48%) minmax(0, 1fr); }
+.planner-shell { border-right-color: var(--trip-line); background: var(--trip-surface); }
+.overview-panel { padding: 34px 32px 48px; background: var(--trip-surface); }
+.trip-header { display: none; }
+.trip-eyebrow { color: #aa8b50; font-size: 9px; letter-spacing: .17em; text-transform: uppercase; }
+.trip-title { margin: 7px 0 10px; font-family: var(--trip-display); font-size: 34px; font-weight: 500; line-height: 1.12; letter-spacing: -.035em; }
+.trip-summary { color: var(--trip-muted); font-size: 13px; line-height: 1.65; }
+.trip-stats { display: none; }
+.trip-stat { padding: 13px 9px; }
+.trip-stat strong { font-family: var(--trip-display); font-size: 25px; font-weight: 500; }
+.trip-stat span { font-size: 10px; }
+.trip-quick-controls { margin-top: 0; padding-top: 0; border-top: 0; }
+.trip-city-tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--trip-line); }
+.trip-city-tab { min-height: 35px; padding: 5px 0 8px; border: 0; border-bottom: 1px solid transparent; border-radius: 0; background: transparent; color: var(--trip-muted); font-size: 11px; }
+.trip-city-tab:hover, .trip-city-tab.is-active { border-color: var(--trip-accent); background: transparent; color: var(--trip-accent); }
+.section-block { margin-top: 34px; }
+.section-title { font-family: var(--trip-display); font-size: 21px; font-weight: 500; }
+.day-list, .place-list, .quick-list { gap: 0; margin-top: 12px; border-top: 1px solid var(--trip-line); }
+.day-card { padding: 22px 6px 23px 14px; border: 0; border-bottom: 1px solid var(--trip-line); border-radius: 0; background: transparent; }
+.day-card:hover { border-color: var(--trip-line); background: #faf6ee; }
+.day-card.is-active { border-color: var(--trip-line); background: #f8f3e9; box-shadow: inset 3px 0 0 var(--trip-accent); }
+.day-title { font-family: var(--trip-display); font-size: 22px; font-weight: 500; }
+.day-summary { color: #5e5a53; font-size: 12px; line-height: 1.6; }
+.day-reason { color: #898278; font-size: 11px; }
+.day-timeline { margin-top: 13px; padding-top: 12px; }
+.day-timeline-stop { padding-top: 7px; padding-bottom: 7px; }
+.quick-place { padding: 13px 8px; border: 0; border-bottom: 1px solid var(--trip-line); border-radius: 0; background: transparent; }
+.route-segments { gap: 0; border-top: 1px solid var(--trip-line); border-bottom: 1px solid var(--trip-line); }
+.route-segments button { padding: 12px 9px; border: 0; border-right: 1px solid var(--trip-line); border-radius: 0; background: transparent; }
+.route-segments button:last-child { border-right: 0; }
+.detail-browse { background: var(--trip-surface); }
+.detail-browse:has(.poi-detail > .empty-state:only-child) { grid-template-columns: 94px minmax(0, 1fr); }
+.detail-browse:has(.poi-detail > .empty-state:only-child) .poi-detail { display: none; }
+.detail-browse .day-rail { padding: 16px 8px 28px; background: #f3eee5; }
+.detail-browse .day-pill { border-radius: 4px; }
+.day-list-panel { padding: 30px 26px 44px; background: #faf7f1; }
+.detail-browse .day-context h2 { font-family: var(--trip-display); font-size: 23px; font-weight: 500; }
+.detail-browse .day-context > p { max-width: 58ch; line-height: 1.65; }
+.detail-browse .place-row { padding: 12px 8px; border: 0; border-bottom: 1px solid var(--trip-line); border-radius: 0; background: transparent; }
+.detail-browse .place-row.is-selected { background: #f2ede4; box-shadow: inset 2px 0 0 var(--trip-accent); }
+.detail-browse .place-actions .order-shift { display: grid; opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
+.detail-browse .place-row:hover .order-shift, .detail-browse .place-row:focus-within .order-shift { opacity: 1; pointer-events: auto; }
+.detail-browse .poi-detail { padding: 29px 25px 42px; background: var(--trip-surface); }
+.detail-browse .detail-title { font-family: var(--trip-display); font-size: 29px; font-weight: 500; }
+.detail-section h3 { font-family: var(--trip-display); font-size: 18px; font-weight: 500; }
+.image-preview-viewer { border-radius: 4px; background: #eee8dd; }
+#map { background: #e8e2d7; }
+
+@media (max-width: 1100px) and (min-width: 821px) {
+  .trip-app, .trip-app.is-detail-browse { grid-template-columns: minmax(600px, 60vw) minmax(0, 1fr); }
+  .detail-browse:has(.poi-detail > .empty-state:only-child) { grid-template-columns: 78px minmax(0, 1fr); }
+  .overview-panel { padding: 28px 24px 40px; }
+}
+
+@media (max-height: 760px) and (min-width: 821px) {
+  .day-list-panel { padding-top: 18px; padding-bottom: 28px; }
+  .detail-browse .day-context > p { margin-bottom: 8px; }
+  .detail-browse .day-rationale { margin-top: 10px; padding: 12px; }
+  .detail-browse .section-block { margin-top: 20px; }
+  .detail-browse .place-row { padding-top: 9px; padding-bottom: 9px; }
+}
+
+@media (max-width: 820px) {
+  .overview-panel { padding: 22px 17px 32px; }
+  .trip-title { font-size: 30px; }
+  .trip-app, .trip-app.is-detail-browse { grid-template-columns: minmax(0,1fr); }
+  .day-list-panel { padding: 14px 16px; }
+  .detail-browse .poi-detail { padding: 18px 16px 30px; }
+}

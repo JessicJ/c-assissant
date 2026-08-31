@@ -1,0 +1,57 @@
+{
+  "version": "0.1.0",
+  "items": [
+    {
+      "id": "visit-japan-web",
+      "capability": "digital_entry",
+      "nameOriginal": "Visit Japan Web（入国手続オンラインサービス）",
+      "nameEnglish": "Visit Japan Web",
+      "explanationEnglish": "Review the current official online service for arrival procedures; using it does not guarantee entry.",
+      "sourceId": "jp-visit-japan-web"
+    },
+    {
+      "id": "welcome-suica",
+      "capability": "transport_payment",
+      "nameOriginal": "Welcome Suica（ウェルカム・スイカ）",
+      "nameEnglish": "Welcome Suica",
+      "explanationEnglish": "Review the operator's current visitor IC-card coverage and conditions before relying on it for Tokyo transport or small purchases.",
+      "sourceId": "jp-jreast-welcome-suica"
+    },
+    {
+      "id": "japan-ic-cards",
+      "capability": "transport_payment",
+      "nameOriginal": "交通系ICカード（Suica・PASMO等）",
+      "nameEnglish": "IC travel cards (Suica, PASMO and others)",
+      "explanationEnglish": "Use the official tourism overview to compare card use and limitations; retain cash or another payment fallback.",
+      "sourceId": "jp-jnto-ic-cards"
+    },
+    {
+      "id": "japan-emergency-info",
+      "capability": "emergency",
+      "nameOriginal": "訪日旅行者向け緊急情報",
+      "nameEnglish": "Emergency information for visitors",
+      "explanationEnglish": "Save official emergency guidance and contact information for use during the trip.",
+      "sourceId": "jp-jnto-emergencies"
+    },
+    {
+      "id": "haneda-access",
+      "capability": "airport_arrival",
+      "nameOriginal": "羽田空港アクセス",
+      "nameEnglish": "Haneda Airport access",
+      "explanationEnglish": "Review official train, monorail, bus and taxi access options after the actual arrival airport and accommodation are confirmed.",
+      "sourceId": "jp-haneda-access"
+    }
+  ],
+  "food": {
+    "city": "Tokyo",
+    "aliases": ["Tokyo", "東京"],
+    "sourceId": "jp-go-tokyo-food",
+    "facts": [
+      { "id": "edomae-sushi", "nameOriginal": "江戸前寿司", "nameEnglish": "Edomae sushi", "explanationEnglish": "A Tokyo food tradition that developed from Edo-era quick-service sushi." },
+      { "id": "monjayaki", "nameOriginal": "もんじゃ焼き", "nameEnglish": "Monjayaki", "explanationEnglish": "A savory griddle dish identified by Tokyo's official guide as a local specialty." },
+      { "id": "fukagawa-meshi", "nameOriginal": "深川めし", "nameEnglish": "Fukagawa meshi", "explanationEnglish": "A Tokyo rice dish associated with Fukagawa and clams." },
+      { "id": "dojo-nabe", "nameOriginal": "どじょう鍋", "nameEnglish": "Dojo nabe", "explanationEnglish": "A traditional Tokyo hot-pot preparation associated with Asakusa." },
+      { "id": "soba", "nameOriginal": "蕎麦", "nameEnglish": "Soba", "explanationEnglish": "Buckwheat noodles that became a popular fast food in Edo." }
+    ]
+  }
+}

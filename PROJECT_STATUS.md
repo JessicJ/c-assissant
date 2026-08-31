@@ -110,6 +110,12 @@
 
 ## V1 完成状态与后续范围
 
+- 已加入可选 WhatsApp Business Platform Connector：未配置时不影响 Setup；`pnpm configure:whatsapp` 通过隐藏输入验证测试/正式号码，并只向本机私有 `.env` 保存凭据、随机 Webhook Verify Token 和一个允许交互的国际号码。Server 支持号码验证、Webhook challenge、原始请求体 `X-Hub-Signature-256` 验签、持久化 `wamid` 去重，以及文字、位置、按钮/列表和投递状态归一化。唯一绑定号码的文字请求已接入现有 Plan/命令逻辑，并以独立 `whatsapp` Run trigger 审计；URL 行动交接转成可点击文本。WhatsApp 原生 Plan 确认、定位动作和 Reminder 渠道选择仍待后续装配，当前会明确引导用户使用 Web/Telegram，不会误报已执行。所有 `WHATSAPP_*` 值都会从 Agent 子进程环境和 Git 跟踪安全检查中排除，Web 本次未修改。
+
+- 2026-08-12 当前 Provider 决策：Google Maps Platform 是全球地点、周边发现与路线事实底座，Uber 负责打车行动交接；Google Weather 仅在其覆盖范围内使用。地点不受支持（包括当前实测无法返回天气的中国大陆坐标）会被归类为 `unsupported`，天气 Skill 非阻塞降级，Plan 其余部分继续编译；显式天气查询会诚实提示不可用，Reminder 则不附天气但仍发送原内容。当前不启用高德或 QWeather 地区型兜底。
+
+- 以下高德/QWeather 条目是此前实现与验收记录，已被上述当前 Provider 决策替代；兼容代码和测试暂时保留，但生产运行不再调用。
+
 - 首个公开版本已统一标记为 `0.1.0`；发布预检会拒绝根项目与八个 workspace 的版本漂移。
 
 - 生产 Fact Collector、数字生活来源目录、七 Skill orchestrator、Server 编排保存服务、Core Plan 编译器、China Pack Proposal Adapter 与 SQLite 原子版本写入已在 Server 完成装配。Web Plan 页面和 Telegram `/prepare` 共用同一条来源准备、编排、原子保存和用户可读失败路径；成功后完整显示新草稿，并保存组合编译 Run 与八条逐 Skill Run，最终仍需用户确认。
@@ -123,10 +129,15 @@
 - 已实现路线交接后的保守时间推进：Telegram 成功发送高德路线卡后只记录事实 `handoff_offered`，以 10 分钟等车缓冲、高德路线时长和 10 分钟安全余量计算预计抵达。到时自动发送下一环节指引；正常情况无需确认上车或到达，用户仅在偏离计划时点击 `I haven't arrived` 延后 15 分钟并可选择一次性定位重算。`expected_waiting`、`expected_in_transit`、`expected_arrived` 始终是推测状态，不会伪装成事实或自动完成 Task。
 - Web 工作台以会话「确认项目网页进度」确认的版本为准并已合并：采用无侧边栏单栏结构，顶部只保留 Landi、制定计划和设置入口；制定与修改都通过对话弹窗完成。计划不再全部强塞进时间轴，而是按内容分别使用总览卡、每日行程时间轴、可勾选准备清单、预订表、预算卡和交通卡；已识别的微信、高德、支付宝和中国移动任务可跳转官方页面。历史 Plan 可展开查看或由用户显式删除，但不能删除当前或仍在执行的 Plan。
 - Plan 审阅与执行已拆分：创建或修订完整替代草稿时，旧的已激活 Plan 继续承担 Reminder、预计抵达和路线时间线；Web 会明确显示仍在运行的 Plan。只有用户确认完整替代草稿时，Core 才原子切换执行指针、取消旧 Plan 尚未完成的提醒 Run，并把旧 Plan 放入只读历史。草稿存在本身不会中断现实中的当前行程。
+- 新增结构化 PlanPresentation 与 SQLite schema v11：新 Agent 草稿需要明确返回 itinerary 或 timeline 展示模型；itinerary 保存地点、分日归属和带核验状态的路线段。Web 已提供分日切换、顺序画布、路线状态、地点列表和地点详情。没有可信坐标或路线证据时只显示虚线顺序示意，不绘制伪造道路轨迹；旧 Plan 继续使用原有阶段时间轴。
+- 已打通单路线段刷新：Web 对步行、公共交通和驾车段提供刷新动作；Server 解析该段引用的两个地点并调用一次 Google Routes，SQLite 只在 Plan ID/版本仍匹配时更新该段、坐标和观测时间。铁路与航班仍要求核对运营方时刻；配置缺失、地点解析失败、路线不可用或版本冲突均不会改写旧事实。
+- Web 新建 Plan 已收口为唯一流程：自然语言对话先形成可继续修改的版本化提案，用户确认最新提案后才允许调用 Runtime 生成完整 Plan。旧旅行问卷请求、直接创建/直接生成 Web API、重复且不可达的 PlanComposer 界面以及重复提案卡均已移除；关闭弹窗后，同一 Planning Session 会在当前计划页无缝继续。
+- Web 当前 Plan 的内容展示已完全依赖显式 `presentationKind`；非 itinerary 阶段不再通过任务标题或时间文案被猜测性塞入行程时间轴。旧数据库的阶段标题推断仅在 Core/SQLite 迁移时执行一次。已完成小红书与独立 HTML 残留审计，产品代码中不存在相关路径。
+- 规划质量回归已覆盖旅游、固定活动和长期旅居等未见场景；中文数字时长可被识别，目的地不会再把“旅行10天”等时长吞入地名。用户修改已就绪提案时会保留既有事实并把提案版本单调递增，SQLite 只允许确认最新版本。已加入 Playwright Chromium CI：使用隔离临时数据库覆盖首次设置、无旧问卷、单一提案卡、V1→V2 修改、关闭弹窗后续接、390px 横向溢出和页面错误；路线刷新另有真实桌面/移动浏览器验收与确定性集成测试。
 - Telegram 的 `/plan` 已提供当前完整 Plan：已知信息、需要纠正的假设、阶段、任务状态、提醒策略和下一步都会显示；超过单条消息安全长度时自动分页，确认按钮只附在最后一页。
 - Claude Code Adapter 已实现并通过契约测试、接入用户可选的预览底座，但当前没有可用付费账号完成真实端到端验证；`0.1.0` 正式支持已真实验证的 Codex，Claude Code 不作为本次发布阻塞项，也不得对外声称已真实验证。Plan 生成、Task Reminder、Country Pack 编译和逐 Skill 已具备最小 Run 审计。
 - 本地 MCP Tool Gateway 调整为 V1 后续项：V1 的 Codex/Claude Code 只做无工具结构化草案，所有 Connector 调用由 Core 的受限工作流执行，避免把密钥或任意工具权限交给 Agent。
-- 已实现即时天气的诚实兜底：Web 与 Telegram 优先返回 QWeather 完整事实；QWeather 不可用且高德地理编码含有效 `adcode` 时，降级显示高德基础实况与预报并标注官方来源和字段限制。高德未提供的降水量、UV、体感温度不会被合成，兜底数据不会进入打包、交通、Reminder 或 China Pack 编译决策。餐饮与住宿的第三方应用行动交接、地图深链接真机验证和限额/配额可视化仍未完成。
+- 已实现即时天气的诚实兜底：Web 与 Telegram 优先返回 QWeather 完整事实；QWeather 不可用且高德地理编码含有效 `adcode` 时，降级显示高德基础实况与预报并标注官方来源和字段限制。高德未提供的降水量、UV、体感温度不会被合成，兜底数据不会进入打包、交通、Reminder 或 China Pack 编译决策。Web 旅行计划现已把住宿、餐饮地点和已知路线集中为第三方地图交接入口，并明确打开入口不等于预订、点餐、叫车或支付完成；地图深链接真机验证和限额/配额可视化仍未完成。
 - 住宿候选已有相对一个 Plan 中心点的初步距离理由，并支持保存或直接录入后由用户显式确认；尚未支持多中心路线、住宿地点偏好和完整区域级比较。
 - 初步交通选择只会在预计抵达日期落入已刷新 QWeather 三天预报窗口时考虑降水；没有日期匹配时不会用天气猜测未来行程。它已成为独立的 `transport-planner` Skill，不再使用固定步行距离阈值，但仍未纳入服务中断或精确位置，也不会替用户自动启动出行。
 - 已建立 China 官方来源注册表并实现受限采集、SQLite 证据快照、去重、内容变化检测及 Plan/Task/编排 Run/逐 Skill Run 的精确版本关联；`policy-applicability` 已完成资料与证据准备门槛，但尚未实现会解释官方政策正文并形成个人适用性结论的后续审查。

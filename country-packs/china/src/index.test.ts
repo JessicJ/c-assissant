@@ -105,6 +105,26 @@ test("transport-planner records matched weather provenance and fails closed on m
   assert.equal(runTransportPlannerSkill({ preference: "plan_recommended", luggage: "light", routeFacts: [{ mode: "walking", distanceMeters: -1 }], routeObservedAt: "2026-08-07T00:00:00.000Z" }).status, "failed");
 });
 
+test("place and transport Skills preserve Google provider provenance", () => {
+  const food = runFoodNearbySkill({ partySize: 2, candidates, observedAt: "2026-08-07T00:00:00.000Z", provider: "google_maps" });
+  const housing = runHousingAreaRecommendationSkill({ centreName: "Shanghai Exhibition Centre", candidates, observedAt: "2026-08-07T00:00:00.000Z", provider: "google_maps" });
+  const transport = runTransportPlannerSkill({
+    preference: "walking",
+    luggage: "light",
+    routeFacts: [{ mode: "walking", distanceMeters: 900, durationSeconds: 800 }],
+    routeObservedAt: "2026-08-07T00:00:00.000Z",
+    mapProvider: "google_maps",
+    weather: { condition: "Cloudy", precipitationMm: 0 },
+    weatherObservedAt: "2026-08-07T00:05:00.000Z",
+    weatherProvider: "google_weather"
+  });
+  assert.deepEqual(food.sources.map((source) => source.provider), ["google_maps"]);
+  assert.deepEqual(housing.sources.map((source) => source.provider), ["google_maps"]);
+  assert.deepEqual(transport.sources.map((source) => source.provider), ["google_maps", "google_weather"]);
+  assert.match(food.summary, /Google Maps/);
+  assert.match(housing.recommendations[0]?.reason ?? "", /Google Maps/);
+});
+
 const weatherInput = {
   locationName: "Shanghai",
   current: { condition: "Cloudy", temperatureC: 24, feelsLikeC: 25, precipitationMm: 0, observedAt: "2026-08-07T00:00:00.000Z" },
@@ -144,6 +164,21 @@ test("weather-and-packing omits unapproved attribution and fails closed on malfo
   assert.equal(runWeatherAndPackingSkill({ ...weatherInput, retrievedAt: "not-a-date" }).status, "failed");
 });
 
+test("weather-and-packing degrades without blocking when the configured provider does not cover a region", () => {
+  const result = runWeatherAndPackingSkill({
+    locationName: "Unsupported destination",
+    availability: "not_supported",
+    retrievedAt: "2026-08-07T00:05:00.000Z",
+    provider: "google_weather",
+    reasonCode: "http_404"
+  });
+  assert.equal(result.status, "degraded");
+  assert.deepEqual(result.facts, []);
+  assert.deepEqual(result.recommendations, []);
+  assert.deepEqual(result.sources.map((source) => source.provider), ["google_weather"]);
+  assert.match(result.summary, /rest of the Plan can continue/i);
+});
+
 const policyEvidence = { id: "source-1", sourceId: "nia-english", authority: "National Immigration Administration", titleOriginal: "Guidance", url: "https://en.nia.gov.cn/", retrievedAt: "2026-08-06T12:00:00.000Z", contentHash: "a".repeat(64) };
 
 test("policy-applicability identity matches its internal manifest and asks only for missing facts", () => {
@@ -163,6 +198,13 @@ test("policy-applicability marks fresh approved evidence ready only for separate
   assert.match(result.nextAction, /separate source-backed policy review/);
   assert.match(result.warnings.join(" "), /does not determine/);
   assert.deepEqual(result.proposedTasks, []);
+});
+
+test("policy-applicability accepts no visa yet as confirmed context for evidence review", () => {
+  const result = runPolicyApplicabilitySkill({ nationality: "Canada", immigrationStatus: "no_visa", location: "Shanghai, China", dates: "September 2026", evidence: [policyEvidence], now: "2026-08-07T00:00:00.000Z" });
+  assert.equal(result.status, "success");
+  assert.match(result.facts.join(" "), /No China visa or residence permit has been obtained yet/i);
+  assert.equal(result.needsInput.some((item) => item.field === "profile.immigrationStatus"), false);
 });
 
 test("policy-applicability rejects stale, future, and unapproved evidence for current review without interpreting content", () => {

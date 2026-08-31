@@ -4,6 +4,9 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   confirmPlan,
+  assertPlanPresentationIntegrity,
+  assertResearchSetIntegrity,
+  assertTripBlueprintIntegrity,
   createInitialWorkspace,
   createPlanFromDraft,
   createPlanFromRequest,
@@ -11,10 +14,15 @@ import {
   isPreDepartureChecklistTask,
   type CreatePlanInput,
   type CountryPackSkillRun,
+  type DestinationArrivalEvent,
   type AgentRuntimeKind,
   type AgentRun,
+  type BlueprintGeneration,
+  type BlueprintGenerationEvent,
+  type BlueprintPlanCompilation,
   type GeneratedPlanDraft,
   type InboxItem,
+  type ItineraryDay,
   type ImmigrationStatus,
   type Plan,
   type PlanAccommodationInput,
@@ -22,8 +30,17 @@ import {
   type PlanCompilationAudit,
   type PlanCompilationOrigin,
   type PlanCompilationRun,
+  type PlanChangeSet,
+  type PlanChangeImpactPreview,
   type PlanConfiguration,
+  type PlanReplacementAudit,
+  type PlanRevalidationScope,
+  type PlanPresentation,
+  type PlanPlacePriority,
+  type PlanRouteSegment,
   type PlanTravelContextInput,
+  type PlanningSession,
+  type PlanBlueprintLineage,
   type PlanTransportPreferenceInput,
   type ProfileGender,
   type ProfileUpdate,
@@ -31,15 +48,19 @@ import {
   type RunStatus,
   type RunTrigger,
   type SourceReference,
+  type StagePresentationKind,
   type SourceEvidenceRef,
   type SourceSnapshot,
   type SourceSnapshotInput,
   type SourceSnapshotWriteResult,
+  type TravelBooking,
+  type ResearchSet,
   type Stage,
   type Task,
   type TaskReminder,
   type TaskReminderRun,
   type TaskReminderRunStatus,
+  type TripBlueprint,
   type TelegramBinding,
   type TelegramPairingStatus,
   type TransportPreference,
@@ -71,13 +92,120 @@ interface PlanRow {
   next_action: string;
   configuration_json: string;
   sources_json: string;
+  presentation_json: string | null;
   created_at: string;
+}
+
+interface PlanChangeSetRow {
+  id: string;
+  plan_id: string;
+  base_version: number;
+  applied_version: number;
+  kind: PlanChangeSet["kind"];
+  impact: PlanChangeSet["impact"];
+  status: PlanChangeSet["status"];
+  stage_id: string;
+  task_id: string;
+  from_index: number;
+  to_index: number;
+  affected_task_ids_json: string;
+  created_at: string;
+  undone_at: string | null;
+}
+
+interface PlanReplacementAuditRow {
+  id: string;
+  source_plan_id: string;
+  source_plan_version: number;
+  replacement_plan_id: string;
+  replacement_plan_version: number;
+  impact: PlanReplacementAudit["impact"];
+  affected_areas_json: string;
+  revalidation_scopes_json: string;
+  preserved_completed_tasks_json: string;
+  created_at: string;
+}
+
+interface BlueprintGenerationRow {
+  generation_key: string;
+  session_id: string;
+  proposal_version: number;
+  skill_id: string;
+  skill_version: string;
+  status: BlueprintGeneration["status"];
+  stage: BlueprintGeneration["stage"];
+  research_set_id: string | null;
+  blueprint_id: string | null;
+  blueprint_version: number | null;
+  failure_json: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ResearchSetRow {
+  id: string;
+  generation_key: string;
+  content_json: string;
+}
+
+interface TripBlueprintRow {
+  id: string;
+  version: number;
+  generation_key: string;
+  research_set_id: string;
+  content_json: string;
+}
+
+interface PlanBlueprintLineageRow {
+  plan_id: string;
+  plan_version: number;
+  blueprint_id: string;
+  blueprint_version: number;
+  compiler_version: string;
+  compilation_key: string;
+  created_at: string;
+}
+
+interface BlueprintGenerationEventRow {
+  id: string;
+  generation_key: string;
+  sequence: number;
+  stage: BlueprintGenerationEvent["stage"];
+  status: BlueprintGenerationEvent["status"];
+  scope_label: string | null;
+  saved_place_count: number | null;
+  detail: string;
+  next_action: string | null;
+  created_at: string;
+}
+
+export interface TelegramPlanChangeProposal {
+  id: string;
+  planId: string;
+  baseVersion: number;
+  request: string;
+  impact: PlanChangeImpactPreview;
+  status: "pending" | "applied" | "cancelled" | "stale";
+  createdAt: string;
+  resolvedAt?: string;
+}
+
+interface TelegramPlanChangeProposalRow {
+  id: string;
+  plan_id: string;
+  base_version: number;
+  request: string;
+  impact_json: string;
+  status: TelegramPlanChangeProposal["status"];
+  created_at: string;
+  resolved_at: string | null;
 }
 
 interface StageRow {
   id: string;
   title: string;
   description: string;
+  presentation_kind: StagePresentationKind | null;
   origin_json?: string | null;
 }
 
@@ -88,8 +216,10 @@ interface TaskRow {
   owner: Task["owner"];
   status: Task["status"];
   due_label: string;
+  preparation_category: Task["preparationCategory"] | null;
   activation_trigger: "arrival" | null;
   reminder_json: string | null;
+  requirement_id?: string | null;
   origin_json?: string | null;
 }
 
@@ -149,6 +279,33 @@ interface AgentRunRow {
   failure_code: string | null;
 }
 
+interface PlanningSessionRow {
+  id: string;
+  status: PlanningSession["status"];
+  objective_type: PlanningSession["objectiveType"];
+  messages_json: string;
+  facts_json: string;
+  unresolved_json: string;
+  deferred_json: string;
+  proposal_json: string | null;
+  confirmed_proposal_version: number | null;
+  output_plan_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface TravelBookingRow {
+  id: string;
+  planning_session_id: string | null;
+  plan_id: string | null;
+  source_hash: string;
+  status: TravelBooking["status"];
+  type: TravelBooking["type"];
+  content_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
 interface TaskReminderRunRow {
   id: string;
   plan_id: string;
@@ -185,6 +342,12 @@ interface TelegramArrivalCheckinRow {
   location_received_at: string | null;
 }
 
+interface PlanDestinationArrivalRow {
+  city: string;
+  arrived_at: string;
+  confirmed: number;
+}
+
 interface TelegramRouteHandoffRow {
   plan_id: string;
   offered_at: string;
@@ -205,7 +368,7 @@ interface TelegramProfileEditRow {
   started_at: string;
 }
 
-export type TelegramLocationIntentPurpose = "arrival_route" | "nearby_food";
+export type TelegramLocationIntentPurpose = "arrival_route" | "nearby_food" | "uber_test" | "movement_go";
 
 interface TelegramLocationIntentRow {
   purpose: TelegramLocationIntentPurpose;
@@ -222,6 +385,16 @@ interface TelegramTaskReminderDeliveryRow {
   next_attempt_at: string | null;
 }
 
+interface TelegramItineraryReminderDeliveryRow {
+  day_id: string;
+  place_id: string;
+  scheduled_time: string;
+  due_at: string;
+  status: "attempting" | "retry_wait" | "delivered" | "failed";
+  attempt_count: number;
+  next_attempt_at: string | null;
+}
+
 export interface TelegramTaskReminderAttempt {
   claimed: boolean;
   attemptNumber?: number;
@@ -232,10 +405,16 @@ export interface TelegramTaskReminderFailureResult {
   nextAttemptAt?: string;
 }
 
+export type TelegramItineraryReminderAttempt = TelegramTaskReminderAttempt;
+export type TelegramItineraryReminderFailureResult = TelegramTaskReminderFailureResult;
+
 const TASK_REMINDER_CATCH_UP_MS = 30 * 60_000;
 const TASK_REMINDER_ATTEMPT_LEASE_MS = 60_000;
 const TASK_REMINDER_RETRY_DELAYS_MS = [60_000, 5 * 60_000] as const;
-const CURRENT_SCHEMA_VERSION = 5;
+const ITINERARY_REMINDER_CATCH_UP_MS = 20 * 60_000;
+const ITINERARY_REMINDER_ATTEMPT_LEASE_MS = 60_000;
+const ITINERARY_REMINDER_RETRY_DELAYS_MS = [60_000, 5 * 60_000] as const;
+const CURRENT_SCHEMA_VERSION = 18;
 
 export interface DatabaseMaintenanceStatus {
   schemaVersion: number;
@@ -342,6 +521,11 @@ export class SqliteWorkspaceStore {
     const activePlan = this.getCurrentPlan();
     if (!profile || !runtime || !activePlan) throw new Error("The local workspace is not initialized.");
     const executionPlan = this.getExecutionPlan();
+    const planningSession = this.getPlanningSession();
+    const latestPlanChange = this.getLatestAppliedPlanChange(activePlan.id);
+    const latestPlanReplacement = this.getLatestPlanReplacementAudit(activePlan.id);
+    const activeLineage = this.getPlanBlueprintLineage(activePlan.id);
+    const activeBlueprint = activeLineage ? this.getTripBlueprint(activeLineage.blueprintId, activeLineage.blueprintVersion) : undefined;
 
     return {
       profile: {
@@ -354,7 +538,12 @@ export class SqliteWorkspaceStore {
       },
       runtime: { selectedKind: runtime.selected_runtime },
       activePlan,
+      ...(activeBlueprint ? { activeBlueprint } : {}),
+      ...(planningSession ? { planningSession } : {}),
+      ...(latestPlanChange ? { latestPlanChange } : {}),
+      ...(latestPlanReplacement ? { latestPlanReplacement } : {}),
       ...(executionPlan && executionPlan.id !== activePlan.id ? { executionPlan } : {}),
+      destinationArrivals: this.listPlanDestinationArrivals(activePlan.id),
       inbox: (this.database.prepare("SELECT id, tone, title, body, timestamp FROM inbox_items ORDER BY created_at DESC, rowid DESC").all() as unknown as InboxRow[]).map((row) => ({
         id: row.id,
         tone: row.tone,
@@ -373,10 +562,710 @@ export class SqliteWorkspaceStore {
     };
   }
 
+  /** Adds one deduplicated attention item for a material current-weather condition on the executing Plan. */
+  recordPlanWeatherAttention(input: { planId: string; destination: string; kind: "storm" | "snow_or_ice" | "heavy_rain" | "extreme_heat" | "extreme_cold" | "low_visibility"; observedAt: string; title: string; body: string }): boolean {
+    const plan = this.getExecutionPlan();
+    if (!plan || plan.id !== input.planId || plan.status !== "active") return false;
+    const destination = input.destination.trim();
+    const title = input.title.trim();
+    const body = input.body.trim();
+    if (!destination || !title || !body || !Number.isFinite(Date.parse(input.observedAt))) throw new Error("A Plan weather attention item needs a destination, observation time, title, and body.");
+    const observedDay = input.observedAt.slice(0, 10);
+    const destinationKey = encodeURIComponent(destination.toLocaleLowerCase()).slice(0, 120);
+    const result = this.database.prepare("INSERT OR IGNORE INTO inbox_items (id, tone, title, body, timestamp, created_at) VALUES (?, 'attention', ?, ?, 'Just now', ?)").run(
+      `plan-weather:${plan.id}:${destinationKey}:${observedDay}:${input.kind}`,
+      title,
+      body,
+      new Date().toISOString()
+    );
+    return result.changes === 1;
+  }
+
+  /** Adds one deduplicated closure attention item for a monitored venue on the executing Plan. */
+  recordPlanVenueAttention(input: { planId: string; placeId: string; status: "temporarily_closed" | "permanently_closed"; observedAt: string; title: string; body: string }): boolean {
+    const plan = this.getExecutionPlan();
+    if (!plan || plan.id !== input.planId || plan.status !== "active") return false;
+    const placeId = input.placeId.trim();
+    const title = input.title.trim();
+    const body = input.body.trim();
+    if (!placeId || !title || !body || !Number.isFinite(Date.parse(input.observedAt))) throw new Error("A Plan venue attention item needs a place, observation time, title, and body.");
+    const observedDay = input.observedAt.slice(0, 10);
+    const result = this.database.prepare("INSERT OR IGNORE INTO inbox_items (id, tone, title, body, timestamp, created_at) VALUES (?, 'attention', ?, ?, 'Just now', ?)").run(
+      `plan-venue:${plan.id}:${encodeURIComponent(placeId).slice(0, 120)}:${observedDay}:${input.status}`,
+      title,
+      body,
+      new Date().toISOString()
+    );
+    return result.changes === 1;
+  }
+
+  getPlanningSession(): PlanningSession | undefined {
+    const row = this.database.prepare(`SELECT id, status, objective_type, messages_json, facts_json, unresolved_json, deferred_json, proposal_json, confirmed_proposal_version, output_plan_id, created_at, updated_at
+      FROM planning_sessions WHERE status IN ('collecting', 'proposal_ready', 'proposal_confirmed', 'generating') ORDER BY updated_at DESC, rowid DESC LIMIT 1`).get() as PlanningSessionRow | undefined;
+    return row ? planningSessionFromRow(row) : undefined;
+  }
+
+  createPlanningSession(objectiveType: PlanningSession["objectiveType"] = "travel", now = new Date()): PlanningSession {
+    const createdAt = now.toISOString();
+    this.database.prepare("UPDATE planning_sessions SET status = 'abandoned', updated_at = ? WHERE status IN ('collecting', 'proposal_ready', 'proposal_confirmed', 'generating')").run(createdAt);
+    const session: PlanningSession = {
+      id: randomUUID(),
+      status: "collecting",
+      objectiveType,
+      messages: [],
+      facts: [],
+      unresolved: [],
+      deferred: [],
+      createdAt,
+      updatedAt: createdAt
+    };
+    this.savePlanningSession(session);
+    return session;
+  }
+
+  savePlanningSession(session: PlanningSession): PlanningSession {
+    this.database.prepare(`INSERT INTO planning_sessions (id, status, objective_type, messages_json, facts_json, unresolved_json, deferred_json, proposal_json, confirmed_proposal_version, output_plan_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET status = excluded.status, objective_type = excluded.objective_type, messages_json = excluded.messages_json, facts_json = excluded.facts_json, unresolved_json = excluded.unresolved_json, deferred_json = excluded.deferred_json, proposal_json = excluded.proposal_json, confirmed_proposal_version = excluded.confirmed_proposal_version, output_plan_id = excluded.output_plan_id, updated_at = excluded.updated_at`).run(
+      session.id,
+      session.status,
+      session.objectiveType,
+      JSON.stringify(session.messages),
+      JSON.stringify(session.facts),
+      JSON.stringify(session.unresolved),
+      JSON.stringify(session.deferred),
+      session.proposal ? JSON.stringify(session.proposal) : null,
+      session.confirmedProposalVersion ?? null,
+      session.outputPlanId ?? null,
+      session.createdAt,
+      session.updatedAt
+    );
+    return session;
+  }
+
+  confirmPlanningSession(sessionId: string, proposalVersion: number): PlanningSession {
+    const session = this.getPlanningSessionById(sessionId);
+    if (!session) throw new Error("The planning session was not found.");
+    if (session.status === "proposal_confirmed" && session.proposal?.version === proposalVersion && session.confirmedProposalVersion === proposalVersion) return session;
+    if (session.status !== "proposal_ready" || !session.proposal || session.proposal.version !== proposalVersion) throw new Error("Confirm the latest planning proposal before generating a Plan.");
+    const confirmed: PlanningSession = { ...session, status: "proposal_confirmed", confirmedProposalVersion: proposalVersion, updatedAt: new Date().toISOString() };
+    return this.savePlanningSession(confirmed);
+  }
+
+  updatePlanningSessionStatus(sessionId: string, status: PlanningSession["status"], outputPlanId?: string): PlanningSession {
+    const session = this.getPlanningSessionById(sessionId);
+    if (!session) throw new Error("The planning session was not found.");
+    const updated: PlanningSession = { ...session, status, updatedAt: new Date().toISOString(), ...(outputPlanId ? { outputPlanId } : {}) };
+    return this.savePlanningSession(updated);
+  }
+
+  abandonPlanningSession(sessionId: string): PlanningSession {
+    const session = this.getPlanningSessionById(sessionId);
+    if (!session) throw new Error("The planning session was not found.");
+    if (session.status === "draft_ready") throw new Error("A completed planning session cannot be abandoned.");
+    return this.savePlanningSession({ ...session, status: "abandoned", updatedAt: new Date().toISOString() });
+  }
+
+  getPlanningSessionById(sessionId: string): PlanningSession | undefined {
+    const row = this.database.prepare(`SELECT id, status, objective_type, messages_json, facts_json, unresolved_json, deferred_json, proposal_json, confirmed_proposal_version, output_plan_id, created_at, updated_at
+      FROM planning_sessions WHERE id = ?`).get(sessionId) as PlanningSessionRow | undefined;
+    return row ? planningSessionFromRow(row) : undefined;
+  }
+
+  listTravelBookingsForPlanningSession(sessionId: string): TravelBooking[] {
+    return (this.database.prepare(`SELECT id, planning_session_id, plan_id, source_hash, status, type, content_json, created_at, updated_at
+      FROM travel_bookings WHERE planning_session_id = ? ORDER BY created_at DESC, rowid DESC`).all(sessionId) as unknown as TravelBookingRow[]).map(travelBookingFromRow);
+  }
+
+  listTravelBookingsForPlan(planId: string): TravelBooking[] {
+    return (this.database.prepare(`SELECT id, planning_session_id, plan_id, source_hash, status, type, content_json, created_at, updated_at
+      FROM travel_bookings WHERE plan_id = ? ORDER BY created_at DESC, rowid DESC`).all(planId) as unknown as TravelBookingRow[]).map(travelBookingFromRow);
+  }
+
+  hasTravelBookingSourceHash(scope: { planningSessionId?: string; planId?: string }, sourceHash: string): boolean {
+    const hash = sourceHash.trim();
+    if (!hash) return false;
+    if (scope.planningSessionId) {
+      const row = this.database.prepare("SELECT id FROM travel_bookings WHERE planning_session_id = ? AND source_hash = ? LIMIT 1").get(scope.planningSessionId, hash);
+      if (row) return true;
+    }
+    if (scope.planId) {
+      const row = this.database.prepare("SELECT id FROM travel_bookings WHERE plan_id = ? AND source_hash = ? LIMIT 1").get(scope.planId, hash);
+      if (row) return true;
+    }
+    return false;
+  }
+
+  saveTravelBooking(booking: TravelBooking): TravelBooking {
+    if (!booking.planningSessionId && !booking.planId) throw new Error("A booking must belong to a Planning Session or Plan.");
+    if (booking.planningSessionId && !this.getPlanningSessionById(booking.planningSessionId)) throw new Error("The planning session was not found.");
+    if (booking.planId && !this.database.prepare("SELECT id FROM plans WHERE id = ?").get(booking.planId)) throw new Error("The Plan was not found.");
+    this.database.prepare(`INSERT INTO travel_bookings (id, planning_session_id, plan_id, source_hash, status, type, content_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET planning_session_id = excluded.planning_session_id, plan_id = excluded.plan_id, source_hash = excluded.source_hash,
+        status = excluded.status, type = excluded.type, content_json = excluded.content_json, updated_at = excluded.updated_at`).run(
+      booking.id,
+      booking.planningSessionId ?? null,
+      booking.planId ?? null,
+      booking.sourceHash,
+      booking.status,
+      booking.type,
+      JSON.stringify(booking),
+      booking.importedAt,
+      booking.updatedAt
+    );
+    return booking;
+  }
+
+  saveProtectedBookingAttachment(input: { bookingId: string; sourceHash: string; sourceLabel: string; contentText: string; createdAt?: string }): void {
+    const contentText = input.contentText.trim();
+    if (!contentText) return;
+    if (!this.database.prepare("SELECT id FROM travel_bookings WHERE id = ?").get(input.bookingId)) throw new Error("Protected Booking Attachment references a missing booking.");
+    const createdAt = input.createdAt ?? new Date().toISOString();
+    this.database.prepare(`INSERT INTO protected_booking_attachments (id, booking_id, source_hash, source_label, content_text, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(booking_id, source_hash) DO UPDATE SET source_label = excluded.source_label, content_text = excluded.content_text`).run(
+      `protected-booking-${input.bookingId}-${input.sourceHash.slice(0, 16)}`,
+      input.bookingId,
+      input.sourceHash,
+      input.sourceLabel.trim().slice(0, 160) || "Imported booking confirmation",
+      contentText.slice(0, 80_000),
+      createdAt
+    );
+  }
+
+  countProtectedBookingAttachments(bookingId: string): number {
+    const row = this.database.prepare("SELECT COUNT(*) AS count FROM protected_booking_attachments WHERE booking_id = ?").get(bookingId) as { count: number } | undefined;
+    return row?.count ?? 0;
+  }
+
+  applyTravelBookingToCurrentPlan(booking: TravelBooking, expectedVersion?: number): WorkspaceSnapshot {
+    if (!booking.planId) throw new Error("A Plan-linked booking is required.");
+    const workspace = this.getWorkspace();
+    const plan = workspace.activePlan.id === booking.planId ? workspace.activePlan : workspace.executionPlan?.id === booking.planId ? workspace.executionPlan : undefined;
+    if (!plan) throw new Error("The Plan was not found.");
+    if (expectedVersion !== undefined && plan.version !== expectedVersion) throw new Error("The Plan changed while the booking was being reviewed.");
+    const knownInformation = uniqueStrings([...plan.knownInformation, ...travelBookingKnownInformation(booking)]);
+    const assumptions = uniqueStrings([...plan.assumptions, ...travelBookingAssumptions(booking)]);
+    const configuration = configurationWithTravelBooking(plan.configuration, booking);
+    const nextAction = booking.segments.some((segment) => segment.constraintStrength === "hard")
+      ? "Review the imported booking details. Structural hard constraints may need a replacement draft before they change the itinerary."
+      : plan.nextAction;
+    const updated = this.database.prepare(`UPDATE plans SET known_information_json = ?, assumptions_json = ?, configuration_json = ?, next_action = ?, version = version + 1
+      WHERE id = ? AND version = ? AND is_current = 1`).run(
+      JSON.stringify(knownInformation),
+      JSON.stringify(assumptions),
+      JSON.stringify(configuration),
+      nextAction,
+      plan.id,
+      plan.version
+    ) as { changes: number | bigint };
+    if (Number(updated.changes) !== 1) throw new Error("The Plan changed while the booking was being saved.");
+    this.addInbox({
+      id: `booking-imported-${booking.id}`,
+      tone: "notice",
+      title: "Booking details added",
+      body: `${booking.title} is linked to this Plan. Landi has not booked, paid, checked in, or changed anything externally.`,
+      timestamp: "Just now"
+    });
+    return this.getWorkspace();
+  }
+
+  getBlueprintGeneration(generationKey: string): BlueprintGeneration | undefined {
+    const row = this.database.prepare(`SELECT generation_key, session_id, proposal_version, skill_id, skill_version, status, stage,
+      research_set_id, blueprint_id, blueprint_version, failure_json, created_at, updated_at
+      FROM blueprint_generations WHERE generation_key = ?`).get(generationKey) as BlueprintGenerationRow | undefined;
+    return row ? blueprintGenerationFromRow(row) : undefined;
+  }
+
+  saveBlueprintGeneration(generation: BlueprintGeneration): BlueprintGeneration {
+    if (!generation.generationKey.trim() || !generation.proposalRef.sessionId.trim() || !Number.isInteger(generation.proposalRef.proposalVersion) || generation.proposalRef.proposalVersion < 1) throw new Error("Blueprint Generation needs a valid key and Proposal reference.");
+    if (!generation.skillLineage.skillId.trim() || !generation.skillLineage.skillVersion.trim()) throw new Error("Blueprint Generation needs Skill lineage.");
+    this.database.prepare(`INSERT INTO blueprint_generations (generation_key, session_id, proposal_version, skill_id, skill_version, status, stage,
+      research_set_id, blueprint_id, blueprint_version, failure_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(generation_key) DO UPDATE SET status = excluded.status, stage = excluded.stage,
+        research_set_id = COALESCE(excluded.research_set_id, blueprint_generations.research_set_id),
+        blueprint_id = COALESCE(excluded.blueprint_id, blueprint_generations.blueprint_id),
+        blueprint_version = COALESCE(excluded.blueprint_version, blueprint_generations.blueprint_version),
+        failure_json = excluded.failure_json, updated_at = excluded.updated_at`).run(
+      generation.generationKey,
+      generation.proposalRef.sessionId,
+      generation.proposalRef.proposalVersion,
+      generation.skillLineage.skillId,
+      generation.skillLineage.skillVersion,
+      generation.status,
+      generation.stage,
+      generation.researchSetId ?? null,
+      generation.blueprintId ?? null,
+      generation.blueprintVersion ?? null,
+      generation.failure ? JSON.stringify(generation.failure) : null,
+      generation.createdAt,
+      generation.updatedAt
+    );
+    return this.getBlueprintGeneration(generation.generationKey)!;
+  }
+
+  saveResearchSet(research: ResearchSet): ResearchSet {
+    assertResearchSetIntegrity(research);
+    const generation = this.getBlueprintGeneration(research.generationKey);
+    if (!generation) throw new Error("Save Blueprint Generation before its Research Set.");
+    if (generation.proposalRef.sessionId !== research.proposalRef.sessionId || generation.proposalRef.proposalVersion !== research.proposalRef.proposalVersion) throw new Error("Research Set does not match its confirmed Proposal.");
+    if (generation.skillLineage.skillId !== research.skillLineage.skillId || generation.skillLineage.skillVersion !== research.skillLineage.skillVersion) throw new Error("Research Set does not match its Skill lineage.");
+    this.database.exec("BEGIN");
+    try {
+      this.database.prepare(`INSERT INTO research_sets (id, generation_key, schema_version, status, content_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET status = excluded.status, content_json = excluded.content_json, updated_at = excluded.updated_at`).run(
+        research.id, research.generationKey, research.schemaVersion, research.status, JSON.stringify(research), research.createdAt, research.updatedAt
+      );
+      this.database.prepare("UPDATE blueprint_generations SET research_set_id = ?, updated_at = ? WHERE generation_key = ?").run(research.id, research.updatedAt, research.generationKey);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getResearchSet(research.id)!;
+  }
+
+  getResearchSet(id: string): ResearchSet | undefined {
+    const row = this.database.prepare("SELECT id, generation_key, content_json FROM research_sets WHERE id = ?").get(id) as ResearchSetRow | undefined;
+    return row ? JSON.parse(row.content_json) as ResearchSet : undefined;
+  }
+
+  getResearchSetByGenerationKey(generationKey: string): ResearchSet | undefined {
+    const row = this.database.prepare("SELECT id, generation_key, content_json FROM research_sets WHERE generation_key = ?").get(generationKey) as ResearchSetRow | undefined;
+    return row ? JSON.parse(row.content_json) as ResearchSet : undefined;
+  }
+
+  saveTripBlueprint(blueprint: TripBlueprint): TripBlueprint {
+    const research = this.getResearchSet(blueprint.researchSetId);
+    if (!research) throw new Error("Publish a Trip Blueprint only after its Research Set is saved.");
+    if (research.generationKey !== blueprint.generationKey) throw new Error("Trip Blueprint does not belong to its Research Set Generation.");
+    assertTripBlueprintIntegrity(blueprint, { expectedResearchPlaceIds: research.places.map((place) => place.id) });
+    this.database.exec("BEGIN");
+    try {
+      this.database.prepare(`INSERT INTO trip_blueprints (id, version, generation_key, research_set_id, schema_version, content_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id, version) DO UPDATE SET content_json = excluded.content_json`).run(
+        blueprint.id, blueprint.version, blueprint.generationKey, blueprint.researchSetId, blueprint.schemaVersion, JSON.stringify(blueprint), blueprint.createdAt
+      );
+      this.database.prepare("UPDATE blueprint_generations SET blueprint_id = ?, blueprint_version = ?, stage = 'compile', updated_at = ? WHERE generation_key = ?").run(blueprint.id, blueprint.version, blueprint.createdAt, blueprint.generationKey);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getTripBlueprint(blueprint.id, blueprint.version)!;
+  }
+
+  getTripBlueprint(id: string, version: number): TripBlueprint | undefined {
+    const row = this.database.prepare("SELECT id, version, generation_key, research_set_id, content_json FROM trip_blueprints WHERE id = ? AND version = ?").get(id, version) as TripBlueprintRow | undefined;
+    return row ? JSON.parse(row.content_json) as TripBlueprint : undefined;
+  }
+
+  getTripBlueprintByGenerationKey(generationKey: string): TripBlueprint | undefined {
+    const row = this.database.prepare("SELECT id, version, generation_key, research_set_id, content_json FROM trip_blueprints WHERE generation_key = ? ORDER BY version DESC LIMIT 1").get(generationKey) as TripBlueprintRow | undefined;
+    return row ? JSON.parse(row.content_json) as TripBlueprint : undefined;
+  }
+
+  savePlanBlueprintLineage(lineage: PlanBlueprintLineage): PlanBlueprintLineage {
+    const existing = this.getPlanBlueprintLineageByCompilationKey(lineage.compilationKey);
+    if (existing) {
+      if (JSON.stringify(existing) !== JSON.stringify(lineage)) throw new Error("Compilation Key already belongs to a different Plan lineage.");
+      return existing;
+    }
+    const blueprint = this.getTripBlueprint(lineage.blueprintId, lineage.blueprintVersion);
+    if (!blueprint) throw new Error("Plan lineage references a missing Trip Blueprint.");
+    const plan = this.database.prepare("SELECT id, version FROM plans WHERE id = ?").get(lineage.planId) as { id: string; version: number } | undefined;
+    if (!plan || plan.version !== lineage.planVersion) throw new Error("Plan lineage must reference the persisted Plan version.");
+    this.database.prepare(`INSERT INTO plan_blueprint_lineage (plan_id, plan_version, blueprint_id, blueprint_version, compiler_version, compilation_key, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(lineage.planId, lineage.planVersion, lineage.blueprintId, lineage.blueprintVersion, lineage.compilerVersion, lineage.compilationKey, lineage.createdAt);
+    return this.getPlanBlueprintLineage(lineage.planId)!;
+  }
+
+  getPlanBlueprintLineage(planId: string): PlanBlueprintLineage | undefined {
+    const row = this.database.prepare(`SELECT plan_id, plan_version, blueprint_id, blueprint_version, compiler_version, compilation_key, created_at
+      FROM plan_blueprint_lineage WHERE plan_id = ?`).get(planId) as PlanBlueprintLineageRow | undefined;
+    return row ? planBlueprintLineageFromRow(row) : undefined;
+  }
+
+  getPlanBlueprintLineageByCompilationKey(compilationKey: string): PlanBlueprintLineage | undefined {
+    const row = this.database.prepare(`SELECT plan_id, plan_version, blueprint_id, blueprint_version, compiler_version, compilation_key, created_at
+      FROM plan_blueprint_lineage WHERE compilation_key = ?`).get(compilationKey) as PlanBlueprintLineageRow | undefined;
+    return row ? planBlueprintLineageFromRow(row) : undefined;
+  }
+
+  appendBlueprintGenerationEvent(input: Omit<BlueprintGenerationEvent, "id" | "sequence"> & { id?: string }): BlueprintGenerationEvent {
+    if (!this.getBlueprintGeneration(input.generationKey)) throw new Error("Generation Event references a missing Blueprint Generation.");
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const sequence = ((this.database.prepare("SELECT MAX(sequence) AS sequence FROM blueprint_generation_events WHERE generation_key = ?").get(input.generationKey) as { sequence: number | null } | undefined)?.sequence ?? 0) + 1;
+      const event: BlueprintGenerationEvent = { ...input, id: input.id ?? randomUUID(), sequence };
+      this.database.prepare(`INSERT INTO blueprint_generation_events (id, generation_key, sequence, stage, status, scope_label, saved_place_count, detail, next_action, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(event.id, event.generationKey, event.sequence, event.stage, event.status, event.scopeLabel ?? null, event.savedPlaceCount ?? null, event.detail, event.nextAction ?? null, event.createdAt);
+      this.database.exec("COMMIT");
+      return event;
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  getBlueprintGenerationEvents(generationKey: string, afterSequence = 0): BlueprintGenerationEvent[] {
+    const rows = this.database.prepare(`SELECT id, generation_key, sequence, stage, status, scope_label, saved_place_count, detail, next_action, created_at
+      FROM blueprint_generation_events WHERE generation_key = ? AND sequence > ? ORDER BY sequence`).all(generationKey, afterSequence) as unknown as BlueprintGenerationEventRow[];
+    return rows.map(blueprintGenerationEventFromRow);
+  }
+
+  saveDiagnosticArtifact(input: { id?: string; generationKey: string; rawResponse: string; createdAt: string; expiresAt: string }): string {
+    if (!this.getBlueprintGeneration(input.generationKey)) throw new Error("Diagnostic Artifact references a missing Blueprint Generation.");
+    if (!Number.isFinite(Date.parse(input.createdAt)) || !Number.isFinite(Date.parse(input.expiresAt)) || Date.parse(input.expiresAt) <= Date.parse(input.createdAt)) throw new Error("Diagnostic Artifact needs a valid expiry.");
+    const id = input.id ?? randomUUID();
+    this.database.prepare("INSERT INTO blueprint_diagnostic_artifacts (id, generation_key, raw_response, created_at, expires_at) VALUES (?, ?, ?, ?, ?)").run(id, input.generationKey, input.rawResponse, input.createdAt, input.expiresAt);
+    return id;
+  }
+
+  deleteExpiredDiagnosticArtifacts(now = new Date()): number {
+    if (!Number.isFinite(now.getTime())) throw new Error("Diagnostic cleanup needs a valid time.");
+    return Number(this.database.prepare("DELETE FROM blueprint_diagnostic_artifacts WHERE expires_at <= ?").run(now.toISOString()).changes);
+  }
+
+  getLatestAppliedPlanChange(planId: string): PlanChangeSet | undefined {
+    const row = this.database.prepare(`SELECT id, plan_id, base_version, applied_version, kind, impact, status, stage_id, task_id, from_index, to_index, affected_task_ids_json, created_at, undone_at
+      FROM plan_change_sets WHERE plan_id = ? AND status = 'applied' ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(planId) as PlanChangeSetRow | undefined;
+    return row ? planChangeSetFromRow(row) : undefined;
+  }
+
+  getLatestPlanReplacementAudit(replacementPlanId: string): PlanReplacementAudit | undefined {
+    const row = this.database.prepare(`SELECT id, source_plan_id, source_plan_version, replacement_plan_id, replacement_plan_version, impact,
+      affected_areas_json, revalidation_scopes_json, preserved_completed_tasks_json, created_at
+      FROM plan_replacement_audits WHERE replacement_plan_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(replacementPlanId) as PlanReplacementAuditRow | undefined;
+    return row ? planReplacementAuditFromRow(row) : undefined;
+  }
+
+  reorderPlanTask(input: { planId: string; taskId: string; direction: "up" | "down"; expectedVersion: number }): { workspace: WorkspaceSnapshot; change: PlanChangeSet } {
+    const plan = this.getCurrentPlan();
+    if (!plan || plan.id !== input.planId) throw new Error("The current Plan was not found.");
+    if (plan.status !== "draft") throw new Error("Reorder a draft Plan before confirming it for execution.");
+    if (plan.version !== input.expectedVersion) throw new Error("The Plan changed before this reorder was applied.");
+    const selected = this.database.prepare(`SELECT tasks.stage_id, tasks.sort_order FROM tasks JOIN stages ON stages.id = tasks.stage_id
+      WHERE tasks.id = ? AND stages.plan_id = ?`).get(input.taskId, input.planId) as { stage_id: string; sort_order: number } | undefined;
+    if (!selected) throw new Error("The Plan task was not found.");
+    const comparison = input.direction === "up" ? "<" : ">";
+    const ordering = input.direction === "up" ? "DESC" : "ASC";
+    const adjacent = this.database.prepare(`SELECT id, sort_order FROM tasks WHERE stage_id = ? AND sort_order ${comparison} ? ORDER BY sort_order ${ordering} LIMIT 1`).get(selected.stage_id, selected.sort_order) as { id: string; sort_order: number } | undefined;
+    if (!adjacent) throw new Error(`The task is already at the ${input.direction === "up" ? "start" : "end"} of this section.`);
+    const createdAt = new Date().toISOString();
+    const change: PlanChangeSet = {
+      id: randomUUID(),
+      planId: input.planId,
+      baseVersion: plan.version,
+      appliedVersion: plan.version + 1,
+      kind: "reorder_task",
+      impact: "low",
+      status: "applied",
+      stageId: selected.stage_id,
+      taskId: input.taskId,
+      fromIndex: selected.sort_order,
+      toIndex: adjacent.sort_order,
+      affectedTaskIds: [input.taskId, adjacent.id],
+      createdAt
+    };
+    this.database.exec("BEGIN");
+    try {
+      this.database.prepare("UPDATE tasks SET sort_order = ? WHERE id = ?").run(adjacent.sort_order, input.taskId);
+      this.database.prepare("UPDATE tasks SET sort_order = ? WHERE id = ?").run(selected.sort_order, adjacent.id);
+      this.database.prepare("UPDATE plans SET version = ? WHERE id = ?").run(change.appliedVersion, input.planId);
+      this.database.prepare(`INSERT INTO plan_change_sets (id, plan_id, base_version, applied_version, kind, impact, status, stage_id, task_id, from_index, to_index, affected_task_ids_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(change.id, change.planId, change.baseVersion, change.appliedVersion, change.kind, change.impact, change.status, change.stageId, change.taskId, change.fromIndex, change.toIndex, JSON.stringify(change.affectedTaskIds), change.createdAt);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return { workspace: this.getWorkspace(), change };
+  }
+
+  undoPlanChange(input: { planId: string; changeId: string; expectedVersion: number }): WorkspaceSnapshot {
+    const plan = this.getCurrentPlan();
+    if (!plan || plan.id !== input.planId) throw new Error("The current Plan was not found.");
+    if (plan.status !== "draft") throw new Error("Only draft Plan changes can be undone here.");
+    if (plan.version !== input.expectedVersion) throw new Error("The Plan changed before this undo was applied.");
+    const latest = this.getLatestAppliedPlanChange(input.planId);
+    if (!latest || latest.id !== input.changeId) throw new Error("Only the latest Plan change can be undone.");
+    const adjacentTaskId = latest.affectedTaskIds.find((taskId) => taskId !== latest.taskId);
+    if (!adjacentTaskId) throw new Error("The Plan change cannot be reversed safely.");
+    const undoneAt = new Date().toISOString();
+    this.database.exec("BEGIN");
+    try {
+      this.database.prepare("UPDATE tasks SET sort_order = ? WHERE id = ? AND stage_id = ?").run(latest.fromIndex, latest.taskId, latest.stageId);
+      this.database.prepare("UPDATE tasks SET sort_order = ? WHERE id = ? AND stage_id = ?").run(latest.toIndex, adjacentTaskId, latest.stageId);
+      this.database.prepare("UPDATE plans SET version = version + 1 WHERE id = ?").run(input.planId);
+      this.database.prepare("UPDATE plan_change_sets SET status = 'undone', undone_at = ? WHERE id = ?").run(undoneAt, latest.id);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getWorkspace();
+  }
+
+  /** Saves one Connector-observed route fact without regenerating unrelated Plan content. */
+  savePlanRouteRefresh(input: { planId: string; segmentId: string; expectedVersion: number; observedAt: string; distanceMeters: number; durationSeconds?: number; originCoordinates: [number, number]; destinationCoordinates: [number, number]; provider: "google_maps" }): WorkspaceSnapshot {
+    const workspace = this.getWorkspace();
+    const plan = workspace.activePlan;
+    if (plan.id !== input.planId || plan.version !== input.expectedVersion) throw new Error("The Plan changed before this route refresh was saved.");
+    if (!plan.presentation || plan.presentation.kind !== "itinerary") throw new Error("This Plan does not contain a structured itinerary presentation.");
+    if (!Number.isFinite(Date.parse(input.observedAt)) || !Number.isInteger(input.distanceMeters) || input.distanceMeters <= 0 || (input.durationSeconds !== undefined && (!Number.isInteger(input.durationSeconds) || input.durationSeconds <= 0))) throw new Error("A refreshed route needs valid observed distance and duration facts.");
+    if (![input.originCoordinates, input.destinationCoordinates].every(([longitude, latitude]) => Number.isFinite(longitude) && longitude >= -180 && longitude <= 180 && Number.isFinite(latitude) && latitude >= -90 && latitude <= 90)) throw new Error("A refreshed route needs valid place coordinates.");
+    const presentation = structuredClone(plan.presentation);
+    const segment = presentation.routeSegments.find((candidate) => candidate.id === input.segmentId);
+    if (!segment) throw new Error("The Plan route segment was not found.");
+    const origin = presentation.places.find((place) => place.id === segment.originPlaceId);
+    const destination = presentation.places.find((place) => place.id === segment.destinationPlaceId);
+    if (!origin || !destination) throw new Error("The Plan route segment references a missing place.");
+    origin.coordinates = providerCoordinatesToPlanCoordinates(input.originCoordinates);
+    destination.coordinates = providerCoordinatesToPlanCoordinates(input.destinationCoordinates);
+    const { distanceMeters: _oldDistance, checkedAt: _oldCheckedAt, sourceRefs: _oldSourceRefs, ...stableSegment } = segment;
+    const refreshed: PlanRouteSegment = {
+      ...stableSegment,
+      verification: "verified",
+      distanceMeters: input.distanceMeters,
+      ...(input.durationSeconds !== undefined
+        ? { durationMinutes: Math.max(1, Math.round(input.durationSeconds / 60)) }
+        : segment.durationMinutes !== undefined ? { durationMinutes: segment.durationMinutes } : {}),
+      checkedAt: input.observedAt,
+      sourceRefs: [input.provider]
+    };
+    presentation.routeSegments = presentation.routeSegments.map((candidate) => candidate.id === input.segmentId ? refreshed : candidate);
+    const updated = this.database.prepare("UPDATE plans SET presentation_json = ?, version = version + 1 WHERE id = ? AND version = ? AND is_current = 1").run(JSON.stringify(presentation), input.planId, input.expectedVersion);
+    if (updated.changes !== 1) throw new Error("The Plan changed before this route refresh was saved.");
+    this.addInbox({ id: `route-refreshed-${input.planId}-${input.segmentId}-${Date.now()}`, tone: "notice", title: "Route facts refreshed", body: "One Plan route segment was refreshed from Google Maps facts. No navigation, booking, or transport action was started.", timestamp: "Just now" });
+    return this.getWorkspace();
+  }
+
+  /** Saves a best-effort batch of Connector-observed route facts after generation. */
+  saveGeneratedPlanRouteRefresh(input: { planId: string; expectedVersion: number; provider: "google_maps"; routes: Array<{ segmentId: string; observedAt: string; distanceMeters: number; durationSeconds?: number; originCoordinates: [number, number]; destinationCoordinates: [number, number]; geometry?: Array<[number, number]> }> }): { workspace: WorkspaceSnapshot; scheduleConflictDayIds: string[] } {
+    if (!input.routes.length) return { workspace: this.getWorkspace(), scheduleConflictDayIds: [] };
+    const workspace = this.getWorkspace();
+    const plan = workspace.activePlan;
+    if (plan.id !== input.planId || plan.version !== input.expectedVersion) throw new Error("The Plan changed before generated routes were saved.");
+    if (!plan.presentation || plan.presentation.kind !== "itinerary") throw new Error("This Plan does not contain a structured itinerary presentation.");
+    const presentation = structuredClone(plan.presentation);
+    const routeById = new Map(input.routes.map((route) => [route.segmentId, route]));
+    const validCoordinate = ([longitude, latitude]: [number, number]) => Number.isFinite(longitude) && longitude >= -180 && longitude <= 180 && Number.isFinite(latitude) && latitude >= -90 && latitude <= 90;
+    for (const route of input.routes) {
+      if (!Number.isFinite(Date.parse(route.observedAt)) || !Number.isInteger(route.distanceMeters) || route.distanceMeters <= 0 || (route.durationSeconds !== undefined && (!Number.isInteger(route.durationSeconds) || route.durationSeconds <= 0))) throw new Error("Generated routes need valid observed distance and duration facts.");
+      if (!validCoordinate(route.originCoordinates) || !validCoordinate(route.destinationCoordinates) || route.geometry?.some((point) => !validCoordinate(point))) throw new Error("Generated routes need valid map coordinates.");
+    }
+    const refreshedSegments = new Map(presentation.routeSegments.map((segment) => {
+      const route = routeById.get(segment.id);
+      if (!route) return [segment.id, segment] as const;
+      const origin = presentation.places.find((place) => place.id === segment.originPlaceId);
+      const destination = presentation.places.find((place) => place.id === segment.destinationPlaceId);
+      if (!origin || !destination) throw new Error("A generated route references a missing place.");
+      origin.coordinates = providerCoordinatesToPlanCoordinates(route.originCoordinates);
+      destination.coordinates = providerCoordinatesToPlanCoordinates(route.destinationCoordinates);
+      return [segment.id, {
+        ...segment,
+        verification: "verified",
+        distanceMeters: route.distanceMeters,
+        ...(route.durationSeconds !== undefined ? { durationMinutes: Math.max(1, Math.round(route.durationSeconds / 60)) } : {}),
+        checkedAt: route.observedAt,
+        sourceRefs: [input.provider],
+        detail: route.durationSeconds !== undefined
+          ? `Google Maps checked this ${segment.mode} segment at ${Math.max(1, Math.round(route.durationSeconds / 60))} minutes over ${(route.distanceMeters / 1000).toFixed(1)} km.`
+          : `Google Maps checked this ${segment.mode} segment over ${(route.distanceMeters / 1000).toFixed(1)} km.`
+      } satisfies PlanRouteSegment] as const;
+    }));
+    const scheduleConflictDayIds = new Set<string>();
+    const shiftedStopsByDay = new Map<string, NonNullable<ItineraryDay["stops"]>>();
+    for (const day of presentation.days) {
+      const stops = (day.stops ?? []).map((stop) => ({ ...stop }));
+      if (stops.length < 2 || stops.some((stop) => itineraryMinute(stop.time) === undefined)) continue;
+      const originalStops = stops.map((stop) => ({ ...stop }));
+      let conflict = false;
+      for (let index = 0; index < stops.length - 1; index += 1) {
+        const current = stops[index]!;
+        const next = stops[index + 1]!;
+        const origin = presentation.places.find((place) => place.id === current.placeId);
+        const destination = presentation.places.find((place) => place.id === next.placeId);
+        const segment = presentation.routeSegments.find((candidate) => candidate.dayId === day.id && candidate.originPlaceId === current.placeId && candidate.destinationPlaceId === next.placeId);
+        const refreshed = segment ? refreshedSegments.get(segment.id) : undefined;
+        if (!origin || !destination || !refreshed?.durationMinutes) continue;
+        const earliest = itineraryMinute(current.time)! + (origin.durationMinutes ?? 0) + refreshed.durationMinutes;
+        const nextMinute = itineraryMinute(next.time)!;
+        if (earliest <= nextMinute) continue;
+        if (fixedItineraryStop(next.role, destination.priority) || earliest >= 24 * 60) {
+          conflict = true;
+          break;
+        }
+        next.time = itineraryTime(earliest);
+      }
+      if (conflict) {
+        scheduleConflictDayIds.add(day.id);
+        shiftedStopsByDay.set(day.id, originalStops);
+      } else {
+        shiftedStopsByDay.set(day.id, stops);
+      }
+    }
+    presentation.routeSegments = presentation.routeSegments.map((segment) => {
+      const refreshed = refreshedSegments.get(segment.id) ?? segment;
+      if (!scheduleConflictDayIds.has(segment.dayId ?? "") || !routeById.has(segment.id)) return refreshed;
+      const route = routeById.get(segment.id)!;
+      const observedMinutes = route.durationSeconds !== undefined ? Math.max(1, Math.round(route.durationSeconds / 60)) : undefined;
+      return {
+        ...refreshed,
+        verification: "stale",
+        ...(segment.durationMinutes ? { durationMinutes: segment.durationMinutes } : {}),
+        detail: `Google Maps observed${observedMinutes ? ` about ${observedMinutes} minutes` : " a changed route"}, but applying it would conflict with a fixed itinerary time. Replan this day before execution.`
+      };
+    });
+    presentation.days = presentation.days.map((day) => {
+      const daySegments = presentation.routeSegments.filter((segment) => segment.dayId === day.id);
+      const geometries = daySegments.map((segment) => routeById.get(segment.id)?.geometry).filter((geometry): geometry is Array<[number, number]> => Boolean(geometry?.length));
+      const scheduleConflict = scheduleConflictDayIds.has(day.id);
+      const stops = shiftedStopsByDay.get(day.id) ?? day.stops;
+      const conflictConstraint = "Google Maps found a travel-time conflict with a fixed itinerary time; this day must be replanned before execution.";
+      if (!daySegments.length || geometries.length !== daySegments.length) return {
+        ...day,
+        ...(stops ? { stops } : {}),
+        ...(scheduleConflict ? { routeReview: { ...day.routeReview, fixedConstraints: [...new Set([...(day.routeReview?.fixedConstraints ?? []), conflictConstraint])] } } : {})
+      };
+      const routeGeometry = geometries.flatMap((geometry, index) => index === 0 ? geometry : geometry.slice(1));
+      if (routeGeometry.length < 2) return day;
+      const modes = new Set(daySegments.map((segment) => segment.mode));
+      const reviewedAt = daySegments.map((segment) => segment.checkedAt).filter((value): value is string => Boolean(value)).sort().at(-1);
+      return {
+        ...day,
+        ...(stops ? { stops } : {}),
+        routeGeometry,
+        routeGeometryMode: modes.size === 1 ? daySegments[0]!.mode : "mixed",
+        ...(reviewedAt ? { routeGeometryReviewedAt: reviewedAt } : {}),
+        routeReview: {
+          ...day.routeReview,
+          routingMethod: "Google Maps Routes",
+          ...(scheduleConflict ? { fixedConstraints: [...new Set([...(day.routeReview?.fixedConstraints ?? []), conflictConstraint])] } : {})
+        }
+      };
+    });
+    const updated = this.database.prepare("UPDATE plans SET presentation_json = ?, version = version + 1 WHERE id = ? AND version = ? AND is_current = 1").run(JSON.stringify(presentation), input.planId, input.expectedVersion);
+    if (updated.changes !== 1) throw new Error("The Plan changed before generated routes were saved.");
+    return { workspace: this.getWorkspace(), scheduleConflictDayIds: [...scheduleConflictDayIds] };
+  }
+
+  /** Saves user-authored itinerary organization without pretending that routes were reverified. */
+  savePlanPresentationEdits(input: { planId: string; expectedVersion: number; assignments: Record<string, string>; priorities: Record<string, string>; orders: Record<string, string[]> }): WorkspaceSnapshot {
+    const workspace = this.getWorkspace();
+    const plan = workspace.activePlan;
+    if (plan.id !== input.planId || plan.version !== input.expectedVersion) throw new Error("The Plan changed before these itinerary edits were saved.");
+    if (plan.status !== "draft") throw new Error("An active Plan must be revised through Landi before changing its itinerary.");
+    if (!plan.presentation || plan.presentation.kind !== "itinerary") throw new Error("This Plan does not contain a structured itinerary presentation.");
+    const presentation = structuredClone(plan.presentation);
+    const placeIds = new Set(presentation.places.map((place) => place.id));
+    const dayIds = new Set(presentation.days.map((day) => day.id));
+    if (Object.keys(input.assignments).some((placeId) => !placeIds.has(placeId) || (input.assignments[placeId] && !dayIds.has(input.assignments[placeId]!)))) throw new Error("The itinerary assignment contains an unknown place or day.");
+    if (Object.keys(input.priorities).some((placeId) => !placeIds.has(placeId) || !["must", "preferred", "nearby", "archive", "pending", "recheck", "booked"].includes(input.priorities[placeId]!))) throw new Error("The itinerary priority contains an unsupported value.");
+    if (Object.entries(input.orders).some(([dayId, ids]) => !dayIds.has(dayId) || !Array.isArray(ids) || ids.some((placeId, index) => !placeIds.has(placeId) || ids.indexOf(placeId) !== index))) throw new Error("The itinerary order contains an unknown or duplicate place.");
+
+    const originalDayByPlace = new Map(presentation.days.flatMap((day) => day.placeIds.map((placeId) => [placeId, day.id] as const)));
+    const originalStopByPlace = new Map(presentation.days.flatMap((day) => (day.stops ?? []).map((stop) => [stop.placeId, stop] as const)));
+    presentation.places = presentation.places.map((place) => input.priorities[place.id] ? { ...place, priority: input.priorities[place.id] as typeof place.priority } : place);
+    const changedDayIds = new Set<string>();
+    presentation.days = presentation.days.map((day) => {
+      const requested = (input.orders[day.id] ?? []).filter((placeId) => input.assignments[placeId] === day.id);
+      const unordered = presentation.places.map((place) => place.id).filter((placeId) => input.assignments[placeId] === day.id && !requested.includes(placeId));
+      const nextPlaceIds = [...requested, ...unordered];
+      const previousStops = new Map((day.stops ?? []).map((stop) => [stop.placeId, stop]));
+      const availableTimes = nextPlaceIds.map((placeId) => originalStopByPlace.get(placeId)?.time).filter((time): time is string => Boolean(time)).sort();
+      const usedTimes = new Set(nextPlaceIds.flatMap((placeId) => {
+        const previous = originalStopByPlace.get(placeId);
+        const place = presentation.places.find((candidate) => candidate.id === placeId);
+        return previous?.time && place && fixedItineraryStop(previous.role, place.priority) ? [previous.time] : [];
+      }));
+      const changed = nextPlaceIds.join("\0") !== day.placeIds.join("\0");
+      if (day.capacity !== undefined && nextPlaceIds.length > day.capacity) throw new Error(`The itinerary edit exceeds the capacity of ${day.label}.`);
+      const wrongCity = nextPlaceIds.map((placeId) => presentation.places.find((place) => place.id === placeId)).find((place) => place?.city && day.city && !day.city.trim().toLocaleLowerCase().includes(place.city.trim().toLocaleLowerCase()));
+      if (wrongCity) throw new Error(`The itinerary edit would move ${wrongCity.name} into a day for a different city.`);
+      if (changed) changedDayIds.add(day.id);
+      const { routeGeometry: _routeGeometry, routeGeometryMode: _routeGeometryMode, routeGeometryReviewedAt: _routeGeometryReviewedAt, routeReview: _routeReview, ...stableDay } = day;
+      return {
+        ...(changed ? stableDay : day),
+        placeIds: nextPlaceIds,
+        stops: nextPlaceIds.map((placeId, order) => {
+          const previous = originalStopByPlace.get(placeId) ?? previousStops.get(placeId);
+          const place = presentation.places.find((candidate) => candidate.id === placeId);
+          const fixed = place ? fixedItineraryStop(previous?.role, place.priority) : false;
+          const time = fixed && previous?.time
+            ? previous.time
+            : availableTimes.find((candidate) => !usedTimes.has(candidate));
+          if (time) usedTimes.add(time);
+          return { placeId, order: order + 1, ...(time ? { time } : {}), ...(previous?.role ? { role: previous.role } : {}) };
+        }),
+        anchors: (day.anchors ?? []).filter((placeId) => nextPlaceIds.includes(placeId)),
+        candidates: (day.candidates ?? []).filter((placeId) => !nextPlaceIds.includes(placeId))
+      };
+    });
+    for (const [placeId, previousDayId] of originalDayByPlace) {
+      const nextDayId = input.assignments[placeId] || "";
+      if (previousDayId !== nextDayId) {
+        changedDayIds.add(previousDayId);
+        if (nextDayId) changedDayIds.add(nextDayId);
+      }
+    }
+    const existingRoutes = new Map(presentation.routeSegments.map((segment) => [`${segment.dayId ?? ""}\0${segment.originPlaceId}\0${segment.destinationPlaceId}`, segment] as const));
+    presentation.routeSegments = presentation.days.flatMap((day) => day.placeIds.slice(0, -1).map((originPlaceId, index) => {
+      const destinationPlaceId = day.placeIds[index + 1]!;
+      const existing = existingRoutes.get(`${day.id}\0${originPlaceId}\0${destinationPlaceId}`);
+      if (existing && !changedDayIds.has(day.id)) return existing;
+      const reverse = existingRoutes.get(`${day.id}\0${destinationPlaceId}\0${originPlaceId}`);
+      const mode = existing?.mode ?? reverse?.mode ?? editedItineraryRouteMode(plan.configuration.transport.preference);
+      const durationMinutes = existing?.durationMinutes ?? reverse?.durationMinutes;
+      return {
+        id: existing?.id ?? `${day.id}-route-${index + 1}`,
+        dayId: day.id,
+        originPlaceId,
+        destinationPlaceId,
+        mode,
+        verification: "needs_verification" as const,
+        ...(durationMinutes ? { durationMinutes } : {}),
+        sourceRefs: [],
+        label: "The itinerary order changed, so this journey needs to be checked again.",
+        detail: "Landi will recalculate this journey with the map service. The current duration is not treated as live routing until verification is complete."
+      };
+    }));
+    presentation.days = presentation.days.map((day) => {
+      if (!changedDayIds.has(day.id) || !day.stops?.length) return day;
+      const stops = day.stops.map((stop) => ({ ...stop }));
+      for (let index = 0; index < stops.length - 1; index += 1) {
+        const current = stops[index]!;
+        const next = stops[index + 1]!;
+        const currentStart = itineraryMinute(current.time);
+        if (currentStart === undefined) continue;
+        const origin = presentation.places.find((place) => place.id === current.placeId);
+        const destination = presentation.places.find((place) => place.id === next.placeId);
+        const route = presentation.routeSegments.find((segment) => segment.dayId === day.id && segment.originPlaceId === current.placeId && segment.destinationPlaceId === next.placeId);
+        const earliest = currentStart + (origin?.durationMinutes ?? 0) + (route?.durationMinutes ?? 30);
+        const nextStart = itineraryMinute(next.time);
+        if (nextStart !== undefined && nextStart >= earliest) continue;
+        if (destination && fixedItineraryStop(next.role, destination.priority)) throw new Error(`The itinerary order conflicts with the fixed time for ${destination.name}. Revise the time before moving this stop.`);
+        if (earliest >= 24 * 60) throw new Error(`The itinerary edit would push ${destination?.name ?? next.placeId} beyond the end of the day.`);
+        next.time = itineraryTime(earliest);
+      }
+      return { ...day, stops };
+    });
+    assertPlanPresentationIntegrity(presentation, { executionReady: false });
+    const updated = this.database.prepare("UPDATE plans SET presentation_json = ?, version = version + 1 WHERE id = ? AND version = ? AND is_current = 1 AND status = 'draft'").run(JSON.stringify(presentation), input.planId, input.expectedVersion);
+    if (updated.changes !== 1) throw new Error("The Plan changed before these itinerary edits were saved.");
+    this.addInbox({ id: `itinerary-edited-${input.planId}-${Date.now()}`, tone: "notice", title: "Travel Plan updated", body: "The date, order, or priority changes from the map were saved to the current Plan. Affected routes still need to be checked again.", timestamp: "Just now" });
+    return this.getWorkspace();
+  }
+
   /** Returns archived Plan versions for read-only user review. */
   listHistoricalPlans(limit = 20): Plan[] {
     const safeLimit = Number.isInteger(limit) && limit > 0 && limit <= 100 ? limit : 20;
-    const rows = this.database.prepare(`SELECT id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, created_at
+    const rows = this.database.prepare(`SELECT id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, presentation_json, created_at
       FROM plans WHERE is_current = 0 AND is_execution = 0 ORDER BY created_at DESC, rowid DESC LIMIT ?`).all(safeLimit) as unknown as PlanRow[];
     return rows.map((row) => this.planFromRow(row));
   }
@@ -394,13 +1283,58 @@ export class SqliteWorkspaceStore {
     return Number(this.database.prepare("DELETE FROM plans WHERE is_current = 0 AND is_execution = 0").run().changes);
   }
 
+  /** Clears every user Plan and returns the workspace to its stable empty-Plan state. */
+  resetPlansToEmptyState(): WorkspaceSnapshot {
+    const placeholderPlan = createInitialWorkspace().activePlan;
+    this.database.exec("BEGIN");
+    try {
+      this.database.prepare("DELETE FROM task_reminder_runs").run();
+      this.database.prepare("DELETE FROM telegram_reminder_deliveries").run();
+      this.database.prepare("DELETE FROM telegram_task_reminder_deliveries").run();
+      this.database.prepare("DELETE FROM telegram_itinerary_reminder_deliveries").run();
+      this.database.prepare("DELETE FROM telegram_location_intent").run();
+      this.database.prepare("UPDATE agent_runs SET output_plan_id = NULL").run();
+      this.database.prepare("DELETE FROM plans").run();
+      this.insertCurrentPlan(placeholderPlan);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getWorkspace();
+  }
+
+  /** Discards the current unconfirmed draft, preserving an executing Plan or returning to an empty workspace. */
+  discardCurrentDraft(planId: string): WorkspaceSnapshot {
+    const current = this.database.prepare("SELECT id, status, is_current, is_execution FROM plans WHERE id = ?").get(planId) as { id: string; status: Plan["status"]; is_current: number; is_execution: number } | undefined;
+    if (!current || !current.is_current) throw new Error("The current draft Plan was not found.");
+    if (current.status !== "draft" || current.is_execution) throw new Error("Only an unconfirmed draft Plan can be discarded.");
+    const fallback = this.database.prepare(`SELECT id FROM plans
+      WHERE id <> ? AND is_execution = 1
+      ORDER BY rowid DESC LIMIT 1`).get(planId) as { id: string } | undefined;
+    this.database.exec("BEGIN");
+    try {
+      this.database.prepare("UPDATE planning_sessions SET status = 'abandoned', output_plan_id = NULL, updated_at = ? WHERE output_plan_id = ?").run(new Date().toISOString(), planId);
+      this.database.prepare("UPDATE agent_runs SET output_plan_id = NULL WHERE output_plan_id = ?").run(planId);
+      this.database.prepare("DELETE FROM plans WHERE id = ?").run(planId);
+      this.database.prepare("DELETE FROM inbox_items WHERE id LIKE ?").run(`%${planId}%`);
+      if (fallback) this.database.prepare("UPDATE plans SET is_current = 1 WHERE id = ?").run(fallback.id);
+      else this.insertCurrentPlan(createInitialWorkspace().activePlan);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getWorkspace();
+  }
+
   /** Persists a user-owned preparation checklist item from the Web workspace. */
   setPlanTaskChecked(planId: string, taskId: string, checked: boolean): WorkspaceSnapshot {
-    const task = this.database.prepare(`SELECT tasks.owner, tasks.status, tasks.title, tasks.description, tasks.due_label, stages.title AS stage_title
+    const task = this.database.prepare(`SELECT tasks.owner, tasks.status, tasks.title, tasks.description, tasks.due_label, tasks.preparation_category, stages.title AS stage_title
       FROM tasks JOIN stages ON stages.id = tasks.stage_id JOIN plans ON plans.id = stages.plan_id
-      WHERE tasks.id = ? AND plans.id = ? AND plans.is_current = 1`).get(taskId, planId) as { owner: Task["owner"]; status: Task["status"]; title: string; description: string | null; due_label: string; stage_title: string } | undefined;
+      WHERE tasks.id = ? AND plans.id = ? AND plans.is_current = 1`).get(taskId, planId) as { owner: Task["owner"]; status: Task["status"]; title: string; description: string | null; due_label: string; preparation_category: Task["preparationCategory"] | null; stage_title: string } | undefined;
     if (!task) throw new Error("The current Plan task was not found.");
-    if (!isPreDepartureChecklistTask({ owner: task.owner, title: task.title, ...(task.description ? { description: task.description } : {}), dueLabel: task.due_label }, task.stage_title)) {
+    if (!isPreDepartureChecklistTask({ owner: task.owner, title: task.title, ...(task.description ? { description: task.description } : {}), dueLabel: task.due_label, ...(task.preparation_category ? { preparationCategory: task.preparation_category } : {}) }, task.stage_title)) {
       throw new Error("Only packing items and pre-departure tasks can be checked here.");
     }
     const nextStatus: Task["status"] = checked ? "completed" : "waiting_user";
@@ -413,7 +1347,7 @@ export class SqliteWorkspaceStore {
 
   /** Returns the Plan whose reminders and timeline are currently allowed to execute. */
   getExecutionPlan(): Plan | undefined {
-    const plan = this.database.prepare(`SELECT id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, created_at
+    const plan = this.database.prepare(`SELECT id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, presentation_json, created_at
       FROM plans WHERE is_execution = 1 ORDER BY created_at DESC LIMIT 1`).get() as PlanRow | undefined;
     return plan ? this.planFromRow(plan) : undefined;
   }
@@ -516,6 +1450,15 @@ export class SqliteWorkspaceStore {
     return true;
   }
 
+  claimWhatsAppMessage(messageId: string): boolean {
+    const normalized = messageId.trim();
+    if (!/^wamid\.[A-Za-z0-9._~:-]{1,240}$/.test(normalized)) throw new Error("WhatsApp message id is invalid.");
+    const existing = this.database.prepare("SELECT message_id FROM whatsapp_processed_messages WHERE message_id = ?").get(normalized);
+    if (existing) return false;
+    this.database.prepare("INSERT INTO whatsapp_processed_messages (message_id, processed_at) VALUES (?, ?)").run(normalized, new Date().toISOString());
+    return true;
+  }
+
   claimTelegramReminder(input: { planId: string; reminderKey: string; dueAt: string }): boolean {
     const planId = input.planId.trim();
     const reminderKey = input.reminderKey.trim();
@@ -524,6 +1467,67 @@ export class SqliteWorkspaceStore {
     if (existing) return false;
     this.database.prepare("INSERT INTO telegram_reminder_deliveries (plan_id, reminder_key, due_at, claimed_at) VALUES (?, ?, ?, ?)").run(planId, reminderKey, input.dueAt, new Date().toISOString());
     return true;
+  }
+
+  claimTelegramItineraryReminderAttempt(input: { planId: string; reminderKey: string; dayId: string; placeId: string; scheduledTime: string; dueAt: string; now?: string }): TelegramItineraryReminderAttempt {
+    const now = input.now ?? new Date().toISOString();
+    const nowMs = Date.parse(now);
+    const dueAtMs = Date.parse(input.dueAt);
+    if (![input.planId, input.reminderKey, input.dayId, input.placeId].every((value) => value.trim()) || !/^\d{2}:\d{2}$/.test(input.scheduledTime) || !Number.isFinite(nowMs) || !Number.isFinite(dueAtMs)) throw new Error("An itinerary reminder attempt needs a Plan, stop, local time, and due time.");
+    if (nowMs < dueAtMs || nowMs > dueAtMs + ITINERARY_REMINDER_CATCH_UP_MS) return { claimed: false };
+    if (!this.itineraryReminderStillCurrent(input)) return { claimed: false };
+    const existing = this.database.prepare(`SELECT day_id, place_id, scheduled_time, due_at, status, attempt_count, next_attempt_at
+      FROM telegram_itinerary_reminder_deliveries WHERE plan_id = ? AND reminder_key = ?`).get(input.planId, input.reminderKey) as TelegramItineraryReminderDeliveryRow | undefined;
+    const leaseUntil = new Date(nowMs + ITINERARY_REMINDER_ATTEMPT_LEASE_MS).toISOString();
+    if (!existing) {
+      this.database.prepare(`INSERT INTO telegram_itinerary_reminder_deliveries
+        (plan_id, reminder_key, day_id, place_id, scheduled_time, due_at, status, attempt_count, next_attempt_at, last_failure_code, delivered_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'attempting', 1, ?, NULL, NULL, ?)`).run(input.planId, input.reminderKey, input.dayId, input.placeId, input.scheduledTime, input.dueAt, leaseUntil, now);
+      return { claimed: true, attemptNumber: 1 };
+    }
+    if (existing.day_id !== input.dayId || existing.place_id !== input.placeId || existing.scheduled_time !== input.scheduledTime || existing.due_at !== input.dueAt || existing.status === "delivered" || existing.status === "failed" || existing.attempt_count >= 3) return { claimed: false };
+    if (existing.next_attempt_at && Date.parse(existing.next_attempt_at) > nowMs) return { claimed: false };
+    const attemptNumber = existing.attempt_count + 1;
+    const updated = this.database.prepare(`UPDATE telegram_itinerary_reminder_deliveries SET status = 'attempting', attempt_count = ?, next_attempt_at = ?, updated_at = ?
+      WHERE plan_id = ? AND reminder_key = ? AND status IN ('attempting', 'retry_wait') AND attempt_count = ?`).run(attemptNumber, leaseUntil, now, input.planId, input.reminderKey, existing.attempt_count);
+    return updated.changes === 1 ? { claimed: true, attemptNumber } : { claimed: false };
+  }
+
+  recordTelegramItineraryReminderDelivered(input: { planId: string; reminderKey: string; dayId: string; placeId: string; scheduledTime: string; deliveredAt?: string }): void {
+    const deliveredAt = input.deliveredAt ?? new Date().toISOString();
+    if (!Number.isFinite(Date.parse(deliveredAt))) throw new Error("A delivered itinerary reminder needs a valid delivery time.");
+    const updated = this.database.prepare(`UPDATE telegram_itinerary_reminder_deliveries SET status = 'delivered', next_attempt_at = NULL, delivered_at = ?, updated_at = ?
+      WHERE plan_id = ? AND reminder_key = ? AND day_id = ? AND place_id = ? AND scheduled_time = ? AND status = 'attempting'`).run(deliveredAt, deliveredAt, input.planId, input.reminderKey, input.dayId, input.placeId, input.scheduledTime);
+    if (updated.changes !== 1) throw new Error("The itinerary reminder delivery attempt is not active.");
+  }
+
+  recordTelegramItineraryReminderFailure(input: { planId: string; reminderKey: string; dayId: string; placeId: string; scheduledTime: string; failureCode: string; retryable: boolean; failedAt?: string }): TelegramItineraryReminderFailureResult {
+    const failedAt = input.failedAt ?? new Date().toISOString();
+    const failedAtMs = Date.parse(failedAt);
+    if (!Number.isFinite(failedAtMs)) throw new Error("A failed itinerary reminder needs a valid failure time.");
+    const row = this.database.prepare(`SELECT day_id, place_id, scheduled_time, due_at, status, attempt_count, next_attempt_at
+      FROM telegram_itinerary_reminder_deliveries WHERE plan_id = ? AND reminder_key = ?`).get(input.planId, input.reminderKey) as TelegramItineraryReminderDeliveryRow | undefined;
+    if (!row || row.day_id !== input.dayId || row.place_id !== input.placeId || row.scheduled_time !== input.scheduledTime || row.status !== "attempting") throw new Error("The itinerary reminder delivery attempt is not active.");
+    const current = this.itineraryReminderStillCurrent(input);
+    const failureCode = input.failureCode.trim().slice(0, 80) || "unknown_failure";
+    const retryDelay = ITINERARY_REMINDER_RETRY_DELAYS_MS[row.attempt_count - 1];
+    const nextAttemptAt = retryDelay === undefined ? undefined : new Date(failedAtMs + retryDelay).toISOString();
+    const retryWithinWindow = nextAttemptAt !== undefined && Date.parse(nextAttemptAt) <= Date.parse(row.due_at) + ITINERARY_REMINDER_CATCH_UP_MS;
+    if (current && input.retryable && row.attempt_count < 3 && retryWithinWindow) {
+      this.database.prepare(`UPDATE telegram_itinerary_reminder_deliveries SET status = 'retry_wait', next_attempt_at = ?, last_failure_code = ?, updated_at = ?
+        WHERE plan_id = ? AND reminder_key = ? AND status = 'attempting'`).run(nextAttemptAt, failureCode, failedAt, input.planId, input.reminderKey);
+      return { status: "retry_scheduled", nextAttemptAt };
+    }
+    this.database.prepare(`UPDATE telegram_itinerary_reminder_deliveries SET status = 'failed', next_attempt_at = NULL, last_failure_code = ?, updated_at = ?
+      WHERE plan_id = ? AND reminder_key = ? AND status = 'attempting'`).run(current ? failureCode : "reminder_cancelled", failedAt, input.planId, input.reminderKey);
+    return { status: current ? "failed" : "cancelled" };
+  }
+
+  private itineraryReminderStillCurrent(input: { planId: string; dayId: string; placeId: string; scheduledTime: string }): boolean {
+    const plan = this.getExecutionPlan();
+    if (plan?.id !== input.planId || plan.status !== "active" || plan.presentation?.kind !== "itinerary") return false;
+    const day = plan.presentation.days.find((candidate) => candidate.id === input.dayId);
+    return Boolean(day?.stops?.some((stop) => stop.placeId === input.placeId && stop.time === input.scheduledTime));
   }
 
   claimTelegramTaskReminderAttempt(input: { planId: string; reminderKey: string; taskId: string; dueAt: string; reminder: TaskReminder; now?: string }): TelegramTaskReminderAttempt {
@@ -677,6 +1681,32 @@ export class SqliteWorkspaceStore {
     };
   }
 
+  recordPlanDestinationArrival(input: { planId: string; city: string; arrivedAt?: string }): DestinationArrivalEvent {
+    const plan = this.getExecutionPlan();
+    if (!plan || plan.id !== input.planId || plan.status !== "active") throw new Error("An arrival can be confirmed only for the active Plan.");
+    if (!plan.presentation || plan.presentation.kind !== "itinerary") throw new Error("The active Plan has no itinerary destinations to confirm.");
+    const requestedCity = input.city.trim();
+    const canonicalCity = plan.presentation.days.flatMap((day) => day.city?.trim() ? [day.city.trim()] : []).find((city) => samePlanCity(city, requestedCity));
+    if (!canonicalCity) throw new Error(`“${requestedCity}” is not a destination in the active Plan.`);
+    const arrivedAt = input.arrivedAt ?? new Date().toISOString();
+    if (!Number.isFinite(Date.parse(arrivedAt))) throw new Error("A destination arrival needs a valid confirmation time.");
+    this.database.prepare(`INSERT INTO plan_destination_arrivals (plan_id, city, arrived_at, confirmed)
+      VALUES (?, ?, ?, 1) ON CONFLICT(plan_id, city) DO UPDATE SET arrived_at = excluded.arrived_at, confirmed = 1`).run(plan.id, canonicalCity, arrivedAt);
+    this.addInbox({
+      id: `destination-arrival-${plan.id}-${encodeURIComponent(canonicalCity.toLocaleLowerCase())}`,
+      tone: "ready",
+      title: `Arrival confirmed: ${canonicalCity}`,
+      body: `Current-destination weather and travel assistance now follow ${canonicalCity}. No continuous location tracking was enabled.`,
+      timestamp: "Just now"
+    });
+    return { city: canonicalCity, arrivedAt, confirmed: true };
+  }
+
+  listPlanDestinationArrivals(planId: string): DestinationArrivalEvent[] {
+    return (this.database.prepare(`SELECT city, arrived_at, confirmed FROM plan_destination_arrivals
+      WHERE plan_id = ? ORDER BY arrived_at ASC`).all(planId.trim()) as unknown as PlanDestinationArrivalRow[]).map((row) => ({ city: row.city, arrivedAt: row.arrived_at, confirmed: row.confirmed === 1 }));
+  }
+
   markTelegramArrivalLocationRequested(planId: string, requestedAt: string): boolean {
     if (!planId.trim() || !Number.isFinite(Date.parse(requestedAt))) throw new Error("Telegram arrival location request needs a Plan and valid time.");
     const result = this.database.prepare("UPDATE telegram_arrival_checkins SET location_requested_at = ? WHERE plan_id = ? AND location_requested_at IS NULL AND location_received_at IS NULL").run(requestedAt, planId.trim());
@@ -800,8 +1830,21 @@ export class SqliteWorkspaceStore {
     return this.getWorkspace();
   }
 
-  createGeneratedPlan(draft: GeneratedPlanDraft, runtime: AgentRuntimeKind = "codex"): WorkspaceSnapshot {
+  createGeneratedPlan(draft: GeneratedPlanDraft, runtime: AgentRuntimeKind = "codex", context?: { partySize?: number; transportPreference?: TransportPreference; expectedArrivalAtLocal?: string }): WorkspaceSnapshot {
+    if (draft.presentation) assertPlanPresentationIntegrity(draft.presentation, { executionReady: false });
     const plan = createPlanFromDraft(draft);
+    if (context?.partySize !== undefined) {
+      if (!Number.isInteger(context.partySize) || context.partySize < 1 || context.partySize > 20) throw new Error("Party size must be a whole number from 1 to 20.");
+      plan.configuration.travelContext.partySize = context.partySize;
+    }
+    if (context?.transportPreference !== undefined) {
+      if (!["plan_recommended", "taxi", "public_transit", "walking"].includes(context.transportPreference)) throw new Error("Choose a supported transport preference.");
+      plan.configuration.transport.preference = context.transportPreference;
+    }
+    if (context?.expectedArrivalAtLocal !== undefined) {
+      if (!isLocalDateTime(context.expectedArrivalAtLocal)) throw new Error("Expected arrival must be a valid local date and time.");
+      plan.configuration.arrival.expectedAtLocal = context.expectedArrivalAtLocal;
+    }
     this.savePlan(plan);
     this.addInbox({
       id: `plan-generated-${plan.id}`,
@@ -813,7 +1856,44 @@ export class SqliteWorkspaceStore {
     return this.getWorkspace();
   }
 
-  reviseGeneratedPlan(input: { draft: GeneratedPlanDraft; runtime?: AgentRuntimeKind; expectedPlanId: string; expectedVersion: number }): WorkspaceSnapshot {
+  createCompiledBlueprintPlan(compilation: BlueprintPlanCompilation, runtime: AgentRuntimeKind = "codex"): WorkspaceSnapshot {
+    const { plan, lineage } = compilation;
+    if (lineage.planId !== plan.id || lineage.planVersion !== plan.version) throw new Error("Compilation Lineage does not match its Draft Plan.");
+    const existing = this.getPlanBlueprintLineageByCompilationKey(lineage.compilationKey);
+    if (existing) {
+      if (existing.planId !== plan.id || existing.blueprintId !== lineage.blueprintId || existing.blueprintVersion !== lineage.blueprintVersion || existing.compilerVersion !== lineage.compilerVersion) throw new Error("Compilation Key already belongs to a different Draft Plan.");
+      return this.getWorkspace();
+    }
+    if (!this.getTripBlueprint(lineage.blueprintId, lineage.blueprintVersion)) throw new Error("Compile a Draft Plan only from a published Trip Blueprint.");
+    this.database.exec("BEGIN");
+    try {
+      this.insertCurrentPlan(plan);
+      this.database.prepare(`INSERT INTO plan_blueprint_lineage (plan_id, plan_version, blueprint_id, blueprint_version, compiler_version, compilation_key, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`).run(lineage.planId, lineage.planVersion, lineage.blueprintId, lineage.blueprintVersion, lineage.compilerVersion, lineage.compilationKey, lineage.createdAt);
+      this.database.prepare("UPDATE blueprint_generations SET status = 'completed', stage = 'ready', updated_at = ? WHERE blueprint_id = ? AND blueprint_version = ?").run(lineage.createdAt, lineage.blueprintId, lineage.blueprintVersion);
+      this.addInbox({ id: `blueprint-plan-compiled-${plan.id}`, tone: "notice", title: `${runtimeDisplayName(runtime)} trip draft ready for review`, body: "The complete Trip Blueprint and its execution work are saved locally. Nothing will run before you confirm the Draft Plan.", timestamp: "Just now" });
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getWorkspace();
+  }
+
+  saveGeneratedPlanArrivalTimeZone(input: { planId: string; expectedVersion: number; timeZone: string }): WorkspaceSnapshot {
+    const workspace = this.getWorkspace();
+    const plan = workspace.activePlan;
+    if (plan.id !== input.planId || plan.version !== input.expectedVersion) throw new Error("The Plan changed before its arrival timezone was saved.");
+    if (!plan.configuration.arrival.expectedAtLocal || !isTimeZoneName(input.timeZone)) throw new Error("A generated arrival timezone needs a valid local arrival time and IANA timezone.");
+    const configuration = structuredClone(plan.configuration);
+    configuration.arrival.timeZone = input.timeZone;
+    const updated = this.database.prepare("UPDATE plans SET configuration_json = ?, version = version + 1 WHERE id = ? AND version = ? AND is_current = 1").run(JSON.stringify(configuration), input.planId, input.expectedVersion);
+    if (updated.changes !== 1) throw new Error("The Plan changed before its arrival timezone was saved.");
+    return this.getWorkspace();
+  }
+
+  reviseGeneratedPlan(input: { draft: GeneratedPlanDraft; runtime?: AgentRuntimeKind; expectedPlanId: string; expectedVersion: number; changeImpact?: PlanChangeImpactPreview }): WorkspaceSnapshot {
+    if (input.draft.presentation) assertPlanPresentationIntegrity(input.draft.presentation, { executionReady: false });
     const workspace = this.getWorkspace();
     if (workspace.activePlan.id !== input.expectedPlanId || workspace.activePlan.version !== input.expectedVersion) {
       throw new Error("The Plan changed while its revision was being prepared.");
@@ -821,8 +1901,42 @@ export class SqliteWorkspaceStore {
     const plan = createPlanFromDraft(input.draft);
     plan.configuration = structuredClone(workspace.activePlan.configuration);
     plan.sources = structuredClone(workspace.activePlan.sources);
-    carryForwardCompletedTasks(workspace.activePlan, plan);
-    this.savePlan(plan);
+    const sourceArrivals = this.listPlanDestinationArrivals(workspace.activePlan.id);
+    const preservedCompletedTasks = carryForwardCompletedTasks(workspace.activePlan, plan);
+    const impact = input.changeImpact ?? defaultPlanChangeImpact(workspace.activePlan);
+    if (impact.planId !== workspace.activePlan.id || impact.baseVersion !== workspace.activePlan.version) throw new Error("The Plan change impact no longer matches the current Plan version.");
+    const audit: PlanReplacementAudit = {
+      id: `replacement-${randomUUID()}`,
+      sourcePlanId: workspace.activePlan.id,
+      sourcePlanVersion: workspace.activePlan.version,
+      replacementPlanId: plan.id,
+      replacementPlanVersion: plan.version,
+      impact: impact.impact,
+      affectedAreas: structuredClone(impact.affectedAreas),
+      revalidationScopes: revalidationScopesForAreas(impact.affectedAreas),
+      preservedCompletedTasks,
+      createdAt: new Date().toISOString()
+    };
+    this.database.exec("BEGIN");
+    try {
+      this.insertCurrentPlan(plan);
+      const replacementCities = plan.presentation?.days.flatMap((day) => day.city?.trim() ? [day.city.trim()] : []) ?? [];
+      for (const arrival of sourceArrivals) {
+        const city = replacementCities.find((candidate) => samePlanCity(candidate, arrival.city));
+        if (city) this.database.prepare(`INSERT INTO plan_destination_arrivals (plan_id, city, arrived_at, confirmed) VALUES (?, ?, ?, ?)`)
+          .run(plan.id, city, arrival.arrivedAt, arrival.confirmed ? 1 : 0);
+      }
+      this.database.prepare(`INSERT INTO plan_replacement_audits
+        (id, source_plan_id, source_plan_version, replacement_plan_id, replacement_plan_version, impact, affected_areas_json, revalidation_scopes_json, preserved_completed_tasks_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        audit.id, audit.sourcePlanId, audit.sourcePlanVersion, audit.replacementPlanId, audit.replacementPlanVersion, audit.impact,
+        JSON.stringify(audit.affectedAreas), JSON.stringify(audit.revalidationScopes), JSON.stringify(audit.preservedCompletedTasks), audit.createdAt
+      );
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
     this.addInbox({
       id: `plan-revised-${plan.id}`,
       tone: "notice",
@@ -990,6 +2104,39 @@ export class SqliteWorkspaceStore {
     return this.getWorkspace();
   }
 
+  undoLatestPlanReplacement(input: { expectedPlanId: string; expectedVersion: number }): WorkspaceSnapshot {
+    const workspace = this.getWorkspace();
+    if (workspace.activePlan.id !== input.expectedPlanId || workspace.activePlan.version !== input.expectedVersion || workspace.activePlan.status !== "active") {
+      throw new Error("The active Plan changed before this replacement could be undone.");
+    }
+    const audit = this.getLatestPlanReplacementAudit(workspace.activePlan.id);
+    if (!audit || audit.replacementPlanVersion !== workspace.activePlan.version) throw new Error("There is no latest replacement activation to undo.");
+    const source = this.database.prepare("SELECT id, status FROM plans WHERE id = ? AND is_current = 0 AND is_execution = 0").get(audit.sourcePlanId) as { id: string; status: Plan["status"] } | undefined;
+    if (!source) throw new Error("The previous Plan is no longer available to restore.");
+    const restoredAt = new Date().toISOString();
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database.prepare(`UPDATE task_reminder_runs SET status = 'cancelled', finished_at = ?, updated_at = ?
+        WHERE plan_id = ? AND status IN ('running', 'retry_wait')`).run(restoredAt, restoredAt, workspace.activePlan.id);
+      this.database.prepare("UPDATE telegram_plan_change_proposals SET status = 'cancelled', resolved_at = ? WHERE plan_id = ? AND status = 'pending'").run(restoredAt, workspace.activePlan.id);
+      this.database.prepare("UPDATE plans SET is_current = 0, is_execution = 0 WHERE id = ? AND is_current = 1 AND is_execution = 1").run(workspace.activePlan.id);
+      const restored = this.database.prepare("UPDATE plans SET is_current = 1, is_execution = 1, status = 'active' WHERE id = ? AND is_current = 0 AND is_execution = 0").run(source.id);
+      if (restored.changes !== 1) throw new Error("The previous Plan could not be restored atomically.");
+      this.addInbox({
+        id: `plan-replacement-undone-${audit.id}`,
+        tone: "ready",
+        title: "Latest Plan replacement undone",
+        body: "The previous Plan is active again. Future assistance follows the restored Plan; no external action was performed.",
+        timestamp: "Just now"
+      });
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getWorkspace();
+  }
+
   updateProfile(input: ProfileUpdate): WorkspaceSnapshot {
     const displayName = input.displayName.trim();
     const preferredLanguage = input.preferredLanguage.trim();
@@ -997,7 +2144,7 @@ export class SqliteWorkspaceStore {
     if (!displayName || !preferredLanguage || !nationality) throw new Error("Name, preferred language, and nationality are required.");
     if (displayName.length > 80 || preferredLanguage.length > 80 || nationality.length > 100) throw new Error("Keep each Profile text field concise.");
     if (!["not_specified", "woman", "man", "nonbinary", "prefer_not_to_say"].includes(input.gender)) throw new Error("Choose a supported gender setting.");
-    if (!["unknown", "short_term_visitor", "tourist_visa", "student_visa", "work_visa", "residence_permit", "other"].includes(input.immigrationStatus)) throw new Error("Choose a supported immigration status setting.");
+    if (!["unknown", "no_visa", "short_term_visitor", "tourist_visa", "student_visa", "work_visa", "residence_permit", "other"].includes(input.immigrationStatus)) throw new Error("Choose a supported immigration status setting.");
 
     const status = nationality.toLocaleLowerCase() !== "to be confirmed" && input.immigrationStatus !== "unknown" ? "ready" : "incomplete";
     this.database.prepare("UPDATE profiles SET display_name = ?, preferred_language = ?, nationality = ?, gender = ?, immigration_status = ?, status = ?, updated_at = ? WHERE id = 1").run(
@@ -1040,7 +2187,7 @@ export class SqliteWorkspaceStore {
   }
 
   startTelegramLocationIntent(input: { purpose: TelegramLocationIntentPurpose; planId: string; transportOverride?: Exclude<TransportPreference, "plan_recommended">; startedAt?: string }): void {
-    if (!["arrival_route", "nearby_food"].includes(input.purpose)) throw new Error("Choose a supported Telegram location purpose.");
+    if (!["arrival_route", "nearby_food", "uber_test", "movement_go"].includes(input.purpose)) throw new Error("Choose a supported Telegram location purpose.");
     const startedAt = input.startedAt ?? new Date().toISOString();
     if (!Number.isFinite(Date.parse(startedAt))) throw new Error("Telegram location use needs a valid start time.");
     const workspace = this.getWorkspace();
@@ -1064,6 +2211,53 @@ export class SqliteWorkspaceStore {
     this.database.prepare("DELETE FROM telegram_location_intent WHERE id = 1").run();
   }
 
+  createTelegramPlanChangeProposal(input: { planId: string; baseVersion: number; request: string; impact: PlanChangeImpactPreview; createdAt?: string }): TelegramPlanChangeProposal {
+    const workspace = this.getWorkspace();
+    if (workspace.activePlan.id !== input.planId || workspace.activePlan.version !== input.baseVersion || workspace.activePlan.status !== "active") {
+      throw new Error("The active Plan changed before this Telegram proposal could be saved.");
+    }
+    const request = input.request.trim();
+    if (!request || request.length > 1_500) throw new Error("A Telegram Plan change needs a request between 1 and 1500 characters.");
+    if (input.impact.planId !== input.planId || input.impact.baseVersion !== input.baseVersion) throw new Error("The Telegram proposal impact does not match the active Plan version.");
+    const createdAt = input.createdAt ?? new Date().toISOString();
+    if (!Number.isFinite(Date.parse(createdAt))) throw new Error("A Telegram Plan change proposal needs a valid creation time.");
+    const proposal: TelegramPlanChangeProposal = {
+      id: `tg-change-${randomUUID()}`,
+      planId: input.planId,
+      baseVersion: input.baseVersion,
+      request,
+      impact: structuredClone(input.impact),
+      status: "pending",
+      createdAt
+    };
+    this.database.exec("BEGIN");
+    try {
+      this.database.prepare("UPDATE telegram_plan_change_proposals SET status = 'cancelled', resolved_at = ? WHERE status = 'pending'").run(createdAt);
+      this.database.prepare(`INSERT INTO telegram_plan_change_proposals
+        (id, plan_id, base_version, request, impact_json, status, created_at, resolved_at)
+        VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL)`).run(proposal.id, proposal.planId, proposal.baseVersion, proposal.request, JSON.stringify(proposal.impact), proposal.createdAt);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return proposal;
+  }
+
+  getTelegramPlanChangeProposal(id: string): TelegramPlanChangeProposal | undefined {
+    const row = this.database.prepare(`SELECT id, plan_id, base_version, request, impact_json, status, created_at, resolved_at
+      FROM telegram_plan_change_proposals WHERE id = ?`).get(id.trim()) as TelegramPlanChangeProposalRow | undefined;
+    return row ? telegramPlanChangeProposalFromRow(row) : undefined;
+  }
+
+  resolveTelegramPlanChangeProposal(id: string, status: Exclude<TelegramPlanChangeProposal["status"], "pending">, resolvedAt = new Date().toISOString()): TelegramPlanChangeProposal {
+    if (!Number.isFinite(Date.parse(resolvedAt))) throw new Error("A Telegram Plan change resolution needs a valid time.");
+    const result = this.database.prepare(`UPDATE telegram_plan_change_proposals SET status = ?, resolved_at = ?
+      WHERE id = ? AND status = 'pending'`).run(status, resolvedAt, id.trim());
+    if (result.changes !== 1) throw new Error("The Telegram Plan change proposal is missing or already resolved.");
+    return this.getTelegramPlanChangeProposal(id)!;
+  }
+
   updateRuntimeSelection(input: RuntimeSelectionUpdate): WorkspaceSnapshot {
     if (!isAgentRuntimeKind(input.kind)) throw new Error("Choose Codex or Claude Code as the Plan runtime.");
     const current = this.getWorkspace().runtime.selectedKind;
@@ -1081,7 +2275,7 @@ export class SqliteWorkspaceStore {
 
   startPlanGenerationRun(input: { runtimeKind: AgentRuntimeKind; trigger: RunTrigger }): AgentRun {
     if (!isAgentRuntimeKind(input.runtimeKind)) throw new Error("Choose Codex or Claude Code for the recorded Plan run.");
-    if (!isRunTrigger(input.trigger)) throw new Error("Choose Web or Telegram as the Plan run trigger.");
+    if (!isRunTrigger(input.trigger)) throw new Error("Choose Web, Telegram, or WhatsApp as the Plan run trigger.");
     const run: AgentRun = {
       id: `run-${randomUUID()}`,
       kind: "plan_generation",
@@ -1111,6 +2305,24 @@ export class SqliteWorkspaceStore {
     const saved = this.database.prepare(`SELECT id, kind, runtime_kind, trigger, status, started_at, finished_at, output_plan_id, failure_code
       FROM agent_runs WHERE id = ?`).get(runId) as unknown as AgentRunRow;
     return agentRunFromRow(saved);
+  }
+
+  recoverInterruptedPlanGenerations(finishedAt = new Date().toISOString()): { runs: number; sessions: number } {
+    if (!Number.isFinite(Date.parse(finishedAt))) throw new Error("Interrupted Plan recovery needs a valid time.");
+    this.database.exec("BEGIN");
+    try {
+      const runs = Number(this.database.prepare(`UPDATE agent_runs
+        SET status = 'failed', finished_at = ?, failure_code = 'service_interrupted'
+        WHERE status = 'running'`).run(finishedAt).changes);
+      const sessions = Number(this.database.prepare(`UPDATE planning_sessions
+        SET status = 'proposal_ready', updated_at = ?
+        WHERE status IN ('generating', 'proposal_confirmed') AND proposal_json IS NOT NULL`).run(finishedAt).changes);
+      this.database.exec("COMMIT");
+      return { runs, sessions };
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   listRecentAgentRuns(limit = 12): AgentRun[] {
@@ -1270,6 +2482,48 @@ export class SqliteWorkspaceStore {
     return this.getWorkspace();
   }
 
+  /** Atomically saves a draft accommodation and its effect on each daily departure. */
+  saveDraftAccommodationLinkage(input: { planId: string; expectedVersion: number; accommodation: PlanAccommodationInput; departures: Array<{ dayId: string; departure: NonNullable<import("@c-assistant/core").ItineraryDay["accommodationDeparture"]> }> }): WorkspaceSnapshot {
+    const workspace = this.getWorkspace();
+    const plan = workspace.activePlan;
+    if (plan.id !== input.planId || plan.version !== input.expectedVersion) throw new Error("The Plan changed before this accommodation update was saved.");
+    if (plan.status !== "draft") throw new Error("An active Plan must use a replacement draft before changing accommodation.");
+    if (!plan.presentation || plan.presentation.kind !== "itinerary") throw new Error("This Plan does not contain a structured itinerary presentation.");
+    const name = input.accommodation.name.trim();
+    const address = input.accommodation.address.trim();
+    const location = input.accommodation.location.trim();
+    if (!name || !address || !location) throw new Error("Accommodation linkage needs a resolved name, address, and location.");
+    const dayById = new Map(plan.presentation.days.map((day) => [day.id, day]));
+    const placeIds = new Set(plan.presentation.places.map((place) => place.id));
+    if (input.departures.some(({ dayId, departure }) => !dayById.has(dayId) || !placeIds.has(departure.destinationPlaceId) || departure.accommodationName !== name || departure.accommodationAddress !== address)) throw new Error("Accommodation departure facts do not match this Plan.");
+    const departureByDay = new Map(input.departures.map((item) => [item.dayId, item.departure]));
+    const presentation: PlanPresentation = {
+      ...structuredClone(plan.presentation),
+      days: plan.presentation.days.map((day) => {
+        const { accommodationDeparture: _previous, ...stable } = day;
+        const departure = departureByDay.get(day.id);
+        return departure ? { ...stable, accommodationDeparture: departure } : stable;
+      })
+    };
+    const configuration: PlanConfiguration = {
+      ...plan.configuration,
+      accommodation: {
+        status: input.accommodation.status,
+        ...(input.accommodation.id?.trim() ? { id: input.accommodation.id.trim() } : {}),
+        name,
+        address,
+        location,
+        source: input.accommodation.source,
+        updatedAt: new Date().toISOString()
+      }
+    };
+    const updated = this.database.prepare("UPDATE plans SET configuration_json = ?, presentation_json = ?, version = version + 1 WHERE id = ? AND version = ? AND is_current = 1 AND status = 'draft'").run(JSON.stringify(configuration), JSON.stringify(presentation), input.planId, input.expectedVersion);
+    if (updated.changes !== 1) throw new Error("The Plan changed before this accommodation update was saved.");
+    const verified = input.departures.filter((item) => item.departure.verification === "verified").length;
+    this.addInbox({ id: `accommodation-linked-${input.planId}-${Date.now()}`, tone: verified === input.departures.length ? "ready" : "attention", title: "Accommodation linked to the Travel Plan", body: `${name} was saved. Departure routes were updated for ${verified} travel days, while ${input.departures.length - verified} still need verification.`, timestamp: "Just now" });
+    return this.getWorkspace();
+  }
+
   updatePlanTransportPreference(planId: string, input: PlanTransportPreferenceInput): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
     const plan = workspace.activePlan.id === planId ? workspace.activePlan : workspace.executionPlan?.id === planId ? workspace.executionPlan : undefined;
@@ -1377,6 +2631,7 @@ export class SqliteWorkspaceStore {
         next_action TEXT NOT NULL,
         configuration_json TEXT NOT NULL,
         sources_json TEXT NOT NULL,
+        presentation_json TEXT,
         is_current INTEGER NOT NULL DEFAULT 0,
         is_execution INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL
@@ -1386,6 +2641,7 @@ export class SqliteWorkspaceStore {
         plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
         title TEXT NOT NULL,
         description TEXT NOT NULL,
+        presentation_kind TEXT NOT NULL DEFAULT 'details' CHECK (presentation_kind IN ('overview', 'itinerary', 'reservations', 'budget', 'transport', 'details')),
         origin_json TEXT,
         sort_order INTEGER NOT NULL
       );
@@ -1397,8 +2653,10 @@ export class SqliteWorkspaceStore {
         owner TEXT NOT NULL,
         status TEXT NOT NULL,
         due_label TEXT NOT NULL,
+        preparation_category TEXT,
         activation_trigger TEXT,
         reminder_json TEXT,
+        requirement_id TEXT,
         origin_json TEXT,
         sort_order INTEGER NOT NULL
       );
@@ -1426,12 +2684,139 @@ export class SqliteWorkspaceStore {
         id TEXT PRIMARY KEY,
         kind TEXT NOT NULL CHECK (kind = 'plan_generation'),
         runtime_kind TEXT NOT NULL CHECK (runtime_kind IN ('codex', 'claude-code')),
-        trigger TEXT NOT NULL CHECK (trigger IN ('web', 'telegram')),
+        trigger TEXT NOT NULL CHECK (trigger IN ('web', 'telegram', 'whatsapp')),
         status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'fallback')),
         started_at TEXT NOT NULL,
         finished_at TEXT,
         output_plan_id TEXT,
         failure_code TEXT
+      );
+      CREATE TABLE IF NOT EXISTS planning_sessions (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL CHECK (status IN ('collecting', 'proposal_ready', 'proposal_confirmed', 'generating', 'draft_ready', 'failed', 'abandoned')),
+        objective_type TEXT NOT NULL CHECK (objective_type IN ('travel', 'relocation', 'event', 'other')),
+        messages_json TEXT NOT NULL,
+        facts_json TEXT NOT NULL,
+        unresolved_json TEXT NOT NULL,
+        deferred_json TEXT NOT NULL,
+        proposal_json TEXT,
+        confirmed_proposal_version INTEGER,
+        output_plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS travel_bookings (
+        id TEXT PRIMARY KEY,
+        planning_session_id TEXT REFERENCES planning_sessions(id) ON DELETE CASCADE,
+        plan_id TEXT REFERENCES plans(id) ON DELETE CASCADE,
+        source_hash TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'confirmed', 'cancelled', 'needs_review')),
+        type TEXT NOT NULL CHECK (type IN ('accommodation', 'flight', 'train', 'rental_car', 'event', 'tour', 'ticket', 'restaurant', 'other')),
+        content_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        CHECK (planning_session_id IS NOT NULL OR plan_id IS NOT NULL)
+      );
+      CREATE TABLE IF NOT EXISTS protected_booking_attachments (
+        id TEXT PRIMARY KEY,
+        booking_id TEXT NOT NULL REFERENCES travel_bookings(id) ON DELETE CASCADE,
+        source_hash TEXT NOT NULL,
+        source_label TEXT NOT NULL,
+        content_text TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (booking_id, source_hash)
+      );
+      CREATE TABLE IF NOT EXISTS blueprint_generations (
+        generation_key TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES planning_sessions(id) ON DELETE CASCADE,
+        proposal_version INTEGER NOT NULL CHECK (proposal_version > 0),
+        skill_id TEXT NOT NULL,
+        skill_version TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled', 'superseded')),
+        stage TEXT NOT NULL CHECK (stage IN ('queued', 'research', 'itinerary', 'import', 'compile', 'ready')),
+        research_set_id TEXT,
+        blueprint_id TEXT,
+        blueprint_version INTEGER,
+        failure_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS research_sets (
+        id TEXT PRIMARY KEY,
+        generation_key TEXT NOT NULL UNIQUE REFERENCES blueprint_generations(generation_key) ON DELETE CASCADE,
+        schema_version INTEGER NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('researching', 'completed', 'failed', 'cancelled', 'superseded')),
+        content_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS trip_blueprints (
+        id TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version > 0),
+        generation_key TEXT NOT NULL UNIQUE REFERENCES blueprint_generations(generation_key) ON DELETE RESTRICT,
+        research_set_id TEXT NOT NULL REFERENCES research_sets(id) ON DELETE RESTRICT,
+        schema_version INTEGER NOT NULL,
+        content_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (id, version)
+      );
+      CREATE TABLE IF NOT EXISTS plan_blueprint_lineage (
+        plan_id TEXT PRIMARY KEY REFERENCES plans(id) ON DELETE CASCADE,
+        plan_version INTEGER NOT NULL CHECK (plan_version > 0),
+        blueprint_id TEXT NOT NULL,
+        blueprint_version INTEGER NOT NULL,
+        compiler_version TEXT NOT NULL,
+        compilation_key TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (blueprint_id, blueprint_version) REFERENCES trip_blueprints(id, version) ON DELETE RESTRICT
+      );
+      CREATE TABLE IF NOT EXISTS blueprint_generation_events (
+        id TEXT PRIMARY KEY,
+        generation_key TEXT NOT NULL REFERENCES blueprint_generations(generation_key) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL CHECK (sequence > 0),
+        stage TEXT NOT NULL CHECK (stage IN ('queued', 'research', 'itinerary', 'import', 'compile', 'ready')),
+        status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled', 'superseded')),
+        scope_label TEXT,
+        saved_place_count INTEGER CHECK (saved_place_count IS NULL OR saved_place_count >= 0),
+        detail TEXT NOT NULL,
+        next_action TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (generation_key, sequence)
+      );
+      CREATE TABLE IF NOT EXISTS blueprint_diagnostic_artifacts (
+        id TEXT PRIMARY KEY,
+        generation_key TEXT NOT NULL REFERENCES blueprint_generations(generation_key) ON DELETE CASCADE,
+        raw_response TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS plan_change_sets (
+        id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+        base_version INTEGER NOT NULL,
+        applied_version INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind = 'reorder_task'),
+        impact TEXT NOT NULL CHECK (impact = 'low'),
+        status TEXT NOT NULL CHECK (status IN ('applied', 'undone')),
+        stage_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        from_index INTEGER NOT NULL,
+        to_index INTEGER NOT NULL,
+        affected_task_ids_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        undone_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS plan_replacement_audits (
+        id TEXT PRIMARY KEY,
+        source_plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+        source_plan_version INTEGER NOT NULL,
+        replacement_plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+        replacement_plan_version INTEGER NOT NULL,
+        impact TEXT NOT NULL CHECK (impact IN ('low', 'high')),
+        affected_areas_json TEXT NOT NULL,
+        revalidation_scopes_json TEXT NOT NULL,
+        preserved_completed_tasks_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS task_reminder_runs (
         id TEXT PRIMARY KEY,
@@ -1512,13 +2897,17 @@ export class SqliteWorkspaceStore {
       );
       CREATE TABLE IF NOT EXISTS telegram_location_intent (
         id INTEGER PRIMARY KEY CHECK (id = 1),
-        purpose TEXT NOT NULL CHECK (purpose IN ('arrival_route', 'nearby_food')),
+        purpose TEXT NOT NULL CHECK (purpose IN ('arrival_route', 'nearby_food', 'uber_test', 'movement_go')),
         plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
         started_at TEXT NOT NULL,
         transport_override TEXT CHECK (transport_override IN ('taxi', 'public_transit', 'walking'))
       );
       CREATE TABLE IF NOT EXISTS telegram_processed_updates (
         update_id INTEGER PRIMARY KEY,
+        processed_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS whatsapp_processed_messages (
+        message_id TEXT PRIMARY KEY,
         processed_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS telegram_reminder_deliveries (
@@ -1541,11 +2930,33 @@ export class SqliteWorkspaceStore {
         updated_at TEXT NOT NULL,
         PRIMARY KEY (plan_id, reminder_key)
       );
+      CREATE TABLE IF NOT EXISTS telegram_itinerary_reminder_deliveries (
+        plan_id TEXT NOT NULL,
+        reminder_key TEXT NOT NULL,
+        day_id TEXT NOT NULL,
+        place_id TEXT NOT NULL,
+        scheduled_time TEXT NOT NULL,
+        due_at TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('attempting', 'retry_wait', 'delivered', 'failed')),
+        attempt_count INTEGER NOT NULL,
+        next_attempt_at TEXT,
+        last_failure_code TEXT,
+        delivered_at TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (plan_id, reminder_key)
+      );
       CREATE TABLE IF NOT EXISTS telegram_arrival_checkins (
         plan_id TEXT PRIMARY KEY REFERENCES plans(id) ON DELETE CASCADE,
         check_in_sent_at TEXT NOT NULL,
         location_requested_at TEXT,
         location_received_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS plan_destination_arrivals (
+        plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+        city TEXT NOT NULL,
+        arrived_at TEXT NOT NULL,
+        confirmed INTEGER NOT NULL CHECK (confirmed IN (0, 1)),
+        PRIMARY KEY (plan_id, city)
       );
       CREATE TABLE IF NOT EXISTS telegram_route_handoffs (
         plan_id TEXT PRIMARY KEY REFERENCES plans(id) ON DELETE CASCADE,
@@ -1559,12 +2970,32 @@ export class SqliteWorkspaceStore {
         delay_count INTEGER NOT NULL DEFAULT 0 CHECK (delay_count >= 0),
         last_delayed_at TEXT
       );
+      CREATE TABLE IF NOT EXISTS telegram_plan_change_proposals (
+        id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+        base_version INTEGER NOT NULL,
+        request TEXT NOT NULL,
+        impact_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'cancelled', 'stale')),
+        created_at TEXT NOT NULL,
+        resolved_at TEXT
+      );
       CREATE INDEX IF NOT EXISTS idx_plans_current ON plans(is_current, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_stages_plan_order ON stages(plan_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_tasks_stage_order ON tasks(stage_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_inbox_created_at ON inbox_items(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_source_snapshots_latest ON source_snapshots(source_id, url, retrieved_at DESC);
       CREATE INDEX IF NOT EXISTS idx_agent_runs_recent ON agent_runs(started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_planning_sessions_recent ON planning_sessions(updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_travel_bookings_session_recent ON travel_bookings(planning_session_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_travel_bookings_plan_recent ON travel_bookings(plan_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_travel_bookings_source_hash ON travel_bookings(source_hash);
+      CREATE INDEX IF NOT EXISTS idx_protected_booking_attachments_booking ON protected_booking_attachments(booking_id);
+      CREATE INDEX IF NOT EXISTS idx_blueprint_generations_recent ON blueprint_generations(updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_blueprint_generation_events_stream ON blueprint_generation_events(generation_key, sequence);
+      CREATE INDEX IF NOT EXISTS idx_blueprint_diagnostic_expiry ON blueprint_diagnostic_artifacts(expires_at);
+      CREATE INDEX IF NOT EXISTS idx_plan_change_sets_recent ON plan_change_sets(plan_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_plan_replacement_audits_recent ON plan_replacement_audits(replacement_plan_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_task_reminder_runs_recent ON task_reminder_runs(started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_plan_compilation_runs_recent ON plan_compilation_runs(compiled_at DESC);
       CREATE INDEX IF NOT EXISTS idx_country_pack_skill_runs_recent ON country_pack_skill_runs(finished_at DESC);
@@ -1572,14 +3003,18 @@ export class SqliteWorkspaceStore {
       CREATE INDEX IF NOT EXISTS idx_country_pack_skill_run_sources_snapshot ON country_pack_skill_run_sources(source_snapshot_id);
       CREATE INDEX IF NOT EXISTS idx_telegram_pairing_requests_active ON telegram_pairing_requests(consumed_at, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_telegram_task_reminders_due ON telegram_task_reminder_deliveries(status, next_attempt_at);
+      CREATE INDEX IF NOT EXISTS idx_telegram_itinerary_reminders_due ON telegram_itinerary_reminder_deliveries(status, next_attempt_at);
       CREATE INDEX IF NOT EXISTS idx_telegram_arrival_checkins_follow_up ON telegram_arrival_checkins(location_requested_at, location_received_at, check_in_sent_at);
+      CREATE INDEX IF NOT EXISTS idx_plan_destination_arrivals_recent ON plan_destination_arrivals(plan_id, arrived_at DESC);
       CREATE INDEX IF NOT EXISTS idx_telegram_route_handoffs_due ON telegram_route_handoffs(guidance_sent_at, expected_arrival_at);
+      CREATE INDEX IF NOT EXISTS idx_telegram_plan_changes_pending ON telegram_plan_change_proposals(status, created_at DESC);
       PRAGMA optimize;
     `);
     const planColumns = this.database.prepare("PRAGMA table_info(plans)").all() as unknown as Array<{ name: string }>;
     if (!planColumns.some((column) => column.name === "configuration_json")) {
       this.database.exec("ALTER TABLE plans ADD COLUMN configuration_json TEXT NOT NULL DEFAULT '{\"accommodation\":{\"status\":\"not_set\"}}'");
     }
+    if (!planColumns.some((column) => column.name === "presentation_json")) this.database.exec("ALTER TABLE plans ADD COLUMN presentation_json TEXT");
     if (!planColumns.some((column) => column.name === "is_execution")) this.database.exec("ALTER TABLE plans ADD COLUMN is_execution INTEGER NOT NULL DEFAULT 0");
     this.database.exec(`UPDATE plans SET is_execution = 1
       WHERE is_current = 1 AND status = 'active' AND NOT EXISTS (SELECT 1 FROM plans WHERE is_execution = 1);
@@ -1587,17 +3022,62 @@ export class SqliteWorkspaceStore {
       PRAGMA optimize;`);
     const taskColumns = this.database.prepare("PRAGMA table_info(tasks)").all() as unknown as Array<{ name: string }>;
     if (!taskColumns.some((column) => column.name === "activation_trigger")) this.database.exec("ALTER TABLE tasks ADD COLUMN activation_trigger TEXT");
+    if (!taskColumns.some((column) => column.name === "preparation_category")) this.database.exec("ALTER TABLE tasks ADD COLUMN preparation_category TEXT");
     if (!taskColumns.some((column) => column.name === "reminder_json")) this.database.exec("ALTER TABLE tasks ADD COLUMN reminder_json TEXT");
+    if (!taskColumns.some((column) => column.name === "requirement_id")) this.database.exec("ALTER TABLE tasks ADD COLUMN requirement_id TEXT");
     if (!taskColumns.some((column) => column.name === "description")) this.database.exec("ALTER TABLE tasks ADD COLUMN description TEXT");
     if (!taskColumns.some((column) => column.name === "origin_json")) this.database.exec("ALTER TABLE tasks ADD COLUMN origin_json TEXT");
     const stageColumns = this.database.prepare("PRAGMA table_info(stages)").all() as unknown as Array<{ name: string }>;
     if (!stageColumns.some((column) => column.name === "origin_json")) this.database.exec("ALTER TABLE stages ADD COLUMN origin_json TEXT");
+    if (!stageColumns.some((column) => column.name === "presentation_kind")) this.database.exec("ALTER TABLE stages ADD COLUMN presentation_kind TEXT NOT NULL DEFAULT 'details'");
+    if (existingVersion < 9) this.database.exec(`UPDATE stages SET presentation_kind = CASE
+      WHEN lower(title) LIKE '%daily itinerary%' OR lower(title) LIKE '%day-by-day%' OR lower(title) LIKE '%itinerary%' OR title LIKE '%每日行程%' THEN 'itinerary'
+      WHEN lower(title) LIKE '%trip overview%' OR lower(title) LIKE '%journey overview%' OR lower(title) LIKE '%overview%' OR title LIKE '%总行程%' THEN 'overview'
+      WHEN lower(title) LIKE '%reservation%' OR lower(title) LIKE '%booking%' OR title LIKE '%预订%' THEN 'reservations'
+      WHEN lower(title) LIKE '%budget%' OR lower(title) LIKE '%cost%' OR title LIKE '%预算%' THEN 'budget'
+      WHEN lower(title) LIKE '%transport%' OR title LIKE '%交通方案%' THEN 'transport'
+      ELSE 'details' END;`);
     this.database.exec("CREATE INDEX IF NOT EXISTS idx_tasks_arrival_trigger ON tasks(activation_trigger, status) WHERE activation_trigger = 'arrival' AND status = 'scheduled'; PRAGMA optimize;");
     const profileColumns = this.database.prepare("PRAGMA table_info(profiles)").all() as unknown as Array<{ name: string }>;
     if (!profileColumns.some((column) => column.name === "gender")) this.database.exec("ALTER TABLE profiles ADD COLUMN gender TEXT NOT NULL DEFAULT 'not_specified'");
     if (!profileColumns.some((column) => column.name === "immigration_status")) this.database.exec("ALTER TABLE profiles ADD COLUMN immigration_status TEXT NOT NULL DEFAULT 'unknown'");
     const locationIntentColumns = this.database.prepare("PRAGMA table_info(telegram_location_intent)").all() as unknown as Array<{ name: string }>;
     if (!locationIntentColumns.some((column) => column.name === "transport_override")) this.database.exec("ALTER TABLE telegram_location_intent ADD COLUMN transport_override TEXT CHECK (transport_override IN ('taxi', 'public_transit', 'walking'))");
+    const locationIntentSchema = this.database.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'telegram_location_intent'").get() as { sql: string } | undefined;
+    if (locationIntentSchema?.sql && !locationIntentSchema.sql.includes("'movement_go'")) {
+      this.database.exec(`BEGIN;
+        CREATE TABLE telegram_location_intent_next (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          purpose TEXT NOT NULL CHECK (purpose IN ('arrival_route', 'nearby_food', 'uber_test', 'movement_go')),
+          plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+          started_at TEXT NOT NULL,
+          transport_override TEXT CHECK (transport_override IN ('taxi', 'public_transit', 'walking'))
+        );
+        INSERT INTO telegram_location_intent_next (id, purpose, plan_id, started_at, transport_override)
+          SELECT id, purpose, plan_id, started_at, transport_override FROM telegram_location_intent;
+        DROP TABLE telegram_location_intent;
+        ALTER TABLE telegram_location_intent_next RENAME TO telegram_location_intent;
+        COMMIT;`);
+    }
+    if (existingVersion > 0 && existingVersion < 6) {
+      this.database.exec(`BEGIN;
+        CREATE TABLE agent_runs_v6 (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL CHECK (kind = 'plan_generation'),
+          runtime_kind TEXT NOT NULL CHECK (runtime_kind IN ('codex', 'claude-code')),
+          trigger TEXT NOT NULL CHECK (trigger IN ('web', 'telegram', 'whatsapp')),
+          status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'fallback')),
+          started_at TEXT NOT NULL,
+          finished_at TEXT,
+          output_plan_id TEXT,
+          failure_code TEXT
+        );
+        INSERT INTO agent_runs_v6 SELECT id, kind, runtime_kind, trigger, status, started_at, finished_at, output_plan_id, failure_code FROM agent_runs;
+        DROP TABLE agent_runs;
+        ALTER TABLE agent_runs_v6 RENAME TO agent_runs;
+        CREATE INDEX idx_agent_runs_recent ON agent_runs(started_at DESC);
+        COMMIT;`);
+    }
     this.database.prepare("INSERT OR IGNORE INTO runtime_settings (id, selected_runtime, updated_at) VALUES (1, 'codex', ?)").run(new Date().toISOString());
     const migrationTime = new Date().toISOString();
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (1, 'v1-local-workspace-baseline', ?)").run(migrationTime);
@@ -1605,6 +3085,19 @@ export class SqliteWorkspaceStore {
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (3, 'telegram-one-route-transport-override', ?)").run(migrationTime);
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (4, 'telegram-route-handoff-timeline', ?)").run(migrationTime);
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (5, 'separate-plan-review-and-execution', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (6, 'optional-whatsapp-messaging', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (7, 'conversational-planning-sessions', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (8, 'version-bound-plan-change-sets', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (9, 'explicit-stage-presentation-kinds', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (10, 'plan-replacement-impact-audits', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (11, 'structured-plan-presentations', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (12, 'telegram-version-bound-plan-change-proposals', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (13, 'explicit-plan-destination-arrivals', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (14, 'retryable-itinerary-mobile-reminders', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (15, 'versioned-trip-blueprints-and-generation-events', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (16, 'booking-evidence-imports', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (17, 'telegram-uber-handoff-test', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (18, 'telegram-movement-go-location-intent', ?)").run(migrationTime);
   }
 
   private seedIfEmpty(): void {
@@ -1629,23 +3122,7 @@ export class SqliteWorkspaceStore {
   private savePlan(plan: Plan): void {
     this.database.exec("BEGIN");
     try {
-      this.database.prepare("UPDATE plans SET is_current = 0 WHERE is_current = 1").run();
-      this.database.prepare(`INSERT INTO plans (id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, is_current, is_execution, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?)`).run(
-        plan.id,
-        plan.version,
-        plan.title,
-        plan.location,
-        plan.dates,
-        plan.status,
-        JSON.stringify(plan.knownInformation),
-        JSON.stringify(plan.assumptions),
-        plan.nextAction,
-        JSON.stringify(plan.configuration),
-        JSON.stringify(plan.sources),
-        plan.createdAt
-      );
-      this.insertPlanStages(plan);
+      this.insertCurrentPlan(plan);
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -1653,18 +3130,40 @@ export class SqliteWorkspaceStore {
     }
   }
 
+  private insertCurrentPlan(plan: Plan): void {
+    this.database.prepare("UPDATE plans SET is_current = 0 WHERE is_current = 1").run();
+    this.database.prepare(`INSERT INTO plans (id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, presentation_json, is_current, is_execution, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?)`).run(
+      plan.id,
+      plan.version,
+      plan.title,
+      plan.location,
+      plan.dates,
+      plan.status,
+      JSON.stringify(plan.knownInformation),
+      JSON.stringify(plan.assumptions),
+      plan.nextAction,
+      JSON.stringify(plan.configuration),
+      JSON.stringify(plan.sources),
+      plan.presentation ? JSON.stringify(plan.presentation) : null,
+      plan.createdAt
+    );
+    this.insertPlanStages(plan);
+  }
+
   private insertPlanStages(plan: Plan): void {
     plan.stages.forEach((stage, stageIndex) => {
-      this.database.prepare("INSERT INTO stages (id, plan_id, title, description, origin_json, sort_order) VALUES (?, ?, ?, ?, ?, ?)").run(
+      this.database.prepare("INSERT INTO stages (id, plan_id, title, description, presentation_kind, origin_json, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
         stage.id,
         plan.id,
         stage.title,
         stage.description,
+        stage.presentationKind ?? "details",
         stage.origin ? JSON.stringify(stage.origin) : null,
         stageIndex
       );
       stage.tasks.forEach((task, taskIndex) => {
-        this.database.prepare("INSERT INTO tasks (id, stage_id, title, description, owner, status, due_label, activation_trigger, reminder_json, origin_json, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+        this.database.prepare("INSERT INTO tasks (id, stage_id, title, description, owner, status, due_label, preparation_category, activation_trigger, reminder_json, requirement_id, origin_json, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
           task.id,
           stage.id,
           task.title,
@@ -1672,8 +3171,10 @@ export class SqliteWorkspaceStore {
           task.owner,
           task.status,
           task.dueLabel,
+          task.preparationCategory ?? null,
           task.activationTrigger ?? null,
           task.reminder ? JSON.stringify(task.reminder) : null,
+          task.requirementId ?? null,
           task.origin ? JSON.stringify(task.origin) : null,
           taskIndex
         );
@@ -1682,20 +3183,21 @@ export class SqliteWorkspaceStore {
   }
 
   private getCurrentPlan(): Plan | undefined {
-    const plan = this.database.prepare(`SELECT id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, created_at
+    const plan = this.database.prepare(`SELECT id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, presentation_json, created_at
       FROM plans WHERE is_current = 1 ORDER BY created_at DESC LIMIT 1`).get() as PlanRow | undefined;
     return plan ? this.planFromRow(plan) : undefined;
   }
 
   private planFromRow(plan: PlanRow): Plan {
-    const stageRows = this.database.prepare("SELECT id, title, description, origin_json FROM stages WHERE plan_id = ? ORDER BY sort_order").all(plan.id) as unknown as StageRow[];
+    const stageRows = this.database.prepare("SELECT id, title, description, presentation_kind, origin_json FROM stages WHERE plan_id = ? ORDER BY sort_order").all(plan.id) as unknown as StageRow[];
     const stages: Stage[] = stageRows.map((stage) => {
       const origin = parsePlanCompilationOrigin(stage.origin_json);
       return {
       id: stage.id,
       title: stage.title,
       description: stage.description,
-      tasks: (this.database.prepare("SELECT id, title, description, owner, status, due_label, activation_trigger, reminder_json, origin_json FROM tasks WHERE stage_id = ? ORDER BY sort_order").all(stage.id) as unknown as TaskRow[]).map((task) => {
+      presentationKind: stage.presentation_kind ?? "details",
+      tasks: (this.database.prepare("SELECT id, title, description, owner, status, due_label, preparation_category, activation_trigger, reminder_json, requirement_id, origin_json FROM tasks WHERE stage_id = ? ORDER BY sort_order").all(stage.id) as unknown as TaskRow[]).map((task) => {
         const reminder = parseTaskReminder(task.reminder_json);
         const taskOrigin = parsePlanCompilationOrigin(task.origin_json);
         return {
@@ -1705,8 +3207,10 @@ export class SqliteWorkspaceStore {
           owner: task.owner,
           status: task.status,
           dueLabel: task.due_label,
+          ...(task.preparation_category ? { preparationCategory: task.preparation_category } : {}),
           ...(task.activation_trigger === "arrival" ? { activationTrigger: "arrival" as const } : {}),
           ...(reminder ? { reminder } : {}),
+          ...(task.requirement_id ? { requirementId: task.requirement_id } : {}),
           ...(taskOrigin ? { origin: taskOrigin } : {})
         };
       }),
@@ -1726,6 +3230,7 @@ export class SqliteWorkspaceStore {
       nextAction: plan.next_action,
       configuration: parsePlanConfiguration(plan.configuration_json),
       stages,
+      ...(plan.presentation_json ? { presentation: JSON.parse(plan.presentation_json) as PlanPresentation } : {}),
       sources: JSON.parse(plan.sources_json) as SourceReference[],
       createdAt: plan.created_at
     };
@@ -1761,6 +3266,59 @@ function parsePlanConfiguration(value: string): PlanConfiguration {
     // Old local data can safely fall back to an empty Plan configuration.
   }
   return defaults;
+}
+
+function travelBookingKnownInformation(booking: TravelBooking): string[] {
+  if (booking.status === "cancelled") return [];
+  return booking.segments
+    .filter((segment) => segment.constraintStrength === "hard")
+    .map((segment) => `Confirmed ${travelBookingTypeLabel(booking.type)}: ${booking.title}${segment.startAtLocal ? ` starts ${segment.startAtLocal}` : ""}${segment.endAtLocal ? ` ends ${segment.endAtLocal}` : ""}${segment.location ? ` at ${segment.location}` : ""}${segment.origin || segment.destination ? ` (${[segment.origin, segment.destination].filter(Boolean).join(" to ")})` : ""}`);
+}
+
+function travelBookingAssumptions(booking: TravelBooking): string[] {
+  if (booking.status === "cancelled") return [`Imported booking '${booking.title}' is cancelled and should not constrain the itinerary.`];
+  return booking.segments
+    .filter((segment) => segment.constraintStrength === "soft")
+    .map((segment) => `Imported ${travelBookingTypeLabel(booking.type)} '${booking.title}' needs review before it constrains this Plan.${segment.needsReviewReasons.length ? ` ${segment.needsReviewReasons.join(" ")}` : ""}`);
+}
+
+function configurationWithTravelBooking(configuration: PlanConfiguration, booking: TravelBooking): PlanConfiguration {
+  const next = structuredClone(configuration);
+  if (booking.status === "cancelled") return next;
+  const hardSegments = booking.segments.filter((segment) => segment.constraintStrength === "hard");
+  const accommodation = hardSegments.find((segment) => segment.segmentType === "hotel_stay" && (segment.location || segment.destination));
+  if (accommodation) {
+    next.accommodation = {
+      status: "confirmed",
+      name: booking.title,
+      ...(accommodation.location ? { address: accommodation.location, location: accommodation.location } : accommodation.destination ? { location: accommodation.destination } : {}),
+      source: "user",
+      updatedAt: booking.updatedAt
+    };
+  }
+  const arrival = hardSegments.find((segment) => (segment.segmentType === "flight_leg" || segment.segmentType === "train_leg") && (segment.endAtLocal || segment.startAtLocal));
+  if (arrival) {
+    const expectedAtLocal = arrival.endAtLocal ?? arrival.startAtLocal;
+    const timeZone = arrival.endTimeZone ?? arrival.startTimeZone;
+    if (expectedAtLocal) next.arrival.expectedAtLocal = expectedAtLocal;
+    if (timeZone) next.arrival.timeZone = timeZone;
+  }
+  return next;
+}
+
+function uniqueStrings(items: string[]): string[] {
+  return [...new Set(items.map((item) => item.trim()).filter(Boolean))];
+}
+
+function travelBookingTypeLabel(type: TravelBooking["type"]): string {
+  return type === "accommodation" ? "accommodation"
+    : type === "flight" ? "flight"
+      : type === "train" ? "train"
+        : type === "rental_car" ? "rental car"
+          : type === "restaurant" ? "restaurant"
+            : type === "event" ? "event"
+              : type === "tour" ? "tour"
+                : type === "ticket" ? "ticket" : "booking";
 }
 
 function parseTaskReminder(value: string | null): TaskReminder | undefined {
@@ -1889,6 +3447,28 @@ function isSemver(value: string): boolean {
   return /^\d+\.\d+\.\d+$/.test(value);
 }
 
+function itineraryMinute(value?: string): number | undefined {
+  const match = /^(\d{2}):(\d{2})$/.exec(value ?? "");
+  if (!match) return undefined;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  return hours <= 23 && minutes <= 59 ? hours * 60 + minutes : undefined;
+}
+
+function itineraryTime(minutes: number): string {
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
+function fixedItineraryStop(role: string | undefined, priority: PlanPlacePriority): boolean {
+  return priority === "booked" || /(?:fixed|reservation|booked|arrival|departure|flight|rail)/i.test(role ?? "");
+}
+
+function editedItineraryRouteMode(preference: TransportPreference): PlanRouteSegment["mode"] {
+  if (preference === "taxi") return "driving";
+  if (preference === "walking") return "walking";
+  return "transit";
+}
+
 function taskRemindersEqual(left: TaskReminder, right: TaskReminder): boolean {
   return left.scheduledAtLocal === right.scheduledAtLocal
     && left.timeZone === right.timeZone
@@ -1897,11 +3477,12 @@ function taskRemindersEqual(left: TaskReminder, right: TaskReminder): boolean {
 }
 
 /** Keeps user-confirmed completion facts stable when an Agent replaces a draft. */
-function carryForwardCompletedTasks(previousPlan: Plan, replacementPlan: Plan): void {
+function carryForwardCompletedTasks(previousPlan: Plan, replacementPlan: Plan): PlanReplacementAudit["preservedCompletedTasks"] {
   const completed = previousPlan.stages.flatMap((stage) => stage.tasks
     .filter((task) => task.status === "completed")
     .map((task) => ({ stageTitle: stage.title, task })));
 
+  const preserved: PlanReplacementAudit["preservedCompletedTasks"] = [];
   for (const item of completed) {
     const sameStage = replacementPlan.stages.find((stage) => normalizedPlanLabel(stage.title) === normalizedPlanLabel(item.stageTitle));
     const matchingTask = sameStage?.tasks.find((task) => normalizedPlanLabel(task.title) === normalizedPlanLabel(item.task.title))
@@ -1912,18 +3493,47 @@ function carryForwardCompletedTasks(previousPlan: Plan, replacementPlan: Plan): 
       matchingTask.owner = item.task.owner;
       delete matchingTask.reminder;
       delete matchingTask.activationTrigger;
+      preserved.push({ sourceTaskId: item.task.id, replacementTaskId: matchingTask.id, title: matchingTask.title });
       continue;
     }
 
     const targetStage = sameStage ?? replacementPlan.stages.at(-1);
     if (!targetStage) continue;
     const { id: _id, reminder: _reminder, activationTrigger: _activationTrigger, ...taskWithoutExecution } = structuredClone(item.task);
-    targetStage.tasks.push({
+    const carriedTask: Task = {
       ...taskWithoutExecution,
       id: `task-${randomUUID()}`,
       status: "completed"
-    });
+    };
+    targetStage.tasks.push(carriedTask);
+    preserved.push({ sourceTaskId: item.task.id, replacementTaskId: carriedTask.id, title: carriedTask.title });
   }
+  return preserved;
+}
+
+function defaultPlanChangeImpact(plan: Plan): PlanChangeImpactPreview {
+  return {
+    planId: plan.id,
+    baseVersion: plan.version,
+    impact: "low",
+    summary: "This revision creates a reviewable replacement draft.",
+    reasons: [],
+    affectedAreas: ["itinerary"],
+    requiresConfirmation: false,
+    createsReplacementDraft: true
+  };
+}
+
+function revalidationScopesForAreas(areas: PlanChangeImpactPreview["affectedAreas"]): PlanRevalidationScope[] {
+  const scopes = new Set<PlanRevalidationScope>();
+  for (const area of areas) {
+    if (["destination", "accommodation", "fixed_commitments", "party", "itinerary"].includes(area)) scopes.add("route_facts");
+    if (["dates", "destination", "accommodation", "fixed_commitments", "party", "itinerary"].includes(area)) scopes.add("time_estimates");
+    if (["dates", "destination", "fixed_commitments"].includes(area)) scopes.add("official_sources");
+    if (["dates", "fixed_commitments", "reminders"].includes(area)) scopes.add("reminders");
+    if (["destination", "accommodation", "party"].includes(area)) scopes.add("accommodation_options");
+  }
+  return [...scopes];
 }
 
 function normalizedPlanLabel(value: string): string {
@@ -1968,6 +3578,127 @@ function normalizeSourceSnapshotInput(input: SourceSnapshotInput): Omit<SourceSn
 
 function sourceSnapshotFromRow(row: SourceSnapshotRow): SourceSnapshot {
   return { id: row.id, sourceId: row.source_id, authority: row.authority, titleOriginal: row.title_original, url: row.url, retrievedAt: row.retrieved_at, contentHash: row.content_hash, excerpt: row.excerpt };
+}
+
+function planningSessionFromRow(row: PlanningSessionRow): PlanningSession {
+  return {
+    id: row.id,
+    status: row.status,
+    objectiveType: row.objective_type,
+    messages: JSON.parse(row.messages_json) as PlanningSession["messages"],
+    facts: JSON.parse(row.facts_json) as PlanningSession["facts"],
+    unresolved: JSON.parse(row.unresolved_json) as PlanningSession["unresolved"],
+    deferred: JSON.parse(row.deferred_json) as PlanningSession["deferred"],
+    ...(row.proposal_json ? { proposal: JSON.parse(row.proposal_json) as NonNullable<PlanningSession["proposal"]> } : {}),
+    ...(row.confirmed_proposal_version === null ? {} : { confirmedProposalVersion: row.confirmed_proposal_version }),
+    ...(row.output_plan_id ? { outputPlanId: row.output_plan_id } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function travelBookingFromRow(row: TravelBookingRow): TravelBooking {
+  const booking = JSON.parse(row.content_json) as TravelBooking;
+  return {
+    ...booking,
+    id: row.id,
+    ...(row.planning_session_id ? { planningSessionId: row.planning_session_id } : {}),
+    ...(row.plan_id ? { planId: row.plan_id } : {}),
+    sourceHash: row.source_hash,
+    status: row.status,
+    type: row.type,
+    updatedAt: row.updated_at
+  };
+}
+
+function blueprintGenerationFromRow(row: BlueprintGenerationRow): BlueprintGeneration {
+  return {
+    generationKey: row.generation_key,
+    proposalRef: { sessionId: row.session_id, proposalVersion: row.proposal_version },
+    skillLineage: { skillId: row.skill_id, skillVersion: row.skill_version },
+    status: row.status,
+    stage: row.stage,
+    ...(row.research_set_id ? { researchSetId: row.research_set_id } : {}),
+    ...(row.blueprint_id ? { blueprintId: row.blueprint_id } : {}),
+    ...(row.blueprint_version === null ? {} : { blueprintVersion: row.blueprint_version }),
+    ...(row.failure_json ? { failure: JSON.parse(row.failure_json) as NonNullable<BlueprintGeneration["failure"]> } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function planBlueprintLineageFromRow(row: PlanBlueprintLineageRow): PlanBlueprintLineage {
+  return {
+    planId: row.plan_id,
+    planVersion: row.plan_version,
+    blueprintId: row.blueprint_id,
+    blueprintVersion: row.blueprint_version,
+    compilerVersion: row.compiler_version,
+    compilationKey: row.compilation_key,
+    createdAt: row.created_at
+  };
+}
+
+function blueprintGenerationEventFromRow(row: BlueprintGenerationEventRow): BlueprintGenerationEvent {
+  return {
+    id: row.id,
+    generationKey: row.generation_key,
+    sequence: row.sequence,
+    stage: row.stage,
+    status: row.status,
+    ...(row.scope_label ? { scopeLabel: row.scope_label } : {}),
+    ...(row.saved_place_count === null ? {} : { savedPlaceCount: row.saved_place_count }),
+    detail: row.detail,
+    ...(row.next_action ? { nextAction: row.next_action } : {}),
+    createdAt: row.created_at
+  };
+}
+
+function planChangeSetFromRow(row: PlanChangeSetRow): PlanChangeSet {
+  return {
+    id: row.id,
+    planId: row.plan_id,
+    baseVersion: row.base_version,
+    appliedVersion: row.applied_version,
+    kind: row.kind,
+    impact: row.impact,
+    status: row.status,
+    stageId: row.stage_id,
+    taskId: row.task_id,
+    fromIndex: row.from_index,
+    toIndex: row.to_index,
+    affectedTaskIds: JSON.parse(row.affected_task_ids_json) as string[],
+    createdAt: row.created_at,
+    ...(row.undone_at ? { undoneAt: row.undone_at } : {})
+  };
+}
+
+function planReplacementAuditFromRow(row: PlanReplacementAuditRow): PlanReplacementAudit {
+  return {
+    id: row.id,
+    sourcePlanId: row.source_plan_id,
+    sourcePlanVersion: row.source_plan_version,
+    replacementPlanId: row.replacement_plan_id,
+    replacementPlanVersion: row.replacement_plan_version,
+    impact: row.impact,
+    affectedAreas: JSON.parse(row.affected_areas_json) as PlanReplacementAudit["affectedAreas"],
+    revalidationScopes: JSON.parse(row.revalidation_scopes_json) as PlanReplacementAudit["revalidationScopes"],
+    preservedCompletedTasks: JSON.parse(row.preserved_completed_tasks_json) as PlanReplacementAudit["preservedCompletedTasks"],
+    createdAt: row.created_at
+  };
+}
+
+function telegramPlanChangeProposalFromRow(row: TelegramPlanChangeProposalRow): TelegramPlanChangeProposal {
+  return {
+    id: row.id,
+    planId: row.plan_id,
+    baseVersion: row.base_version,
+    request: row.request,
+    impact: JSON.parse(row.impact_json) as PlanChangeImpactPreview,
+    status: row.status,
+    createdAt: row.created_at,
+    ...(row.resolved_at ? { resolvedAt: row.resolved_at } : {})
+  };
 }
 
 function agentRunFromRow(row: AgentRunRow): AgentRun {
@@ -2031,7 +3762,7 @@ function isAgentRuntimeKind(value: unknown): value is AgentRuntimeKind {
 }
 
 function isRunTrigger(value: unknown): value is RunTrigger {
-  return value === "web" || value === "telegram";
+  return value === "web" || value === "telegram" || value === "whatsapp";
 }
 
 function isFinishedRunStatus(value: unknown): value is Exclude<RunStatus, "running"> {
@@ -2040,4 +3771,18 @@ function isFinishedRunStatus(value: unknown): value is Exclude<RunStatus, "runni
 
 function runtimeDisplayName(kind: AgentRuntimeKind): string {
   return kind === "claude-code" ? "Claude Code" : "Codex";
+}
+
+function samePlanCity(left: string, right: string): boolean {
+  const normalize = (value: string) => value.trim().toLocaleLowerCase().replace(/[\s,，.。-]+/g, "");
+  const leftKey = normalize(left);
+  const rightKey = normalize(right);
+  if (leftKey === rightKey) return true;
+  const aliases = [["paris", "巴黎"], ["versailles", "凡尔赛"], ["london", "伦敦"], ["tokyo", "东京"], ["kyoto", "京都"], ["osaka", "大阪"]];
+  return aliases.some((group) => group.includes(leftKey) && group.includes(rightKey));
+}
+
+/** Google route facts use [longitude, latitude]; Plan places use [latitude, longitude]. */
+function providerCoordinatesToPlanCoordinates([longitude, latitude]: [number, number]): [number, number] {
+  return [latitude, longitude];
 }

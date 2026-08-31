@@ -1,5 +1,7 @@
 # Decisions and Open Items
 
+> Project record. This file preserves earlier decisions and unresolved implementation questions. Accepted product behavior has been consolidated into `landi-product-baseline.md`; future development direction belongs in `travel-assistant-development-roadmap.md`.
+
 This document separates accepted product decisions from questions that still require evidence or a later choice.
 
 ## Accepted decisions
@@ -8,7 +10,7 @@ This document separates accepted product decisions from questions that still req
 - Landi is the confirmed product name.
 - One user runs one instance and authenticates with their own Codex or Claude Code account.
 - Users may self-deploy, ask a friend to deploy, or eventually use a one-click deployment service.
-- Telegram is the only V1 messaging channel; WhatsApp is deferred.
+- Telegram is the default V1 messaging channel. WhatsApp Business Platform is an optional Connector: leaving it unconfigured never blocks setup, free-form replies require an active user-opened service window, and proactive reminders require an approved utility template.
 - Web is a full desktop product surface.
 - The confirmed Web workspace uses one column without a sidebar. Plan creation and revision open conversational dialogs; Plan content chooses overview, itinerary, checklist, reservation, budget, or transport presentation instead of forcing every Task into one timeline.
 - Profile stores long-term facts; Plan stores one concrete objective and its temporary context.

@@ -41,8 +41,8 @@ test("fresh one-user instance prepares, reviews, and confirms a complete China P
     attributionUrl: "https://www.qweather.com/weather/shanghai.html"
   };
   const collector = createChinaArrivalFactCollector({
-    amap,
-    qweather: { weather: async () => available("qweather", weather) },
+    maps: amap,
+    weather: { weather: async () => available("qweather", weather) },
     sourceSnapshots: () => store.getWorkspace().sourceSnapshots,
     referenceCatalog: (locationName) => createChinaReferenceCatalog({ snapshots: store.getWorkspace().sourceSnapshots, locationName })
   });

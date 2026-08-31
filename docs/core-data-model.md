@@ -1,123 +1,261 @@
-# Core data model
+# Landi Core Data Model
+
+## Model purpose
+
+The data model preserves one travel objective across planning conversations, Plan versions, service restarts, notifications, real-world changes, and in-trip execution.
+
+The model separates:
+
+- stable traveler information from trip-specific facts;
+- planning state from an executable Plan;
+- active execution from a replacement draft under review;
+- verified provider facts from Agent suggestions;
+- reversible preparation from irreversible external actions.
 
 ## Aggregate
 
 ```text
-Workspace
-├── Profile
-├── plans[]
-│   └── Plan
-│       ├── Stages[]
-│       ├── Tasks[]
-│       ├── Reminders[]
-│       ├── Events[]
-│       └── Runs[]
-├── Confirmations[]
-├── SourceSnapshots[]
-└── current_plan_id
+Traveler Workspace
+ ├─ Profile
+ ├─ Runtime selection
+ ├─ Planning Session
+ ├─ Current Plan
+ ├─ Execution Plan
+ ├─ Historical Plans
+ ├─ Inbox
+ ├─ Source Snapshots
+ └─ Run records
+
+Plan
+ ├─ Configuration
+ ├─ Presentation
+ ├─ Stages
+ │   └─ Tasks
+ │       └─ Reminder proposal
+ ├─ Sources
+ ├─ Replacement audit
+ └─ Destination arrival events
 ```
 
-`plans[]` is a collection. Each `Plan` is one independent plan, such as attending an exhibition or beginning a study year.
+The Roadmap extends the aggregate with persistent Travel Events, Monitoring Jobs, and Travel Attention.
 
 ## Profile
 
-Profile stores information that remains useful across Plans:
+Profile stores stable information that the traveler explicitly confirms for reuse.
 
-- preferred language and presentation preferences;
-- passport-issuing country or region;
-- user-confirmed visa or residence status and validity;
-- dietary restrictions and serious allergies;
-- accessibility needs;
-- provenance, confirmation state, confirmation time, and expiration.
+Current examples:
 
-Profile does not store passport images or numbers, banking documents, exact GPS history, trip dates, companions, accommodation, or provider credentials.
+- preferred name;
+- preferred language;
+- nationality;
+- basic personal settings;
+- confirmed status fields required by a regional preparation flow.
 
-### Profile write rules
-
-- An explicit user statement is treated as user confirmation and may be saved with a visible receipt.
-- An AI inference remains pending until the user confirms it.
-- Expiring facts become stale and must be updated before high-risk use.
-- A Skill receives only the Profile fields declared in its contract.
-
-The current implementation lets the user review and edit these basics in either Web or the bound Telegram private chat. Telegram `/profile` shows the saved values; text fields use an explicit 15-minute “next message” edit state, while gender and China visa/residence status use allowlisted buttons. Commands and location messages are never consumed as Profile values. The edit state stores only the selected field and start time, not unsaved input, and is cleared when Telegram is disconnected. Profile remains `incomplete` until both nationality and a known China status are recorded; this status is preparation metadata, not a policy eligibility conclusion.
+Profile does not store temporary trip details such as travel dates, lodging, party size, luggage, or one-time transportation preferences.
 
 ### Context priority
 
+When Landi resolves a fact, use this order:
+
+1. explicit information in the current interaction;
+2. confirmed Plan-specific information;
+3. confirmed Profile information;
+4. verified Connector facts;
+5. explicit assumptions shown to the traveler.
+
+An assumption never silently becomes a confirmed fact.
+
+## Planning Session
+
+A Planning Session represents the work before a complete Plan exists.
+
+It stores:
+
+- status;
+- objective type;
+- recent conversation messages;
+- structured planning facts with provenance;
+- unresolved and deferred questions;
+- the latest Planning Proposal;
+- the approved proposal version;
+- the output Plan ID after generation.
+
+Typical states:
+
 ```text
-Current explicit user instruction
-> current Plan configuration
-> long-term Profile
-> system default
+collecting
+  -> proposal_ready
+  -> proposal_confirmed
+  -> generating
+  -> draft_ready
 ```
 
-A one-time Plan preference does not update Profile unless the user explicitly makes it a future default.
+A failed generation may return the session to a recoverable state. Repeating an already completed generation request must not create another Plan.
+
+## Planning Proposal
+
+A Planning Proposal is a versioned direction checkpoint, not an executable Plan.
+
+It contains:
+
+- title and objective;
+- planning theme;
+- major segments;
+- provisional skeleton;
+- tradeoffs;
+- assumptions;
+- unresolved decision points.
+
+Only the latest proposal version can be approved. A material planning-fact change after approval requires another proposal version and another approval.
 
 ## Plan
 
-A Plan is one continuous objective in one country and period. It may include multiple cities and dynamically generated Stages.
+A Plan is the authoritative structured representation of one travel objective.
+
+Current fields include:
+
+- ID and version;
+- title, destination, and dates;
+- status;
+- known information and assumptions;
+- next action;
+- Plan-scoped configuration;
+- Stages and Tasks;
+- optional itinerary or timeline Presentation;
+- source references;
+- creation time.
+
+### Current status model
 
 ```text
-Plan
-├── inputs          User-provided facts for this Plan
-├── assumptions     Visible, unconfirmed assumptions
-├── decisions       User-selected options
-├── stages          Structured execution phases
-├── sources         Evidence used by this Plan
-└── versions        Material versions of the complete Plan
+draft
+active
+completed
+cancelled
 ```
 
-AI regeneration may change derived Stages and Tasks, but it cannot silently overwrite user inputs or decisions.
+The Roadmap adds explicit paused and archived lifecycle behavior. Those states must not be treated as implemented until Core and Storage support them.
 
-### Creating a Plan
+### Current and execution pointers
 
-- A multi-step, continuing objective with time, place, and purpose creates a Plan.
-- An immediate request such as “find food near me” creates a Run, not a new Plan.
-- Immediate work may be associated with the current Plan without changing it.
-- Confirmed new information such as booked accommodation updates the current Plan and recalculates affected work.
+The workspace distinguishes:
 
-### Plan states
+- **current Plan** — the draft or active Plan shown for review and editing;
+- **execution Plan** — an older active Plan that continues real-world Reminders while a replacement draft is under review.
 
-Plan lifecycle, reminder activation, and conversation focus are independent:
+Approving the replacement atomically moves execution to the new Plan and archives the old version into history.
+
+## Plan configuration
+
+Plan configuration stores trip-specific facts that should not enter Profile:
+
+- lodging status and selected property;
+- expected arrival time and time zone;
+- transportation preference;
+- party size;
+- luggage level.
+
+Lodging has explicit `not_set`, `candidate`, and `confirmed` states. A discovered property or external link never becomes confirmed lodging without traveler action.
+
+## Plan presentation
+
+Presentation describes how travel content is explored. It supplements executable Stages and Tasks rather than replacing them.
+
+Current presentation kinds:
+
+- `itinerary` for spatial, day-based travel;
+- `timeline` for non-spatial or long-horizon Plans.
+
+An itinerary Presentation contains:
+
+- date range and destination cities;
+- itinerary days;
+- Places;
+- route segments.
+
+### Itinerary day
+
+An itinerary day may contain:
+
+- date and city;
+- traveler-facing title and summary;
+- ordered scheduled Places;
+- same-day candidates;
+- capacity and fixed anchors;
+- accommodation-to-first-stop route;
+- reviewed route geometry and rationale.
+
+Candidates must remain distinct from scheduled stops.
+
+### Place
+
+A Place has a stable ID and may contain:
+
+- primary and localized names;
+- location label and normalized coordinates;
+- city, area, and category;
+- priority and visit role;
+- visit duration and traveler-facing rationale;
+- reservation state;
+- map, official, booking, or experience handoffs;
+- source references.
+
+Coordinates and factual claims require appropriate evidence.
+
+### Route segment
+
+A route segment connects two Plan Places.
+
+It records:
+
+- origin and destination Place IDs;
+- movement mode;
+- day association;
+- duration and distance when available;
+- verification state;
+- observation time;
+- source references.
+
+Verification states:
 
 ```text
-Plan: open | completed | cancelled | archived
-Reminders: off | on | paused
-Conversation focus: current_plan_id
+needs_verification
+verified
+stale
 ```
 
-The Plan is generated and displayed immediately. Confirmation activates the complete Plan version and its declared automation scope.
+Stop coordinates alone may support a sequence guide but do not prove a real road or transit route.
 
 ## Stage
 
-A Stage groups related Tasks inside a Plan. Stages are generated according to purpose and are not limited to travel phases.
+A Stage groups related Tasks inside a Plan.
 
-Examples include pre-departure preparation, arrival, exhibition attendance, school registration, residence setup, or return.
+Examples include:
 
-V1 supports one Stage level. Stages do not recursively contain more Stages or Plans.
+- trip overview;
+- itinerary;
+- reservations;
+- transportation;
+- preparation;
+- budget or details.
+
+Each Stage has an explicit presentation kind. Rendering must not infer semantics from translated or user-generated titles.
 
 ## Task
 
-A Task is an executable or trackable unit, not just checklist text.
+A Task is a trackable unit of travel work.
 
 ### Ownership
 
 ```text
-assistant   Landi can complete it
-user        the user must complete it
-external    a third-party service or real-world action completes it
+assistant   Landi can prepare or complete the work
+user        the traveler must complete the work
+external    an external service or real-world event completes it
 ```
 
-Core must not mark a user or external Task completed merely because guidance or an external link was delivered.
+Landi cannot mark a user or external Task complete merely because it supplied instructions or opened a link.
 
-### Triggers
-
-```text
-time         a scheduled time is reached
-event        an Event occurs
-dependency   another Task reaches the required state
-```
-
-### States
+### Current states
 
 ```text
 scheduled
@@ -131,70 +269,149 @@ failed
 cancelled
 ```
 
-Temporary provider failures are retried before the user is interrupted. Obsolete Tasks from an updated Plan are skipped and cannot send stale Reminders.
+Tasks may include explicit preparation categories, arrival activation, source provenance, and an optional Reminder proposal.
 
 ## Reminder
 
-A Reminder stores why and when to trigger work, not a permanently frozen message body.
+A Reminder stores why and when Landi should prompt the traveler. It does not freeze the final message body at Plan-generation time.
 
-When due, it creates a Run that reads the latest confirmed Plan, refreshes required facts, generates current content, and delivers through the appropriate channel.
+Current Reminder data includes:
 
-Reminder times use the Event location's local timezone. Plan updates recalculate affected Reminders and cancel obsolete ones.
+- local wall-clock time;
+- IANA time zone;
+- purpose;
+- explicitly approved dynamic facts to refresh.
 
-Current implementation supports a first Task-level reminder with a concrete local wall-clock time, IANA time zone, purpose, and explicit delivery-time fact policy. Codex or Claude Code may include it only when the request contains enough dated facts; it must set `refreshFacts` to `["weather"]` only when destination weather can materially change the immediate Task, and to `[]` otherwise. Older persisted reminders without the field are treated as requesting no dynamic facts. The policy is persisted with the Plan and disclosed in Web and Telegram previews. The reminder remains inert while the Plan is a draft. After Plan activation, a paired Telegram account receives a delivery attempt when the reminder is due or within a 30-minute restart catch-up window. Retryable failures wait one minute and then five minutes, with no more than three total attempts; non-retryable or exhausted delivery is recorded in Web Inbox alongside successful delivery. The user can remove a Task reminder from the current Plan; this creates a new Plan version and an Inbox receipt. Immediately before claiming each attempt, storage verifies that the Plan is still current and active and that the Task still contains the exact reminder, including its dynamic-fact policy. A cancelled, changed, or superseded reminder therefore cannot begin a stale attempt. Only reminders declaring weather resolve the Plan destination through Amap and refresh QWeather. They append an exact-date forecast only when one matches the reminder's local date; otherwise current conditions are clearly labelled as an observation rather than a forecast. Provider failure never blocks the original reminder. Weather context includes retrieval time and attribution but is not retained in Profile or Plan. The delivery copy reads the current Task and purpose instead of freezing draft text. Local state prevents retries after a recorded terminal result, but a crash after Telegram accepts a message and before SQLite records success can still produce a duplicate. Stronger cross-system idempotency and additional fact policies remain future work.
+A Reminder remains inactive while its Plan is a draft. Delivery must recheck the current execution Plan and exact Reminder definition before sending.
 
-Telegram location intent is interaction state rather than Profile or Plan data. Schema version 3 may retain a named transport override (`taxi`, `public_transit`, or `walking`) with an arrival-route intent for at most 15 minutes. It stores no coordinates, is consumed once, and changes neither the current Plan's transport preference nor any future route. Explicit whole-Plan wording uses the normal versioned Plan update path instead.
+The current dynamic fact policy supports weather where weather can materially change the immediate Task. Other facts require explicit future contracts.
 
-## Event
+## Destination arrival event
 
-An Event records what is expected or what actually occurred.
+The current implementation stores explicit city-arrival events for an itinerary Plan.
 
-Sources include:
+These events help determine the current destination without continuous GPS. They supplement date-based inference and never fabricate an arrival from opening a map or route handoff.
 
-- planned times and milestones;
-- user text, location sharing, and button actions;
-- provider facts such as weather or source changes;
-- system events such as a Reminder becoming due.
+## Planned Travel Event
 
-An expected arrival Event may prepare and send a route card. It does not prove that the user has landed. Receiving location or explicit confirmation can mark actual occurrence.
+The Roadmap generalizes the existing arrival record into a Travel Event model.
 
-## Run
+Planned event categories include:
 
-A Run is one actual system execution. It records:
+- arrival and departure confirmation;
+- traveler delay or deviation;
+- Task completion;
+- Reminder due;
+- provider fact change;
+- system lifecycle transition.
 
-- triggering Task, Reminder, or Event;
-- Skill and version;
-- minimized context fields used;
-- Connector calls and evidence references;
-- validated result and delivery status;
-- timing, retry, cancellation, and failure state.
+Each Travel Event must bind to a Plan and Plan version, record its source, and retain only the minimum payload required for later behavior and audit.
 
-The Web shows user-friendly results and source evidence, not raw Agent logs. Technical details remain available through local diagnostics.
+## Planned Monitoring Job
 
-Current implementation has two minimized Run forms. A Plan generation Run stores only the runtime kind, Web or Telegram trigger, start/finish time, outcome (`succeeded`, `failed`, or `fallback`), an Agent-generated Plan id on success, and a short failure classification when needed. A Task Reminder Run spans all delivery retries for one Plan/Task/Reminder key and stores the due/start/update/finish times, attempt count, weather status and failed stage/code when unavailable, Telegram failure code, and final state (`retry_wait`, `succeeded`, `failed`, or `cancelled`). Cancelling the reminder or replacing the current Plan terminates unfinished Reminder Runs; a Telegram success already in flight can still replace `cancelled` with the actual `succeeded` outcome. User requests, reminder message copy, raw weather or model output, coordinates, error text, account state, and credentials are intentionally not retained. Skill versions, richer Event linkage, evidence linkage, and retention controls remain future work.
+A Monitoring Job represents durable future checking work for an active Plan.
 
-The first Core Plan compiler accepts a country-neutral, exact-version proposal and returns a new draft Plan version without activation. Generated Stages and Tasks carry origin metadata for Country Pack ID/version, composition Skill ID/version, source Plan version, supporting Skill versions, and the exact immutable source-snapshot ID/hash pairs they actually used. Reminder instants are rejected when stale or malformed and converted to the existing local wall-clock plus IANA time-zone representation. SQLite persists Task descriptions and Stage/Task origins and applies the next draft version only through an atomic ID/version/status comparison; a concurrent edit or confirmation leaves the compiled result unapplied. A minimized `plan_compilation` Run and each supporting Skill Run retain their evidence ID/hash pairs without proposal text, source excerpts, or raw Skill output. Evidence that does not match a stored immutable snapshot makes the whole atomic write fail closed.
+It should record:
+
+- Plan ID and version;
+- monitoring type;
+- affected Place, route, Task, date, or source scope;
+- time zone and next run time;
+- state, retry, and lease information;
+- latest normalized result key;
+- cancellation or completion state.
+
+Monitoring Jobs survive service restarts and stop when their Plan version is no longer executable.
+
+## Planned Travel Attention
+
+A Travel Attention records a meaningful change that may require traveler action or Plan adjustment.
+
+It should contain:
+
+- Plan ID and version;
+- attention type and severity;
+- affected dates, Places, routes, Tasks, or decisions;
+- evidence references and observation time;
+- summary and suggested next action;
+- deduplication key and expiration.
+
+A Travel Attention does not directly modify the Plan. It feeds the impact and replacement flow.
+
+## Plan change and impact
+
+Direct structured edits create versioned Plan changes. The current low-impact change model includes Task ordering and itinerary workspace edits.
+
+Natural-language or high-impact changes first produce an impact preview containing:
+
+- affected areas;
+- reasons;
+- whether confirmation is required;
+- whether the result creates a replacement draft.
+
+Affected areas may include dates, destination, lodging, fixed commitments, party constraints, Reminders, and itinerary structure.
+
+## Replacement audit
+
+A replacement audit links one source Plan version to one replacement Plan version.
+
+It records:
+
+- source and replacement references;
+- affected areas;
+- facts requiring revalidation;
+- completed Tasks preserved in the replacement;
+- creation time.
+
+Future Attention-driven replanning should also record the Travel Attention that triggered the replacement.
 
 ## Confirmation
 
-A Confirmation records the exact object, version, scope, channel, and time approved by the user. It may be revoked.
+A Confirmation authorizes one exact object, version, scope, channel, and time.
 
-A Confirmation for Plan V3 cannot authorize a materially different Plan V4. Real-time adjustments inside the already approved scope do not require a new confirmation.
+A Confirmation for Plan V3 cannot activate Plan V4. Telegram controls and Web review must use the same version rule.
 
-Web and the bound Telegram private chat can both create this Confirmation. Telegram callback data includes the reviewed Plan id and version, and Core accepts it only while that exact version remains the current draft. Long mobile Plans are paginated in full, with the confirmation control attached only to the last page.
+## Source snapshot
 
-## SourceSnapshot
+A SourceSnapshot stores the minimum immutable evidence needed to support a Plan item or detect a later source change.
 
-A SourceSnapshot stores the minimum evidence needed to verify a conclusion or detect a later change:
+It includes:
 
-- source provider or official institution;
-- original URL;
-- retrieval and publication/update time;
-- jurisdiction and applicability metadata;
-- relevant excerpt or normalized factual fields;
+- source identity and authority;
+- canonical URL;
+- retrieval time;
 - content fingerprint;
-- linked Plans, Tasks, and Runs.
+- bounded excerpt or normalized factual fields;
+- links to Plans, Tasks, and Runs.
 
-It is not an unrestricted archive of entire websites or raw location histories.
+A newer source snapshot does not rewrite the evidence used by an older Plan version.
 
-Current implementation persists allowlisted official-source snapshots in local SQLite with the source id, authority, original title, HTTPS canonical URL, retrieval time, SHA-256 content fingerprint, and a bounded excerpt. Equal source/url/hash records are deduplicated; a later differing hash reports a content change but does not itself claim that a policy changed or applies to the user. A saved snapshot linked to the current Plan preserves its ID and content fingerprint as well as the title, authority, original URL, and retrieval time. Country Pack compilation additionally links the exact ID/hash pair to each dependent Task, the compilation Run, and the corresponding Skill Run. These links preserve historical provenance after a newer snapshot appears; they do not turn evidence preparation into a policy conclusion.
+## Run
+
+A Run records one actual system execution without retaining unnecessary private content.
+
+Current Run categories include:
+
+- Plan generation;
+- Task Reminder delivery;
+- Country Pack compilation;
+- individual Country Pack Skills.
+
+Runs store sanitized status, timing, version, retry, evidence, and failure classifications. They do not store credentials, raw account state, exact location history, or unrestricted model transcripts.
+
+Future scheduling work should add Monitoring Job runs using the same minimized-audit principle.
+
+## Inbox item
+
+Inbox records user-visible notices, attention, completion receipts, and delivery results.
+
+The target Travel Attention model should remain separate from presentation. One Attention may create an Inbox entry and a Telegram message, but the underlying Attention remains the structured source of truth.
+
+## Version and concurrency rules
+
+- Every material Plan change creates a new version.
+- Storage applies changes only when the expected Plan ID, version, and status still match.
+- Agent results become invalid if the Plan changes during the run.
+- Old Reminders and monitoring work cannot begin after their Plan version becomes obsolete.
+- Replacement drafts do not interrupt the current execution Plan before approval.
+- Provider facts update only the affected structured fields and retain observation time and evidence.
