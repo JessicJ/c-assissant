@@ -1,16 +1,15 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useState } from "react";
 import type { DestinationArrivalEvent, Plan, PlanChangeSet, PlanReplacementAudit, TripBlueprint, WorkspaceSnapshot } from "@c-assistant/core";
-import { abandonActivePlan, deletePlan, linkPlanAccommodation, sendAgentChat, undoPlanReplacement } from "./api-client.js";
+import { abandonActivePlan, deletePlan, sendAgentChat, undoPlanReplacement } from "./api-client.js";
 import { BookingImportPanel } from "./BookingImportPanel.js";
+import { LandiBlueprintWorkspace } from "./LandiBlueprintWorkspace.js";
 import { PlanMapWorkspace } from "./PlanMapWorkspace.js";
 import { PlanChangeNotice, PlanCommandCenter, PlanDecisionBoard, PlanGrounding, PlanReplacementNotice } from "./PlanStatusWidgets.js";
 import { PlanRemindersView, PlanSourcesView, WorkspaceEmpty } from "./PlanSupportingViews.js";
 import { FeaturedChecklist, FeaturedTimeline, PlanContentSection } from "./PlanTaskSections.js";
-import { TravelExternalHandoffs } from "./TravelExternalHandoffs.js";
 import { blueprintPresentation } from "./blueprint-presentation.js";
 import { planRefinementQuestion } from "./plan-display.js";
-import { formatDistance, visibleDocumentPolicySources } from "./plan-external-display.js";
-import { groupPackingItems, planPackingItems, readPackingChecks, writePackingChecks, type PackingDisplayItem } from "./plan-packing-list.js";
+import { visibleDocumentPolicySources } from "./plan-external-display.js";
 import { isExplicitPreparationTask } from "./plan-preparation-display.js";
 import { displayPlanTitle } from "./trip-title.js";
 import type { AgentStatus } from "./ui-types.js";
@@ -88,7 +87,6 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
   const checklistItems = plan.stages.flatMap((stage) => stage.tasks
     .filter(isExplicitPreparationTask)
     .map((task) => ({ task, stageTitle: stage.title })));
-  const packingItems = planPackingItems(plan);
   const checklistTaskIds = new Set(checklistItems.map((item) => item.task.id));
   const timelineItems = plan.stages.flatMap((stage) => {
     const visibleTasks = stage.presentationKind === "itinerary"
@@ -134,15 +132,9 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
     </article>;
   }
   if (plan.presentation?.kind === "itinerary" && plan.presentation.places.length) {
-    const journalDates = plan.presentation.startDate && plan.presentation.endDate ? `${plan.presentation.startDate} — ${plan.presentation.endDate}` : plan.dates;
-    const bookingsOpen = visibleWorkspaceView === "bookings";
     return <article className="current-plan-card native-trip-plan">
       {latestPlanReplacement ? <PlanReplacementNotice audit={latestPlanReplacement} active={plan.status === "active"} onUndo={undoReplacement} /> : null}
-      <header className="editorial-trip-hero"><div className="editorial-trip-heading"><h1>{displayPlanTitle(plan)}</h1><p>{journalDates}</p></div><button type="button" className={bookingsOpen ? "secondary-action trip-bookings-button active" : "secondary-action trip-bookings-button"} aria-expanded={bookingsOpen} onClick={() => setWorkspaceView(bookingsOpen ? "plan" : "bookings")}>Bookings</button></header>
-      {bookingsOpen ? <section className="plan-sections itinerary-bookings-panel"><BookingImportPanel scope={{ type: "plan", planId: plan.id }} expectedVersion={plan.version} onWorkspace={onWorkspace} onStatus={onStatus} onError={onError} /></section> : null}
-      <PlanMapWorkspace planId={plan.id} planVersion={plan.version} presentation={plan.presentation} partySize={plan.configuration.travelContext.partySize} arrivals={destinationArrivals} editable={plan.status === "draft" || plan.status === "active"} onWorkspace={onWorkspace} onStatus={(text) => onStatus({ tone: "success", text })} onError={onError} onRevise={onRevise} />
-      <TravelPackingList plan={plan} items={packingItems} onTaskToggle={onTaskToggle} />
-      <TravelPlanAdditions plan={plan} editable={plan.status === "draft" && !blueprint} onWorkspace={onWorkspace} onStatus={onStatus} onError={onError} onRevise={onRevise} />
+      <LandiBlueprintWorkspace plan={plan} presentation={plan.presentation} onRevise={onRevise} onTaskToggle={onTaskToggle} />
       <footer className="plan-footer actions-only"><div className="plan-footer-actions">{plan.status === "draft" ? discardControl() : abandonControl()}<button className="secondary-action" onClick={() => onRevise()}>Adjust in conversation</button>{plan.status === "draft" ? <button className="primary-action" disabled={confirming} onClick={() => void onConfirm(plan.id)}>{confirming ? "Confirming…" : "Confirm and activate"}</button> : null}</div></footer>
     </article>;
   }
@@ -160,86 +152,4 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
     {visibleWorkspaceView === "sources" ? <PlanSourcesView sources={documentPolicySources} /> : null}
     <footer className="plan-footer"><div><strong>{plan.status === "draft" ? "Confirm the complete plan" : "Need an adjustment?"}</strong><span>{plan.status === "draft" ? refinementQuestion ? "The complete plan is ready. The question above can improve execution accuracy but does not block review or confirmation." : "Confirmation enables only reminders and execution tasks backed by sufficient information." : "Changes first create a replacement draft. The current plan stays active until you confirm it."}</span></div><div className="plan-footer-actions">{plan.status === "draft" ? discardControl() : abandonControl()}<button className="secondary-action" onClick={() => onRevise()}>{plan.status === "draft" && refinementQuestion ? "Add plan details" : "Modify current plan"}</button>{plan.status === "draft" ? <button className="primary-action" disabled={confirming} onClick={() => void onConfirm(plan.id)}>{confirming ? "Confirming…" : "Confirm and activate"}</button> : null}</div></footer>
   </article>;
-}
-
-function TravelPlanAdditions({ plan, editable, onWorkspace, onStatus, onError, onRevise }: { plan: Plan; editable: boolean; onWorkspace: (workspace: WorkspaceSnapshot) => Promise<void>; onStatus: (status: AgentStatus) => void; onError: (message: string) => void; onRevise: (message?: string) => void }) {
-  const accommodation = plan.configuration.accommodation;
-  const bookingPlaces = plan.presentation?.places.filter((place) => place.bookingUrl && (!place.reservation || place.reservation.requirement === "required" || place.reservation.requirement === "recommended")) ?? [];
-  const plannedPlaceIds = new Set(plan.presentation?.days.flatMap((day) => day.placeIds) ?? []);
-  const plannedPlaces = plan.presentation?.places.filter((place) => plannedPlaceIds.has(place.id)) ?? [];
-  const foodPlaces = plannedPlaces.filter((place) => /restaurant|food|bar|dining/i.test(`${place.category} ${place.name}`)).slice(0, 4);
-  const routeHandoffs = (plan.presentation?.routeSegments ?? []).filter((segment) => segment.verification === "verified" && segment.mode !== "flight" && segment.mode !== "rail").slice(0, 4);
-  const needsAccommodation = accommodation.status !== "confirmed";
-  const [formOpen, setFormOpen] = useState(false);
-  const [name, setName] = useState(accommodation.name ?? "");
-  const [address, setAddress] = useState(accommodation.address ?? "");
-  const [confirmed, setConfirmed] = useState(accommodation.status === "confirmed");
-  const [saving, setSaving] = useState(false);
-  const departures = plan.presentation?.days.flatMap((day) => day.accommodationDeparture ? [{ day, departure: day.accommodationDeparture, place: plan.presentation!.places.find((place) => place.id === day.accommodationDeparture!.destinationPlaceId) }] : []) ?? [];
-  async function saveAccommodation(event: FormEvent) {
-    event.preventDefault();
-    if (!name.trim() || !address.trim() || saving) return;
-    setSaving(true);
-    try {
-      const payload = await linkPlanAccommodation(plan.id, { expectedVersion: plan.version, name: name.trim(), address: address.trim(), status: confirmed ? "confirmed" : "candidate" });
-      await onWorkspace(payload.workspace);
-      setFormOpen(false);
-      onStatus({ tone: "success", text: `Accommodation saved. Departure routes updated for ${payload.impact?.verifiedDays ?? 0} days${payload.impact?.pendingDays ? `; ${payload.impact.pendingDays} more days need review` : ""}.` });
-    } catch (caught) {
-      const message = caught instanceof Error ? caught.message : "Unable to link the accommodation to the current plan.";
-      onError(message); onStatus({ tone: "error", text: message });
-    } finally { setSaving(false); }
-  }
-
-  return <section className="travel-plan-additions" aria-labelledby="travel-progress-title">
-    <header><div><h2 id="travel-progress-title">Core trip details</h2></div></header>
-    <div className="travel-plan-addition-grid">
-      <article>
-        <span className="travel-action-state">{needsAccommodation ? "Temporary accommodation base" : "Accommodation linked"}</span>
-        <strong>{accommodation.name ?? "Accommodation not set"}</strong>
-        <p>{accommodation.address ?? "Routes currently use the plan's temporary area base. Saving the actual accommodation recalculates affected daily departure routes."}</p>
-        <button type="button" onClick={() => editable ? setFormOpen((open) => !open) : onRevise("Create a replacement draft using the new accommodation details and recalculate affected daily departure routes without overwriting the active plan.")}>{editable ? accommodation.status === "not_set" ? "Add accommodation" : "Change accommodation" : "Adjust in replacement draft"}</button>
-        {departures.length ? <details className="accommodation-route-impact"><summary>Departure routes updated for {departures.filter(({ departure }) => departure.verification === "verified").length} of {departures.length} days</summary><div>{departures.map(({ day, departure, place }) => <p key={day.id}><strong>{day.shortLabel ?? day.date ?? day.label}</strong><span>{accommodation.name} → {place?.localizedName ?? place?.name ?? "First stop"}</span><em>{departure.verification === "verified" ? `${departure.durationMinutes ? `${departure.durationMinutes} min · ` : ""}${departure.distanceMeters ? formatDistance(departure.distanceMeters) : "Route verified"}` : "Route needs review"}</em></p>)}</div></details> : null}
-      </article>
-      {bookingPlaces.map((place) => <article className="booking-link-card" key={place.id}>
-        <span className="travel-action-state booking">{place.reservation?.requirement === "required" ? "Reservation required" : place.reservation?.requirement === "recommended" ? "Reservation recommended" : "Official link"}</span>
-        <strong>{place.name}</strong>
-        {place.localizedName && place.localizedName !== place.name ? <small className="local-place-name">{place.localizedName}</small> : null}
-        <p>{place.reservation?.note ?? "Official page saved. Confirm the exact date, time, and payment only if you choose this stop."}</p>
-        {place.reservation?.verification === "verified" ? <small className="reservation-verification">Verified by Landi{place.reservation.checkedAt ? ` · ${place.reservation.checkedAt}` : ""}</small> : null}
-        <a href={place.bookingUrl} target="_blank" rel="noreferrer">Open official booking ↗</a>
-      </article>)}
-    </div>
-    {accommodation.name || foodPlaces.length || routeHandoffs.length ? <TravelExternalHandoffs accommodation={accommodation} foodPlaces={foodPlaces} routeHandoffs={routeHandoffs} plan={plan} /> : null}
-    {formOpen ? <form className="accommodation-link-form" onSubmit={(event) => void saveAccommodation(event)}><label>Accommodation name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Hotel or apartment name" required /></label><label>Full address<input value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Street address, city, and country" required /></label><label className="accommodation-confirmed"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />Accommodation is booked</label><div><button type="button" onClick={() => setFormOpen(false)}>Cancel</button><button type="submit" disabled={saving}>{saving ? "Saving and updating routes…" : "Save and update routes"}</button></div></form> : null}
-  </section>;
-}
-
-function TravelPackingList({ plan, items, onTaskToggle }: { plan: Plan; items: PackingDisplayItem[]; onTaskToggle: (planId: string, taskId: string, checked: boolean) => Promise<void> }) {
-  const [checkedSuggestions, setCheckedSuggestions] = useState<Set<string>>(() => readPackingChecks(localStorage, plan.id, plan.version));
-  useEffect(() => setCheckedSuggestions(readPackingChecks(localStorage, plan.id, plan.version)), [plan.id, plan.version]);
-  if (!items.length) return null;
-  const groups = groupPackingItems(items);
-  function toggleSuggested(key: string, checked: boolean) {
-    setCheckedSuggestions((current) => {
-      const next = new Set(current);
-      if (checked) next.add(key);
-      else next.delete(key);
-      writePackingChecks(localStorage, plan.id, plan.version, next);
-      return next;
-    });
-  }
-  return <section className="travel-packing-list" aria-labelledby="travel-packing-title">
-    <header><div><h2 id="travel-packing-title">Packing</h2></div><small>{items.length} items</small></header>
-    <div className="travel-packing-groups">{groups.map((group) => <section key={group.title}>
-      <header><strong>{group.title}</strong><small>{group.items.length} items</small></header>
-      <div className="travel-packing-grid">{group.items.map((item) => {
-        const checked = item.task ? item.task.status === "completed" : checkedSuggestions.has(item.key);
-        return <label className={checked ? "checked" : ""} key={item.key}>
-          <input type="checkbox" checked={checked} onChange={(event) => item.task ? void onTaskToggle(plan.id, item.task.id, event.target.checked) : toggleSuggested(item.key, event.target.checked)} />
-          <div><strong>{item.title}</strong><small>{item.detail}</small></div>
-        </label>;
-      })}</div>
-    </section>)}</div>
-  </section>;
 }
