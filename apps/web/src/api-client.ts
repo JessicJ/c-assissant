@@ -86,7 +86,14 @@ export type ConnectorTestResponse = {
 export type RuntimeTestResponse = { ok?: boolean; message?: string; error?: string };
 
 async function readJson<T>(response: Response): Promise<T> {
-  return await response.json() as T;
+  const text = await response.text();
+  if (!text.trim()) return {} as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    if (!response.ok) return { error: text.trim() || `HTTP ${response.status}` } as T;
+    throw new Error("The core service returned a response that was not valid JSON.");
+  }
 }
 
 async function requestJson<T>(path: string, init: RequestInit | undefined, defaultError: string): Promise<T> {

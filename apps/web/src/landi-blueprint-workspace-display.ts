@@ -1,0 +1,284 @@
+import type { ItineraryDay, Plan, PlanPlace, PlanPresentation, PlanRouteSegment, SourceReference, Task } from "@c-assistant/core";
+
+export type BlueprintWorkspaceArea = "itinerary" | "preparation" | "tips" | "sources";
+export type GuideFilter = "all" | "attraction" | "dining" | "shopping" | "experience";
+export type GuideState = "scheduled" | "unscheduled" | "informational";
+
+export type TimelineBlock = {
+  day: ItineraryDay;
+  place: PlanPlace;
+  order: number;
+  timeLabel: string;
+  type: GuideFilter;
+  status: string;
+  routeAfter?: PlanRouteSegment;
+};
+
+export type GuideCardDisplay = {
+  place: PlanPlace;
+  type: GuideFilter;
+  state: GuideState;
+  summary: string;
+  tags: string[];
+  timeline?: { dayId: string; label: string; timeLabel: string };
+  source?: SourceMarkerDisplay;
+};
+
+export type SourceMarkerDisplay = {
+  label: string;
+  summary: string;
+  url?: string;
+};
+
+export type ComparisonRow = {
+  id: string;
+  name: string;
+  area: string;
+  routeFit: string;
+  timing: string;
+  effort: string;
+  sourceState: string;
+};
+
+export type TipDisplay = {
+  id: string;
+  title: string;
+  body: string;
+  context: string;
+  source?: SourceMarkerDisplay;
+};
+
+export function guideTypeForPlace(place: Pick<PlanPlace, "category" | "visitRole" | "name" | "plan" | "detailSections">): GuideFilter {
+  const text = `${place.category} ${place.visitRole ?? ""} ${place.name} ${place.plan} ${place.detailSections.map((section) => section.title).join(" ")}`.toLocaleLowerCase();
+  if (/experience|workshop|class|tour|show|performance|theatre|theater|festival|ceremony|onsen|spa|cruise|walk|ride/.test(text)) return "experience";
+  if (/restaurant|dining|food|meal|breakfast|lunch|dinner|cafe|coffee|tea|dessert|bar|market|izakaya|ramen|sushi|noodle|bakery/.test(text)) return "dining";
+  if (/shopping|shop|store|mall|market|craft|souvenir|product|design|boutique|bookstore|department/.test(text)) return "shopping";
+  return "attraction";
+}
+
+export function isGuidePlace(place: PlanPlace): boolean {
+  const text = `${place.category} ${place.visitRole ?? ""} ${place.name}`.toLocaleLowerCase();
+  return !/hotel|accommodation|lodg|airport|station|flight|rail|transfer|transport/.test(text);
+}
+
+export function guideStateForPlace(place: PlanPlace, scheduledPlaceIds: Set<string>): GuideState {
+  if (scheduledPlaceIds.has(place.id)) return "scheduled";
+  const text = `${place.category} ${place.visitRole ?? ""}`.toLocaleLowerCase();
+  if (/informational|theme|local food|local product|background|context/.test(text)) return "informational";
+  return "unscheduled";
+}
+
+export function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay): TimelineBlock[] {
+  const placeById = new Map(presentation.places.map((place) => [place.id, place] as const));
+  const stops: Array<{ placeId: string; order: number; time?: string; role?: string }> = day.stops?.length
+    ? [...day.stops].sort((left, right) => left.order - right.order)
+    : day.placeIds.map((placeId, index) => ({ placeId, order: index + 1 }));
+  return stops.flatMap((stop, index) => {
+    const place = placeById.get(stop.placeId);
+    if (!place) return [];
+    const routeAfter = presentation.routeSegments.find((segment) => segment.dayId === day.id && segment.originPlaceId === place.id);
+    return [{
+      day,
+      place,
+      order: stop.order,
+      timeLabel: roughTimeLabel(stop.time, stop.role, place, index),
+      type: guideTypeForPlace(place),
+      status: timelineStatus(place, routeAfter),
+      ...(routeAfter ? { routeAfter } : {})
+    }];
+  });
+}
+
+export function guideCardsForPresentation(presentation: PlanPresentation, planSources: SourceReference[] = []): GuideCardDisplay[] {
+  const scheduledPlaceIds = new Set(presentation.days.flatMap((day) => day.placeIds));
+  const firstTimelineByPlace = new Map<string, GuideCardDisplay["timeline"]>();
+  for (const day of presentation.days) {
+    for (const block of timelineBlocksForDay(presentation, day)) {
+      if (firstTimelineByPlace.has(block.place.id)) continue;
+      firstTimelineByPlace.set(block.place.id, { dayId: day.id, label: day.shortLabel ?? day.date ?? day.label, timeLabel: block.timeLabel });
+    }
+  }
+  return presentation.places
+    .filter(isGuidePlace)
+    .map((place) => {
+      const state = guideStateForPlace(place, scheduledPlaceIds);
+      return {
+        place,
+        type: guideTypeForPlace(place),
+        state,
+        summary: shortGuideSummary(place),
+        tags: guideTags(place),
+        ...(firstTimelineByPlace.get(place.id) ? { timeline: firstTimelineByPlace.get(place.id)! } : {}),
+        ...(sourceMarkerForPlace(place, planSources) ? { source: sourceMarkerForPlace(place, planSources)! } : {})
+      };
+    });
+}
+
+export function comparisonRowsForPlace(presentation: PlanPresentation, selectedPlace: PlanPlace): ComparisonRow[] {
+  const selectedType = guideTypeForPlace(selectedPlace);
+  return presentation.places
+    .filter((place) => place.id !== selectedPlace.id && isGuidePlace(place) && guideTypeForPlace(place) === selectedType)
+    .slice(0, 5)
+    .map((place) => ({
+      id: place.id,
+      name: displayPlaceName(place),
+      area: place.area ?? place.locationLabel,
+      routeFit: routeFitLabel(place, selectedPlace),
+      timing: timingLabel(place),
+      effort: effortLabel(place),
+      sourceState: sourceStateLabel(place)
+    }));
+}
+
+export function localTipsForPlan(plan: Pick<Plan, "stages" | "presentation" | "location">): TipDisplay[] {
+  const placeTips = (plan.presentation?.places ?? []).flatMap((place) => {
+    const body = place.tip?.trim();
+    if (!body || !isDestinationRelevantTip(body)) return [];
+    return [{
+      id: `place-${place.id}`,
+      title: tipTitle(body),
+      body,
+      context: [place.area, place.city, place.name].filter(Boolean).join(" · "),
+      ...(sourceMarkerForPlace(place, []) ? { source: sourceMarkerForPlace(place, [])! } : {})
+    }];
+  });
+  const taskTips = plan.stages.flatMap((stage) => stage.tasks.flatMap((task) => {
+    const text = `${task.title}. ${task.description ?? ""}`.trim();
+    if (task.owner !== "assistant" || !/tip|custom|safety|payment|transport|etiquette|local|礼仪|安全|支付|交通|风俗/.test(`${stage.title} ${task.title}`.toLocaleLowerCase()) || !isDestinationRelevantTip(text)) return [];
+    return [{ id: `task-${task.id}`, title: task.title, body: task.description ?? task.title, context: stage.title }];
+  }));
+  return uniqueTips([...placeTips, ...taskTips]).slice(0, 12);
+}
+
+export function preparationItemsForPlan(plan: Plan): Array<{ task: Task; stageTitle: string }> {
+  return plan.stages.flatMap((stage) => stage.tasks
+    .filter((task) => task.owner === "user" && task.preparationCategory !== undefined && task.preparationCategory !== "not_applicable")
+    .map((task) => ({ task, stageTitle: stage.title })));
+}
+
+export function roughTimeLabel(time: string | undefined, role: string | undefined, place: Pick<PlanPlace, "category" | "name" | "visitRole">, index: number): string {
+  if (time && /^\d{2}:\d{2}$/.test(time)) return time;
+  const text = `${role ?? ""} ${place.visitRole ?? ""} ${place.category} ${place.name}`.toLocaleLowerCase();
+  if (/breakfast|morning meal/.test(text)) return "Breakfast window";
+  if (/lunch|midday|noon/.test(text)) return "Around lunch";
+  if (/dinner|supper/.test(text)) return "Dinner window";
+  if (/night|evening|bar|show|performance/.test(text)) return "Optional evening";
+  if (/shopping|shop|market|souvenir|product/.test(text)) return index < 2 ? "Late morning option" : "Flexible afternoon";
+  if (/rest|buffer|free|flex/.test(text)) return index >= 3 ? "Flexible afternoon" : "Flexible time";
+  if (index === 0) return "Morning";
+  if (index === 1) return "Late morning";
+  if (index === 2) return "Afternoon";
+  return "Flexible afternoon";
+}
+
+export function sourceMarkerForPlace(place: Pick<PlanPlace, "evidenceSources" | "sourceRefs">, planSources: SourceReference[]): SourceMarkerDisplay | undefined {
+  const evidence = place.evidenceSources?.[0];
+  if (evidence) {
+    const sourceState = evidence.status === "verified" ? "Source verified" : "Source needs recheck";
+    return {
+      label: "i",
+      summary: [sourceState, evidence.title, evidence.role, evidence.supports?.slice(0, 2).join("; "), evidence.checkedAt ? `checked ${evidence.checkedAt}` : undefined].filter(Boolean).join(" · "),
+      url: evidence.url
+    };
+  }
+  const sourceUrl = place.sourceRefs[0];
+  if (!sourceUrl) return undefined;
+  const source = planSources.find((candidate) => candidate.url === sourceUrl);
+  return { label: "i", summary: source ? sourceReferenceSummary(source) : sourceUrl, url: sourceUrl };
+}
+
+export function sourceMarkersForPlan(plan: Plan): SourceMarkerDisplay[] {
+  const fromPlan = plan.sources.map((source) => ({ label: "i", summary: sourceReferenceSummary(source), url: source.url }));
+  const fromPlaces = (plan.presentation?.places ?? []).flatMap((place) => place.evidenceSources?.map((source) => ({ label: "i", summary: [source.status === "verified" ? "Source verified" : "Source needs recheck", source.title, source.role, source.checkedAt ? `checked ${source.checkedAt}` : undefined].filter(Boolean).join(" · "), url: source.url })) ?? []);
+  const seen = new Set<string>();
+  return [...fromPlan, ...fromPlaces].filter((source) => {
+    const key = source.url ?? source.summary;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export function displayPlaceName(place: Pick<PlanPlace, "name" | "localizedName">): string {
+  return place.localizedName && place.localizedName !== place.name ? `${place.name} · ${place.localizedName}` : place.name;
+}
+
+export function guideFilterLabel(filter: GuideFilter): string {
+  return filter === "all" ? "All" : filter === "attraction" ? "Attractions" : filter === "dining" ? "Dining" : filter === "shopping" ? "Shopping" : "Experiences";
+}
+
+function shortGuideSummary(place: PlanPlace): string {
+  return shorten(firstUsefulSentence(place.plan) || firstUsefulSentence(place.whyWorthIt) || `${place.area ?? place.locationLabel}.`, 125);
+}
+
+function firstUsefulSentence(value: string): string {
+  return value.split(/(?<=[.!?。！？])\s+/)[0]?.trim() ?? "";
+}
+
+function shorten(value: string, max: number): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 1).replace(/\s+\S*$/, "")}…`;
+}
+
+function guideTags(place: PlanPlace): string[] {
+  return [place.area, place.city, place.durationMinutes ? `${place.durationMinutes} min` : undefined, place.reservation?.requirement === "required" ? "Reservation" : undefined].filter(Boolean).slice(0, 4) as string[];
+}
+
+function timelineStatus(place: PlanPlace, routeAfter?: PlanRouteSegment): string {
+  if (place.reservation?.requirement === "required") return "Reservation required";
+  if (place.priority === "recheck" || place.reservation?.verification === "needs_recheck") return "Needs recheck";
+  if (place.priority === "booked") return "Booked";
+  if (routeAfter?.verification === "stale") return "Route stale";
+  if (routeAfter?.verification === "needs_verification") return "Route check needed";
+  return place.area ?? place.locationLabel;
+}
+
+function routeFitLabel(place: PlanPlace, selectedPlace: PlanPlace): string {
+  if (place.area && selectedPlace.area && place.area === selectedPlace.area) return "Same area";
+  if (place.city && selectedPlace.city && place.city === selectedPlace.city) return "Same city";
+  return place.locationLabel;
+}
+
+function timingLabel(place: PlanPlace): string {
+  if (place.reservation?.requirement === "required") return "Reserve ahead";
+  if (place.reservation?.requirement === "recommended") return "Reservation useful";
+  return place.durationMinutes ? `${place.durationMinutes} min` : "Flexible timing";
+}
+
+function effortLabel(place: PlanPlace): string {
+  if (place.priority === "recheck") return "Recheck before use";
+  if (place.bookingUrl || place.officialUrl) return "Official link saved";
+  if (place.mapUrl) return "Map link saved";
+  return place.area ?? "Review details";
+}
+
+function sourceStateLabel(place: PlanPlace): string {
+  if (place.evidenceSources?.some((source) => source.status === "verified")) return "Verified source";
+  if (place.evidenceSources?.length || place.sourceRefs.length) return "Referenced";
+  return "No source marker";
+}
+
+function sourceReferenceSummary(source: SourceReference): string {
+  return [source.title, source.authority, source.retrievedAt].filter(Boolean).join(" · ") || source.url;
+}
+
+function isDestinationRelevantTip(value: string): boolean {
+  const text = value.toLocaleLowerCase();
+  if (/rest early|stay positive|enjoy the journey|take photos|have fun|relax and enjoy/.test(text)) return false;
+  return /local|custom|etiquette|safety|safe|scam|payment|cash|card|transport|taxi|metro|train|bus|weather|dress|temple|shrine|market|queue|reservation|opening|hours|passport|visa|entry|neighborhood|area|language|tip|礼仪|安全|支付|现金|交通|天气|寺|神社|市场|排队|预约|营业|签证|入境/.test(text);
+}
+
+function tipTitle(value: string): string {
+  const first = firstUsefulSentence(value).replace(/[:：].*$/, "").trim();
+  return shorten(first || "Local tip", 54);
+}
+
+function uniqueTips(tips: TipDisplay[]): TipDisplay[] {
+  const seen = new Set<string>();
+  return tips.filter((tip) => {
+    const key = tip.body.toLocaleLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
