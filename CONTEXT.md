@@ -184,6 +184,10 @@ _Avoid_: Place count, coverage score
 The complete set of valid, distinct places retained in a Trip Blueprint, including both scheduled and candidate places. A place is not removed merely because it does not fit into the day-by-day itinerary.
 _Avoid_: Scheduled stops, map viewport results
 
+**Guide Catalog**:
+The shared set of user-facing attraction, shopping, dining, and local-experience content in a Trip Blueprint. It belongs under the Itinerary workspace as schedulable planning material rather than as separate top-level Plan workspace modules.
+_Avoid_: Separate guide lists, static articles, top-level plan modules
+
 **Place Identity**:
 The stable identifier of one Place Catalog entry, used by itinerary stops and candidates. An itinerary may reference an identity only after the corresponding complete place record belongs to its Research Set.
 _Avoid_: Place name, list position
@@ -192,9 +196,185 @@ _Avoid_: Place name, list position
 The ability to place a Place Catalog entry on the interactive map using sufficiently reliable coordinates. A place without Map Eligibility remains available in written content and carries a recheck status.
 _Avoid_: Place validity, candidate validity
 
+**Itinerary Map**:
+The Web map presentation inside the Itinerary workspace. It supports spatial understanding, selected-place context, route or sequence review, and route status, but it is not the default entrypoint for adding or replacing Guide Items.
+_Avoid_: Itinerary Explore Panel, map-first editor, standalone map guide
+
 **Candidate Place**:
 A Place Catalog entry that is not currently scheduled in the day-by-day itinerary but remains available for discovery, substitution, or replanning.
 _Avoid_: Rejected place, unused place
+
+**Attraction Place**:
+A concrete Place Identity for sightseeing, museums, landmarks, neighborhoods, nature, or cultural venues. Attraction Guide Cards correspond directly to Attraction Places; attraction themes are browsing groups, not separate schedulable content objects.
+_Avoid_: Attraction theme object, vague sightseeing idea, non-place attraction
+
+**Guide Item**:
+A user-facing image-and-text travel content item shown in the Itinerary workspace, such as an attraction, shopping idea, dining option, or local experience, that may reference a Place Identity or represent a schedulable experience. It remains travel content until the traveler promotes it into an Itinerary Day or preparation work.
+_Avoid_: Static article, Plan Task, one-line place recommendation
+
+**Guide Card**:
+The Web presentation of a Guide Item in browsing lists. Its default anatomy includes title or local name, Guide Card Summary, optional image, concrete place or related place when applicable, compact Source Marker, and a state-aware primary action. It should not show default day, time, replacement-type label, scheduling rationale, or full Guide Value Explanation while the Guide Item remains unscheduled. Informational Guide Items remain searchable and filterable, can open detail, and simply do not show an add action.
+_Avoid_: Itinerary Block, source list, recommendation rationale panel
+
+**Guide Card Summary**:
+The short browsing copy on a Guide Card. It helps the traveler scan title, image or text teaser, tags, area, and state without reading the full guide explanation. Longer Guide Value Explanation, comparisons, practical details, and source context belong in the shared detail panel.
+_Avoid_: Full article, full Guide Value Explanation, comparison table, schedule rationale
+
+**Guide Theme**:
+A traveler-facing grouping of Guide Items around an experience, need, or decision context, such as local breakfast, design shopping, rainy-day museums, or evening neighborhoods. It helps the traveler browse by intent before choosing specific places.
+_Avoid_: Place category, top-level module, itinerary day
+
+**Guide Relationship Graph**:
+The explicit Blueprint Contract relationships between guide-level concepts and concrete schedulable objects: Local Foods to Dining Places, Local Products to Purchase Places, Experience Themes to Experience Offerings, and Attraction Guide Cards to Attraction Places. The Skill should output these relationships and the Skill Importer should normalize them without relying on Web inference.
+_Avoid_: Inferred category match, prose-only relationship, Web-owned data repair
+
+**Itinerary Explore Panel**:
+The unified Web workspace surface for browsing Guide Cards inside the Itinerary area, including both material already used in the Recommended Itinerary and available alternatives. It includes an All view for complete guide browsing and lets travelers filter by theme, type, area, and itinerary state. Scheduled cards locate the relevant timeline block; unscheduled cards start itinerary edits.
+_Avoid_: Top-level guide page, day-owned candidate list, separate attraction/dining/shopping module
+
+**Guide Relevance Order**:
+The default ordering of Guide Cards in the Itinerary Explore Panel, including its All view. It prioritizes relationship to the current trip, current day, or selected Itinerary Block before secondary popularity, distance, rating, or source-richness signals.
+_Avoid_: Global ranking, popularity-only list, source-volume score
+
+**Per-block Arrangement Rationale**:
+A possible explanation of why Landi placed one scheduled Itinerary Block at a specific day or time, such as preference fit, weather, opening hours, pacing, or route convenience. Landi may use these factors during generation, but the Trip Blueprint and Web workspace do not require a traveler-visible rationale field for each block.
+_Avoid_: Itinerary Block status, Source Marker, Guide Relevance Order, Execution Action Card rationale
+
+**Timeline-linked Guide Detail**:
+The shared detail state opened when a scheduled Guide Card or timeline block is selected. It locates the corresponding timeline block and shows the Guide Item's image or text content, Source Marker, related guide material, and relevant alternatives in the same detail panel. Relevant alternatives are revealed here, not on timeline blocks by default.
+_Avoid_: Separate article page, map-only selection, jump without context
+
+**Guide Detail Template**:
+The type-specific detail presentation used inside the shared Workspace Side Panel. Attraction, dining, shopping, and local-experience Guide Items share the same panel shell but render different useful fields for the travel decision.
+_Avoid_: One generic detail layout, duplicated side panel, timeline block content
+
+**Guide Option Comparison**:
+The detail-panel pattern that shows multiple concrete dining places, purchase places, or experience offerings as peer options for the same food, product, or experience theme. It defaults to compact Option Comparison Rows rather than large image-led cards. It helps the traveler compare route fit, distance, price or quality signals, reservation or queue friction, timing, source state, and personal fit before choosing a concrete schedulable object. Web should not present these options as lower-status candidates or force one recommended default.
+_Avoid_: Candidate label, single forced best option, ranked recommendation, large card stack, unschedulable theme
+
+**Option Comparison Row**:
+The compact row or table-like presentation of one concrete option inside a Guide Option Comparison. It prioritizes Comparison Facts such as name, area, distance or route fit, hours or source state, price or effort, reservation or queue friction, and the action to choose or inspect details.
+_Avoid_: Large Guide Card, article block, promotional tile, subjective hype, hidden comparison data
+
+**Comparison Fact**:
+A comparable, traveler-useful fact or explainable signal shown in an Option Comparison Row, such as location, distance, route fit, hours, source state, price or effort, reservation need, queue friction, dietary fit, timing fit, or accessibility. Subjective promotional phrases do not belong in comparison rows.
+_Avoid_: Marketing copy, hype phrase, ungrounded popularity claim, Guide Value Explanation
+
+**Neutral Option Ordering**:
+The non-promotional default ordering used inside a Guide Option Comparison. It may sort peer options by factual convenience signals such as proximity to the current itinerary, route fit, opening-state confidence, reservation friction, queue risk, timing fit, or source freshness, but it must not label one option as best or recommended.
+_Avoid_: Ranked recommendation, default winner, hidden scoring, forced best option
+
+**Guide Value Explanation**:
+The traveler-facing explanation of why a Guide Item is worth visiting, eating, buying, or experiencing. It may use Guide Editorial Voice to make the detail view beautiful and engaging, but it should remain grounded in concrete reasons such as architecture, history, flavor, craft, local life, landscape, collection, ritual, or experience style. It supports reading, comparison, and taste judgment in Guide Cards or detail views, but it does not explain why the item was scheduled on a specific day or time.
+_Avoid_: Per-block Arrangement Rationale, scheduling rationale, route optimization reason, source list, marketing slogan
+
+**Guide Editorial Voice**:
+The polished, magazine-like writing style allowed only in Guide Value Explanation and supporting guide copy. It can be visual, textured, and inviting, but must avoid exaggerated advertising language and should be anchored in specific observable or explainable travel value.
+_Avoid_: Hype copy, empty praise, influencer catchphrase, unsupported superlative, timeline copy, checklist copy
+
+**Functional Workspace Voice**:
+The concise, restrained writing style for functional workspace surfaces such as Itinerary Timeline blocks, Preparation Checklist items, Travel Tip Cards, Contextual Tip Surfaces, Option Comparison Rows, route status, and action controls. It prioritizes scanning, judgment, and action over editorial atmosphere.
+_Avoid_: Guide Editorial Voice, magazine paragraph, marketing copy, decorative prose
+
+**Preparation Checklist**:
+The top-level Web area for pre-departure preparation. It presents grouped text-only checklist items with expandable written details, due timing, source-backed status, and completion controls; it does not use image-led guide cards.
+_Avoid_: Guide Card, inspiration article, image-led preparation module
+
+**Preparation Relevance Rule**:
+The rule that a Preparation Checklist item must materially affect the trip's readiness, legality, access, booking use, payment, connectivity, weather fit, health, safety, transport setup, or destination-specific procedure. Generic life advice and broad wellness suggestions do not belong in Preparation unless tied to a concrete travel requirement.
+_Avoid_: Generic to-do, lifestyle advice, vague reminder, filler checklist item
+
+**Travel Tip Card**:
+The compact text-first Web presentation of a Travel Tip. It may show a Source Marker when a custom, safety, payment, transport, or other change-sensitive claim needs provenance, but it does not require images.
+_Avoid_: Image-led guide card, execution task, generic FAQ
+
+**Canonical Tip**:
+The primary Travel Tip record shown in the Tips area. It carries the full text, theme, source state, freshness state, and available actions, and can be referenced from itinerary context without being duplicated.
+_Avoid_: Duplicate itinerary note, one-off caution copy, preparation task
+
+**Inspiration Source**:
+A non-authoritative content source, such as a social, UGC, short-video, image-board, review, or travel-community platform, used to discover guide themes, visual context, local products, and possible experiences. It can suggest what to investigate, but cannot by itself verify time-sensitive facts, bookings, policy, opening status, route reliability, or safety claims.
+_Avoid_: Official Evidence, verified source, execution fact
+
+**Source Channel**:
+One available way for Landi to gather planning material or verify facts, such as maps data, official sources, merchant pages, structured providers, review platforms, image search, or UGC. No single Source Channel is required for every trip.
+_Avoid_: Required platform, regional bundle, evidence status
+
+**Source Capability Selection**:
+A capability-driven source selection model that chooses inspiration, maps, dining, shopping, merchant, review, official, and image sources according to the planning need, destination coverage, traveler language, and available connectors. Region may be a coverage signal, but it is not the organizing strategy.
+_Avoid_: Fixed regional strategy, Xiaohongshu-only source, single global platform
+
+**Source Marker**:
+A small unobtrusive indicator on a guide card, image, tip, or itinerary detail that reveals inspiration and evidence references on hover, focus, or tap. It preserves source transparency without making source lists part of the default reading layout. Itinerary Timeline blocks do not show Source Markers by default; they use short status text for schedule-critical facts that need attention.
+_Avoid_: Visible citation block, hidden provenance, card footer clutter, timeline block default badge
+
+**Local Product**:
+A destination-specific shopping item or specialty that can be recommended with context and one or more suitable Purchase Places. It is separate from the places where it can be bought. It remains Guide Catalog content and becomes itinerary material only through an Itinerary Promotion of a related Purchase Place or shopping block.
+_Avoid_: Shopping task, generic souvenir, purchase confirmation
+
+**Purchase Place**:
+A concrete Place Identity where a Local Product or shopping theme can reasonably be browsed or bought. One Local Product may link to multiple Purchase Places, and each Purchase Place may carry its own location, source state, hours, effort, price, or nearby itinerary context. It must identify a real place rather than a vague area before it can be promoted into an Itinerary Block.
+_Avoid_: Product, shopping category, vague shopping area
+
+**Purchase Place Comparison**:
+The shopping detail presentation that helps travelers choose among multiple Purchase Places for one Local Product. It compares location, suitable itinerary area, convenience, price or quality signals, hours, source state, and nearby itinerary links when available.
+_Avoid_: Name-only store list, generic shopping area, product description
+
+**Local Food**:
+A destination-specific dish, drink, food style, dining ritual, or food theme that can be recommended with cultural and practical context. It is separate from the places where it can be eaten and becomes itinerary material only through an Itinerary Promotion of a related Dining Place or meal block.
+_Avoid_: Restaurant, meal reservation, generic cuisine tag
+
+**Dining Place**:
+A concrete Place Identity where a Local Food or dining theme can reasonably be eaten or explored, such as a restaurant, cafe, market, food hall, food street, or neighborhood dining cluster. One Local Food may link to multiple Dining Places.
+_Avoid_: Dish, cuisine category, vague food idea
+
+**Dining Place Comparison**:
+The dining detail presentation that helps travelers choose among multiple Dining Places for one Local Food or dining theme. It compares location, suitable itinerary area or meal moment, reservation or queue expectation, dietary fit, price or quality signals, hours, source state, and nearby itinerary links when available.
+_Avoid_: Name-only restaurant list, live availability claim, ordering flow
+
+**Experience Theme**:
+A destination-specific local-experience concept, such as tea culture, bathing culture, neighborhood nightlife, craft workshops, performances, seasonal festivals, or local rituals. It explains cultural context, suitable travelers, timing, and practical considerations before the traveler chooses a concrete offering.
+_Avoid_: Place, booking, generic activity category
+
+**Experience Offering**:
+A concrete schedulable activity, venue, provider, event, route, or place where an Experience Theme can be experienced. One Experience Theme may link to multiple Experience Offerings, and an offering must carry enough place, time, or booking context before it can become an Itinerary Block.
+_Avoid_: Experience theme, vague local custom, generic inspiration
+
+**Experience Offering Comparison**:
+The local-experience detail presentation that helps travelers choose among multiple Experience Offerings for one Experience Theme. It compares location, duration, suitable itinerary area or day part, booking need, seasonal fit, accessibility, etiquette or risk notes, source state, and nearby itinerary links when available.
+_Avoid_: Name-only activity list, booking claim, unsourced event
+
+**Schedulable Itinerary Object**:
+A concrete object that can appear in an Itinerary Block because it answers where, when, and what the traveler is doing. Examples include Attraction Place, Dining Place, Purchase Place, Experience Offering, movement, rest, and flexible time. Local Food, Local Product, and Experience Theme explain choices but should not occupy the timeline directly.
+_Avoid_: Theme-only block, product-only block, dish-only block
+
+**Informational Guide Item**:
+A Guide Item that is useful for understanding local food, shopping, culture, or customs but lacks a related Schedulable Itinerary Object in the imported Blueprint. The Skill Importer preserves it as guide content and marks it unavailable for timeline placement. Web can show it in explore, search, filter, and detail surfaces, but should not show an add-to-itinerary action. Landi does not design a separate post-import enrichment path for turning these items into schedulable content.
+_Avoid_: Invalid content, schedulable block, discarded theme
+
+**Guide Content Selectivity**:
+The qualitative generation rule that prioritizes Schedulable Itinerary Objects and keeps Informational Guide Items limited to high-value context that helps the traveler understand local food, shopping, culture, or experience choices. It is not a fixed ratio or quota per destination or guide type.
+_Avoid_: Background-content dump, encyclopedic guide, filler cards, content quota
+
+**Unscheduled Guide Option**:
+A Guide Item that is available as replacement or enrichment material but is not part of the Recommended Itinerary. It should not carry a default day, time, or visible replacement-type label unless a real constraint, such as a booking window or opening time, requires it. Scheduling compatibility can exist internally for validation and impact checks.
+_Avoid_: Scheduled stop, recommended itinerary block, hidden default
+
+**Itinerary Promotion**:
+A traveler action that adds a Guide Item or Candidate Place into a compatible Itinerary Day as scheduled or optional content. It first enters a pending edit state for traveler review, and only changes travel meaning after confirmation records a Blueprint Revision.
+_Avoid_: Bookmark, filter choice, execution task
+
+**Placement Selection State**:
+The lightweight Web state opened by an unscheduled Guide Card's add action. The traveler chooses the target day, placement position, and whether the item is scheduled or optional before Landi creates a Pending Itinerary Edit.
+_Avoid_: Immediate insertion, default schedule recommendation, hidden auto-placement
+
+**Placement Advisory**:
+A lightweight warning shown inside Placement Selection State when a possible placement may create route, opening-hour, meal timing, reservation, weather, or pacing friction. It informs the traveler before confirmation but does not block selection unless a hard booking or explicit safety rule applies.
+_Avoid_: Hard validation error, hidden conflict, automatic rejection
+
+**Pending Itinerary Edit**:
+An unconfirmed workspace change to guide content, candidate places, priorities, or itinerary order. It is not durable travel meaning until the traveler confirms it through the existing edit confirmation path. Ordinary guide additions can be represented by highlighting the changed placement in the existing edit state, without a separate impact summary module.
+_Avoid_: Blueprint Revision, saved itinerary, Workspace View State
 
 **Confirmed Duplicate**:
 Two place records proven to represent the same real place through a shared stable external identity, official place identity, or traveler-confirmed alias relationship. Only Confirmed Duplicates may be merged automatically.
@@ -207,6 +387,42 @@ _Avoid_: Confirmed Duplicate, invalid place
 **Itinerary Day**:
 The Trip Blueprint's explicit account of one calendar day in the travel date range. It may schedule places or intentionally represent transit, rest, or unstructured free time.
 _Avoid_: Mandatory sightseeing day, Plan Stage
+
+**Recommended Itinerary**:
+The complete day-by-day itinerary Landi generates from the travel boundary, time constraints, weather context, traveler preferences, and available evidence. The traveler may apply it as-is or use guide material to replace, add, remove, or rearrange parts before activation.
+_Avoid_: Empty itinerary canvas, fixed itinerary, executed plan
+
+**Itinerary Timeline**:
+The Web presentation of a Recommended Itinerary as a time-ordered sequence of Itinerary Blocks. It helps the traveler read what happens when, select blocks, review status, and see changed-placement highlighting in the existing edit state; it is not the primary arrangement tool. Timeline blocks default to time, title, type, place or area, and short status. They do not show Source Markers by default; long descriptions, sources, and related material live in the shared detail panel.
+_Avoid_: Itinerary Explore Panel, drag-first editor, day overview module
+
+**Itinerary Workspace Layout**:
+The default desktop Web workspace arrangement for the Itinerary area: time-ordered Itinerary Timeline as the plan body, Itinerary Map as spatial and route context, and an openable Itinerary Explore Panel or shared detail panel for guide browsing, source inspection, and adjustment actions. The map should not dominate the page. Landi's Web workspace does not target mobile layout or mobile editing.
+_Avoid_: Map-first workspace, standalone guide page, timeline editor
+
+**Desktop Workspace Density**:
+The Web workspace's ability to keep the Itinerary Timeline, Itinerary Map, and Explore or Detail panel visible together when screen space allows. It uses desktop information density for comparison and review instead of compressing the product into a mobile-style single-column flow.
+_Avoid_: Mobile-first layout, single-column workspace, hidden map by default
+
+**Workspace Side Panel**:
+The shared right-side desktop workspace region that switches between Itinerary Explore Panel and shared detail view modes. It prevents guide browsing and detail inspection from opening as competing sidebars.
+_Avoid_: Multiple simultaneous sidebars, modal-only detail, separate explore and detail columns
+
+**Side Panel Navigation State**:
+Ephemeral Web view state that preserves the Workspace Side Panel's previous explore filters, sort order, scroll position, and selected card when switching into detail mode. It lets the traveler return from detail to the prior exploration context without changing Trip Blueprint meaning.
+_Avoid_: Blueprint Revision, saved preference, duplicated detail panel
+
+**Itinerary Block**:
+A typed part of an Itinerary Day, such as a main stop, meal block, shopping block, local-experience block, transit block, rest block, or flexible block. It helps Landi present a complete day as replaceable planning pieces instead of only as a flat list of places.
+_Avoid_: Plan Stage, generic task, untyped place row, day overview module
+
+**Flexible Itinerary Block**:
+An Itinerary Block that belongs to the Recommended Itinerary but uses a rough time window, optional status, or flexible placement instead of a precise start time. It remains ordered within its Itinerary Day and may render with a Rough Time Label. It is appropriate for dining, shopping, local experiences, rest, and exploratory stops when the plan should remain useful without becoming rigid.
+_Avoid_: Candidate Place, unscheduled Guide Option, exact booking, hidden filler
+
+**Rough Time Label**:
+A localized timeline label for a Flexible Itinerary Block, such as around lunch, flexible afternoon, or optional evening. It communicates day rhythm and ordering without pretending the block has an exact start time.
+_Avoid_: Exact start time, empty time slot, hidden ordering, scheduling rationale
 
 **Movement Plan**:
 The intended movement between two adjacent scheduled places on an Itinerary Day. Its existence is structural; its mode, duration, route, and evidence each carry an Evidence Status and may require rechecking.
@@ -259,6 +475,18 @@ _Avoid_: Scheduled notification, active monitoring
 **External Action**:
 An operation that spends money, creates a booking, submits personal information, or otherwise changes state in another service. It requires separate confirmation at the time of action even when related to an approved Execution Plan.
 _Avoid_: Plan approval, Reminder execution
+
+**Travel Tip**:
+A traveler-facing local caution or norm that helps the traveler avoid destination-specific friction during the trip, including etiquette, transport habits, payment norms, safety, language, weather, dress, taboos, scams, tourist traps, and common local mistakes. It is grouped by theme and may also be surfaced near a relevant Itinerary Day or Itinerary Block; it remains informational unless it has a concrete accountable action that becomes an Action Requirement.
+_Avoid_: Itinerary stop, generic FAQ, automatic task
+
+**Travel Tip Relevance Rule**:
+The rule that a Travel Tip must be tied to the destination, local culture, local infrastructure, trip context, or a concrete itinerary situation. Generic travel inspiration, broad life advice, motivational copy, and obvious universal reminders do not belong in Tips.
+_Avoid_: Travel essay, motivational advice, generic packing reminder, filler caution
+
+**Contextual Tip Surface**:
+A compact itinerary-side display of a Canonical Tip beside a relevant Itinerary Day or Itinerary Block. It should show only the short caution needed in that itinerary context, while the full explanation remains in the Tips area or shared detail view. It references the same Travel Tip rather than duplicating, converting, or scheduling it as itinerary content.
+_Avoid_: Full tip copy, separate tip copy, Itinerary Promotion, Plan Task
 
 **Travel Execution Capability**:
 A destination-neutral Landi capability that helps a traveler act on an approved trip through current guidance, rechecks, reminders, local-option selection, and External Action handoffs without completing the external action for them.
@@ -452,16 +680,24 @@ _Avoid_: Generation log, Plan history
 The immutable Skill identity and version recorded on the Research Set and Trip Blueprint Version it helped produce.
 _Avoid_: Current installed Skill, Agent model name
 
+**Skill Output Acceptance Criteria**:
+The checklist used to judge whether a Landi-native planning Skill artifact is usable before or during Skill Importer normalization. It focuses on contract shape, content relevance, schedulable relationships, source handling, image optionality, writing style, and Web presentation readiness, not on Plan execution behavior.
+_Avoid_: Web QA checklist, Plan Compiler test, visual regression test
+
+**Blueprint Workspace Requirements Draft**:
+The initial PRD-style requirements baseline for the Landi-native travel planning generation and Web workspace presentation redesign. It captures agreed product architecture, content areas, source strategy, guide presentation, timeline behavior, preparation and tips boundaries, and Skill Output Acceptance Criteria, but does not authorize code implementation by itself.
+_Avoid_: ADR, implementation plan, raw skill prompt, visual QA checklist
+
 **Skill Availability Failure**:
 A generation-blocking state in which the required travel-planning Skill identity or version cannot be invoked. It cannot be converted into a successful generic-Agent Blueprint.
 _Avoid_: Evidence gap, degraded research
 
 **Blueprint Contract**:
-Landi's versioned domain schema for Research Sets and Trip Blueprints. It remains independent of the travel-planning Skill's internal files and of Plan persistence structure.
+Landi's versioned domain schema for Research Sets and Trip Blueprints. It remains independent of the travel-planning Skill's internal files and of Plan persistence structure. It includes Guide Relationship Graph data so Web can present guide concepts and schedulable objects without inference.
 _Avoid_: Skill output file, Plan contract, Web view model
 
 **Skill Importer**:
-The deterministic boundary that converts one supported Skill artifact format into the Blueprint Contract. It owns format compatibility and safe normalization but no Plan execution semantics.
+The deterministic boundary that converts one supported Skill artifact format into the Blueprint Contract. It owns format compatibility, relationship validation, and safe normalization but no Plan execution semantics. It should preserve explicit Guide Relationship Graph data, mark useful theme-level content without schedulable relationships as Informational Guide Items, and must not invent missing concept-to-place relationships.
 _Avoid_: Plan Compiler, Agent repair, Skill
 
 **Safe Normalization**:

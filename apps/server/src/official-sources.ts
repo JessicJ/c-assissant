@@ -1,5 +1,6 @@
 import type { ConnectorResult, OfficialSourceDefinition, OfficialSourceSnapshot } from "@c-assistant/connectors";
 import type { SourceSnapshotInput, SourceSnapshotWriteResult } from "@c-assistant/core";
+import type { OfficialSourceService } from "./official-source-service.js";
 
 export interface OfficialSourceReader {
   discover(input?: { topic?: string | undefined }): ConnectorResult<OfficialSourceDefinition[]>;
@@ -10,7 +11,7 @@ export interface OfficialSourceSnapshotStore {
   saveSourceSnapshot(input: SourceSnapshotInput): SourceSnapshotWriteResult;
 }
 
-export function createOfficialSourceService(reader: OfficialSourceReader, store: OfficialSourceSnapshotStore) {
+export function createOfficialSourceService(reader: OfficialSourceReader, store: OfficialSourceSnapshotStore): OfficialSourceService {
   return {
     discover(topic?: string): ConnectorResult<OfficialSourceDefinition[]> {
       return reader.discover({ ...(topic?.trim() ? { topic: topic.trim() } : {}) });

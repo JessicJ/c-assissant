@@ -321,6 +321,8 @@
       fromPriority: state.priorities[action.poiId],
       toPriority: next.priorities[action.poiId],
       affectedDayIds: plan.affectedDayIds,
+      requiresConfirmation: plan.requiresConfirmation,
+      reasons: plan.reasons,
       summary: changeSummary(trip, state, action, plan),
     });
     return next;
@@ -339,15 +341,15 @@
 
   function buildReplanPrompt(trip, state) {
     if (!hasPendingChanges(state)) {
-      return `${trip.title || "This trip"} has no changes that require replanning.`;
+      return `${trip.title || "This trip"} has no pending map changes.`;
     }
     const days = dayMap(trip);
     const affected = unique(
       state.changes.flatMap((change) => change.affectedDayIds || []),
     ).map((dayId) => days.get(dayId)).filter(Boolean);
-    const dayText = affected.map((day) => `${day.date}《${day.title || day.city}》`).join("、");
+    const dayText = affected.map((day) => `${day.date} (${day.title || day.city})`).join(", ");
     const changes = state.changes.map((change, index) => `${index + 1}. ${change.summary}`).join("\n");
-    return `Please replan “${trip.title || "this trip"}”.\n\nI made these map changes:\n${changes}\n\nAffected dates: ${dayText || "determine from the changes"}.\n\nRecheck opening hours, reservations, transport, accommodation departure and return routes, meals, energy, and daily capacity, then update the final route. Do not treat straight lines between coordinates as road routes.`;
+    return `Map changes for “${trip.title || "this trip"}”:\n\n${changes}\n\nAffected dates: ${dayText || "determine from the changes"}.\n\nOnly the affected itinerary dates and routes should be updated. Unrelated days and Plan content should stay unchanged.`;
   }
 
   root.TripMapState = {

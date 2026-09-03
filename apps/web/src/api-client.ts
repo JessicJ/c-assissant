@@ -1,0 +1,301 @@
+import type { RuntimeCheck } from "@c-assistant/agent-adapters";
+import type { ConnectorResult, WeatherSnapshot } from "@c-assistant/connectors";
+import type {
+  AgentRuntimeKind,
+  BookingImportPreview,
+  Plan,
+  PlanChangeImpactPreview,
+  PlanChangeSet,
+  PlanningProposal,
+  PlanningSession,
+  Profile,
+  TravelBooking,
+  WorkspaceSnapshot
+} from "@c-assistant/core";
+
+export type LocalConfiguration = {
+  google?: { configured: boolean };
+  uber?: { configured: boolean };
+  telegram?: { configured: boolean };
+};
+
+export type LocalConfigurationForm = {
+  googleMapsApiKey: string;
+  uberClientId: string;
+  telegramBotToken: string;
+};
+
+export type PlanGenerationState = {
+  runId: string;
+  sessionId: string;
+  generationKey?: string;
+  stage: "queued" | "research" | "itinerary" | "import" | "compile" | "ready" | "failed" | "cancelled";
+  status: "running" | "succeeded" | "failed" | "cancelled";
+  startedAt: string;
+  updatedAt: string;
+  scopeLabel?: string;
+  savedPlaceCount?: number;
+  failureCode?: string;
+  message?: string;
+};
+
+export type AgentChatResponse = Partial<WorkspaceSnapshot> & {
+  reply?: string;
+  workspace?: WorkspaceSnapshot;
+  planningSession?: PlanningSession;
+  proposal?: PlanningProposal;
+  planningStatus?: PlanningSession["status"];
+  generated?: boolean;
+  accepted?: boolean;
+  generation?: PlanGenerationState;
+  followUpQuestion?: string;
+  readyForReview?: boolean;
+  evidenceStatus?: "verified" | "partial";
+  error?: string;
+};
+
+export type BookingScope = { type: "planning"; sessionId?: string } | { type: "plan"; planId: string };
+
+export type MapSearchResponse = {
+  status?: string;
+  data?: Array<{ location?: string }>;
+};
+
+export type PlanPresentationPatch = {
+  expectedVersion: number;
+  assignments: Record<string, string>;
+  priorities: Record<string, string>;
+  orders: Record<string, string[]>;
+  replanPrompt?: string;
+};
+
+export type PlanPresentationResponse = WorkspaceSnapshot & {
+  workspace?: WorkspaceSnapshot;
+  error?: string;
+};
+
+export type ConnectorTestKind = "google" | "uber" | "telegram";
+
+export type ConnectorTestResponse = {
+  status?: string;
+  maps?: { status?: string; failure?: { message?: string } };
+  failure?: { message?: string };
+  error?: string;
+};
+
+export type RuntimeTestResponse = { ok?: boolean; message?: string; error?: string };
+
+async function readJson<T>(response: Response): Promise<T> {
+  return await response.json() as T;
+}
+
+async function requestJson<T>(path: string, init: RequestInit | undefined, defaultError: string): Promise<T> {
+  const response = await fetch(path, init);
+  const payload = await readJson<T & { error?: string }>(response);
+  if (!response.ok) throw new Error(payload.error ?? defaultError);
+  return payload;
+}
+
+async function optionalJson<T>(path: string, init?: RequestInit): Promise<T | undefined> {
+  const response = await fetch(path, init);
+  if (!response.ok) return undefined;
+  return await readJson<T>(response);
+}
+
+function jsonRequest(method: "POST" | "PUT" | "PATCH", body?: unknown): RequestInit {
+  return {
+    method,
+    headers: { "content-type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) })
+  };
+}
+
+function bookingBasePath(scope: BookingScope): string {
+  if (scope.type === "plan") return `/api/plans/${encodeURIComponent(scope.planId)}/bookings`;
+  if (scope.sessionId) return `/api/planning-sessions/${encodeURIComponent(scope.sessionId)}/bookings`;
+  return "/api/planning-sessions/bookings";
+}
+
+export async function getWorkspace(init?: RequestInit): Promise<WorkspaceSnapshot> {
+  return await requestJson<WorkspaceSnapshot>("/api/workspace", init, "The core service did not return workspace data.");
+}
+
+export async function listPlanHistory(): Promise<Plan[] | undefined> {
+  return await optionalJson<Plan[]>("/api/plans/history");
+}
+
+export async function getSettingsSnapshot(): Promise<{ configuration?: LocalConfiguration; runtimeChecks?: RuntimeCheck[] }> {
+  const [configuration, runtimeChecks] = await Promise.all([
+    optionalJson<LocalConfiguration>("/api/configuration"),
+    optionalJson<RuntimeCheck[]>("/api/runtimes")
+  ]);
+  return {
+    ...(configuration ? { configuration } : {}),
+    ...(runtimeChecks ? { runtimeChecks } : {})
+  };
+}
+
+export async function deleteHistoricalPlan(planId: string): Promise<void> {
+  await requestJson<unknown>(`/api/plans/${encodeURIComponent(planId)}/history`, { method: "DELETE" }, "Unable to delete the archived plan.");
+}
+
+export async function setPlanTaskChecked(planId: string, taskId: string, checked: boolean): Promise<WorkspaceSnapshot> {
+  return await requestJson<WorkspaceSnapshot>(
+    `/api/plans/${encodeURIComponent(planId)}/tasks/${encodeURIComponent(taskId)}/check`,
+    jsonRequest("PATCH", { checked }),
+    "Unable to save the checklist status."
+  );
+}
+
+export async function reorderPlanTask(planId: string, taskId: string, direction: "up" | "down", expectedVersion: number): Promise<{ workspace: WorkspaceSnapshot; change?: PlanChangeSet; error?: string }> {
+  const response = await fetch(`/api/plans/${encodeURIComponent(planId)}/changes`, jsonRequest("POST", { kind: "reorder_task", taskId, direction, expectedVersion }));
+  const payload = await readJson<{ workspace?: WorkspaceSnapshot; change?: PlanChangeSet; error?: string }>(response);
+  if (!response.ok || !payload.workspace) throw new Error(payload.error ?? "Unable to reorder the itinerary.");
+  return { ...payload, workspace: payload.workspace };
+}
+
+export async function undoPlanChange(planId: string, changeId: string, expectedVersion: number): Promise<WorkspaceSnapshot> {
+  return await requestJson<WorkspaceSnapshot>(
+    `/api/plans/${encodeURIComponent(planId)}/changes/${encodeURIComponent(changeId)}/undo`,
+    jsonRequest("POST", { expectedVersion }),
+    "Unable to undo the change."
+  );
+}
+
+export async function confirmPlan(planId: string): Promise<WorkspaceSnapshot> {
+  return await requestJson<WorkspaceSnapshot>(`/api/plans/${encodeURIComponent(planId)}/confirm`, { method: "POST" }, "Unable to confirm the plan.");
+}
+
+export async function cancelPlanningGeneration(sessionId: string): Promise<void> {
+  await requestJson<unknown>(`/api/planning-sessions/${encodeURIComponent(sessionId)}/generation/cancel`, { method: "POST" }, "Unable to cancel generation.");
+}
+
+export async function deletePlanningSession(sessionId: string): Promise<WorkspaceSnapshot> {
+  return await requestJson<WorkspaceSnapshot>(`/api/planning-sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" }, "Unable to abandon this planning session.");
+}
+
+export async function deletePlan(planId: string): Promise<WorkspaceSnapshot> {
+  return await requestJson<WorkspaceSnapshot>(`/api/plans/${encodeURIComponent(planId)}`, { method: "DELETE" }, "Unable to discard this plan draft.");
+}
+
+export async function abandonActivePlan(planId: string): Promise<WorkspaceSnapshot> {
+  return await requestJson<WorkspaceSnapshot>(`/api/plans/${encodeURIComponent(planId)}/abandon`, { method: "POST" }, "Unable to abandon the active plan.");
+}
+
+export async function sendAgentChat(body: {
+  mode: "new_plan" | "revise_plan";
+  message: string;
+  expectedPlanId?: string;
+  expectedVersion?: number;
+  impactConfirmed?: boolean;
+}): Promise<AgentChatResponse> {
+  return await requestJson<AgentChatResponse>("/api/agent/chat", jsonRequest("POST", body), "Landi is temporarily unavailable.");
+}
+
+export async function undoPlanReplacement(planId: string, expectedVersion: number): Promise<WorkspaceSnapshot> {
+  return await requestJson<WorkspaceSnapshot>(
+    `/api/plans/${encodeURIComponent(planId)}/replacement/undo`,
+    jsonRequest("POST", { expectedVersion }),
+    "Unable to undo the latest plan replacement."
+  );
+}
+
+export async function linkPlanAccommodation(planId: string, body: { expectedVersion: number; name: string; address: string; status: "confirmed" | "candidate" }): Promise<{ workspace: WorkspaceSnapshot; impact?: { affectedDays: number; verifiedDays: number; pendingDays: number }; error?: string }> {
+  const response = await fetch(`/api/plans/${encodeURIComponent(planId)}/accommodation/linked`, jsonRequest("POST", body));
+  const payload = await readJson<{ workspace?: WorkspaceSnapshot; impact?: { affectedDays: number; verifiedDays: number; pendingDays: number }; error?: string }>(response);
+  if (!response.ok || !payload.workspace) throw new Error(payload.error ?? "Unable to link the accommodation to the current plan.");
+  return { ...payload, workspace: payload.workspace };
+}
+
+export async function listBookings(scope: BookingScope): Promise<{ bookings?: TravelBooking[] } | undefined> {
+  if (scope.type === "planning" && !scope.sessionId) return { bookings: [] };
+  return await optionalJson<{ bookings?: TravelBooking[] }>(bookingBasePath(scope), { cache: "no-store" });
+}
+
+export async function previewBookingImport(scope: BookingScope, source: { sourceLabel: string; content: string }): Promise<BookingImportPreview> {
+  return await requestJson<BookingImportPreview>(`${bookingBasePath(scope)}/import-preview`, jsonRequest("POST", source), `Unable to preview ${source.sourceLabel}.`);
+}
+
+export async function confirmBookingImport(scope: BookingScope, body: { booking: TravelBooking; sourceContent: string; expectedVersion?: number }): Promise<{ workspace: WorkspaceSnapshot; planningSession?: PlanningSession; booking?: TravelBooking; requiresBlueprintRevision?: boolean; error?: string }> {
+  const response = await fetch(`${bookingBasePath(scope)}/import-confirm`, jsonRequest("POST", body));
+  const payload = await readJson<{ workspace?: WorkspaceSnapshot; planningSession?: PlanningSession; booking?: TravelBooking; requiresBlueprintRevision?: boolean; error?: string }>(response);
+  if (!response.ok || !payload.workspace) throw new Error(payload.error ?? "Unable to save this booking.");
+  return { ...payload, workspace: payload.workspace };
+}
+
+export async function saveProfile(profile: Profile): Promise<WorkspaceSnapshot> {
+  return await requestJson<WorkspaceSnapshot>("/api/profile", jsonRequest("PUT", profile), "Unable to save profile details.");
+}
+
+export async function saveConfiguration(form: LocalConfigurationForm): Promise<LocalConfiguration> {
+  return await requestJson<LocalConfiguration>("/api/configuration", jsonRequest("PUT", form), "Unable to save API configuration.");
+}
+
+export async function testConnector(kind: ConnectorTestKind): Promise<ConnectorTestResponse> {
+  const path = kind === "google" ? "/api/connectors/google" : kind === "uber" ? "/api/connectors/uber" : "/api/connectors/telegram/verify";
+  const response = await fetch(path, kind === "telegram" ? { method: "POST" } : undefined);
+  const payload = await readJson<ConnectorTestResponse>(response);
+  const status = kind === "google" ? payload.maps?.status : payload.status;
+  if (!response.ok || status === "unavailable" || status === "misconfigured") throw new Error(payload.error ?? payload.maps?.failure?.message ?? payload.failure?.message ?? "Connection failed");
+  return payload;
+}
+
+export async function selectRuntime(kind: AgentRuntimeKind): Promise<WorkspaceSnapshot> {
+  return await requestJson<WorkspaceSnapshot>("/api/runtime", jsonRequest("PUT", { kind }), "Unable to switch AI Agent runtime.");
+}
+
+export async function listRuntimes(): Promise<RuntimeCheck[] | undefined> {
+  return await optionalJson<RuntimeCheck[]>("/api/runtimes");
+}
+
+export async function testRuntime(kind: AgentRuntimeKind): Promise<RuntimeTestResponse> {
+  const response = await fetch(`/api/runtimes/${kind}/test`, { method: "POST" });
+  const payload = await readJson<RuntimeTestResponse>(response);
+  if (!response.ok || !payload.ok) throw new Error(payload.error ?? payload.message ?? "Test failed");
+  return payload;
+}
+
+export async function getPlanningGeneration(sessionId: string): Promise<{ sessionStatus: PlanningSession["status"]; generation: PlanGenerationState | null } | undefined> {
+  return await optionalJson<{ sessionStatus: PlanningSession["status"]; generation: PlanGenerationState | null }>(`/api/planning-sessions/${encodeURIComponent(sessionId)}/generation`, { cache: "no-store" });
+}
+
+export function planningGenerationEventsUrl(sessionId: string): string {
+  return `/api/planning-sessions/${encodeURIComponent(sessionId)}/generation/events`;
+}
+
+export async function confirmPlanningProposal(sessionId: string, proposalVersion: number): Promise<AgentChatResponse> {
+  return await requestJson<AgentChatResponse>(
+    `/api/planning-sessions/${encodeURIComponent(sessionId)}/confirm`,
+    jsonRequest("POST", { proposalVersion }),
+    "Plan confirmation did not finish."
+  );
+}
+
+export async function previewPlanChangeImpact(planId: string, message: string, expectedVersion: number): Promise<PlanChangeImpactPreview> {
+  return await requestJson<PlanChangeImpactPreview>(
+    `/api/plans/${encodeURIComponent(planId)}/change-impact`,
+    jsonRequest("POST", { message, expectedVersion }),
+    "Unable to assess the impact of this change."
+  );
+}
+
+export async function patchPlanPresentation(planId: string, patch: PlanPresentationPatch): Promise<PlanPresentationResponse> {
+  const response = await fetch(`/api/plans/${encodeURIComponent(planId)}/presentation`, jsonRequest("PATCH", patch));
+  const payload = await readJson<PlanPresentationResponse>(response);
+  if (!response.ok || !payload.activePlan) throw new Error(payload.error ?? "The map changes could not be saved to the plan.");
+  return payload;
+}
+
+export async function searchMapPlaces(query: string, region?: string): Promise<MapSearchResponse | undefined> {
+  const suffix = region ? `&region=${encodeURIComponent(region)}` : "";
+  return await optionalJson<MapSearchResponse>(`/api/maps/places?query=${encodeURIComponent(query)}${suffix}`);
+}
+
+export async function getCurrentWeather(location: string, coordinates?: [number, number]): Promise<WeatherSnapshot> {
+  const parameters = new URLSearchParams({ location, language: "en" });
+  if (coordinates) parameters.set("coordinates", `${coordinates[1]},${coordinates[0]}`);
+  const response = await fetch(`/api/weather?${parameters.toString()}`);
+  const payload = await readJson<ConnectorResult<WeatherSnapshot> & { error?: string }>(response);
+  if (!response.ok || payload.status !== "available" || !payload.data) throw new Error(payload.error ?? payload.failure?.message ?? "Weather is temporarily unavailable");
+  return payload.data;
+}

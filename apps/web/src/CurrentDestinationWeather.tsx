@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { DestinationArrivalEvent, PlanPresentation } from "@c-assistant/core";
 import { resolveCurrentPlanDestination } from "@c-assistant/core/current-destination";
-import type { ConnectorResult, WeatherSnapshot } from "@c-assistant/connectors";
+import type { WeatherSnapshot } from "@c-assistant/connectors";
+import { getCurrentWeather } from "./api-client.js";
 
 type WeatherState =
   | { status: "loading" }
@@ -35,13 +36,9 @@ export function CurrentDestinationWeather({ presentation, arrivals = [] }: { pre
       if (cached && !cancelled) setState({ status: "available", weather: cached, cached: true });
       else if (!cancelled) setState({ status: "loading" });
       try {
-        const parameters = new URLSearchParams({ location: city, language: "en" });
-        if (coordinates) parameters.set("coordinates", `${coordinates[1]},${coordinates[0]}`);
-        const response = await fetch(`/api/weather?${parameters.toString()}`);
-        const payload = await response.json() as ConnectorResult<WeatherSnapshot> & { error?: string };
-        if (!response.ok || payload.status !== "available" || !payload.data) throw new Error(payload.error ?? payload.failure?.message ?? "Weather is temporarily unavailable");
-        writeWeatherCache(city, payload.data);
-        if (!cancelled) setState({ status: "available", weather: payload.data, cached: false });
+        const weather = await getCurrentWeather(city, coordinates);
+        writeWeatherCache(city, weather);
+        if (!cancelled) setState({ status: "available", weather, cached: false });
       } catch {
         if (!cancelled && !cached) setState({ status: "unavailable" });
       } finally {

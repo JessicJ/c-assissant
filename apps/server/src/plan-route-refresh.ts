@@ -55,9 +55,12 @@ export async function refreshPlanRouteFacts(plan: Plan, segmentId: string, maps:
   };
 }
 
-export async function refreshGeneratedPlanRoutes(plan: Plan, maps: PlanRouteMaps, concurrency = 3): Promise<{ refreshed: RefreshedPlanRouteFacts[]; failedSegmentIds: string[] }> {
+export async function refreshGeneratedPlanRoutes(plan: Plan, maps: PlanRouteMaps, options: number | { concurrency?: number; segmentIds?: string[] } = 3): Promise<{ refreshed: RefreshedPlanRouteFacts[]; failedSegmentIds: string[] }> {
+  const concurrency = typeof options === "number" ? options : options.concurrency ?? 3;
+  const requestedSegmentIds = typeof options === "number" || !options.segmentIds ? undefined : new Set(options.segmentIds);
   const segmentIds = (plan.presentation?.kind === "itinerary" ? plan.presentation.routeSegments : [])
     .filter((segment) => segment.mode === "driving" || segment.mode === "walking" || segment.mode === "transit")
+    .filter((segment) => !requestedSegmentIds || requestedSegmentIds.has(segment.id))
     .slice(0, 36)
     .map((segment) => segment.id);
   const refreshed: RefreshedPlanRouteFacts[] = [];

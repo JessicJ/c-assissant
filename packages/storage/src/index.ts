@@ -1160,7 +1160,7 @@ export class SqliteWorkspaceStore {
     const workspace = this.getWorkspace();
     const plan = workspace.activePlan;
     if (plan.id !== input.planId || plan.version !== input.expectedVersion) throw new Error("The Plan changed before these itinerary edits were saved.");
-    if (plan.status !== "draft") throw new Error("An active Plan must be revised through Landi before changing its itinerary.");
+    if (plan.status !== "draft" && plan.status !== "active") throw new Error("Only the current draft or active Plan can receive itinerary map edits.");
     if (!plan.presentation || plan.presentation.kind !== "itinerary") throw new Error("This Plan does not contain a structured itinerary presentation.");
     const presentation = structuredClone(plan.presentation);
     const placeIds = new Set(presentation.places.map((place) => place.id));
@@ -1256,9 +1256,9 @@ export class SqliteWorkspaceStore {
       return { ...day, stops };
     });
     assertPlanPresentationIntegrity(presentation, { executionReady: false });
-    const updated = this.database.prepare("UPDATE plans SET presentation_json = ?, version = version + 1 WHERE id = ? AND version = ? AND is_current = 1 AND status = 'draft'").run(JSON.stringify(presentation), input.planId, input.expectedVersion);
+    const updated = this.database.prepare("UPDATE plans SET presentation_json = ?, version = version + 1 WHERE id = ? AND version = ? AND is_current = 1 AND status IN ('draft', 'active')").run(JSON.stringify(presentation), input.planId, input.expectedVersion);
     if (updated.changes !== 1) throw new Error("The Plan changed before these itinerary edits were saved.");
-    this.addInbox({ id: `itinerary-edited-${input.planId}-${Date.now()}`, tone: "notice", title: "Travel Plan updated", body: "The date, order, or priority changes from the map were saved to the current Plan. Affected routes still need to be checked again.", timestamp: "Just now" });
+    this.addInbox({ id: `itinerary-edited-${input.planId}-${Date.now()}`, tone: "notice", title: "Travel Plan updated", body: "The map change was saved directly to the current Plan. Only affected itinerary days and routes were marked for refresh.", timestamp: "Just now" });
     return this.getWorkspace();
   }
 
@@ -1320,6 +1320,36 @@ export class SqliteWorkspaceStore {
       this.database.prepare("DELETE FROM inbox_items WHERE id LIKE ?").run(`%${planId}%`);
       if (fallback) this.database.prepare("UPDATE plans SET is_current = 1 WHERE id = ?").run(fallback.id);
       else this.insertCurrentPlan(createInitialWorkspace().activePlan);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getWorkspace();
+  }
+
+  /** Abandons the current active Plan and returns to an empty workspace while preserving historical Plans. */
+  abandonActivePlan(planId: string): WorkspaceSnapshot {
+    const current = this.database.prepare("SELECT id, status, is_current, is_execution FROM plans WHERE id = ?").get(planId) as { id: string; status: Plan["status"]; is_current: number; is_execution: number } | undefined;
+    if (!current || !current.is_current || !current.is_execution) throw new Error("The active Plan was not found.");
+    if (current.status !== "active") throw new Error("Only the active Plan can be abandoned.");
+    const abandonedAt = new Date().toISOString();
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database.prepare(`UPDATE task_reminder_runs SET status = 'cancelled', finished_at = ?, updated_at = ?
+        WHERE plan_id = ? AND status IN ('running', 'retry_wait')`).run(abandonedAt, abandonedAt, planId);
+      this.database.prepare("UPDATE telegram_plan_change_proposals SET status = 'cancelled', resolved_at = ? WHERE plan_id = ? AND status = 'pending'").run(abandonedAt, planId);
+      this.database.prepare("UPDATE planning_sessions SET status = 'abandoned', output_plan_id = NULL, updated_at = ? WHERE output_plan_id = ?").run(abandonedAt, planId);
+      this.database.prepare("UPDATE agent_runs SET output_plan_id = NULL WHERE output_plan_id = ?").run(planId);
+      this.database.prepare("UPDATE plans SET status = 'cancelled', next_action = ?, is_current = 0, is_execution = 0 WHERE id = ? AND is_current = 1 AND is_execution = 1").run("This Plan was abandoned by the user.", planId);
+      this.insertCurrentPlan(createInitialWorkspace().activePlan);
+      this.addInbox({
+        id: `plan-abandoned-${planId}-${Date.now()}`,
+        tone: "notice",
+        title: "Plan abandoned",
+        body: "The active Plan was stopped. Reminders and execution guidance for it no longer run; the Plan remains in history for review.",
+        timestamp: "Just now"
+      });
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");

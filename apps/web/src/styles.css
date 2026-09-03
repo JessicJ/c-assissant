@@ -412,7 +412,6 @@ a { color: inherit; text-decoration: none; }
 @media (prefers-reduced-motion: reduce) { .composer-status.generating b { animation: none; } }
 .chat-input { overflow: hidden; border: 1px solid #cad6d1; border-radius: 16px; background: #fff; box-shadow: 0 5px 17px rgba(38,61,54,.07); }
 .chat-input:focus-within { border-color: #6f9d91; box-shadow: 0 0 0 3px rgba(65,125,111,.1); }
-.chat-input.listening { border-color: #c05b55; box-shadow: 0 0 0 4px rgba(192,91,85,.09); }
 .chat-input textarea { width: 100%; min-height: 92px; resize: none; padding: 15px 16px 5px; border: 0; background: transparent; color: #283632; outline: none; line-height: 1.55; }
 .chat-input textarea:focus-visible { outline: none; }
 .composer-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; padding: 7px 9px 9px; border-top: 0; }
@@ -430,20 +429,7 @@ a { color: inherit; text-decoration: none; }
 .planning-proposal button { justify-self: start; padding: 10px 13px; border: 0; border-radius: 9px; background: #2f6d62; color: #fff; font-size: 11px; font-weight: 800; }
 .planning-proposal button:disabled { cursor: wait; opacity: .55; }
 .planning-proposal small { color: #82918b; font-size: 10px; line-height: 1.5; }
-.voice-button { width: 34px; height: 34px; display: inline-grid; place-items: center; padding: 0; border: 1px solid #d5ded9; border-radius: 50%; background: #fff; color: #567c72; }
-.voice-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.voice-button.active { border-color: #db9a94; background: #fff2f1; color: #9b4842; }
 .send-button { width: 34px; height: 34px; display: grid; place-items: center; border: 0; border-radius: 50%; background: #2f6d62; color: #fff; font-size: 18px; }
-.permission-backdrop { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(18,31,27,.38); z-index: 70; }
-.permission-dialog { width: min(410px,100%); padding: 28px; border: 1px solid #dce5e0; border-radius: 18px; background: #fff; box-shadow: 0 24px 70px rgba(17,36,30,.25); text-align: center; }
-.permission-dialog > span { width: 42px; height: 42px; display: grid; place-items: center; margin: 0 auto 14px; border-radius: 50%; background: #e4efeb; color: #347267; }
-.permission-dialog h3 { margin: 0; font-size: 20px; }
-.permission-dialog p { margin: 10px 0 0; color: #74817c; font-size: 12px; line-height: 1.65; }
-.permission-dialog small { display: block; margin-top: 12px; padding: 10px 12px; border-radius: 9px; background: #fff4e8; color: #8a6131; font-size: 10px; line-height: 1.55; text-align: left; }
-.permission-dialog > div { display: flex; justify-content: center; gap: 9px; margin-top: 22px; }
-.permission-dialog button { padding: 10px 14px; border-radius: 9px; font-size: 11px; font-weight: 750; }
-.permission-cancel { border: 1px solid #d6dfda; background: #fff; color: #64736e; }
-.permission-primary { border: 0; background: #2e6b61; color: #fff; }
 .settings-stack { gap: 16px; }
 .settings-card { padding: 26px 28px; border: 1px solid #dfe5e1; border-radius: 16px; background: #fff; box-shadow: 0 6px 20px rgba(37,57,50,.035); }
 .settings-card > header { display: flex; align-items: center; gap: 13px; margin-bottom: 22px; }
@@ -563,7 +549,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .booking-import-inputs input,.booking-import-inputs textarea,.booking-preview-card input,.booking-preview-card select,.booking-segment-list input,.booking-segment-list select { width: 100%; border: 1px solid #cfddd7; border-radius: 8px; background: #fff; color: #263c36; font: inherit; font-size: 11px; }
 .booking-import-inputs input,.booking-preview-card input,.booking-preview-card select,.booking-segment-list input,.booking-segment-list select { height: 36px; padding: 0 9px; }
 .booking-import-inputs textarea { min-height: 92px; resize: vertical; padding: 9px; line-height: 1.5; }
-.booking-import-inputs .file-input input { padding: 8px; }
+.booking-import-inputs .file-input { position: relative; }
+.booking-import-inputs .file-input .native-file-input { position: absolute; width: 1px; height: 1px; margin: 0; padding: 0; border: 0; opacity: 0; pointer-events: none; }
+.file-picker-control { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 10px; align-items: center; min-height: 36px; padding: 0 9px; border: 1px solid #cfddd7; border-radius: 8px; background: #fff; color: #263c36; font-size: 11px; cursor: pointer; }
+.file-picker-control strong { color: #28695b; font-size: 10px; font-weight: 850; white-space: nowrap; }
+.file-picker-control small { overflow: hidden; color: #73827d; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .booking-preview { display: grid; gap: 10px; padding: 12px; border: 1px solid #d7e4df; border-radius: 12px; background: #fff; }
 .booking-preview-header,.booking-preview-item > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .booking-preview-header strong,.booking-preview-item > header strong { color: #2d423c; font-size: 11px; }
@@ -704,6 +694,19 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 }
 
 /* The native Skill map owns its internal layout inside a Shadow DOM. */
+.native-map-workspace-frame { position: relative; }
+.native-map-edit-bar { position: absolute; z-index: 35; top: 10px; left: calc(var(--native-map-column-offset, clamp(380px,32vw,620px)) + 5px); display: flex; width: fit-content; max-width: calc(100% - var(--native-map-column-offset, clamp(380px,32vw,620px)) - 30px); align-items: center; justify-content: flex-start; gap: 10px; padding: 0; color: #24332e; background: transparent; }
+.native-map-edit-bar > div { min-width: 0; display: flex; align-items: center; padding-right: 2px; }
+.native-map-edit-bar strong { overflow: hidden; color: #42534d; font-size: 11px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.native-map-edit-bar .secondary-action,.native-map-edit-bar .primary-action { min-height: 34px; padding: 7px 11px; border-radius: 7px; font-size: 10px; }
+@media (max-width: 820px) {
+  .native-map-edit-bar { top: 10px; right: 16px; left: 16px; width: auto; max-width: none; justify-content: flex-start; }
+}
+@media (max-width: 560px) {
+  .native-map-edit-bar { width: auto; max-width: none; align-items: center; justify-content: flex-start; flex-wrap: wrap; margin: 0 12px 10px; }
+  .native-map-edit-bar > div { flex: 1 1 100%; padding-right: 0; }
+  .native-map-edit-bar .secondary-action,.native-map-edit-bar .primary-action { flex: 1; }
+}
 .native-trip-workspace { position: relative; display: block; min-height: 680px; overflow: hidden; border-radius: 18px 18px 0 0; background: #f5f7f9; }
 .native-trip-workspace > div { width: 100%; }
 .destination-weather-card { min-height: 82px; display: grid; grid-template-columns: auto auto minmax(0,1fr) auto; gap: 14px; align-items: center; padding: 14px 22px; border-bottom: 1px solid #dfe6e2; background: linear-gradient(110deg,#edf5f2 0%,#f8faf9 58%,#f3efe7 100%); color: #213c35; }
