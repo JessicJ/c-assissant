@@ -1,0 +1,1550 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1440, initial-scale=1" />
+    <title>Landi Blueprint Workspace Prototype</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f4f6f8;
+        --surface: #ffffff;
+        --surface-2: #eef3f0;
+        --ink: #17211d;
+        --muted: #61706b;
+        --quiet: #8b9893;
+        --line: #d9e0dd;
+        --green: #276758;
+        --green-2: #e5f1eb;
+        --red: #a94f35;
+        --red-2: #f7e8e2;
+        --gold: #b8891d;
+        --gold-2: #f6edcf;
+        --blue: #426a8f;
+        --blue-2: #e4edf5;
+        --shadow: 0 18px 50px rgba(23, 33, 29, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-width: 1320px;
+        background: var(--bg);
+        color: var(--ink);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      .app {
+        min-height: 100vh;
+        padding: 18px;
+      }
+
+      .shell {
+        min-height: calc(100vh - 36px);
+        display: grid;
+        grid-template-rows: auto 1fr;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .topbar {
+        height: 72px;
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        padding: 0 22px;
+        border-bottom: 1px solid var(--line);
+        background: #fbfcfd;
+      }
+
+      .brand {
+        width: 38px;
+        height: 38px;
+        display: grid;
+        place-items: center;
+        border-radius: 8px;
+        background: var(--ink);
+        color: #fff;
+        font-weight: 750;
+        letter-spacing: 0;
+      }
+
+      .trip-title {
+        min-width: 320px;
+      }
+
+      .trip-title h1 {
+        margin: 0;
+        font-size: 19px;
+        line-height: 1.2;
+        letter-spacing: 0;
+      }
+
+      .trip-title p {
+        margin: 5px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .primary-nav {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+      }
+
+      .nav-btn,
+      .panel-mode,
+      .filter-btn,
+      .icon-btn,
+      .text-btn,
+      .primary-btn,
+      .secondary-btn {
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--muted);
+      }
+
+      .nav-btn {
+        min-width: 96px;
+        height: 34px;
+        padding: 0 14px;
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      .nav-btn.active {
+        background: var(--green);
+        color: #fff;
+      }
+
+      .top-actions {
+        margin-left: auto;
+        display: flex;
+        gap: 8px;
+      }
+
+      .secondary-btn,
+      .primary-btn {
+        height: 36px;
+        padding: 0 13px;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .secondary-btn {
+        border: 1px solid var(--line);
+        background: var(--surface);
+        color: var(--ink);
+      }
+
+      .primary-btn {
+        background: var(--green);
+        color: #fff;
+      }
+
+      .page {
+        display: none;
+        min-height: 0;
+      }
+
+      .page.active {
+        display: block;
+      }
+
+      .workspace {
+        height: calc(100vh - 109px);
+        display: grid;
+        grid-template-columns: 380px minmax(440px, 1fr) 430px;
+        min-height: 720px;
+      }
+
+      .timeline,
+      .map-pane,
+      .side-panel {
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .timeline {
+        display: grid;
+        grid-template-rows: auto auto 1fr;
+        border-right: 1px solid var(--line);
+        background: #fbfcfd;
+      }
+
+      .timeline-head {
+        padding: 18px 18px 14px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .section-kicker {
+        margin: 0 0 6px;
+        color: var(--green);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .timeline-head h2,
+      .map-head h2,
+      .panel-head h2,
+      .content-head h2 {
+        margin: 0;
+        font-size: 18px;
+        letter-spacing: 0;
+      }
+
+      .timeline-head p,
+      .map-head p,
+      .panel-head p,
+      .content-head p {
+        margin: 7px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .day-strip {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 6px;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .day-btn {
+        height: 42px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 750;
+      }
+
+      .day-btn.active {
+        border-color: var(--green);
+        background: var(--green-2);
+        color: var(--green);
+      }
+
+      .timeline-list {
+        overflow: auto;
+        padding: 16px 16px 24px;
+      }
+
+      .block {
+        position: relative;
+        display: grid;
+        grid-template-columns: 72px 1fr;
+        gap: 12px;
+        padding: 13px 0;
+      }
+
+      .block::before {
+        content: "";
+        position: absolute;
+        left: 78px;
+        top: 0;
+        bottom: 0;
+        width: 1px;
+        background: var(--line);
+      }
+
+      .block:first-child::before {
+        top: 22px;
+      }
+
+      .block:last-child::before {
+        bottom: calc(100% - 22px);
+      }
+
+      .time {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 760;
+        line-height: 1.25;
+        text-align: right;
+      }
+
+      .block-card {
+        position: relative;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        padding: 12px;
+      }
+
+      .block-card::before {
+        content: "";
+        position: absolute;
+        left: -18px;
+        top: 17px;
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--surface);
+        border: 2px solid var(--green);
+      }
+
+      .block-card.selected {
+        border-color: var(--green);
+        box-shadow: 0 0 0 2px rgba(39, 103, 88, 0.12);
+      }
+
+      .block-top {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+
+      .block-type {
+        width: 22px;
+        height: 22px;
+        display: grid;
+        place-items: center;
+        border-radius: 6px;
+        background: var(--green-2);
+        color: var(--green);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .block-card h3 {
+        margin: 0;
+        flex: 1;
+        font-size: 14px;
+        letter-spacing: 0;
+      }
+
+      .status {
+        border-radius: 5px;
+        padding: 3px 6px;
+        background: var(--surface-2);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 760;
+      }
+
+      .status.warn {
+        background: var(--gold-2);
+        color: #745300;
+      }
+
+      .status.fixed {
+        background: var(--red-2);
+        color: var(--red);
+      }
+
+      .block-card p {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .tip-inline {
+        margin-top: 9px;
+        padding: 8px 9px;
+        border-left: 3px solid var(--gold);
+        background: #fff9e8;
+        color: #6c5517;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      .map-pane {
+        display: grid;
+        grid-template-rows: auto 1fr;
+        background: #eef1f4;
+      }
+
+      .map-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 18px 20px 14px;
+        border-bottom: 1px solid var(--line);
+        background: #f8fafb;
+      }
+
+      .map-status {
+        display: flex;
+        gap: 7px;
+        align-items: center;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .map-status span {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--green);
+      }
+
+      .map-canvas {
+        position: relative;
+        overflow: hidden;
+        background:
+          linear-gradient(90deg, rgba(23, 33, 29, 0.035) 1px, transparent 1px),
+          linear-gradient(0deg, rgba(23, 33, 29, 0.035) 1px, transparent 1px),
+          #edf1f3;
+        background-size: 46px 46px;
+      }
+
+      .river {
+        position: absolute;
+        left: 8%;
+        top: -8%;
+        width: 36%;
+        height: 118%;
+        transform: rotate(9deg);
+        border-radius: 45%;
+        background: rgba(66, 106, 143, 0.16);
+      }
+
+      .district {
+        position: absolute;
+        border: 1px solid rgba(39, 103, 88, 0.18);
+        background: rgba(255, 255, 255, 0.5);
+        border-radius: 8px;
+      }
+
+      .district.one {
+        left: 45%;
+        top: 15%;
+        width: 34%;
+        height: 24%;
+      }
+
+      .district.two {
+        left: 39%;
+        top: 46%;
+        width: 44%;
+        height: 30%;
+      }
+
+      .route-svg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+
+      .pin {
+        position: absolute;
+        width: 32px;
+        height: 32px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        background: var(--surface);
+        border: 2px solid var(--green);
+        color: var(--green);
+        font-size: 12px;
+        font-weight: 800;
+        box-shadow: 0 8px 22px rgba(23, 33, 29, 0.16);
+      }
+
+      .pin.red {
+        border-color: var(--red);
+        color: var(--red);
+      }
+
+      .pin.gold {
+        border-color: var(--gold);
+        color: var(--gold);
+      }
+
+      .map-legend {
+        position: absolute;
+        left: 18px;
+        bottom: 18px;
+        width: 250px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.92);
+        padding: 12px;
+      }
+
+      .map-legend h3 {
+        margin: 0 0 9px;
+        font-size: 13px;
+      }
+
+      .legend-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 7px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .legend-line {
+        width: 30px;
+        height: 3px;
+        border-radius: 3px;
+        background: var(--green);
+      }
+
+      .legend-line.stale {
+        background: repeating-linear-gradient(
+          90deg,
+          var(--gold) 0 6px,
+          transparent 6px 10px
+        );
+      }
+
+      .side-panel {
+        display: grid;
+        grid-template-rows: auto auto 1fr;
+        border-left: 1px solid var(--line);
+        background: #fbfcfd;
+      }
+
+      .panel-head {
+        padding: 18px 18px 12px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .panel-tabs {
+        display: flex;
+        gap: 6px;
+        margin-top: 12px;
+      }
+
+      .panel-mode {
+        height: 30px;
+        padding: 0 11px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        font-size: 12px;
+        font-weight: 760;
+      }
+
+      .panel-mode.active {
+        border-color: var(--green);
+        background: var(--green-2);
+        color: var(--green);
+      }
+
+      .filters {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        padding: 12px 18px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .filter-btn {
+        height: 28px;
+        padding: 0 10px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 720;
+      }
+
+      .filter-btn.active {
+        border-color: var(--green);
+        background: var(--green);
+        color: #fff;
+      }
+
+      .panel-scroll {
+        min-height: 0;
+        overflow: auto;
+        padding: 16px 18px 22px;
+      }
+
+      .guide-card {
+        position: relative;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        overflow: hidden;
+        margin-bottom: 12px;
+      }
+
+      .guide-card-media {
+        height: 118px;
+        border-bottom: 1px solid var(--line);
+        background: #dfe7e3;
+      }
+
+      .guide-card-media svg {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+
+      .guide-card-body {
+        padding: 12px;
+      }
+
+      .guide-card h3 {
+        margin: 0;
+        font-size: 15px;
+        letter-spacing: 0;
+      }
+
+      .guide-card p {
+        margin: 7px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .meta-row,
+      .card-actions,
+      .detail-actions {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        flex-wrap: wrap;
+      }
+
+      .meta-row {
+        margin-top: 10px;
+      }
+
+      .tag {
+        border-radius: 5px;
+        padding: 3px 6px;
+        background: var(--surface-2);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 720;
+      }
+
+      .tag.green {
+        background: var(--green-2);
+        color: var(--green);
+      }
+
+      .tag.gold {
+        background: var(--gold-2);
+        color: #735400;
+      }
+
+      .card-actions,
+      .detail-actions {
+        margin-top: 12px;
+      }
+
+      .text-btn {
+        height: 30px;
+        padding: 0 10px;
+        color: var(--green);
+        background: var(--green-2);
+        font-size: 12px;
+        font-weight: 780;
+      }
+
+      .text-btn.secondary {
+        background: var(--surface-2);
+        color: var(--muted);
+      }
+
+      .source-marker {
+        position: relative;
+        width: 20px;
+        height: 20px;
+        display: inline-grid;
+        place-items: center;
+        border-radius: 50%;
+        border: 1px solid var(--quiet);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .source-popover {
+        position: absolute;
+        z-index: 10;
+        right: -4px;
+        bottom: 26px;
+        width: 220px;
+        display: none;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--ink);
+        padding: 10px;
+        box-shadow: 0 12px 32px rgba(23, 33, 29, 0.16);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .source-marker:hover .source-popover,
+      .source-marker:focus .source-popover {
+        display: block;
+      }
+
+      .source-popover strong {
+        display: block;
+        margin-bottom: 5px;
+        font-size: 11px;
+      }
+
+      .detail {
+        display: none;
+      }
+
+      .detail.active,
+      .explore.active {
+        display: block;
+      }
+
+      .detail-hero {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--surface);
+      }
+
+      .detail-hero-media {
+        height: 170px;
+        border-bottom: 1px solid var(--line);
+        background: #dfe7e3;
+      }
+
+      .detail-hero-media svg {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+
+      .detail-copy {
+        padding: 14px;
+      }
+
+      .detail-copy h3 {
+        margin: 0;
+        font-size: 18px;
+        letter-spacing: 0;
+      }
+
+      .editorial {
+        margin: 10px 0 0;
+        color: #2b3733;
+        font-size: 13px;
+        line-height: 1.65;
+      }
+
+      .detail-section {
+        margin-top: 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        padding: 12px;
+      }
+
+      .detail-section h4 {
+        margin: 0 0 10px;
+        font-size: 13px;
+        letter-spacing: 0;
+      }
+
+      .option-table {
+        display: grid;
+        gap: 7px;
+      }
+
+      .option-row {
+        display: grid;
+        grid-template-columns: 1.1fr 0.75fr 0.7fr 0.7fr auto;
+        align-items: center;
+        gap: 8px;
+        min-height: 48px;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #fbfcfd;
+      }
+
+      .option-row strong {
+        display: block;
+        font-size: 12px;
+      }
+
+      .option-row span {
+        display: block;
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .mini-action {
+        height: 28px;
+        border: 0;
+        border-radius: 6px;
+        background: var(--green);
+        color: #fff;
+        padding: 0 9px;
+        font-size: 11px;
+        font-weight: 760;
+      }
+
+      .placement {
+        display: none;
+        margin-top: 12px;
+        border: 1px solid var(--green);
+        border-radius: 8px;
+        background: var(--green-2);
+        padding: 12px;
+      }
+
+      .placement.active {
+        display: block;
+      }
+
+      .placement h4 {
+        margin: 0;
+        font-size: 13px;
+      }
+
+      .placement-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .placement-choice {
+        min-height: 46px;
+        border: 1px solid rgba(39, 103, 88, 0.28);
+        border-radius: 6px;
+        background: #fff;
+        color: var(--green);
+        font-size: 12px;
+        font-weight: 760;
+      }
+
+      .placement-note {
+        margin: 10px 0 0;
+        color: #44665d;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .content-page {
+        height: calc(100vh - 109px);
+        min-height: 720px;
+        overflow: auto;
+        padding: 24px;
+        background: #f6f8f9;
+      }
+
+      .content-shell {
+        max-width: 1180px;
+        margin: 0 auto;
+      }
+
+      .content-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+        margin-bottom: 18px;
+      }
+
+      .content-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .checklist-card,
+      .tip-card,
+      .source-card {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        padding: 14px;
+      }
+
+      .checklist-card h3,
+      .tip-card h3,
+      .source-card h3 {
+        margin: 0 0 10px;
+        font-size: 15px;
+      }
+
+      .check-row {
+        display: grid;
+        grid-template-columns: 18px 1fr auto;
+        gap: 9px;
+        align-items: start;
+        padding: 10px 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .check-row:first-of-type {
+        border-top: 0;
+      }
+
+      .box {
+        width: 16px;
+        height: 16px;
+        border-radius: 4px;
+        border: 1px solid var(--quiet);
+        margin-top: 2px;
+      }
+
+      .box.done {
+        background: var(--green);
+        border-color: var(--green);
+      }
+
+      .check-row strong {
+        display: block;
+        font-size: 13px;
+      }
+
+      .check-row p,
+      .tip-card p,
+      .source-card p {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .due {
+        white-space: nowrap;
+        color: var(--quiet);
+        font-size: 11px;
+        font-weight: 760;
+      }
+
+      .tip-card {
+        display: grid;
+        gap: 8px;
+      }
+
+      .tip-head {
+        display: flex;
+        align-items: start;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .source-list {
+        display: grid;
+        gap: 9px;
+      }
+
+      .source-card {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+      }
+
+      .source-kind {
+        align-self: start;
+        border-radius: 5px;
+        padding: 4px 7px;
+        background: var(--blue-2);
+        color: var(--blue);
+        font-size: 11px;
+        font-weight: 780;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <section class="shell">
+        <header class="topbar">
+          <div class="brand">L</div>
+          <div class="trip-title">
+            <h1>京都 5 日 Trip Blueprint</h1>
+            <p>2026.10.18 至 10.22 · 设计、庭园、手作、轻购物</p>
+          </div>
+          <nav class="primary-nav" aria-label="Plan workspace">
+            <button class="nav-btn active" data-page="itinerary">Itinerary</button>
+            <button class="nav-btn" data-page="preparation">Preparation</button>
+            <button class="nav-btn" data-page="tips">Tips</button>
+            <button class="nav-btn" data-page="sources">Sources</button>
+          </nav>
+          <div class="top-actions">
+            <button class="secondary-btn">保存草稿</button>
+            <button class="primary-btn">应用这份计划</button>
+          </div>
+        </header>
+
+        <section class="page active" data-page-panel="itinerary">
+          <div class="workspace">
+            <aside class="timeline">
+              <div class="timeline-head">
+                <p class="section-kicker">Recommended Itinerary</p>
+                <h2>Day 3 · 东山与河原町</h2>
+                <p>时间轴只呈现当天顺序、状态和粗粒度节奏。来源、图文详情和比较放到右侧详情。</p>
+              </div>
+              <div class="day-strip">
+                <button class="day-btn">D1<br />抵达</button>
+                <button class="day-btn">D2<br />庭园</button>
+                <button class="day-btn active">D3<br />东山</button>
+                <button class="day-btn">D4<br />岚山</button>
+                <button class="day-btn">D5<br />离开</button>
+              </div>
+              <div class="timeline-list">
+                <article class="block" data-detail="kiyomizu">
+                  <div class="time">09:20</div>
+                  <div class="block-card selected">
+                    <div class="block-top">
+                      <span class="block-type">景</span>
+                      <h3>清水寺</h3>
+                      <span class="status">已排入</span>
+                    </div>
+                    <p>东山坡道上的主停留点，建议从茶碗坂步行进入。</p>
+                    <div class="tip-inline">进入寺院前保持安静，拍照时避开参拜队列。</div>
+                  </div>
+                </article>
+                <article class="block" data-detail="sannenzaka">
+                  <div class="time">11:10</div>
+                  <div class="block-card">
+                    <div class="block-top">
+                      <span class="block-type">逛</span>
+                      <h3>三年坂与二年坂</h3>
+                      <span class="status">步行段</span>
+                    </div>
+                    <p>保留 70 分钟给坡道、器物小店和途中休息。</p>
+                  </div>
+                </article>
+                <article class="block" data-detail="lunch">
+                  <div class="time">午餐附近</div>
+                  <div class="block-card">
+                    <div class="block-top">
+                      <span class="block-type">食</span>
+                      <h3>汤豆腐或京料理简餐</h3>
+                      <span class="status warn">弹性</span>
+                    </div>
+                    <p>不绑定精确开始时间，按排队和体力在东山附近选择。</p>
+                  </div>
+                </article>
+                <article class="block" data-detail="craft">
+                  <div class="time">下午弹性</div>
+                  <div class="block-card">
+                    <div class="block-top">
+                      <span class="block-type">购</span>
+                      <h3>清水烧与纸品小店</h3>
+                      <span class="status warn">可选</span>
+                    </div>
+                    <p>进入行程，但保持灵活。具体购买地点在详情里平级比较。</p>
+                  </div>
+                </article>
+                <article class="block" data-detail="tea">
+                  <div class="time">16:30</div>
+                  <div class="block-card">
+                    <div class="block-top">
+                      <span class="block-type">验</span>
+                      <h3>町家茶体验</h3>
+                      <span class="status fixed">需预约</span>
+                    </div>
+                    <p>体验项目有固定开始时间，适合从东山步行转入河原町。</p>
+                  </div>
+                </article>
+                <article class="block" data-detail="market">
+                  <div class="time">晚间可选</div>
+                  <div class="block-card">
+                    <div class="block-top">
+                      <span class="block-type">食</span>
+                      <h3>锦市场周边小吃</h3>
+                      <span class="status warn">弹性</span>
+                    </div>
+                    <p>若茶体验后不想正式晚餐，可以改为轻食散步。</p>
+                  </div>
+                </article>
+              </div>
+            </aside>
+
+            <section class="map-pane">
+              <div class="map-head">
+                <div>
+                  <p class="section-kicker">Itinerary Map</p>
+                  <h2>路线与空间上下文</h2>
+                  <p>地图辅助理解区域、步行顺序和路线状态，不作为默认编排入口。</p>
+                </div>
+                <div class="map-status"><span></span> intended movement plan</div>
+              </div>
+              <div class="map-canvas">
+                <div class="river"></div>
+                <div class="district one"></div>
+                <div class="district two"></div>
+                <svg class="route-svg" viewBox="0 0 800 680" preserveAspectRatio="none" aria-hidden="true">
+                  <path d="M560 100 C520 170 520 220 470 270 S390 360 420 430 S475 510 395 590" fill="none" stroke="#276758" stroke-width="6" stroke-linecap="round" />
+                  <path d="M420 430 C500 455 535 485 580 530" fill="none" stroke="#b8891d" stroke-width="5" stroke-dasharray="12 10" stroke-linecap="round" />
+                </svg>
+                <div class="pin" style="left: 67%; top: 12%">1</div>
+                <div class="pin" style="left: 58%; top: 36%">2</div>
+                <div class="pin gold" style="left: 50%; top: 59%">3</div>
+                <div class="pin red" style="left: 68%; top: 74%">4</div>
+                <div class="map-legend">
+                  <h3>路线状态</h3>
+                  <div class="legend-row"><span class="legend-line"></span> 已形成步行顺序</div>
+                  <div class="legend-row"><span class="legend-line stale"></span> 晚间轻食段需临近核验</div>
+                  <div class="legend-row"><span class="status fixed">需预约</span> 固定体验不自动变更</div>
+                </div>
+              </div>
+            </section>
+
+            <aside class="side-panel">
+              <div class="panel-head">
+                <p class="section-kicker">Workspace Side Panel</p>
+                <h2 id="panelTitle">探索</h2>
+                <p id="panelSubtitle">浏览行程里的景点、餐饮、购物和体验。卡片短，详情深。</p>
+                <div class="panel-tabs">
+                  <button class="panel-mode active" data-panel-mode="explore">Explore</button>
+                  <button class="panel-mode" data-panel-mode="detail">Detail</button>
+                </div>
+              </div>
+              <div class="filters">
+                <button class="filter-btn active" data-filter="all">All</button>
+                <button class="filter-btn" data-filter="attraction">Attractions</button>
+                <button class="filter-btn" data-filter="dining">Dining</button>
+                <button class="filter-btn" data-filter="shopping">Shopping</button>
+                <button class="filter-btn" data-filter="experience">Experiences</button>
+              </div>
+              <div class="panel-scroll">
+                <div class="explore active" id="exploreList"></div>
+                <div class="detail" id="detailPanel"></div>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="page" data-page-panel="preparation">
+          <div class="content-page">
+            <div class="content-shell">
+              <div class="content-head">
+                <div>
+                  <p class="section-kicker">Preparation Checklist</p>
+                  <h2>出发前准备</h2>
+                  <p>只保留影响旅行准备度、入境、预订、支付、通信、天气和安全的事项。</p>
+                </div>
+                <button class="secondary-btn">显示已完成</button>
+              </div>
+              <div class="content-grid">
+                <article class="checklist-card">
+                  <h3>证件与预订</h3>
+                  <div class="check-row">
+                    <span class="box done"></span>
+                    <div><strong>核对护照有效期</strong><p>确保护照覆盖返程日后 6 个月。</p></div>
+                    <span class="due">已完成</span>
+                  </div>
+                  <div class="check-row">
+                    <span class="box"></span>
+                    <div><strong>保存酒店确认单</strong><p>离线保存地址、入住日期和联系电话。</p></div>
+                    <span class="due">出发前 7 天</span>
+                  </div>
+                  <div class="check-row">
+                    <span class="box"></span>
+                    <div><strong>确认茶体验预约</strong><p>固定时间体验，变更会影响 Day 3 下午行程。</p></div>
+                    <span class="due">出发前 3 天</span>
+                  </div>
+                </article>
+                <article class="checklist-card">
+                  <h3>支付与通信</h3>
+                  <div class="check-row">
+                    <span class="box"></span>
+                    <div><strong>准备 IC 卡或交通支付</strong><p>覆盖市内地铁、巴士和便利店小额支付。</p></div>
+                    <span class="due">抵达前</span>
+                  </div>
+                  <div class="check-row">
+                    <span class="box"></span>
+                    <div><strong>开通境外数据方案</strong><p>地图、翻译和预约确认都依赖网络。</p></div>
+                    <span class="due">出发前 2 天</span>
+                  </div>
+                </article>
+                <article class="checklist-card">
+                  <h3>天气与装备</h3>
+                  <div class="check-row">
+                    <span class="box"></span>
+                    <div><strong>准备防滑步行鞋</strong><p>东山坡道和岚山步行时间较长。</p></div>
+                    <span class="due">打包时</span>
+                  </div>
+                  <div class="check-row">
+                    <span class="box"></span>
+                    <div><strong>带轻便雨具</strong><p>秋季阵雨会影响庭园和坡道体验。</p></div>
+                    <span class="due">打包时</span>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" data-page-panel="tips">
+          <div class="content-page">
+            <div class="content-shell">
+              <div class="content-head">
+                <div>
+                  <p class="section-kicker">Travel Tips</p>
+                  <h2>当地风俗与实用提醒</h2>
+                  <p>目的地相关、短、可判断。完整提示可在这里浏览，行程旁只出现短提醒。</p>
+                </div>
+                <button class="secondary-btn">只看 Day 3 相关</button>
+              </div>
+              <div class="content-grid">
+                <article class="tip-card">
+                  <div class="tip-head">
+                    <h3>寺院参拜动线</h3>
+                    <span class="source-marker" tabindex="0">i<span class="source-popover"><strong>来源</strong>寺院公开说明 · 旅行礼仪指南</span></span>
+                  </div>
+                  <p>进入主要参拜区域前降低音量，避免在队列正前方长时间拍摄。</p>
+                  <div class="meta-row"><span class="tag">宗教场所</span><span class="tag">Day 3</span></div>
+                </article>
+                <article class="tip-card">
+                  <div class="tip-head">
+                    <h3>小店支付</h3>
+                    <span class="source-marker" tabindex="0">i<span class="source-popover"><strong>来源</strong>商户页面 · 地图评论摘要</span></span>
+                  </div>
+                  <p>老街区小店可能不接受海外电子钱包，准备少量现金更稳。</p>
+                  <div class="meta-row"><span class="tag">支付</span><span class="tag">购物</span></div>
+                </article>
+                <article class="tip-card">
+                  <div class="tip-head">
+                    <h3>市场试吃与拍摄</h3>
+                    <span class="source-marker" tabindex="0">i<span class="source-popover"><strong>来源</strong>市场公开说明 · 本地礼仪资料</span></span>
+                  </div>
+                  <p>市场通道窄，边走边吃或长时间站在摊位前拍摄会影响通行。</p>
+                  <div class="meta-row"><span class="tag">餐饮</span><span class="tag">市场</span></div>
+                </article>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" data-page-panel="sources">
+          <div class="content-page">
+            <div class="content-shell">
+              <div class="content-head">
+                <div>
+                  <p class="section-kicker">Sources</p>
+                  <h2>来源与新鲜度</h2>
+                  <p>灵感来源与事实证据分开。UGC 不是必需来源，也不能单独验证执行事实。</p>
+                </div>
+              </div>
+              <div class="source-list">
+                <article class="source-card">
+                  <div><h3>京都市观光与寺院公开信息</h3><p>用于开放时间、礼仪、路线入口和固定规则。</p></div>
+                  <span class="source-kind">Evidence</span>
+                </article>
+                <article class="source-card">
+                  <div><h3>地图与商户页面</h3><p>用于地点身份、位置、营业状态、预约敏感性和路线核验。</p></div>
+                  <span class="source-kind">Fact</span>
+                </article>
+                <article class="source-card">
+                  <div><h3>图片搜索与旅行社区内容</h3><p>用于视觉理解、主题发现和本地产品灵感，不作为单独证据。</p></div>
+                  <span class="source-kind">Inspiration</span>
+                </article>
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script>
+      const guideItems = [
+        {
+          id: "kiyomizu",
+          type: "attraction",
+          title: "清水寺",
+          local: "Kiyomizu-dera",
+          area: "东山",
+          state: "已在行程",
+          summary: "木构舞台、坡道街区和城市远景构成 Day 3 的主停留点。",
+          media: "temple",
+          value:
+            "清水寺的价值不只在正殿本身，而在它和东山坡道共同形成的抵达过程。木构舞台向城市打开，坡道两侧的器物店、茶屋和石板路把参拜、散步与日常商业自然连在一起。",
+          options: [
+            ["仁王门入口", "东山上坡", "步行顺", "开放状态需核验"],
+            ["茶碗坂入口", "陶器店集中", "更贴合购物", "人流较多"],
+            ["五条坂入口", "车行更近", "坡度较缓", "需确认下车点"]
+          ]
+        },
+        {
+          id: "craft",
+          type: "shopping",
+          title: "清水烧与和纸小物",
+          local: "Kiyomizu-yaki",
+          area: "三年坂",
+          state: "可加入",
+          summary: "适合在东山步行段中插入的轻购物主题，具体购买地点平级选择。",
+          media: "craft",
+          value:
+            "清水烧和和纸小物适合放在东山这一天，是因为它们和坡道街区的手作传统贴得很近。器物的釉色、纸品的纹样和小店尺度都适合慢慢比较，而不是把购物做成一个单点打卡。",
+          options: [
+            ["朝日堂", "清水坂", "距清水寺近", "器物选择多"],
+            ["陶葊 八坂店", "八坂通", "路线顺", "价格中高"],
+            ["鸠居堂 京都本店", "寺町通", "适合转入市中心", "纸品为主"]
+          ]
+        },
+        {
+          id: "lunch",
+          type: "dining",
+          title: "汤豆腐或京料理简餐",
+          local: "Yudofu",
+          area: "东山",
+          state: "弹性行程",
+          summary: "午餐不锁死时间，按排队、体力和雨势在东山附近选择。",
+          media: "",
+          value:
+            "汤豆腐适合放在东山，是因为它清淡、节奏慢，不会和下午的步行与茶体验互相抢体力。若当天排队太久，也可以切换为更轻的京料理简餐。",
+          options: [
+            ["奥丹 清水", "清水寺周边", "步行近", "可能排队"],
+            ["南禅寺 顺正", "需转场", "庭院体验强", "占用时间更长"],
+            ["祇园轻食店", "转入祇园", "更灵活", "风味较日常"]
+          ]
+        },
+        {
+          id: "tea",
+          type: "experience",
+          title: "町家茶体验",
+          local: "Machiya Tea",
+          area: "河原町",
+          state: "需预约",
+          summary: "固定开始时间的体验项目，适合安排在东山步行后。",
+          media: "tea",
+          value:
+            "町家茶体验的重点在空间尺度和动作节奏。比起只喝一杯抹茶，它让旅行者在木格窗、榻榻米和器具之间理解京都日常审美如何进入一场简单的茶事。",
+          options: [
+            ["Camellia Garden", "二年坂附近", "路线贴合", "需预约"],
+            ["Tea Ceremony Ju-An", "京都站侧", "交通方便", "需转场"],
+            ["En Tea House", "祇园", "晚间衔接好", "需确认时段"]
+          ]
+        },
+        {
+          id: "market",
+          type: "dining",
+          title: "锦市场周边小吃",
+          local: "Nishiki Market",
+          area: "河原町",
+          state: "晚间可选",
+          summary: "茶体验后不想正式晚餐时，用作轻食和散步组合。",
+          media: "market",
+          value:
+            "锦市场更适合作为晚间轻食选择，而不是硬排成长时间晚餐。它的价值在密集的小吃、食材店和周边街巷，可以按饥饿程度自由收放。",
+          options: [
+            ["锦市场东段", "靠近寺町", "转场自然", "部分店铺较早关"],
+            ["锦市场西段", "靠近乌丸", "回酒店方便", "需核验营业"],
+            ["河原町小巷", "餐饮密集", "晚间选择多", "排队不确定"]
+          ]
+        }
+      ];
+
+      const mediaTemplates = {
+        temple: ["#d6e2dd", "#94b0a5", "#5b756b"],
+        craft: ["#f1e4cf", "#c28f54", "#7e5e43"],
+        tea: ["#dce8d2", "#7e9d68", "#405b3d"],
+        market: ["#f3dfd7", "#c56b4e", "#6f3d31"]
+      };
+
+      function mediaSvg(kind) {
+        const colors = mediaTemplates[kind];
+        if (!colors) return "";
+        return `
+          <svg viewBox="0 0 520 180" role="img" aria-label="">
+            <rect width="520" height="180" fill="${colors[0]}"></rect>
+            <rect x="0" y="118" width="520" height="62" fill="${colors[1]}" opacity=".34"></rect>
+            <path d="M42 138 C120 86 176 86 242 128 S368 151 478 92" fill="none" stroke="${colors[2]}" stroke-width="10" stroke-linecap="round" opacity=".58"></path>
+            <circle cx="405" cy="62" r="32" fill="#fff" opacity=".46"></circle>
+            <rect x="68" y="42" width="118" height="78" rx="6" fill="#fff" opacity=".3"></rect>
+            <rect x="218" y="64" width="88" height="60" rx="6" fill="#17211d" opacity=".16"></rect>
+          </svg>`;
+      }
+
+      const exploreList = document.getElementById("exploreList");
+      const detailPanel = document.getElementById("detailPanel");
+      const panelTitle = document.getElementById("panelTitle");
+      const panelSubtitle = document.getElementById("panelSubtitle");
+
+      function renderExplore(filter = "all") {
+        const items = guideItems.filter((item) => filter === "all" || item.type === filter);
+        exploreList.innerHTML = items
+          .map(
+            (item) => `
+            <article class="guide-card" data-card-id="${item.id}">
+              ${item.media ? `<div class="guide-card-media">${mediaSvg(item.media)}</div>` : ""}
+              <div class="guide-card-body">
+                <div class="meta-row" style="justify-content: space-between; margin-top: 0;">
+                  <span class="tag green">${item.area}</span>
+                  <span class="source-marker" tabindex="0">i
+                    <span class="source-popover"><strong>来源</strong>地图地点 · 商户页面 · 旅行社区灵感</span>
+                  </span>
+                </div>
+                <h3>${item.title}</h3>
+                <p>${item.summary}</p>
+                <div class="meta-row">
+                  <span class="tag">${typeName(item.type)}</span>
+                  <span class="tag gold">${item.state}</span>
+                </div>
+                <div class="card-actions">
+                  <button class="text-btn" data-open-detail="${item.id}">${item.state === "已在行程" ? "定位详情" : "打开详情"}</button>
+                  ${item.state === "已在行程" ? "" : `<button class="text-btn secondary" data-add="${item.id}">加入行程</button>`}
+                </div>
+              </div>
+            </article>`
+          )
+          .join("");
+      }
+
+      function typeName(type) {
+        return {
+          attraction: "景点",
+          dining: "餐饮",
+          shopping: "购物",
+          experience: "体验"
+        }[type];
+      }
+
+      function renderDetail(id) {
+        const item = guideItems.find((entry) => entry.id === id) || guideItems[0];
+        detailPanel.innerHTML = `
+          <article class="detail-hero">
+            ${item.media ? `<div class="detail-hero-media">${mediaSvg(item.media)}</div>` : ""}
+            <div class="detail-copy">
+              <div class="meta-row" style="justify-content: space-between; margin-top: 0;">
+                <span class="tag green">${typeName(item.type)} · ${item.area}</span>
+                <span class="source-marker" tabindex="0">i
+                  <span class="source-popover"><strong>来源</strong>地图地点 · 官方/商户信息 · 灵感来源分离显示</span>
+                </span>
+              </div>
+              <h3>${item.title}</h3>
+              <p class="editorial">${item.value}</p>
+              <div class="detail-actions">
+                <button class="text-btn" data-add="${item.id}">加入或替换</button>
+                <button class="text-btn secondary">标记偏好</button>
+              </div>
+            </div>
+          </article>
+          <section class="detail-section">
+            <h4>${item.type === "shopping" ? "推荐购买地点" : item.type === "dining" ? "推荐餐饮地点" : item.type === "experience" ? "体验选择" : "入口与顺路选择"}</h4>
+            <div class="option-table">
+              ${item.options
+                .map(
+                  (row) => `
+                <div class="option-row">
+                  <div><strong>${row[0]}</strong><span>${row[1]}</span></div>
+                  <div><strong>${row[2]}</strong><span>路线适配</span></div>
+                  <div><strong>${row[3]}</strong><span>事实状态</span></div>
+                  <div><strong>来源可查</strong><span>详情内</span></div>
+                  <button class="mini-action">选择</button>
+                </div>`
+                )
+                .join("")}
+            </div>
+          </section>
+          <section class="placement" id="placementBox">
+            <h4>加入行程</h4>
+            <div class="placement-grid">
+              <button class="placement-choice">Day 3 · 午餐附近</button>
+              <button class="placement-choice">Day 3 · 下午弹性</button>
+              <button class="placement-choice">Day 4 · 晚间可选</button>
+            </div>
+            <p class="placement-note">会先形成待确认编辑。若影响固定预约、路线或准备事项，再显示影响预览。</p>
+          </section>
+        `;
+        setPanelMode("detail");
+      }
+
+      function setPanelMode(mode) {
+        document.querySelectorAll(".panel-mode").forEach((button) => {
+          button.classList.toggle("active", button.dataset.panelMode === mode);
+        });
+        document.querySelector(".explore").classList.toggle("active", mode === "explore");
+        document.querySelector(".detail").classList.toggle("active", mode === "detail");
+        panelTitle.textContent = mode === "explore" ? "探索" : "详情";
+        panelSubtitle.textContent =
+          mode === "explore"
+            ? "浏览行程里的景点、餐饮、购物和体验。卡片短，详情深。"
+            : "完整图文、平级地点选择、来源和操作都在这里。";
+      }
+
+      document.addEventListener("click", (event) => {
+        const pageButton = event.target.closest("[data-page]");
+        if (pageButton) {
+          const page = pageButton.dataset.page;
+          document.querySelectorAll(".nav-btn").forEach((button) => {
+            button.classList.toggle("active", button === pageButton);
+          });
+          document.querySelectorAll("[data-page-panel]").forEach((panel) => {
+            panel.classList.toggle("active", panel.dataset.pagePanel === page);
+          });
+        }
+
+        const filterButton = event.target.closest("[data-filter]");
+        if (filterButton) {
+          document.querySelectorAll(".filter-btn").forEach((button) => {
+            button.classList.toggle("active", button === filterButton);
+          });
+          renderExplore(filterButton.dataset.filter);
+          setPanelMode("explore");
+        }
+
+        const modeButton = event.target.closest("[data-panel-mode]");
+        if (modeButton) {
+          setPanelMode(modeButton.dataset.panelMode);
+        }
+
+        const openDetailButton = event.target.closest("[data-open-detail]");
+        if (openDetailButton) {
+          renderDetail(openDetailButton.dataset.openDetail);
+        }
+
+        const timelineBlock = event.target.closest("[data-detail]");
+        if (timelineBlock) {
+          document.querySelectorAll(".block-card").forEach((card) => card.classList.remove("selected"));
+          timelineBlock.querySelector(".block-card").classList.add("selected");
+          renderDetail(timelineBlock.dataset.detail);
+        }
+
+        const addButton = event.target.closest("[data-add]");
+        if (addButton) {
+          renderDetail(addButton.dataset.add);
+          requestAnimationFrame(() => {
+            const placement = document.getElementById("placementBox");
+            if (placement) placement.classList.add("active");
+          });
+        }
+      });
+
+      renderExplore();
+      renderDetail("kiyomizu");
+      setPanelMode("explore");
+    </script>
+  </body>
+</html>

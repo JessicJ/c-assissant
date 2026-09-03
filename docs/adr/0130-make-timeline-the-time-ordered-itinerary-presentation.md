@@ -1,0 +1,7 @@
+# Make timeline the time-ordered itinerary presentation
+
+Landi will present the itinerary timeline as the time-ordered version of the recommended plan. It shows what happens when, where each Itinerary Block belongs in the day, and the basic status needed to understand the plan. Timeline blocks default to time, title, type, place or area, and short status. Flexible Itinerary Blocks remain ordered in the day and render with Rough Time Labels instead of empty times or invented precise times. Timeline blocks do not show Source Markers, long descriptions, source lists, or full guide copy by default.
+
+The timeline is not the primary arrangement tool. Editing and rearrangement are initiated through the Itinerary Explore Panel, shared detail panel, Placement Selection State, and existing edit confirmation path. The timeline may reflect, highlight, or select edited positions, but its default job is to make the plan readable as a sequence. Long guide content, sources, source markers, and relevant alternatives are revealed through the shared detail panel after selection, not displayed on timeline blocks by default.
+
+A timeline-as-editor model was rejected because it would make the scheduled plan compete with browsing, comparison, and replacement controls. Those controls belong around the timeline, while the timeline itself should remain the clearest representation of Landi's proposed itinerary.

@@ -18,6 +18,8 @@ These documents describe the Landi project itself: the travel experience it prov
 
 7. [Regional Capability Design: Japan V1](japan-pack-v1.md) — The Japan-specific source-backed preparation workflow and Tokyo demonstration path.
 
+8. [Blueprint Workspace Generation Requirements](blueprint-workspace-generation-requirements.md) — The next-generation modular travel blueprint and Web workspace presentation requirements.
+
 ## Contributor references
 
 These contracts support implementation and extension work. They are not part of the primary product-design reading path.

@@ -44,6 +44,22 @@ test("generated route enrichment keeps successful facts when another segment fai
   assert.deepEqual(result.failedSegmentIds, ["route-missing"]);
 });
 
+test("generated route enrichment can be scoped to edited segments", async () => {
+  const twoRoutes = structuredClone(plan);
+  twoRoutes.presentation!.routeSegments.push({ id: "route-other-day", originPlaceId: "airport", destinationPlaceId: "hotel", mode: "walking", verification: "needs_verification", sourceRefs: [] });
+  const routeCalls: string[] = [];
+  const maps: PlanRouteMaps = {
+    geocodeAddress: async ({ address }) => available<GeocodedPlaceFact>({ provider: "google_maps", formattedAddress: address, location: address.startsWith("Lisbon Airport") ? "-9.135,38.774" : "-9.142,38.711", province: "", city: "Lisbon", district: "", level: "place" }),
+    drivingRoute: async () => { throw new Error("unused"); },
+    transitRoute: async (input) => { routeCalls.push(`transit:${input.origin}:${input.destination}`); return available<RouteFact>({ provider: "google_maps", mode: "transit", origin: input.origin, destination: input.destination, distanceMeters: 8_400, durationSeconds: 1_620, strategy: "public_transit_recommended" }); },
+    walkingRoute: async (input) => { routeCalls.push(`walking:${input.origin}:${input.destination}`); return available<RouteFact>({ provider: "google_maps", mode: "walking", origin: input.origin, destination: input.destination, distanceMeters: 900, durationSeconds: 720, strategy: "google_maps_recommended" }); }
+  };
+  const result = await refreshGeneratedPlanRoutes(twoRoutes, maps, { concurrency: 2, segmentIds: ["route-other-day"] });
+  assert.deepEqual(result.refreshed.map((route) => route.segmentId), ["route-other-day"]);
+  assert.deepEqual(result.failedSegmentIds, []);
+  assert.deepEqual(routeCalls, ["walking:-9.135,38.774:-9.142,38.711"]);
+});
+
 test("route refresh fails without mutation-ready facts", async () => {
   const unavailable: ConnectorResult<GeocodedPlaceFact> = { status: "not_configured", provider: "google_maps", observedAt: "2026-08-17T10:00:00.000Z", failure: { code: "not_configured", message: "missing", retryable: false } };
   const maps = { geocodeAddress: async () => unavailable, drivingRoute: async () => { throw new Error("unused"); }, walkingRoute: async () => { throw new Error("unused"); }, transitRoute: async () => { throw new Error("unused"); } } as PlanRouteMaps;

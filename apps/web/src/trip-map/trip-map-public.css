@@ -581,15 +581,6 @@ a {
   color: var(--trip-muted);
 }
 
-.route-status {
-  margin-top: 9px;
-  border-left: 3px solid var(--trip-warning);
-  padding: 7px 10px;
-  background: var(--trip-warning-soft);
-  color: #744100;
-  font-size: 12px;
-}
-
 .place-row {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) auto;
@@ -783,33 +774,9 @@ a {
   font-weight: 700;
 }
 
-.change-summary {
-  margin: 20px 22px 0;
-  border: 1px solid #d7ad69;
-  border-radius: 6px;
-  padding: 13px;
-  background: var(--trip-warning-soft);
-}
-
-.change-summary h2 {
-  margin: 0;
-  font-size: 15px;
-}
-
-.change-summary p {
-  margin: 5px 0 0;
-  color: #744100;
-}
-
-.change-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  margin-top: 10px;
-}
-
 .map-stage {
   position: relative;
+  grid-column: 2;
   min-width: 0;
   height: 100%;
   background: #e8ece9;
@@ -979,9 +946,27 @@ a {
   box-shadow: 0 24px 70px rgba(18, 23, 28, 0.25);
 }
 
+.impact-panel {
+  display: flex;
+  width: min(440px, 100%);
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+}
+
 .dialog-heading h2 {
   margin: 0;
   font-size: 19px;
+}
+
+.impact-panel .dialog-heading {
+  min-width: 0;
+}
+
+.impact-panel .dialog-actions {
+  flex: 0 0 auto;
+  margin-top: 0;
 }
 
 .dialog-panel ul {
@@ -1106,8 +1091,13 @@ a {
     grid-column: auto;
   }
 
-  .change-summary {
-    margin: 18px 16px 0;
+  .impact-panel {
+    display: grid;
+    justify-content: stretch;
+  }
+
+  .impact-panel .dialog-actions {
+    justify-content: flex-start;
   }
 
   .map-note {
@@ -1455,7 +1445,6 @@ a {
   }
 
   .day-list-panel .day-context p,
-  .day-list-panel .route-status,
   .day-list-panel > .section-block:last-child {
     display: none;
   }

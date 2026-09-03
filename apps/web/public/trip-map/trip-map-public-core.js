@@ -1,14 +1,16 @@
 (function installTripMapCore(root) {
   "use strict";
 
-  function mount({ root: appRoot, trip, onStateChange, readOnly = false, onEditBlocked }) {
+  function mount({ root: appRoot, trip, onStateChange, onEditSummaryChange, readOnly = false, onEditBlocked }) {
     if (!appRoot) throw new Error("Trip map container not found");
     if (!trip || !Array.isArray(trip.pois) || !Array.isArray(trip.days)) {
       throw new Error("The trip map is missing places or daily route data");
     }
     if (!root.L || !root.TripMapRoute || !root.TripMapState) throw new Error("Trip map resources did not finish loading");
 
-    const $ = (selector) => appRoot.querySelector(selector) || document.querySelector(selector);
+    const shadowRoot = appRoot.getRootNode();
+    const $ = (selector) => appRoot.querySelector(selector) || shadowRoot.querySelector?.(selector) || document.querySelector(selector);
+    const unique = (values) => [...new Set(values.filter(Boolean))];
     const storageKey = `${trip.slug || "trip-planner-public"}:${trip.dataRevision || "v1"}`;
     const pois = new Map(trip.pois.map((poi) => [poi.id, poi]));
     const days = new Map(trip.days.map((day) => [day.id, day]));
@@ -535,7 +537,6 @@
           <h2>${escapeHtml(day.title)}</h2>
           <p>${escapeHtml(day.summary)}</p>
           ${routeRationale ? `<div class="day-rationale"><strong>Why this order</strong><p>${escapeHtml(routeRationale)}</p>${fixedConstraints.length ? `<small>Fixed constraints: ${escapeHtml(fixedConstraints.join("; "))}</small>` : ""}${intentionalDetours.length ? `<small>Necessary detours: ${escapeHtml(intentionalDetours.join("; "))}</small>` : ""}</div>` : ""}
-          ${state.dirtyDays[day.id] ? '<div class="route-status">This route needs replanning. The map keeps the previous route for reference and will not automatically connect new places.</div>' : ""}
         </section>
         <section class="section-block"><div class="section-heading-row"><h3 class="section-title">Day itinerary</h3><span class="muted">${ordered.filter((id) => pois.get(id)?.category !== "hotel").length} / ${Number(day.capacity || 6)} main places</span></div><div class="place-list">${rows || '<div class="empty-state">No places are scheduled for this day.</div>'}</div></section>
         <section class="section-block"><h3 class="section-title">Nearby options</h3><div class="quick-list">${candidates.map((poi) => {
@@ -657,13 +658,54 @@
     }
 
     function renderChangeSummary() {
-      const container = $("#change-summary");
-      const hasChanges = root.TripMapState.hasPendingChanges(state);
-      container.hidden = !hasChanges;
-      $("#undo-change").disabled = !state.undoSnapshot;
-      if (!hasChanges) return;
-      const affected = Object.keys(state.dirtyDays).map((dayId) => days.get(dayId)?.date).filter(Boolean);
-      $("#change-summary-text").textContent = `${state.changes.length} changes affect ${affected.join(", ") || "dates still to be determined"}. The final route has not been rebuilt yet.`;
+      renderEditBar(itineraryEditSummary());
+    }
+
+    function renderEditBar(editSummary = itineraryEditSummary()) {
+      const highImpactReasons = unique(state.changes.flatMap((change) => change.reasons || []));
+      if (typeof onEditSummaryChange === "function") {
+        onEditSummaryChange({
+          count: editSummary.count,
+          affectedLabels: editSummary.affectedLabels,
+          highImpact: highImpactReasons.length > 0,
+        });
+      }
+    }
+
+    function itineraryEditSummary() {
+      const base = root.TripMapState.createState(trip, { view: state.view });
+      const affectedDayIds = new Set();
+      let count = 0;
+      for (const poi of trip.pois || []) {
+        const previousDayId = base.assignments[poi.id] || "";
+        const nextDayId = state.assignments[poi.id] || "";
+        const previousPriority = base.priorities[poi.id] || "";
+        const nextPriority = state.priorities[poi.id] || "";
+        if (previousDayId !== nextDayId) {
+          count += 1;
+          if (previousDayId) affectedDayIds.add(previousDayId);
+          if (nextDayId) affectedDayIds.add(nextDayId);
+        }
+        if (previousPriority !== nextPriority) {
+          count += 1;
+          const dayId = nextDayId || previousDayId;
+          if (dayId) affectedDayIds.add(dayId);
+        }
+      }
+      for (const day of trip.days || []) {
+        const previousOrder = base.orders[day.id] || [];
+        const nextOrder = state.orders[day.id] || [];
+        const sameMembers = previousOrder.length === nextOrder.length && previousOrder.every((poiId) => nextOrder.includes(poiId));
+        if (sameMembers && previousOrder.some((poiId, index) => nextOrder[index] !== poiId)) {
+          count += 1;
+          affectedDayIds.add(day.id);
+        }
+      }
+      return {
+        count,
+        affectedDayIds: [...affectedDayIds],
+        affectedLabels: [...affectedDayIds].map((dayId) => days.get(dayId)?.date || days.get(dayId)?.title).filter(Boolean),
+      };
     }
 
     function renderSequenceGuide(dayId, { hasVerifiedRoute = false, dirty = false } = {}) {
@@ -786,10 +828,10 @@
       const mapNote = $("#map-note");
       if (activeDayId && state.dirtyDays[activeDayId] && activeHasVerifiedRoute) {
         mapNote.textContent = sequenceGuideVisible
-          ? "This day needs replanning. The faint line is the last verified route; numbered dashed lines show visit order, not roads."
-          : "This day needs replanning. The faint line is the last verified route, and new places are not automatically connected.";
+          ? "This day changed. The faint line is the last verified route; numbered dashed lines show visit order, not roads."
+          : "This day changed. The faint line is the last verified route, and new places are waiting for route verification.";
       } else if (activeDayId && state.dirtyDays[activeDayId]) {
-        mapNote.textContent = "This day needs replanning. Numbered dashed lines show visit order, not roads or live navigation.";
+        mapNote.textContent = "This day changed. Numbered dashed lines show visit order, not roads or live navigation.";
       } else if (activeDayId && activeHasVerifiedRoute) {
         mapNote.textContent = "Showing the verified route for this day. The day view focuses on scheduled places, options, and the current place.";
       } else if (activeDayId) {
@@ -814,12 +856,6 @@
         if (typeof onEditBlocked === "function") onEditBlocked();
         return;
       }
-      const plan = root.TripMapState.planAction(trip, state, action);
-      if (plan.requiresConfirmation) {
-        pendingAction = action;
-        openImpactDialog(plan);
-        return;
-      }
       commitAndRender(action);
     }
 
@@ -828,13 +864,17 @@
       persistState();
       closeImpactDialog();
       renderAll({ preserveMapView: true });
-      if (typeof onStateChange === "function") void onStateChange({ assignments: state.assignments, priorities: state.priorities, orders: state.orders, replanPrompt: root.TripMapState.buildReplanPrompt(trip, state) });
     }
 
-    function openImpactDialog(plan) {
-      $("#impact-reasons").innerHTML = plan.reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("");
+    function openImpactDialog() {
+      const editSummary = itineraryEditSummary();
+      if (editSummary.count === 0) return;
+      const title = $("#impact-title");
+      const confirm = $("#confirm-impact");
+      title.textContent = "Save changes?";
+      confirm.textContent = "Save changes";
       $("#impact-dialog").hidden = false;
-      $("#confirm-impact").focus();
+      confirm.focus();
     }
 
     function closeImpactDialog() {
@@ -845,6 +885,23 @@
     function cancelImpactDialog() {
       closeImpactDialog();
       renderAll({ preserveMapView: true });
+    }
+
+    function discardMapEdits() {
+      const view = JSON.parse(JSON.stringify(state.view || {}));
+      state = root.TripMapState.createState(trip, { view });
+      persistState();
+      closeImpactDialog();
+      renderAll({ preserveMapView: true });
+    }
+
+    function saveMapEdits() {
+      if (itineraryEditSummary().count === 0) {
+        closeImpactDialog();
+        return;
+      }
+      closeImpactDialog();
+      if (typeof onStateChange === "function") void onStateChange({ assignments: state.assignments, priorities: state.priorities, orders: state.orders, replanPrompt: root.TripMapState.buildReplanPrompt(trip, state) });
     }
 
     function openReplanDialog() {
@@ -864,7 +921,7 @@
       feedback.textContent = "Copying…";
       try {
         await navigator.clipboard.writeText(textarea.value);
-        feedback.textContent = "Copied. You can paste it directly into Landi.";
+        feedback.textContent = "Copied.";
       } catch (_error) {
         textarea.focus();
         textarea.select();
@@ -992,12 +1049,6 @@
           });
         }
         if (event.target.closest("#clear-filters")) return clearFilters();
-        if (event.target.closest("#undo-change")) {
-          state = root.TripMapState.undoLastAction(state);
-          renderAll({ preserveMapView: true });
-          if (typeof onStateChange === "function") void onStateChange({ assignments: state.assignments, priorities: state.priorities, orders: state.orders, replanPrompt: root.TripMapState.buildReplanPrompt(trip, state) });
-          return;
-        }
       });
 
       appRoot.addEventListener("input", (event) => {
@@ -1021,7 +1072,7 @@
 
       $("#cancel-impact").addEventListener("click", cancelImpactDialog);
       $("#confirm-impact").addEventListener("click", () => {
-        if (pendingAction) commitAndRender(pendingAction);
+        saveMapEdits();
       });
       $("#close-replan").addEventListener("click", closeReplanDialog);
       $("#copy-replan").addEventListener("click", copyReplanPrompt);
@@ -1044,6 +1095,8 @@
       renderFilters,
       renderChangeSummary,
       loadCommonsImages,
+      openSaveDialog: openImpactDialog,
+      discardMapEdits,
     };
   }
 

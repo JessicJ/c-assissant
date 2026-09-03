@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { TravelBooking } from "@c-assistant/core";
-import { applyAgentPlanningTurn, applyExternalPlanningFacts, applyPlanningTurn, createPlanningSession, planningArrivalLocalDateTime, planningGenerationReuse, planningPartySize, planningRequestForGeneration, planningRequestForGenerationWithBookings, planningResearchScopes, planningTransportPreference, prepareConfirmedPlanningSession } from "./planning-session.js";
+import { applyAgentPlanningTurn, applyPlanningTurn, createPlanningSession, prepareConfirmedPlanningSession } from "./planning-session.js";
+import { applyExternalPlanningFacts } from "./planning-session-external-facts.js";
+import { planningArrivalLocalDateTime, planningGenerationReuse, planningPartySize, planningRequestForGeneration, planningRequestForGenerationWithBookings, planningResearchScopes, planningTransportPreference } from "./planning-session-generation.js";
 
 test("planning turns collect facts before producing a proposal", () => {
   const first = applyPlanningTurn(createPlanningSession(new Date("2026-08-17T00:00:00.000Z")), "我想去葡萄牙");

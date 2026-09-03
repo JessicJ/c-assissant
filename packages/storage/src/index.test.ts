@@ -833,6 +833,52 @@ test("SQLite saves itinerary map edits into the current Plan version", () => {
   store.close();
 });
 
+test("SQLite applies active itinerary map edits without replacing unrelated days", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const draft = store.createGeneratedPlan({
+    title: "Active Paris map", location: "Paris", dates: "2026-10-12 to 2026-10-13", knownInformation: [], assumptions: [], nextAction: "Follow the active plan.",
+    presentation: {
+      kind: "itinerary",
+      summary: "Two active days.",
+      startDate: "2026-10-12", endDate: "2026-10-13",
+      days: [
+        { id: "day-1", label: "Day 1", date: "2026-10-12", city: "Paris", title: "Museum and garden", summary: "Pair one museum anchor with a nearby outdoor stop.", placeIds: ["museum", "garden"], candidates: ["square"], stops: [{ placeId: "museum", order: 1, time: "10:00" }, { placeId: "garden", order: 2, time: "14:00" }], routeGeometry: [[2.3, 48.8], [2.31, 48.81]], routeGeometryMode: "walking", routeGeometryReviewedAt: "2026-08-17T00:00:00Z", routeReview: { routingMethod: "Google Maps", sequenceRationale: "One short route." } },
+        { id: "day-2", label: "Day 2", date: "2026-10-13", city: "Paris", title: "Cafe and gallery", summary: "Keep a quiet second day.", placeIds: ["cafe", "gallery"], stops: [{ placeId: "cafe", order: 1, time: "10:00" }, { placeId: "gallery", order: 2, time: "12:00" }], routeGeometry: [[2.32, 48.82], [2.33, 48.83]], routeGeometryMode: "walking", routeGeometryReviewedAt: "2026-08-17T00:00:00Z", routeReview: { routingMethod: "Google Maps", sequenceRationale: "Keep the cafe before the gallery." } }
+      ],
+      places: [
+        { id: "museum", name: "Museum", locationLabel: "Paris", city: "Paris", coordinates: [48.86, 2.34], category: "museum", priority: "must", durationMinutes: 120, whyWorthIt: "Art.", plan: "Visit.", detailSections: [], sourceRefs: [] },
+        { id: "garden", name: "Garden", locationLabel: "Paris", city: "Paris", coordinates: [48.85, 2.33], category: "garden", priority: "nearby", durationMinutes: 60, whyWorthIt: "Rest.", plan: "Walk.", detailSections: [], sourceRefs: [] },
+        { id: "square", name: "Neighborhood square", locationLabel: "Paris", city: "Paris", coordinates: [48.855, 2.335], category: "square", priority: "nearby", durationMinutes: 45, whyWorthIt: "A quiet local stop.", plan: "Pause.", detailSections: [], sourceRefs: [] },
+        { id: "cafe", name: "Cafe", locationLabel: "Paris", city: "Paris", coordinates: [48.856, 2.336], category: "coffee", priority: "preferred", durationMinutes: 45, whyWorthIt: "Coffee.", plan: "Pause.", detailSections: [], sourceRefs: [] },
+        { id: "gallery", name: "Gallery", locationLabel: "Paris", city: "Paris", coordinates: [48.857, 2.337], category: "gallery", priority: "preferred", durationMinutes: 60, whyWorthIt: "Art.", plan: "Visit.", detailSections: [], sourceRefs: [] }
+      ],
+      routeSegments: [
+        { id: "museum-garden", originPlaceId: "museum", destinationPlaceId: "garden", dayId: "day-1", mode: "walking", verification: "verified", durationMinutes: 12, label: "Walk to the garden", detail: "Reviewed walk.", checkedAt: "2026-08-17T00:00:00Z", sourceRefs: ["google_maps"] },
+        { id: "cafe-gallery", originPlaceId: "cafe", destinationPlaceId: "gallery", dayId: "day-2", mode: "walking", verification: "verified", durationMinutes: 8, label: "Walk to gallery", detail: "Reviewed walk.", checkedAt: "2026-08-17T00:00:00Z", sourceRefs: ["google_maps"] }
+      ]
+    },
+    stages: [{ title: "Itinerary", description: "Paris.", presentationKind: "itinerary", tasks: [{ title: "Visit Paris", owner: "user", dueLabel: "Day 1" }] }]
+  });
+  const active = store.confirmPlan(draft.activePlan.id).activePlan;
+
+  const saved = store.savePlanPresentationEdits({
+    planId: active.id,
+    expectedVersion: active.version,
+    assignments: { museum: "day-1", garden: "", square: "day-1", cafe: "day-2", gallery: "day-2" },
+    priorities: { square: "preferred" },
+    orders: { "day-1": ["museum", "square"], "day-2": ["cafe", "gallery"] }
+  });
+
+  assert.equal(saved.activePlan.status, "active");
+  assert.deepEqual(saved.activePlan.presentation!.days.map((day) => day.placeIds), [["museum", "square"], ["cafe", "gallery"]]);
+  assert.equal(saved.activePlan.presentation!.days[0]!.routeGeometry, undefined);
+  assert.deepEqual(saved.activePlan.presentation!.days[1]!.routeGeometry, [[2.32, 48.82], [2.33, 48.83]]);
+  assert.equal(saved.activePlan.presentation!.routeSegments.find((segment) => segment.dayId === "day-1")?.verification, "needs_verification");
+  assert.equal(saved.activePlan.presentation!.routeSegments.find((segment) => segment.id === "cafe-gallery")?.verification, "verified");
+  assert.equal(saved.activePlan.stages[0]?.tasks[0]?.title, "Visit Paris");
+  store.close();
+});
+
 test("SQLite keeps chronological time slots when a draft day is reordered", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const plan = store.createGeneratedPlan({

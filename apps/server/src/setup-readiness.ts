@@ -1,4 +1,5 @@
 import type { RuntimeCheck, RuntimeKind } from "@c-assistant/agent-adapters";
+import { runtimeName } from "./runtime-display.js";
 
 export type SetupReadinessItemId = "profile" | "runtime" | "google" | "telegram";
 
@@ -26,7 +27,7 @@ export function assessSetupReadiness(input: {
   telegramPaired: boolean;
 }): SetupReadiness {
   const selectedRuntime = input.runtimeChecks.find((runtime) => runtime.kind === input.selectedRuntime);
-  const runtimeName = input.selectedRuntime === "claude-code" ? "Claude Code" : "Codex";
+  const selectedRuntimeName = runtimeName(input.selectedRuntime);
   const runtimeReady = Boolean(selectedRuntime?.installed && selectedRuntime.authenticated);
   const items: SetupReadinessItem[] = [
     {
@@ -37,13 +38,13 @@ export function assessSetupReadiness(input: {
     },
     {
       id: "runtime",
-      label: `${runtimeName} runtime`,
+      label: `${selectedRuntimeName} runtime`,
       status: runtimeReady ? "ready" : "needs_attention",
       detail: runtimeReady
-        ? `${runtimeName} is installed and logged in.`
+        ? `${selectedRuntimeName} is installed and logged in.`
         : selectedRuntime?.installed
-          ? `${runtimeName} is installed but needs login on this computer.`
-          : `${runtimeName} is not installed on this computer.`
+          ? `${selectedRuntimeName} is installed but needs login on this computer.`
+          : `${selectedRuntimeName} is not installed on this computer.`
     },
     {
       id: "google",
