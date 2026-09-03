@@ -1,7 +1,7 @@
 # Blueprint Workspace Generation Requirements
 
-Status: Initial requirements draft  
-Last updated: 2026-09-02  
+Status: Working requirements draft
+Last updated: 2026-09-03
 Scope: Landi-native travel planning generation, Trip Blueprint content shape, Skill Importer expectations, and Web Plan Workspace presentation. This draft does not authorize code implementation by itself.
 
 ## Purpose
@@ -25,13 +25,14 @@ Landi-native Blueprint Skill
 Settled product decisions:
 
 - Web remains chat-led for intake and does not add a heavy visible Planning Proposal page.
-- The generated plan has three top-level workspace areas: Itinerary, Preparation, and Tips.
+- The generated plan has three primary content areas: Itinerary, Preparation, and Tips. Sources is a supporting workspace view for evidence inspection.
 - Attractions, dining, shopping, and local experiences live as itinerary sub-branches over a shared Guide Catalog.
 - The itinerary is a complete recommended plan first, not an empty composition canvas.
-- The timeline presents the time-ordered plan; it is not the primary arrangement tool.
-- The desktop Web workspace is timeline-led, with map support and one shared side panel for explore/detail.
+- The itinerary sequence presents the time-ordered plan; it is not the primary arrangement tool and does not require a visible line-and-dot timeline treatment.
+- The desktop Web workspace is itinerary-sequence-led, with map support and one shared side panel for explore/detail.
 - The Web workspace does not target mobile layout or mobile editing.
 - Guide Cards are short browsing units; rich value explanation, source context, and comparison live in details.
+- Guide source disclosure uses small image markers only when a real image is present; text-only cards, tips, and details use unobtrusive source text or links instead of standalone `i` markers.
 - Multiple concrete dining, shopping, and experience options appear as peer choices, not candidates or forced recommendations.
 - Preparation is a travel-readiness checklist, not a generic life-advice task list.
 - Tips are destination-relevant local cautions, not generic travel inspiration.
@@ -153,7 +154,7 @@ Unscheduled guide cards should use a consistent default anatomy:
 - polished text-only presentation when no suitable image is available;
 - tags, area, and itinerary state when useful for scanning;
 - concrete place or related place identity when the item can be visited, eaten, bought, or experienced somewhere specific;
-- compact Source Marker;
+- compact image-level Source Marker only when the card contains a real image;
 - one primary add action that starts an itinerary edit.
 
 They should not show default day, time, replacement-type label, scheduling rationale, full Guide Value Explanation, comparison tables, or long practical details on the card. Those belong in the shared detail panel.
@@ -185,11 +186,11 @@ Guide Cards in the panel should be state-aware:
 - unscheduled cards show a primary action that starts an itinerary edit;
 - cards that are informational only, such as a local product without a concrete purchase place, remain visible in search and filter results and can open details, but do not show a scheduling or add action.
 
-Selecting a scheduled Guide Card should create a Timeline-linked Guide Detail state: the corresponding timeline block is located and highlighted, and the shared detail panel opens with the Guide Item's image or text content, compact Source Marker, related guide material, and relevant alternatives. The same detail panel should also be reachable by selecting the timeline block directly.
+Selecting a scheduled Guide Card should create an itinerary-linked Guide Detail state: the corresponding itinerary block is located and highlighted, and the shared detail panel opens with the Guide Item's image or text content, source context, related guide material, and relevant alternatives. Small Source Markers appear only on images; text-only detail content should expose sources through plain source summaries or links. The same detail panel should also be reachable by selecting the itinerary block directly.
 
 Relevant alternatives should appear only after the traveler opens the shared detail panel. Timeline blocks should not display alternative recommendations by default, so the recommended itinerary remains readable as Landi's proposed plan rather than a crowded comparison board.
 
-The shared detail panel should use Guide Detail Templates. All templates share the same panel shell, source marker behavior, related material, alternatives, and adjustment actions, but each content type renders the fields that help that decision:
+The shared detail panel should use Guide Detail Templates. All templates share the same panel shell, source disclosure behavior, related material, alternatives, and adjustment actions, but each content type renders the fields that help that decision:
 
 - attraction details: why it matters, visit style, recommended duration, area, practical notes, route context, and related dining, shopping, or experience links;
 - dining details: what to eat, Local Food context, Dining Place Comparison for multiple concrete dining places or food areas, reservation or queue expectations, dietary notes, meal fit, and nearby itinerary links;
@@ -208,21 +209,20 @@ Guide details may include a Guide Value Explanation: why a place, food, local pr
 
 Guide Editorial Voice should be limited to Guide Value Explanation and supporting guide copy. Functional workspace surfaces should use Functional Workspace Voice: concise, restrained, and optimized for scanning, judgment, and action. This includes Itinerary Timeline blocks, Preparation Checklist items, Travel Tip Cards, Contextual Tip Surfaces, Option Comparison Rows, route status, and action controls.
 
-Guide Card lists should remain short and scannable. Cards may show title, image or polished text teaser, tags, area, itinerary state, and compact actions. Full Guide Value Explanation, type-specific comparisons, purchase locations, dining options, experience offerings, practical notes, and source context should open in the shared detail panel.
+Guide Card lists should remain short and scannable. Cards may show title, image or polished text teaser, compact tags when they materially help scanning, itinerary state when useful, and compact actions. Full Guide Value Explanation, type-specific comparisons, purchase locations, dining options, experience offerings, practical notes, and source context should open in the shared detail panel.
 
 The Itinerary Explore Panel should be filterable by type:
 
 ```text
-All
 Attractions
 Dining
 Shopping
 Experiences
 ```
 
-It should also support theme, area, and itinerary-state filters when the Blueprint contains that structure. These filters should not create separate top-level pages. They are ways to browse and adjust material that belongs to the overall itinerary.
+The unfiltered complete browsing state should exist without requiring a visible "All" chip. It may also support theme, area, and itinerary-state filters when the Blueprint contains that structure, but these controls should appear only when they reduce real browsing friction. Search is not part of the default Explore chrome and should be introduced only if guide volume makes browsing inefficient. These controls should not create separate top-level pages. They are ways to browse and adjust material that belongs to the overall itinerary.
 
-The panel should keep an All view for complete guide browsing. The All view remains inside the Itinerary Explore Panel and defaults to the same contextual Guide Relevance Order as other views. When the traveler has selected a day or Itinerary Block, the All view should prioritize material related to that context; when no context is selected, it should fall back to trip-level relevance.
+The panel should keep an unfiltered complete guide browsing state inside the Itinerary Explore Panel and default it to the same contextual Guide Relevance Order as filtered views. When the traveler has selected a day or Itinerary Block, the unfiltered state should prioritize material related to that context; when no context is selected, it should fall back to trip-level relevance.
 
 The default order should use Guide Relevance Order: prioritize relationship to the current trip, current day, or selected Itinerary Block, then use secondary signals such as distance, popularity, rating, source richness, freshness, and image availability. This ordering should help the traveler adjust the current plan, not present a generic destination ranking. The ranking reason does not need to be shown on cards by default.
 
@@ -251,9 +251,9 @@ Timeline blocks should contain Schedulable Itinerary Objects. Local Food, Local 
 
 These blocks make replacement clearer: the traveler can replace lunch with another dining option, replace a shopping block with a different specialty area, or swap an evening experience without treating every change as the same kind of place deletion.
 
-Itinerary blocks should not show "why this was arranged here" rationale by default. The timeline should render them as the time-ordered recommended plan, using compact blocks focused on time, title, type, place or area, and short status. Timeline blocks should not show Source Markers, long descriptions, source lists, or full guide copy by default. Selecting a block should open image-and-text details, source markers or sources, related guide material, relevant alternatives, and available adjustment actions in the detail panel.
+Itinerary blocks should not show "why this was arranged here" rationale by default. The itinerary sequence should render them as the time-ordered recommended plan, using compact cards focused on time, full place title, type, and only action-relevant short status. Itinerary blocks should not show Source Markers, long descriptions, source lists, route-check badges, internal labels, or full guide copy by default. Selecting a block should open image-and-text details, source context, related guide material, relevant alternatives, and available adjustment actions in the detail panel.
 
-The timeline should not add a separate day overview, daily summary card, or header module above each day. It should start from the day's concrete Itinerary Blocks. Weather, pacing, fixed commitments, and contextual cautions should appear through relevant blocks, detail panels, route status, Placement Advisories, or Contextual Tip Surfaces.
+The itinerary sequence should not add a separate day overview, daily summary card, or header module above each day. It should start from the day's concrete Itinerary Blocks. Weather, pacing, fixed commitments, and contextual cautions should appear through relevant blocks, detail panels, route status, Placement Advisories, or Contextual Tip Surfaces.
 
 #### Attraction Sub-branch
 
@@ -268,7 +268,7 @@ Expected presentation:
 - title, local name when useful, area, category, recommended duration, and concrete place identity;
 - why it matters, with enough context to understand the visit;
 - best fit, such as morning, rainy day, family-friendly, architecture, art, first-time visit;
-- compact Source Marker;
+- compact image-level Source Marker only when a real image is present;
 - relationship labels when the attraction also belongs to dining, shopping, or experience modules;
 - actions to start an itinerary edit, compare alternatives, mark must-visit, or archive.
 
@@ -345,10 +345,12 @@ Expected presentation:
 - grouped checklist sections;
 - documents, booking confirmations, payment, connectivity, insurance, weather packing, local apps, transport setup, and destination-specific rules;
 - expandable detail for items such as local apps, transport cards, entry materials, weather-specific equipment, or unfamiliar local procedures;
-- due timing and accountable party;
-- source-backed status when official evidence is needed;
+- due timing and accountable party in the underlying data when they materially affect readiness, but not as noisy default card text;
+- source-backed status when official evidence is needed, shown through unobtrusive text or links rather than standalone `i` markers;
 - ability to mark complete;
 - ability to open related source or booking handoff.
+
+Preparation checklist rows should not expose internal generation labels, stage names, or bureaucratic category words such as "authorization" unless that wording is the traveler-facing name of a required action.
 
 Preparation items that are time-sensitive may compile into dormant reminders in a Draft Plan and active reminders only after Plan activation.
 
@@ -365,7 +367,7 @@ Expected presentation:
 - Canonical Tips in the Tips area for full browsing;
 - short Contextual Tip Surfaces beside relevant itinerary days or blocks when the tip affects that moment;
 - local transport norms, payment habits, safety, etiquette, weather, language, accessibility, family/elder needs, scams or tourist traps when evidence supports them;
-- compact Source Marker when custom, safety, payment, transport, or other change-sensitive claims need provenance;
+- source and freshness disclosure for custom, safety, payment, transport, or other change-sensitive claims through unobtrusive source text or links rather than standalone `i` markers;
 - source and freshness state for facts likely to change;
 - actions to pin, dismiss, or turn into a preparation item when appropriate.
 
@@ -485,13 +487,13 @@ Tips
 Sources
 ```
 
-The itinerary tab should use an Itinerary Workspace Layout on desktop: the left side presents the time-ordered Itinerary Timeline as the plan body, the right side presents the Itinerary Map as spatial and route context, and one openable Workspace Side Panel switches between the Itinerary Explore Panel and shared detail view. The map should not dominate the workspace.
+The itinerary tab should use an Itinerary Workspace Layout on desktop: the left side presents the time-ordered itinerary sequence as the plan body, the right side presents the Itinerary Map as spatial and route context, and one openable Workspace Side Panel switches between the Itinerary Explore Panel and shared detail view. Detail does not need its own persistent top-level panel tab; selecting an itinerary block, guide card, or map item may open detail directly, with a clear return control back to Explore. The map should not dominate the workspace.
 
 The layout should embrace Desktop Workspace Density. When screen space allows, the traveler should be able to keep the timeline, map, and Workspace Side Panel visible together for side-by-side reading, spatial review, and guide comparison. Explore and detail should be modes of the same side panel rather than two simultaneous sidebars. The workspace should not collapse into a mobile-style single-column flow.
 
 The Workspace Side Panel should preserve Side Panel Navigation State when switching from explore mode into detail mode. Returning from detail should restore the previous explore filters, sort order, scroll position, and selected card rather than resetting the panel.
 
-The timeline's primary role is to present the time-ordered recommended plan. The map should support spatial understanding, selected-place context, and route review; it should not be the default entrypoint for adding or replacing guide material. The timeline should support plan reading, block selection, status review, and changed-placement highlighting inside the existing edit state. The traveler should use the Itinerary Explore Panel, shared detail panel, Placement Selection State, and existing edit confirmation path to adjust the plan.
+The itinerary sequence's primary role is to present the time-ordered recommended plan. The map should support spatial understanding, selected-place context, and route review; it should not be the default entrypoint for adding or replacing guide material. The itinerary sequence should support plan reading, block selection, status review, and changed-placement highlighting inside the existing edit state. The traveler should use the Itinerary Explore Panel, shared detail panel, Placement Selection State, and existing edit confirmation path to adjust the plan.
 
 Attraction, dining, shopping, and local-experience sub-branches should be available inside the itinerary workspace. Those sub-branches should prioritize image-and-text cards, readable grouping, filters, and promotion actions into pending itinerary edits.
 
@@ -500,10 +502,10 @@ Preparation should prioritize actionable checklist groups. Tips should prioritiz
 The workspace should support:
 
 - visual browsing;
-- search and filters;
+- lightweight filters when they materially reduce browsing friction;
 - card detail views;
-- small source markers on images, guide cards, tips, and itinerary details, but not on timeline blocks by default;
-- hover, focus, or tap source disclosure that separates inspiration sources from fact or evidence sources;
+- small source markers on real images only;
+- hover, focus, or tap source disclosure for image markers, plus plain source summaries or links in details and the Sources view that separate inspiration sources from fact or evidence sources;
 - itinerary sub-branch add/save/archive actions;
 - version-aware save;
 - undo for direct edits;
@@ -523,7 +525,7 @@ The workspace should support:
 
 - A user can create a trip through the current chat-style flow without a heavy visible proposal page.
 - The generated result contains Itinerary, Preparation, and Tips when relevant to the trip.
-- Itinerary opens in a timeline-led desktop workspace with map support and openable explore/detail side panels.
+- Itinerary opens in an itinerary-sequence-led desktop workspace with map support and openable explore/detail side-panel modes.
 - Attractions, shopping, experiences, and dining render as itinerary guide sub-branches with rich Guide Cards.
 - Travel Tips render as compact text-first cards and contextual tip surfaces.
 - Preparation renders as actionable grouped checklists.
@@ -545,7 +547,7 @@ A Landi-native planning Skill artifact is acceptable when it satisfies these gen
 - It treats attractions, dining, shopping, and local experiences as itinerary sub-branches over a shared Guide Catalog, not as separate top-level plan modules.
 - It provides explicit Guide Relationship Graph data for food-to-place, product-to-place, experience-theme-to-offering, and attraction-to-place relationships.
 - It marks useful guide material without a concrete schedulable object as Informational Guide Items that remain visible but unavailable for add-to-itinerary actions.
-- It keeps Guide Card Summary short and scannable, with optional images, tags, area, state, compact Source Marker metadata, and state-aware actions.
+- It keeps Guide Card Summary short and scannable, with optional images, useful scanning tags, itinerary state where useful, image-level Source Marker metadata when an image exists, and state-aware actions.
 - It provides Guide Value Explanation when useful, using grounded Guide Editorial Voice rather than advertising language or social-media hype.
 - It confines Guide Editorial Voice to guide value/supporting copy, and uses Functional Workspace Voice for timeline, preparation, tips, comparison rows, statuses, and action controls.
 - It supports Guide Option Comparison for multiple concrete dining places, purchase places, or experience offerings as peer options, without candidate labels, default recommended labels, or forced best choices.
@@ -554,7 +556,7 @@ A Landi-native planning Skill artifact is acceptable when it satisfies these gen
 - It treats images as optional enhancements. Missing suitable images should not produce placeholders or empty reserved image areas.
 - It treats UGC, social, review, image-board, short-video, and travel-community material as optional Source Channels and possible Inspiration Sources, not required dependencies or verified evidence.
 - It uses Source Capability Selection for global planning rather than hard-coded regional source bundles.
-- It separates Inspiration Sources from evidence sources, and supports compact Source Marker disclosure for cards, images, tips, and itinerary details, but not timeline blocks by default.
+- It separates Inspiration Sources from evidence sources, and supports compact Source Marker disclosure for images plus plain source disclosure for text-only cards, tips, itinerary details, and the Sources view. Itinerary blocks do not show Source Markers by default.
 - It generates Preparation Checklist items only when they satisfy the Preparation Relevance Rule.
 - It generates Travel Tips only when they satisfy the Travel Tip Relevance Rule, and supports short Contextual Tip Surfaces for itinerary-linked cautions.
 - It does not claim booking, ordering, payment, live table availability, ride dispatch, official eligibility, or external action completion without separate evidence and traveler confirmation.

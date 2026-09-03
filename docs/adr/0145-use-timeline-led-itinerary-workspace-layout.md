@@ -1,5 +1,7 @@
 # Use timeline-led itinerary workspace layout
 
+Status: accepted, amended by ADR-0170
+
 Landi will use a timeline-led desktop layout for the Itinerary workspace: the left side presents the time-ordered Itinerary Timeline as the plan body, the right side presents the Itinerary Map as spatial and route context, and one openable Workspace Side Panel switches between the Itinerary Explore Panel and shared detail view.
 
 This decision scopes the Web workspace as a desktop workspace. Mobile layout and mobile editing behavior are not design targets for Landi's Web workspace.

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Plan, PlanPlace, PlanPresentation } from "@c-assistant/core";
-import { comparisonRowsForPlace, filterGuideCards, groupTipsByTheme, guideCardsForPresentation, guideStateForPlace, guideTypeForPlace, localTipsForPlan, roughTimeLabel, sourceMarkerForPlace, sourceMarkersForPlan, sourceSummariesForPlace, timelineBlocksForDay } from "./landi-blueprint-workspace-display.js";
+import { buildPendingItineraryEdit, comparisonRowsForPlace, filterGuideCards, groupTipsByTheme, guideCardsForPresentation, guideStateForPlace, guideTypeForPlace, itineraryPlacementOptions, localTipsForPlan, roughTimeLabel, sourceMarkerForPlace, sourceMarkersForPlan, sourceSummariesForPlace, timelineBlocksForDay } from "./landi-blueprint-workspace-display.js";
 
 function place(id: string, patch: Partial<PlanPlace> = {}): PlanPlace {
   return {
@@ -59,6 +59,11 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.deepEqual(blocks.map((block) => block.place.id), ["temple", "lunch", "craft"]);
   });
 
+  it("builds itinerary placement options around the day sequence", () => {
+    const blocks = timelineBlocksForDay(presentationFixture(), presentationFixture().days[0]!);
+    assert.deepEqual(itineraryPlacementOptions(blocks).map((option) => option.id), ["start", "after-temple", "after-lunch", "after-craft", "end"]);
+  });
+
   it("marks scheduled, unscheduled, and informational guide cards without candidate wording", () => {
     const scheduled = new Set(["temple"]);
     assert.equal(guideStateForPlace(place("temple"), scheduled), "scheduled");
@@ -78,6 +83,23 @@ describe("Landi Blueprint workspace display helpers", () => {
     }));
     assert.deepEqual(filterGuideCards(cards, { type: "dining", state: "unscheduled" }).map((card) => card.place.id), ["ramen"]);
     assert.deepEqual(filterGuideCards(cards, { type: "all", state: "informational" }).map((card) => card.place.id), ["product"]);
+  });
+
+  it("builds a pending itinerary edit with lightweight placement advisories", () => {
+    const presentation = presentationFixture({
+      places: [
+        ...presentationFixture().places,
+        place("osaka-dinner", { city: "Osaka", area: "Namba", category: "restaurant", reservation: { requirement: "required", verification: "needs_recheck", note: "Book ahead." } })
+      ],
+      routeSegments: [{ id: "route-1", dayId: "day-1", originPlaceId: "lunch", destinationPlaceId: "craft", mode: "walking", verification: "needs_verification", sourceRefs: [] }]
+    });
+    const edit = buildPendingItineraryEdit(presentation, presentation.places.find((item) => item.id === "osaka-dinner")!, { dayId: "day-1", positionId: "after-lunch", meaning: "optional" });
+    assert.equal(edit.dayLabel, "2026-10-01");
+    assert.equal(edit.positionLabel, "After lunch");
+    assert.match(edit.requestText, /optional itinerary item/);
+    assert(edit.advisories.some((advisory) => /Osaka/.test(advisory.text)));
+    assert(edit.advisories.some((advisory) => /Reservation/.test(advisory.text)));
+    assert(edit.advisories.some((advisory) => /route context/.test(advisory.text)));
   });
 
   it("builds compact source markers from place evidence", () => {

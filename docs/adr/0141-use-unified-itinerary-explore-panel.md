@@ -1,5 +1,7 @@
 # Use unified Itinerary Explore Panel
 
+Status: accepted, amended by ADR-0170
+
 Landi will present attraction, dining, shopping, and local-experience Guide Cards in one Itinerary Explore Panel inside the itinerary workspace, including both material already used in the Recommended Itinerary and available alternatives. The panel keeps an All view for complete guide browsing and can be filtered by type, theme, area, and itinerary state, but those filters do not create separate top-level pages or day-owned candidate lists.
 
 The Itinerary Explore Panel appears as one mode of the shared Workspace Side Panel. Opening a shared detail view switches that same side panel from explore mode to detail mode rather than opening a second sidebar.

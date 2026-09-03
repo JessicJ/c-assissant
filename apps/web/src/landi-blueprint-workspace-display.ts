@@ -4,6 +4,7 @@ export type BlueprintWorkspaceArea = "itinerary" | "preparation" | "tips" | "sou
 export type GuideFilter = "all" | "attraction" | "dining" | "shopping" | "experience";
 export type GuideState = "scheduled" | "unscheduled" | "informational";
 export type GuideStateFilter = "all" | GuideState;
+export type PlacementMeaning = "scheduled" | "optional";
 
 export type TimelineBlock = {
   day: ItineraryDay;
@@ -52,6 +53,30 @@ export type TipDisplay = {
 export type TipGroupDisplay = {
   theme: string;
   tips: TipDisplay[];
+};
+
+export type ItineraryPlacementOption = {
+  id: string;
+  label: string;
+  kind: "start" | "after" | "end";
+  afterPlaceId?: string;
+};
+
+export type PlacementAdvisory = {
+  tone: "neutral" | "attention";
+  text: string;
+};
+
+export type PendingItineraryEditDisplay = {
+  placeId: string;
+  placeName: string;
+  dayId: string;
+  dayLabel: string;
+  meaning: PlacementMeaning;
+  positionId: string;
+  positionLabel: string;
+  advisories: PlacementAdvisory[];
+  requestText: string;
 };
 
 export function guideTypeForPlace(place: Pick<PlanPlace, "category" | "visitRole" | "name" | "plan" | "detailSections">): GuideFilter {
@@ -143,6 +168,35 @@ export function filterGuideCards(cards: GuideCardDisplay[], options: { type: Gui
     if (options.state && options.state !== "all" && card.state !== options.state) return false;
     return true;
   });
+}
+
+export function itineraryPlacementOptions(blocks: TimelineBlock[]): ItineraryPlacementOption[] {
+  return [
+    { id: "start", label: "At the start of the day", kind: "start" },
+    ...blocks.map((block) => ({ id: `after-${block.place.id}`, label: `After ${displayPlaceName(block.place)}`, kind: "after" as const, afterPlaceId: block.place.id })),
+    { id: "end", label: "At the end of the day", kind: "end" }
+  ];
+}
+
+export function buildPendingItineraryEdit(presentation: PlanPresentation, place: PlanPlace, input: { dayId: string; positionId: string; meaning: PlacementMeaning }): PendingItineraryEditDisplay {
+  const day = presentation.days.find((candidate) => candidate.id === input.dayId) ?? presentation.days[0];
+  const blocks = day ? timelineBlocksForDay(presentation, day) : [];
+  const options = itineraryPlacementOptions(blocks);
+  const position = options.find((option) => option.id === input.positionId) ?? options[options.length - 1];
+  const dayLabel = day ? day.shortLabel ?? day.date ?? day.label : "the selected day";
+  const positionLabel = position?.label ?? "At the end of the day";
+  const itemMeaning = input.meaning === "optional" ? "optional itinerary item" : "scheduled itinerary item";
+  return {
+    placeId: place.id,
+    placeName: displayPlaceName(place),
+    dayId: day?.id ?? input.dayId,
+    dayLabel,
+    meaning: input.meaning,
+    positionId: position?.id ?? input.positionId,
+    positionLabel,
+    advisories: placementAdvisories(presentation, place, day, position),
+    requestText: `I want to add ${displayPlaceName(place)} to ${dayLabel} as a ${itemMeaning}, ${positionLabel.toLocaleLowerCase()}. Show the placement impact before saving.`
+  };
 }
 
 export function groupTipsByTheme(tips: TipDisplay[]): TipGroupDisplay[] {
@@ -258,6 +312,34 @@ function shorten(value: string, max: number): string {
 
 function guideTags(place: PlanPlace): string[] {
   return [place.area, place.city, place.durationMinutes ? `${place.durationMinutes} min` : undefined, place.reservation?.requirement === "required" ? "Reservation" : undefined].filter(Boolean).slice(0, 4) as string[];
+}
+
+function placementAdvisories(presentation: PlanPresentation, place: PlanPlace, day: ItineraryDay | undefined, position: ItineraryPlacementOption | undefined): PlacementAdvisory[] {
+  const advisories: PlacementAdvisory[] = [];
+  if (day?.city && place.city && !sameText(day.city, place.city)) {
+    advisories.push({ tone: "attention", text: `This is in ${place.city}, while the selected day is centered on ${day.city}.` });
+  }
+  if (place.reservation?.requirement === "required") {
+    advisories.push({ tone: "attention", text: "Reservation or timed entry should be checked before saving this placement." });
+  } else if (place.reservation?.requirement === "recommended") {
+    advisories.push({ tone: "neutral", text: "Reservation may reduce friction for this stop." });
+  }
+  if (place.priority === "recheck" || place.reservation?.verification === "needs_recheck" || place.evidenceSources?.some((source) => source.status && source.status !== "verified")) {
+    advisories.push({ tone: "attention", text: "Some details need recheck before this becomes execution-ready." });
+  }
+  if (place.durationMinutes && place.durationMinutes >= 180) {
+    advisories.push({ tone: "attention", text: "This is a long stop, so day pacing may need adjustment." });
+  }
+  const routeAfter = position?.afterPlaceId ? presentation.routeSegments.find((segment) => segment.originPlaceId === position.afterPlaceId) : undefined;
+  if (routeAfter?.verification === "stale" || routeAfter?.verification === "needs_verification") {
+    advisories.push({ tone: "attention", text: "The nearby route context needs verification after placement changes." });
+  }
+  if (!advisories.length) advisories.push({ tone: "neutral", text: "Landi will check route fit and timing before saving this edit." });
+  return advisories;
+}
+
+function sameText(left: string, right: string): boolean {
+  return left.trim().toLocaleLowerCase() === right.trim().toLocaleLowerCase();
 }
 
 function itineraryBlockStatus(place: PlanPlace): string | undefined {

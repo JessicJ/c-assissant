@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import type { Plan, PlanPlace, PlanPresentation } from "@c-assistant/core";
 import {
+  buildPendingItineraryEdit,
   comparisonRowsForPlace,
   displayPlaceName,
   filterGuideCards,
@@ -8,6 +9,7 @@ import {
   guideCardsForPresentation,
   guideFilterLabel,
   guideTypeForPlace,
+  itineraryPlacementOptions,
   localTipsForPlan,
   preparationItemsForPlan,
   sourceMarkersForPlan,
@@ -16,6 +18,8 @@ import {
   type BlueprintWorkspaceArea,
   type GuideCardDisplay,
   type GuideFilter,
+  type PendingItineraryEditDisplay,
+  type PlacementMeaning,
   type TimelineBlock
 } from "./landi-blueprint-workspace-display.js";
 import { groupPreparationItems } from "./plan-preparation-display.js";
@@ -23,6 +27,7 @@ import { displayTripTitle } from "./trip-title.js";
 
 const guideFilters: Exclude<GuideFilter, "all">[] = ["attraction", "dining", "shopping", "experience"];
 const workspaceAreas: BlueprintWorkspaceArea[] = ["itinerary", "preparation", "tips", "sources"];
+type BlueprintPanelMode = "explore" | "detail" | "placement" | "pending";
 
 export function LandiBlueprintWorkspace({ plan, presentation, onRevise, onTaskToggle }: {
   plan: Plan;
@@ -36,8 +41,10 @@ export function LandiBlueprintWorkspace({ plan, presentation, onRevise, onTaskTo
   const lastDayDragEndAtRef = useRef(0);
   const [selectedDayId, setSelectedDayId] = useState(presentation.days[0]?.id ?? "");
   const [selectedPlaceId, setSelectedPlaceId] = useState(presentation.days[0]?.placeIds[0] ?? presentation.places[0]?.id ?? "");
-  const [panelMode, setPanelMode] = useState<"explore" | "detail">("explore");
+  const [panelMode, setPanelMode] = useState<BlueprintPanelMode>("explore");
   const [guideFilter, setGuideFilter] = useState<GuideFilter>("all");
+  const [placementPlaceId, setPlacementPlaceId] = useState("");
+  const [pendingEdit, setPendingEdit] = useState<PendingItineraryEditDisplay | null>(null);
   const selectedDay = presentation.days.find((day) => day.id === selectedDayId) ?? presentation.days[0];
   const selectedPlace = presentation.places.find((place) => place.id === selectedPlaceId) ?? presentation.places[0];
   const guideCards = useMemo(() => guideCardsForPresentation(presentation, plan.sources), [presentation, plan.sources]);
@@ -47,11 +54,28 @@ export function LandiBlueprintWorkspace({ plan, presentation, onRevise, onTaskTo
   const preparationGroups = useMemo(() => groupPreparationItems(preparationItemsForPlan(plan)), [plan]);
   const activeBlocks = selectedDay ? timelineBlocksForDay(presentation, selectedDay) : [];
 
-  function selectPlace(placeId: string, mode: "explore" | "detail" = "detail") {
+  function selectPlace(placeId: string, mode: BlueprintPanelMode = "detail") {
     setSelectedPlaceId(placeId);
     const day = presentation.days.find((candidate) => candidate.placeIds.includes(placeId));
     if (day) setSelectedDayId(day.id);
     setPanelMode(mode);
+  }
+
+  function openPlacement(placeId: string) {
+    setSelectedPlaceId(placeId);
+    setPlacementPlaceId(placeId);
+    setPendingEdit(null);
+    setPanelMode("placement");
+  }
+
+  function previewPendingEdit(edit: PendingItineraryEditDisplay) {
+    setPendingEdit(edit);
+    setPanelMode("pending");
+  }
+
+  function cancelPendingEdit() {
+    setPendingEdit(null);
+    setPanelMode("explore");
   }
 
   function startDayTabDrag(event: PointerEvent<HTMLDivElement>) {
@@ -116,8 +140,10 @@ export function LandiBlueprintWorkspace({ plan, presentation, onRevise, onTaskTo
 
       <aside className="blueprint-side-panel" aria-label="Itinerary side panel">
         <div className="blueprint-panel-body">
-          <ExplorePanel cards={guideCards} filter={guideFilter} hidden={panelMode !== "explore"} onFilter={setGuideFilter} onSelect={selectPlace} onRevise={onRevise} />
-          {selectedPlace ? <DetailPanel presentation={presentation} planSources={plan.sources} place={selectedPlace} hidden={panelMode !== "detail"} onBack={() => setPanelMode("explore")} onSelect={selectPlace} onRevise={onRevise} /> : <p className="blueprint-empty-note" hidden={panelMode !== "detail"}>Select a timeline block or guide card to open details.</p>}
+          <ExplorePanel cards={guideCards} filter={guideFilter} hidden={panelMode !== "explore"} onFilter={setGuideFilter} onSelect={selectPlace} onAdd={openPlacement} />
+          {selectedPlace ? <DetailPanel presentation={presentation} planSources={plan.sources} place={selectedPlace} hidden={panelMode !== "detail"} onBack={() => setPanelMode("explore")} onSelect={selectPlace} onAdd={openPlacement} /> : <p className="blueprint-empty-note" hidden={panelMode !== "detail"}>Select an itinerary block or guide card to open details.</p>}
+          {placementPlaceId ? <PlacementPanel key={placementPlaceId} presentation={presentation} place={presentation.places.find((place) => place.id === placementPlaceId)} hidden={panelMode !== "placement"} selectedDayId={selectedDay?.id} onBack={() => setPanelMode("explore")} onPreview={previewPendingEdit} /> : null}
+          {pendingEdit ? <PendingEditPanel edit={pendingEdit} hidden={panelMode !== "pending"} onCancel={cancelPendingEdit} onChange={() => setPanelMode("placement")} onConfirm={() => onRevise(pendingEdit.requestText)} /> : null}
         </div>
       </aside>
     </div> : null}
@@ -183,7 +209,7 @@ function BlueprintMap({ presentation, blocks, selectedPlace, onSelectPlace }: { 
   </section>;
 }
 
-function ExplorePanel({ cards, filter, hidden, onFilter, onSelect, onRevise }: { cards: GuideCardDisplay[]; filter: GuideFilter; hidden: boolean; onFilter: (filter: GuideFilter) => void; onSelect: (placeId: string) => void; onRevise: (message?: string) => void }) {
+function ExplorePanel({ cards, filter, hidden, onFilter, onSelect, onAdd }: { cards: GuideCardDisplay[]; filter: GuideFilter; hidden: boolean; onFilter: (filter: GuideFilter) => void; onSelect: (placeId: string) => void; onAdd: (placeId: string) => void }) {
   const visibleCards = filterGuideCards(cards, { type: filter });
   return <div className="blueprint-explore-panel blueprint-panel-view" hidden={hidden}>
     <header><h3>Itinerary Explore</h3></header>
@@ -195,14 +221,14 @@ function ExplorePanel({ cards, filter, hidden, onFilter, onSelect, onRevise }: {
           <p>{card.summary}</p>
           <div className="blueprint-guide-tags">{card.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
         </button>
-        <footer>{card.state !== "unscheduled" ? <span>{card.state === "scheduled" ? `In itinerary${card.timeline ? ` · ${card.timeline.label} ${card.timeline.timeLabel}` : ""}` : "Informational"}</span> : <span />}{card.state === "unscheduled" ? <button type="button" onClick={() => onRevise(`I want to add ${displayPlaceName(card.place)} to the itinerary. Show the placement options and impact before saving.`)}>Add</button> : null}</footer>
+        <footer>{card.state !== "unscheduled" ? <span>{card.state === "scheduled" ? `In itinerary${card.timeline ? ` · ${card.timeline.label} ${card.timeline.timeLabel}` : ""}` : "Informational"}</span> : <span />}{card.state === "unscheduled" ? <button type="button" onClick={() => onAdd(card.place.id)}>Add</button> : null}</footer>
       </article>)}
       {!visibleCards.length ? <p className="blueprint-empty-note">No guide cards match these filters.</p> : null}
     </div>
   </div>;
 }
 
-function DetailPanel({ presentation, planSources, place, hidden, onBack, onSelect, onRevise }: { presentation: PlanPresentation; planSources: Plan["sources"]; place: PlanPlace; hidden: boolean; onBack: () => void; onSelect: (placeId: string) => void; onRevise: (message?: string) => void }) {
+function DetailPanel({ presentation, planSources, place, hidden, onBack, onSelect, onAdd }: { presentation: PlanPresentation; planSources: Plan["sources"]; place: PlanPlace; hidden: boolean; onBack: () => void; onSelect: (placeId: string) => void; onAdd: (placeId: string) => void }) {
   const type = guideTypeForPlace(place);
   const rows = comparisonRowsForPlace(presentation, place);
   const scheduled = presentation.days.find((day) => day.placeIds.includes(place.id));
@@ -220,7 +246,65 @@ function DetailPanel({ presentation, planSources, place, hidden, onBack, onSelec
       <div role="row"><span>Name</span><span>Area</span><span>Route fit</span><span>Timing</span><span>Effort</span><span>Source</span><span /></div>
       {rows.map((row) => <div role="row" key={row.id}><strong>{row.name}</strong><span>{row.area}</span><span>{row.routeFit}</span><span>{row.timing}</span><span>{row.effort}</span><span>{row.sourceState}</span><button type="button" onClick={() => onSelect(row.id)}>Review</button></div>)}
     </div></section> : null}
-    <section className="blueprint-detail-actions"><button type="button" onClick={() => scheduled ? onSelect(place.id) : onRevise(`I want to add ${displayPlaceName(place)} to the itinerary. Show the placement options and impact before saving.`)}>{scheduled ? "Locate in timeline" : "Add in conversation"}</button>{place.officialUrl ? <a href={place.officialUrl} target="_blank" rel="noreferrer">Official site</a> : null}{place.mapUrl ? <a href={place.mapUrl} target="_blank" rel="noreferrer">Map link</a> : null}{place.bookingUrl ? <a href={place.bookingUrl} target="_blank" rel="noreferrer">Booking link</a> : null}</section>
+    <section className="blueprint-detail-actions"><button type="button" onClick={() => scheduled ? onSelect(place.id) : onAdd(place.id)}>{scheduled ? "Locate in itinerary" : "Choose placement"}</button>{place.officialUrl ? <a href={place.officialUrl} target="_blank" rel="noreferrer">Official site</a> : null}{place.mapUrl ? <a href={place.mapUrl} target="_blank" rel="noreferrer">Map link</a> : null}{place.bookingUrl ? <a href={place.bookingUrl} target="_blank" rel="noreferrer">Booking link</a> : null}</section>
+  </div>;
+}
+
+function PlacementPanel({ presentation, place, hidden, selectedDayId, onBack, onPreview }: { presentation: PlanPresentation; place?: PlanPlace | undefined; hidden: boolean; selectedDayId?: string | undefined; onBack: () => void; onPreview: (edit: PendingItineraryEditDisplay) => void }) {
+  const [dayId, setDayId] = useState(selectedDayId ?? presentation.days[0]?.id ?? "");
+  const [position, setPosition] = useState("end");
+  const [meaning, setMeaning] = useState<PlacementMeaning>("scheduled");
+  const day = presentation.days.find((candidate) => candidate.id === dayId) ?? presentation.days[0];
+  const blocks = day ? timelineBlocksForDay(presentation, day) : [];
+  if (!place || !day) return <div className="blueprint-placement-panel blueprint-panel-view" hidden={hidden}><p className="blueprint-empty-note">Select a guide card before choosing placement.</p></div>;
+  const positionOptions = itineraryPlacementOptions(blocks);
+  const selectedPosition = positionOptions.find((option) => option.id === position) ?? positionOptions[positionOptions.length - 1];
+  function previewPlacement() {
+    onPreview(buildPendingItineraryEdit(presentation, place!, { dayId: day!.id, positionId: selectedPosition?.id ?? "end", meaning }));
+  }
+  return <div className="blueprint-placement-panel blueprint-panel-view" hidden={hidden}>
+    <header>
+      <button type="button" className="blueprint-detail-back" aria-label="Back to explore" onClick={onBack}><span aria-hidden="true" /></button>
+      <div><span>Placement</span><h3>{displayPlaceName(place)}</h3><p>Choose where this should enter the itinerary before Landi prepares the edit.</p></div>
+    </header>
+    <section>
+      <h4>Day</h4>
+      <div className="blueprint-placement-days">{presentation.days.map((item) => <button type="button" className={item.id === day.id ? "active" : ""} key={item.id} onClick={() => { setDayId(item.id); setPosition("end"); }}>
+        <strong>{item.shortLabel ?? item.date ?? item.label}</strong>
+        <span>{item.city ?? item.title ?? "Trip day"}</span>
+      </button>)}</div>
+    </section>
+    <section>
+      <h4>Position</h4>
+      <div className="blueprint-placement-options">{positionOptions.map((option) => <button type="button" className={option.id === selectedPosition?.id ? "active" : ""} key={option.id} onClick={() => setPosition(option.id)}>{option.label}</button>)}</div>
+    </section>
+    <section>
+      <h4>Meaning</h4>
+      <div className="blueprint-placement-segment">
+        <button type="button" className={meaning === "scheduled" ? "active" : ""} onClick={() => setMeaning("scheduled")}>Scheduled</button>
+        <button type="button" className={meaning === "optional" ? "active" : ""} onClick={() => setMeaning("optional")}>Optional</button>
+      </div>
+    </section>
+    <section className="blueprint-detail-actions"><button type="button" onClick={previewPlacement}>Preview placement</button></section>
+  </div>;
+}
+
+function PendingEditPanel({ edit, hidden, onCancel, onChange, onConfirm }: { edit: PendingItineraryEditDisplay; hidden: boolean; onCancel: () => void; onChange: () => void; onConfirm: () => void }) {
+  return <div className="blueprint-pending-panel blueprint-panel-view" hidden={hidden}>
+    <header>
+      <button type="button" className="blueprint-detail-back" aria-label="Back to placement" onClick={onChange}><span aria-hidden="true" /></button>
+      <div><span>Pending edit</span><h3>{edit.placeName}</h3><p>Review this itinerary change before Landi prepares it in the conversation.</p></div>
+    </header>
+    <section className="blueprint-pending-summary">
+      <div><span>Day</span><strong>{edit.dayLabel}</strong></div>
+      <div><span>Placement</span><strong>{edit.positionLabel}</strong></div>
+      <div><span>Meaning</span><strong>{edit.meaning === "optional" ? "Optional" : "Scheduled"}</strong></div>
+    </section>
+    <section>
+      <h4>Placement advisories</h4>
+      <ul className="blueprint-placement-advisories">{edit.advisories.map((advisory) => <li className={advisory.tone} key={advisory.text}>{advisory.text}</li>)}</ul>
+    </section>
+    <section className="blueprint-detail-actions"><button type="button" onClick={onConfirm}>Confirm edit</button><button type="button" onClick={onChange}>Change placement</button><button type="button" onClick={onCancel}>Cancel</button></section>
   </div>;
 }
 
