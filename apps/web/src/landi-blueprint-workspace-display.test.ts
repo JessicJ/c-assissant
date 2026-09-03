@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Plan, PlanPlace, PlanPresentation } from "@c-assistant/core";
-import { guideCardsForPresentation, guideStateForPlace, guideTypeForPlace, localTipsForPlan, roughTimeLabel, sourceMarkerForPlace, sourceMarkersForPlan, timelineBlocksForDay } from "./landi-blueprint-workspace-display.js";
+import { comparisonRowsForPlace, filterGuideCards, groupTipsByTheme, guideCardsForPresentation, guideStateForPlace, guideTypeForPlace, localTipsForPlan, roughTimeLabel, sourceMarkerForPlace, sourceMarkersForPlan, sourceSummariesForPlace, timelineBlocksForDay } from "./landi-blueprint-workspace-display.js";
 
 function place(id: string, patch: Partial<PlanPlace> = {}): PlanPlace {
   return {
@@ -67,6 +67,19 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.deepEqual(guideCardsForPresentation(presentationFixture()).map((card) => card.state), ["scheduled", "scheduled", "scheduled"]);
   });
 
+  it("filters guide cards by sub-branch and state", () => {
+    const cards = guideCardsForPresentation(presentationFixture({
+      places: [
+        place("temple", { category: "temple", area: "Higashiyama" }),
+        place("ramen", { category: "restaurant ramen", area: "Central" }),
+        place("product", { category: "local product theme", area: "Central" })
+      ],
+      days: [{ ...presentationFixture().days[0]!, placeIds: ["temple"], stops: [{ placeId: "temple", order: 1 }] }]
+    }));
+    assert.deepEqual(filterGuideCards(cards, { type: "dining", state: "unscheduled" }).map((card) => card.place.id), ["ramen"]);
+    assert.deepEqual(filterGuideCards(cards, { type: "all", state: "informational" }).map((card) => card.place.id), ["product"]);
+  });
+
   it("builds compact source markers from place evidence", () => {
     const marker = sourceMarkerForPlace(place("sourced", {
       evidenceSources: [{ title: "Official hours", url: "https://example.com", role: "Opening hours", status: "verified", checkedAt: "2026-09-01" }]
@@ -75,6 +88,16 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.match(marker?.summary ?? "", /Source verified/);
     assert.match(marker?.summary ?? "", /Official hours/);
     assert.match(marker?.summary ?? "", /Opening hours/);
+  });
+
+  it("lists detail sources without duplicating matching source refs", () => {
+    const sources = sourceSummariesForPlace(place("sourced", {
+      evidenceSources: [{ title: "Official hours", url: "https://example.com", role: "Opening hours", status: "verified", checkedAt: "2026-09-01" }],
+      sourceRefs: ["https://example.com", "https://guide.example"]
+    }), [{ title: "Guide article", url: "https://guide.example", authority: "Guide", retrievedAt: "2026-09-02" }]);
+    assert.equal(sources.length, 2);
+    assert.match(sources[0]?.summary ?? "", /Official hours/);
+    assert.equal(sources[1]?.summary, "Guide article · Guide · 2026-09-02");
   });
 
   it("does not repeat source-attached wording in the sources list", () => {
@@ -98,6 +121,7 @@ describe("Landi Blueprint workspace display helpers", () => {
   });
 
   it("filters tips to destination-relevant practical cautions", () => {
+    const localTip = "Temple etiquette is quiet; check local photo rules before entering, avoid blocking the approach, and step aside before adjusting bags or umbrellas near the gate.";
     const plan = {
       id: "plan-1",
       version: 1,
@@ -113,17 +137,53 @@ describe("Landi Blueprint workspace display helpers", () => {
       sources: [],
       createdAt: "2026-09-01T00:00:00.000Z",
       presentation: presentationFixture({ places: [
-        place("local", { tip: "Temple etiquette is quiet; check local photo rules before entering." }),
+        place("local", { tip: localTip }),
         place("generic", { tip: "Rest early and enjoy the journey." })
       ] })
     } satisfies Plan;
     const tips = localTipsForPlan(plan);
     assert.equal(tips.length, 1);
     assert.match(tips[0]?.body ?? "", /Temple etiquette/);
+    assert.equal(tips[0]?.body, localTip);
+  });
+
+  it("groups destination tips by practical theme", () => {
+    const groups = groupTipsByTheme([
+      { id: "pay", title: "Cash helps", body: "Cash is useful at small local counters.", context: "Kyoto" },
+      { id: "rail", title: "Train exits", body: "Train stations use numbered exits.", context: "Kyoto" }
+    ]);
+    assert.deepEqual(groups.map((group) => group.theme), ["Payment", "Transport"]);
+  });
+
+  it("keeps comparison rows factual and includes effort signals", () => {
+    const rows = comparisonRowsForPlace(presentationFixture({ places: [
+      place("selected", { category: "restaurant", area: "Central" }),
+      place("recheck", { category: "restaurant", area: "Central", priority: "recheck" }),
+      place("official", { category: "restaurant", area: "North", officialUrl: "https://example.com" })
+    ] }), place("selected", { category: "restaurant", area: "Central" }));
+    assert.deepEqual(rows.map((row) => row.effort), ["Recheck before use", "Official link saved"]);
+    assert.deepEqual(rows.map((row) => row.routeFit), ["Same area", "Same city"]);
   });
 
   it("does not invent precise times for flexible blocks", () => {
     assert.equal(roughTimeLabel(undefined, undefined, place("market", { category: "shopping market" }), 3), "Flexible afternoon");
     assert.equal(roughTimeLabel(undefined, "dinner", place("meal", { category: "restaurant" }), 2), "Dinner window");
+  });
+
+  it("keeps route verification out of itinerary card status", () => {
+    const presentation = presentationFixture({
+      routeSegments: [{ id: "route-1", dayId: "day-1", originPlaceId: "temple", destinationPlaceId: "lunch", mode: "walking", verification: "needs_verification", sourceRefs: [] }]
+    });
+    const block = timelineBlocksForDay(presentation, presentation.days[0]!)[0];
+    assert.equal(block?.status, undefined);
+    assert.equal(block?.routeAfter?.verification, "needs_verification");
+  });
+
+  it("keeps only action-relevant itinerary card status", () => {
+    const presentation = presentationFixture({
+      places: [place("reserved", { reservation: { requirement: "required", verification: "verified", note: "Timed entry." } })],
+      days: [{ ...presentationFixture().days[0]!, placeIds: ["reserved"], stops: [{ placeId: "reserved", order: 1 }] }]
+    });
+    assert.equal(timelineBlocksForDay(presentation, presentation.days[0]!)[0]?.status, "Reservation required");
   });
 });
