@@ -130,53 +130,232 @@ test("an itinerary Plan renders the Skill-native interactive result inside Landi
           { id: "belem", name: "Mosteiro dos Jerónimos", localizedName: "热罗尼莫斯修道院", city: "里斯本", area: "贝伦", locationLabel: "Belém", coordinates: [38.6979,-9.2065], category: "sight", priority: "must", contentTier: "deep", durationMinutes: 180, whyWorthIt: "从曼努埃尔式石雕理解里斯本如何把航海财富写进宗教建筑。", plan: "上午入场，之后沿河向东移动。", tip: "门票与开放时间需临近复核。", detailSections: [{ title: "到这里看什么", items: ["从南门辨认航海符号与石雕层次", "进入回廊比较光线和柱式变化"] }], sourceRefs: [] },
           { id: "alfama", name: "Alfama", localizedName: "阿尔法玛", city: "里斯本", area: "Alfama", locationLabel: "Alfama", coordinates: [38.711,-9.13], category: "local-life", priority: "preferred", durationMinutes: 120, whyWorthIt: "用坡道、晾衣阳台和小广场理解旧城仍在运转的生活结构。", plan: "下午从低处向上步行，控制爬坡强度。", detailSections: [], sourceRefs: [] },
           { id: "market", name: "Mercado de Campo de Ourique", localizedName: "坎波德欧里克市场", city: "里斯本", area: "Campo de Ourique", locationLabel: "Campo de Ourique", coordinates: [38.716,-9.166], category: "market", priority: "nearby", durationMinutes: 60, whyWorthIt: "市场兼顾居民采购与短暂停留，适合作为体力下降时的同方向替代。", plan: "有余力时加入第一天下午。", detailSections: [], sourceRefs: [] },
-          { id: "lx", name: "LX Factory", city: "里斯本", area: "Alcântara", locationLabel: "Alcântara", coordinates: [38.703,-9.179], category: "art", priority: "preferred", durationMinutes: 180, whyWorthIt: "旧工业空间中的书店、工作室和餐饮适合观察城市更新的现实使用。", plan: "第二日上午慢走并在同区午餐。", detailSections: [], sourceRefs: [] }
+          { id: "lx", name: "LX Factory", city: "里斯本", area: "Alcântara", locationLabel: "Alcântara", coordinates: [38.703,-9.179], category: "art", priority: "preferred", durationMinutes: 180, whyWorthIt: "旧工业空间中的书店、工作室和餐饮适合观察城市更新的现实使用。", plan: "第二日上午慢走并在同区午餐。", detailSections: [], sourceRefs: [] },
+          { id: "bookshop", name: "Livraria Bertrand", localizedName: "伯特兰书店", city: "里斯本", area: "Chiado", locationLabel: "Chiado", coordinates: [38.7102,-9.1421], category: "bookstore shopping", priority: "nearby", durationMinutes: 45, whyWorthIt: "作为轻量购物点，适合在市中心路线中补进一段书店与街区浏览。", plan: "如果当天还有余力，把它作为短购物停留加入。", detailSections: [], sourceRefs: [] }
         ],
         routeSegments: [{ id: "r1", dayId: "d1", originPlaceId: "belem", destinationPlaceId: "alfama", mode: "transit", verification: "verified", durationMinutes: 45, checkedAt: "2026-08-17T00:00:00Z", label: "沿河公共交通进入旧城", detail: "具体线路与耗时出发前复核。", sourceRefs: ["google_maps"] }]
       }
     }
   }) }));
+  const directRevisionRequests: unknown[] = [];
+  await page.route("**/api/plans/native-trip/blueprint-revisions/direct", async (route) => {
+    const requestBody = route.request().postDataJSON();
+    directRevisionRequests.push(requestBody);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const version = directRevisionRequests.length === 1 ? 2 : 3;
+    const includeMarket = directRevisionRequests.length >= 1;
+    const includeBookshop = directRevisionRequests.length >= 2;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({
+      profile: { status: "ready", displayName: "Trip tester", preferredLanguage: "简体中文", nationality: "Singapore", gender: "prefer_not_to_say", immigrationStatus: "short_term_visitor" },
+      runtime: { selectedKind: "codex" },
+      inbox: [],
+      activePlan: {
+        id: "native-trip", version, title: "里斯本建筑与街区生活", location: "里斯本", dates: "2026-10-12 至 2026-10-13", status: "draft", knownInformation: ["两天建筑与当地生活"], assumptions: [], nextAction: "审阅并确认计划。", createdAt: "2026-08-17T00:00:00.000Z",
+        configuration: { accommodation: { status: "not_set" }, arrival: {}, transport: { preference: "plan_recommended" }, travelContext: { partySize: 3, luggage: "light" } },
+        stages: [],
+        sources: [],
+        presentation: {
+          kind: "itinerary", summary: "里斯本建筑与街区生活", language: "zh-CN", startDate: "2026-10-12", endDate: "2026-10-13", cities: ["里斯本"],
+          days: [
+            { id: "d1", label: "10 月 12 日", shortLabel: "10/12", city: "里斯本", title: "河岸建筑与旧城方向感", summary: "从河岸进入旧城，只保留一座重型主锚点。", anchors: ["belem"], candidates: includeBookshop ? [] : ["market"], placeIds: includeBookshop ? ["belem", "bookshop"] : ["belem", "alfama"], stops: includeBookshop ? [{ placeId: "belem", order: 1, time: "09:30" }, { placeId: "bookshop", order: 2, time: "16:30" }] : [{ placeId: "belem", order: 1, time: "09:30" }, { placeId: "alfama", order: 2, time: "15:30" }] },
+            { id: "d2", label: "10 月 13 日", shortLabel: "10/13", city: "里斯本", title: "街区生活与当代空间", summary: "用市场、咖啡和社区空间组成较轻的一天。", anchors: ["lx"], candidates: [], placeIds: includeMarket ? ["lx", "market"] : ["lx"], stops: includeMarket ? [{ placeId: "lx", order: 1, time: "10:00" }, { placeId: "market", order: 2, time: "15:00" }] : [{ placeId: "lx", order: 1, time: "10:00" }] }
+          ],
+          places: [
+            { id: "belem", name: "Mosteiro dos Jerónimos", localizedName: "热罗尼莫斯修道院", city: "里斯本", area: "贝伦", locationLabel: "Belém", coordinates: [38.6979,-9.2065], category: "sight", priority: "must", durationMinutes: 180, whyWorthIt: "从曼努埃尔式石雕理解里斯本如何把航海财富写进宗教建筑。", plan: "上午入场，之后沿河向东移动。", detailSections: [], sourceRefs: [] },
+            { id: "alfama", name: "Alfama", localizedName: "阿尔法玛", city: "里斯本", area: "Alfama", locationLabel: "Alfama", coordinates: [38.711,-9.13], category: "local-life", priority: "preferred", durationMinutes: 120, whyWorthIt: "用坡道、晾衣阳台和小广场理解旧城仍在运转的生活结构。", plan: "下午从低处向上步行，控制爬坡强度。", detailSections: [], sourceRefs: [] },
+            { id: "bookshop", name: "Livraria Bertrand", localizedName: "伯特兰书店", city: "里斯本", area: "Chiado", locationLabel: "Chiado", coordinates: [38.7102,-9.1421], category: "bookstore shopping", priority: "nearby", durationMinutes: 45, whyWorthIt: "作为轻量购物点，适合在市中心路线中补进一段书店与街区浏览。", plan: "如果当天还有余力，把它作为短购物停留加入。", detailSections: [], sourceRefs: [] },
+            { id: "lx", name: "LX Factory", city: "里斯本", area: "Alcântara", locationLabel: "Alcântara", coordinates: [38.703,-9.179], category: "art", priority: "preferred", durationMinutes: 180, whyWorthIt: "旧工业空间中的书店、工作室和餐饮适合观察城市更新的现实使用。", plan: "第二日上午慢走并在同区午餐。", detailSections: [], sourceRefs: [] },
+            { id: "market", name: "Mercado de Campo de Ourique", localizedName: "坎波德欧里克市场", city: "里斯本", area: "Campo de Ourique", locationLabel: "Campo de Ourique", coordinates: [38.716,-9.166], category: "market", priority: "nearby", durationMinutes: 60, whyWorthIt: "市场兼顾居民采购与短暂停留，适合作为体力下降时的同方向替代。", plan: "有余力时加入第一天下午。", detailSections: [], sourceRefs: [] }
+          ],
+          routeSegments: []
+        }
+      }
+    }) });
+  });
+  const agentRequests: unknown[] = [];
+  await page.route("**/api/agent/chat", (route) => {
+    agentRequests.push(route.request().postDataJSON());
+    return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Agent route should not be used for direct itinerary edits." }) });
+  });
 
-  await page.goto("/#day=d2&poi=belem");
-  await expect(page.getByRole("region", { name: "Interactive trip plan" })).toBeVisible();
-  await expect(page.getByText("目标", { exact: true })).toHaveCount(0);
-  await expect(page.locator(".leaflet-container")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "热罗尼莫斯修道院" })).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Day itinerary" }).getByText("10/13 · 里斯本", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Full trip Back to overview" }).click();
-  const tripOverview = page.getByLabel("Trip overview");
-  await expect(tripOverview).toContainText("3Travelers");
-  await expect(tripOverview).toContainText("0Day trips");
-  await expect(tripOverview).toContainText("4Planned places");
-  await expect(page.locator(".trip-city-tabs").getByRole("button", { name: "Full trip" })).toBeVisible();
-  await expect(page.locator(".trip-city-tabs").getByRole("button", { name: "里斯本" })).toBeVisible();
-  const candidateToggle = page.getByRole("checkbox", { name: "Show optional places" });
-  await expect(candidateToggle).toBeChecked();
-  await candidateToggle.uncheck();
-  await candidateToggle.check();
-  await expect(page.locator('[data-open-day="d1"] .day-timeline-time')).toHaveText(["09:30–12:30", "15:30–17:30"]);
-  await expect(page.locator('[data-open-day="d1"] .day-timeline-name')).toHaveText(["Mosteiro dos Jerónimos", "Alfama"]);
-  await expect(page.locator('[data-open-day="d1"] .day-summary')).toContainText("从河岸进入旧城");
-  await expect(page.locator('[data-open-day="d1"] .day-reason')).toContainText("上午先看需要集中精力的建筑");
-  await expect(page.locator('[data-open-day="d1"] .day-timeline-transit')).toContainText("Public transport · 沿河公共交通进入旧城 · 45 min");
-  await expect(page.locator('[data-open-day="d1"] .day-transit-expand')).toHaveCount(0);
-  await expect(page.locator('[data-open-day="d2"] .day-timeline-time')).toHaveText(["10:00–13:00"]);
-  await expect(tripOverview).not.toContainText("待定");
-  await expect(tripOverview).not.toContainText("当天保留弹性");
-  await expect(tripOverview).not.toContainText("主锚点");
-  await page.getByRole("button", { name: /河岸建筑与旧城方向感/ }).click();
-  await expect(page.getByText("沿河公共交通进入旧城", { exact: true })).toBeVisible();
-  await expect(page.locator(".place-transit summary").getByText("沿河公共交通进入旧城", { exact: true })).toBeVisible();
-  await page.locator(".place-transit summary").click();
-  await expect(page.getByRole("region", { name: "Day itinerary" }).getByText("具体线路与耗时出发前复核。", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: /^1 Mosteiro dos Jerónimos/ }).click();
-  await expect(page.getByRole("link", { name: "Google Maps", exact: true })).toHaveAttribute("href", /google\.com\/maps\/search/);
-  await page.route("**/api/plans/native-trip/presentation", async (route) => route.abort("blockedbyclient"));
-  await page.locator('[data-sortable-poi="belem"]').hover();
-  await page.getByRole("button", { name: "Move Mosteiro dos Jerónimos down" }).click();
-  await expect.poll(async () => page.locator("#day-place-list [data-sortable-poi]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-sortable-poi")))).toEqual(["alfama", "belem"]);
-  await page.getByRole("button", { name: /^2 Mosteiro dos Jerónimos/ }).click();
-  await expect(page.getByRole("heading", { name: "Mosteiro dos Jerónimos" })).toBeVisible();
-  await page.getByRole("button", { name: "Close place details" }).click();
+  await page.goto("/");
+  await expect(page.getByLabel("Landi Blueprint workspace")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Itinerary" })).toHaveClass(/active/);
+  await expect(page.locator(".blueprint-map-stage")).toBeVisible();
+  await expect(page.locator(".blueprint-map-stage.blueprint-google-map, .blueprint-map-stage.leaflet-container")).toBeVisible();
+  await expect(page.locator(".blueprint-map-bubble")).toHaveCount(2, { timeout: 15000 });
+  await expect(page.locator(".blueprint-map-dot")).toHaveCount(2);
+  await expect.poll(async () => page.locator(".blueprint-map-dot").evaluateAll((dots) => dots.map((dot) => dot.textContent?.trim() ?? ""))).toEqual(["", ""]);
+  await expect(page.locator(".blueprint-map-bubble").filter({ hasText: "Mosteiro dos Jerónimos" })).toBeVisible();
+  await expect(page.locator(".blueprint-map-bubble").filter({ hasText: "Mercado de Campo de Ourique" })).toHaveCount(0);
+  await expect(page.locator(".blueprint-timeline-list .blueprint-itinerary-card-main")).toHaveText([
+    /09:30.*Mosteiro dos Jerónimos/s,
+    /15:30.*Alfama/s
+  ]);
+  await page.locator(".blueprint-timeline-list .blueprint-itinerary-card-main").filter({ hasText: "Alfama" }).click();
+  await expect(page.locator(".blueprint-map-bubble.selected").filter({ hasText: "Alfama" })).toBeVisible();
+  await expect(page.locator(".blueprint-map-bubble.selected").filter({ hasText: "Mosteiro dos Jerónimos" })).toHaveCount(0);
+  await page.getByLabel("Itinerary side panel").getByRole("button", { name: "Back to explore" }).click();
+
+  await page.locator(".blueprint-day-strip button").filter({ hasText: "10/13" }).click();
+  await expect(page.locator(".blueprint-map-bubble")).toHaveCount(1, { timeout: 15000 });
+  await expect(page.locator(".blueprint-map-bubble").filter({ hasText: "LX Factory" })).toBeVisible();
+  await page.locator(".blueprint-day-strip button").filter({ hasText: "10/12" }).click();
+
+  const sidePanel = page.getByLabel("Itinerary side panel");
+  await expect(sidePanel.getByRole("heading", { name: "Explore" })).toBeVisible();
+  await expect(sidePanel.getByRole("button", { name: "All", exact: true })).toHaveCount(0);
+  await expect(sidePanel.locator(".blueprint-guide-filters button.active")).toHaveCount(0);
+  await expect(sidePanel).toContainText("Mosteiro dos Jerónimos");
+  await expect(sidePanel).toContainText("Alfama");
+  await expect(sidePanel).toContainText("LX Factory");
+  await expect(sidePanel).toContainText("Mercado de Campo de Ourique");
+  await expect(sidePanel).toContainText("Livraria Bertrand");
+  await expect(sidePanel.locator(".blueprint-source-marker")).toHaveCount(0);
+  await expect(sidePanel.getByRole("button", { name: /^i$/ })).toHaveCount(0);
+
+  await sidePanel.getByRole("button", { name: "Attractions" }).click();
+  await expect(sidePanel.locator(".blueprint-guide-filters button.active")).toHaveText("Attractions");
+  await expect(sidePanel).not.toContainText("Mercado de Campo de Ourique");
+  await sidePanel.getByRole("button", { name: "Attractions" }).click();
+  await expect(sidePanel.locator(".blueprint-guide-filters button.active")).toHaveCount(0);
+  await expect(sidePanel).toContainText("Mercado de Campo de Ourique");
+
+  await sidePanel.getByRole("button", { name: "Dining" }).click();
+  await expect(sidePanel.locator(".blueprint-guide-filters button.active")).toHaveText("Dining");
+  await expect(sidePanel).toContainText("Mercado de Campo de Ourique");
+  await expect(sidePanel).not.toContainText("LX Factory");
+  await expect(sidePanel).not.toContainText("Livraria Bertrand");
+
+  await sidePanel.getByRole("button", { name: /Mercado de Campo de Ourique/ }).click();
+  await expect(sidePanel.getByRole("heading", { name: /Mercado de Campo de Ourique/ })).toBeVisible();
+  await expect(sidePanel.getByRole("button", { name: "Add to itinerary" })).toBeVisible();
+  await expect(sidePanel.getByRole("button", { name: "Back to explore" })).toBeVisible();
+  await expect(sidePanel.getByRole("button", { name: "Detail" })).toHaveCount(0);
+
+  await sidePanel.getByRole("button", { name: "Add to itinerary" }).click();
+  await expect(sidePanel.getByText("Placement", { exact: true })).toBeVisible();
+  await expect(sidePanel.getByText("Meaning", { exact: true })).toHaveCount(0);
+  await expect(sidePanel.getByRole("button", { name: "Scheduled", exact: true })).toHaveCount(0);
+  await expect(sidePanel.getByRole("button", { name: "Optional", exact: true })).toHaveCount(0);
+
+  await sidePanel.getByRole("button", { name: "10/13" }).click();
+  await sidePanel.getByRole("button", { name: "Add to draft" }).click();
+  await expect(page.getByText("1 unsaved change")).toBeVisible();
+  await expect(page.getByText("1 day")).toBeVisible();
+  await expect(sidePanel.getByRole("heading", { name: "Explore" })).toBeVisible();
+  await expect(page.locator(".blueprint-timeline-list").getByRole("button", { name: /Pending itinerary edit for Mercado de Campo de Ourique/ })).toContainText("Draft");
+  await expect(page.locator(".blueprint-map-bubble.pending").filter({ hasText: "Mercado de Campo de Ourique" })).toBeVisible();
+  await expect(page.locator(".blueprint-map-bubble.selected").filter({ hasText: "Mercado de Campo de Ourique" })).toBeVisible();
+
+  await sidePanel.getByRole("button", { name: "Dining" }).click();
+  await sidePanel.getByRole("button", { name: "Shopping" }).click();
+  await sidePanel.getByRole("button", { name: /Livraria Bertrand/ }).click();
+  await sidePanel.getByRole("button", { name: "Add to itinerary" }).click();
+  await sidePanel.getByRole("button", { name: "10/12" }).click();
+  await sidePanel.getByRole("button", { name: "Add to draft" }).click();
+  await expect(page.getByText("2 unsaved changes")).toBeVisible();
+  await expect(page.getByText("2 days")).toBeVisible();
+
+  await page.getByRole("button", { name: "Confirm", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Applying...", exact: true })).toBeDisabled();
+  await expect.poll(() => directRevisionRequests.length).toBe(2);
+  expect(directRevisionRequests[0]).toMatchObject({ kind: "add_place_to_day", expectedVersion: 1, placeId: "market", dayId: "d2", position: { kind: "end" } });
+  expect(directRevisionRequests[1]).toMatchObject({ kind: "add_place_to_day", expectedVersion: 2, placeId: "bookshop", dayId: "d1", position: { kind: "end" } });
+  expect(agentRequests).toEqual([]);
+  await expect(page.getByRole("region", { name: "Adjust your plan with Landi" })).toHaveCount(0);
+  await expect(page.getByText("unsaved change")).toHaveCount(0);
+  await page.locator(".blueprint-day-strip button").filter({ hasText: "10/13" }).click();
+  await expect(page.locator(".blueprint-timeline-list .blueprint-itinerary-card-main").filter({ hasText: "Mercado de Campo de Ourique" })).toBeVisible();
+  await expect(sidePanel.getByRole("heading", { name: "Explore" })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test("same-day itinerary drag reorder stages and confirms a direct Blueprint move", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  const workspace = {
+    profile: { status: "ready", displayName: "Trip tester", preferredLanguage: "简体中文", nationality: "Singapore", gender: "prefer_not_to_say", immigrationStatus: "short_term_visitor" },
+    runtime: { selectedKind: "codex" },
+    inbox: [],
+    activePlan: {
+      id: "drag-trip", version: 1, title: "Tokyo route", location: "Tokyo", dates: "2026-10-12", status: "draft", knownInformation: [], assumptions: [], nextAction: "Review.", createdAt: "2026-08-17T00:00:00.000Z",
+      configuration: { accommodation: { status: "not_set" }, arrival: {}, transport: { preference: "plan_recommended" }, travelContext: { partySize: 2 } },
+      stages: [],
+      sources: [],
+      presentation: {
+        kind: "itinerary", summary: "Tokyo route", language: "en", startDate: "2026-10-12", endDate: "2026-10-12", cities: ["Tokyo"],
+        days: [{ id: "d1", label: "October 12", shortLabel: "10/12", city: "Tokyo", title: "Neighborhood day", summary: "A compact same-day route.", placeIds: ["a", "b", "c"], stops: [{ placeId: "a", order: 1, time: "09:00" }, { placeId: "b", order: 2 }, { placeId: "c", order: 3 }] }],
+        places: [
+          { id: "a", name: "Fixed Museum", city: "Tokyo", area: "Ueno", locationLabel: "Ueno", coordinates: [35.714, 139.774], category: "museum", priority: "preferred", durationMinutes: 90, whyWorthIt: "A timed morning anchor.", plan: "Visit at opening.", detailSections: [], sourceRefs: [] },
+          { id: "b", name: "Book Street", city: "Tokyo", area: "Jimbocho", locationLabel: "Jimbocho", coordinates: [35.695, 139.758], category: "shopping street", priority: "preferred", durationMinutes: 60, whyWorthIt: "A flexible browsing stop.", plan: "Use after the anchor.", detailSections: [], sourceRefs: [] },
+          { id: "c", name: "Coffee Stop", city: "Tokyo", area: "Kanda", locationLabel: "Kanda", coordinates: [35.691, 139.77], category: "coffee cafe", priority: "preferred", durationMinutes: 45, whyWorthIt: "A flexible rest stop.", plan: "Use when energy dips.", detailSections: [], sourceRefs: [] }
+        ],
+        routeSegments: []
+      }
+    }
+  };
+  await page.route("**/api/workspace", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(workspace) }));
+  await page.route("**/api/plans/history", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/api/configuration", (route) => route.fulfill({ contentType: "application/json", body: "{}" }));
+  await page.route("**/api/runtimes", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  const directRevisionRequests: unknown[] = [];
+  await page.route("**/api/plans/drag-trip/blueprint-revisions/direct", async (route) => {
+    directRevisionRequests.push(route.request().postDataJSON());
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({
+      ...workspace,
+      activePlan: {
+        ...workspace.activePlan,
+        version: 2,
+        presentation: {
+          ...workspace.activePlan.presentation,
+          days: [{ ...workspace.activePlan.presentation.days[0], placeIds: ["a", "c", "b"], stops: [{ placeId: "a", order: 1, time: "09:00" }, { placeId: "c", order: 2 }, { placeId: "b", order: 3 }] }]
+        }
+      }
+    }) });
+  });
+
+  await page.goto("/");
+  const timeline = page.locator(".blueprint-timeline-list");
+  await expect(timeline.getByRole("button", { name: /Move Fixed Museum/ })).toBeEnabled();
+  await expect(timeline.getByRole("button", { name: /Move Coffee Stop/ })).toBeEnabled();
+  const coffeeHandleBox = await timeline.getByRole("button", { name: /Move Coffee Stop/ }).boundingBox();
+  const targetDropBox = await timeline.locator(".blueprint-itinerary-drop-zone").nth(1).boundingBox();
+  if (!coffeeHandleBox || !targetDropBox) throw new Error("Drag handle or target drop zone is not visible.");
+  await page.mouse.move(coffeeHandleBox.x + coffeeHandleBox.width / 2, coffeeHandleBox.y + coffeeHandleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(targetDropBox.x + targetDropBox.width / 2, targetDropBox.y + targetDropBox.height / 2, { steps: 10 });
+  await page.mouse.up();
+  await expect(page.getByText("1 unsaved change")).toBeVisible();
+  await expect(timeline.locator(".blueprint-itinerary-card-main").filter({ hasText: "Coffee Stop" })).toContainText("Not saved");
+  await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Fixed Museum", "Coffee Stop", "Book Street"]);
+  await expect(timeline.locator(".blueprint-itinerary-card-main > span")).toHaveText(["09:00", "Late morning option", "Afternoon"]);
+
+  const movedCoffeeHandleBox = await timeline.getByRole("button", { name: /Move Coffee Stop/ }).boundingBox();
+  const restoreDropBox = await timeline.locator(".blueprint-itinerary-drop-zone").last().boundingBox();
+  if (!movedCoffeeHandleBox || !restoreDropBox) throw new Error("Restoring drag handle or drop zone is not visible.");
+  await page.mouse.move(movedCoffeeHandleBox.x + movedCoffeeHandleBox.width / 2, movedCoffeeHandleBox.y + movedCoffeeHandleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(restoreDropBox.x + restoreDropBox.width / 2, restoreDropBox.y + restoreDropBox.height / 2, { steps: 10 });
+  await page.mouse.up();
+  await expect(page.getByText("unsaved change")).toHaveCount(0);
+  await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Fixed Museum", "Book Street", "Coffee Stop"]);
+  await expect(timeline.locator(".blueprint-itinerary-card-main > span")).toHaveText(["09:00", "Late morning option", "Afternoon"]);
+
+  const secondCoffeeHandleBox = await timeline.getByRole("button", { name: /Move Coffee Stop/ }).boundingBox();
+  const secondTargetDropBox = await timeline.locator(".blueprint-itinerary-drop-zone").nth(1).boundingBox();
+  if (!secondCoffeeHandleBox || !secondTargetDropBox) throw new Error("Second drag handle or target drop zone is not visible.");
+  await page.mouse.move(secondCoffeeHandleBox.x + secondCoffeeHandleBox.width / 2, secondCoffeeHandleBox.y + secondCoffeeHandleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(secondTargetDropBox.x + secondTargetDropBox.width / 2, secondTargetDropBox.y + secondTargetDropBox.height / 2, { steps: 10 });
+  await page.mouse.up();
+  await expect(page.getByText("1 unsaved change")).toBeVisible();
+  await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Fixed Museum", "Coffee Stop", "Book Street"]);
+  await expect(timeline.locator(".blueprint-itinerary-card-main > span")).toHaveText(["09:00", "Late morning option", "Afternoon"]);
+
+  await page.getByRole("button", { name: "Confirm", exact: true }).click();
+  await expect.poll(() => directRevisionRequests.length).toBe(1);
+  expect(directRevisionRequests[0]).toMatchObject({ kind: "move_place_within_day", expectedVersion: 1, placeId: "c", dayId: "d1", position: { kind: "after", afterPlaceId: "a" } });
+  await expect(page.getByText("unsaved change")).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });

@@ -15,7 +15,7 @@ test("SQLite records its schema baseline and creates a verified private backup",
     const store = new SqliteWorkspaceStore(databasePath);
     store.updateProfile({ displayName: "Backup owner", preferredLanguage: "English", nationality: "Canada", gender: "not_specified", immigrationStatus: "tourist_visa" });
     const maintenance = store.getDatabaseMaintenanceStatus();
-    assert.deepEqual({ schemaVersion: maintenance.schemaVersion, latest: maintenance.latestSchemaVersion, integrity: maintenance.integrity }, { schemaVersion: 18, latest: 18, integrity: "ok" });
+    assert.deepEqual({ schemaVersion: maintenance.schemaVersion, latest: maintenance.latestSchemaVersion, integrity: maintenance.integrity }, { schemaVersion: 19, latest: 19, integrity: "ok" });
     assert.equal(maintenance.migrations[0]?.name, "v1-local-workspace-baseline");
     assert.equal(maintenance.migrations[1]?.name, "country-pack-source-evidence-links");
     assert.equal(maintenance.migrations[2]?.name, "telegram-one-route-transport-override");
@@ -50,7 +50,7 @@ test("SQLite refuses to open a workspace created by a newer schema", () => {
     const future = new DatabaseSync(databasePath);
     future.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, applied_at TEXT NOT NULL); INSERT INTO schema_migrations VALUES (999, 'future', '2026-08-07T00:00:00.000Z');");
     future.close();
-    assert.throws(() => new SqliteWorkspaceStore(databasePath), /supports schema 18.*schema 999/i);
+    assert.throws(() => new SqliteWorkspaceStore(databasePath), /supports schema 19.*schema 999/i);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -391,7 +391,7 @@ test("SQLite upgrades legacy stage titles to explicit presentation kinds", () =>
 
     const upgraded = new SqliteWorkspaceStore(databasePath);
     assert.deepEqual(upgraded.getWorkspace().activePlan.stages.map((stage) => stage.presentationKind), ["overview", "itinerary", "budget"]);
-    assert.equal(upgraded.getDatabaseMaintenanceStatus().schemaVersion, 18);
+    assert.equal(upgraded.getDatabaseMaintenanceStatus().schemaVersion, 19);
     upgraded.close();
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -406,7 +406,7 @@ test("SQLite upgrades a schema-one workspace with source-evidence link tables", 
     old.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, applied_at TEXT NOT NULL); INSERT INTO schema_migrations VALUES (1, 'v1-local-workspace-baseline', '2026-08-07T00:00:00.000Z');");
     old.close();
     const store = new SqliteWorkspaceStore(databasePath);
-    assert.equal(store.getDatabaseMaintenanceStatus().schemaVersion, 18);
+    assert.equal(store.getDatabaseMaintenanceStatus().schemaVersion, 19);
     const tables = new DatabaseSync(databasePath, { readOnly: true });
     const names = tables.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%run_sources' ORDER BY name").all().map((row) => (row as { name: string }).name);
     assert.deepEqual(names, ["country_pack_skill_run_sources", "plan_compilation_run_sources"]);
@@ -1689,13 +1689,13 @@ test("SQLite persists recoverable Blueprint checkpoints, events, lineage, and ex
     proposalRef: { sessionId: session.id, proposalVersion: 1 },
     skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
     status: "completed",
-    batches: [{ id: "tokyo", scopeLabel: "Tokyo", status: "completed", placeIds: ["a", "b"], eventIds: [], sourceIds: [], completedAt: "2026-08-26T00:01:00.000Z" }],
-    places: ["a", "b"].map((id) => ({ id, name: id, locationLabel: "Tokyo", city: "Tokyo", category: "sight", priority: "preferred" as const, whyWorthIt: `Why ${id}`, plan: `Visit ${id}`, evidence: [] })),
+    batches: [{ id: "tokyo", scopeLabel: "Tokyo", status: "completed", placeIds: ["a", "b", "c"], eventIds: [], sourceIds: [], completedAt: "2026-08-26T00:01:00.000Z" }],
+    places: ["a", "b", "c"].map((id) => ({ id, name: id, locationLabel: "Tokyo", city: "Tokyo", category: "sight", priority: "preferred" as const, coordinates: [35.68, 139.76] as [number, number], whyWorthIt: `Why ${id}`, plan: `Visit ${id}`, evidence: [] })),
     events: [], sources: [], actionRequirements: [],
     createdAt: "2026-08-26T00:00:02.000Z", updatedAt: "2026-08-26T00:01:00.000Z", completedAt: "2026-08-26T00:01:00.000Z"
   };
   store.saveResearchSet(research);
-  assert.equal(store.getResearchSetByGenerationKey(generationKey)?.places.length, 2);
+  assert.equal(store.getResearchSetByGenerationKey(generationKey)?.places.length, 3);
 
   const blueprint: TripBlueprint = {
     schemaVersion: TRIP_BLUEPRINT_SCHEMA_VERSION,
@@ -1704,14 +1704,14 @@ test("SQLite persists recoverable Blueprint checkpoints, events, lineage, and ex
     title: "Tokyo", summary: "Tokyo plan", language: "en", destinations: ["Tokyo"], startDate: "2026-09-01", endDate: "2026-09-02",
     places: research.places, events: [], sources: [],
     days: [
-      { id: "d1", date: "2026-09-01", kind: "scheduled", city: "Tokyo", title: "Day one", summary: "Two stops", stops: [{ placeId: "a", order: 1 }, { placeId: "b", order: 2 }], candidatePlaceIds: [] },
+      { id: "d1", date: "2026-09-01", kind: "scheduled", city: "Tokyo", title: "Day one", summary: "Two stops", stops: [{ placeId: "a", order: 1 }, { placeId: "b", order: 2 }], candidatePlaceIds: ["c"] },
       { id: "d2", date: "2026-09-02", kind: "rest", city: "Tokyo", title: "Rest", summary: "Unstructured day", stops: [], candidatePlaceIds: [] }
     ],
     movements: [{ id: "m1", dayId: "d1", originPlaceId: "a", destinationPlaceId: "b", mode: "unknown", status: "recheck", evidence: [] }],
     actionRequirements: [], createdAt: "2026-08-26T00:02:00.000Z"
   };
   store.saveTripBlueprint(blueprint);
-  assert.equal(store.getTripBlueprintByGenerationKey(generationKey)?.places.length, 2);
+  assert.equal(store.getTripBlueprintByGenerationKey(generationKey)?.places.length, 3);
 
   const compilation = compileTripBlueprint(blueprint, { createdAt: "2026-08-26T00:02:01.000Z" });
   const compiled = store.createCompiledBlueprintPlan(compilation).activePlan;
@@ -1719,6 +1719,16 @@ test("SQLite persists recoverable Blueprint checkpoints, events, lineage, and ex
   assert.equal(compiled.presentation, undefined);
   assert.deepEqual(store.getPlanBlueprintLineage(compiled.id), compilation.lineage);
   assert.equal(store.createCompiledBlueprintPlan(compilation).activePlan.id, compiled.id);
+
+  const revisedWorkspace = store.applyDirectBlueprintRevision({
+    expectedPlanId: compiled.id,
+    expectedVersion: compiled.version,
+    revision: { kind: "add_place_to_day", placeId: "c", dayId: "d1", position: { kind: "after", afterPlaceId: "a" }, createdAt: "2026-08-26T00:03:00.000Z" }
+  });
+  assert.equal(revisedWorkspace.activeBlueprint?.version, 2);
+  assert.deepEqual(revisedWorkspace.activeBlueprint?.days[0]?.stops.map((stop) => stop.placeId), ["a", "c", "b"]);
+  assert.deepEqual(revisedWorkspace.activeBlueprint?.movements.map((movement) => movement.status), ["recheck", "recheck"]);
+  assert.equal(store.getPlanBlueprintLineage(revisedWorkspace.activePlan.id)?.blueprintVersion, 2);
 
   const first = store.appendBlueprintGenerationEvent({ generationKey, stage: "research", status: "running", scopeLabel: "Tokyo", savedPlaceCount: 2, detail: "Tokyo research saved", createdAt: "2026-08-26T00:01:00.000Z" });
   const second = store.appendBlueprintGenerationEvent({ generationKey, stage: "compile", status: "running", detail: "Compiling Draft Plan", createdAt: "2026-08-26T00:02:01.000Z" });

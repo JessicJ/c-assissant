@@ -380,7 +380,7 @@ The workspace should treat attraction guide, shopping guide, local signature exp
 The workspace should allow content to move between modules through clear actions:
 
 - add an attraction, shopping area, dining option, or experience to a day;
-- save a place as an optional candidate;
+- save a place for later review;
 - mark an item as must-visit, preferred, optional, archived, booked, or needs recheck;
 - create a preparation task from a guide item;
 - lock a fixed booking or scheduled commitment;
@@ -389,13 +389,14 @@ The workspace should allow content to move between modules through clear actions
 When the traveler selects the add action on an unscheduled Guide Card, Web should open a lightweight Placement Selection State instead of inserting the item directly. In that state, the traveler should be able to choose:
 
 - exact day;
-- scheduled stop or optional candidate;
 - placement position or rough time block when useful, such as morning, lunch, afternoon, evening, or flexible;
-- whether the new item should replace, append to, or be compared with existing content.
+- whether the new item should replace, append to, or be compared with existing content when that distinction is required.
+
+Web should not expose a required scheduled-or-optional meaning selector in this flow. Landi may mark the resulting replacement draft as scheduled content or flexible itinerary content after route, timing, and constraint checks.
 
 Placement Selection State should show available positions and lightweight Placement Advisories. Advisories may flag route friction, opening-hour uncertainty, meal timing mismatch, reservation sensitivity, weather fit, or day pacing risk. They should guide the traveler without blocking selection by default. Hard blocking should be reserved for fixed bookings, explicit traveler constraints, safety constraints, or structural defects that would make the Blueprint unusable.
 
-After placement is selected, the workspace should create a Pending Itinerary Edit using the existing edit-and-confirm interaction. For ordinary guide additions, the timeline only needs to highlight the changed placement and expose confirm/cancel through the existing edit state. These additions do not need a separate temporary timeline block or mandatory impact summary before saving. Each confirmed meaningful change should be version-aware and preserve unrelated plan content.
+After placement is selected, the workspace should create a Pending Itinerary Edit inside the workspace rather than opening a new conversation turn. For ordinary guide additions, the itinerary sequence only needs to highlight the changed placement and expose change/cancel controls until the direct save path exists. These additions do not need a separate mandatory impact summary before saving. Each confirmed meaningful change should be version-aware and preserve unrelated plan content. Until the direct Blueprint Revision write path is connected, Web may keep this as an unsaved local preview and must not imply that the edit has been saved.
 
 ## Editing and Impact Rules
 
@@ -431,6 +432,7 @@ Required content structures include:
 
 - module identity and display order;
 - place and guide item identities;
+- place display intent, including `display.type` for guide branch membership and optional `display.markerKind` for map marker icon semantics;
 - guide theme identities and ordering;
 - Guide Relationship Graph for concept-to-place relationships;
 - `localFoods -> diningPlaces` relationships for dining guide material;
@@ -471,6 +473,15 @@ Required content structures include:
 - relationship metadata, such as alternative, nearby, pairs well with, conflicts with, requires booking, or requires preparation.
 
 The Web presentation should read from Landi-owned normalized structures. It should not read raw skill output.
+
+Current Trip Blueprint Contract V2 slice:
+
+- `moduleIdentity` declares that the Trip Blueprint primarily powers the Itinerary workspace while Preparation, Tips, and Sources are supporting Blueprint-backed modules.
+- `guideTheme` records the trip narrative, visitor mode, taste model labels when used, and city or route segments tied to itinerary days.
+- `guideRelationshipGraph` records place-to-place relationships such as alternatives, same-direction additions, meal support, rainy-day swaps, and anchor support.
+- `schedulingEligibility` on places records whether an item is directly schedulable, informational only, blocked, or high-impact.
+- `blocks` on itinerary days records typed sequence units such as stops, flexible time, meals, rest, transfers, lodging anchors, and events.
+- `fieldEvidence` records evidence for specific Blueprint fields or claims so importer validation does not treat whole-place evidence as proof for every displayed assertion.
 
 Images are optional enhancements for itinerary guide material. If no suitable image is available for a guide item, itinerary block, or product, Web should render a polished text-only card and should not reserve an empty image area or show a decorative placeholder. Pre-departure preparation and Travel Tips do not require images and should render as text checklist or text card content.
 
@@ -548,6 +559,7 @@ A Landi-native planning Skill artifact is acceptable when it satisfies these gen
 - It provides explicit Guide Relationship Graph data for food-to-place, product-to-place, experience-theme-to-offering, and attraction-to-place relationships.
 - It marks useful guide material without a concrete schedulable object as Informational Guide Items that remain visible but unavailable for add-to-itinerary actions.
 - It keeps Guide Card Summary short and scannable, with optional images, useful scanning tags, itinerary state where useful, image-level Source Marker metadata when an image exists, and state-aware actions.
+- It assigns every place a structured display type for Attractions, Dining, Shopping, or Experiences, and only uses a distinct marker kind when the map icon should intentionally differ from the guide branch.
 - It provides Guide Value Explanation when useful, using grounded Guide Editorial Voice rather than advertising language or social-media hype.
 - It confines Guide Editorial Voice to guide value/supporting copy, and uses Functional Workspace Voice for timeline, preparation, tips, comparison rows, statuses, and action controls.
 - It supports Guide Option Comparison for multiple concrete dining places, purchase places, or experience offerings as peer options, without candidate labels, default recommended labels, or forced best choices.

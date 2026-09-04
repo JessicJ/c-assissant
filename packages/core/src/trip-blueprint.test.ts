@@ -74,6 +74,59 @@ test("Trip Blueprint accepts explicit rest days and unverified movement", () => 
   assert.deepEqual(tripBlueprintIntegrityIssues(value, { expectedResearchPlaceIds: research().places.map((item) => item.id) }), []);
 });
 
+test("Trip Blueprint validates optional place display intent", () => {
+  const value = blueprint();
+  value.places[0] = { ...value.places[0]!, display: { type: "shopping", markerKind: "shopping" } };
+  assert.deepEqual(tripBlueprintIntegrityIssues(value), []);
+
+  value.places[0] = { ...value.places[0]!, display: { type: "activity" as "shopping", markerKind: "shopping" } };
+  const issues = tripBlueprintIntegrityIssues(value);
+  assert.ok(issues.includes("place a has invalid display type"));
+});
+
+test("Trip Blueprint validates V2 guide relationships, scheduling, blocks, and field evidence", () => {
+  const value = blueprint();
+  value.moduleIdentity = {
+    primaryModule: "itinerary",
+    enabledModules: [
+      { id: "itinerary", title: "Itinerary", source: "blueprint" },
+      { id: "preparation", title: "Preparation", source: "blueprint" }
+    ]
+  };
+  value.guideTheme = {
+    title: "Tokyo neighborhoods",
+    narrative: "A balanced visitor route.",
+    visitorMode: "balanced-visitor",
+    citySegments: [{ id: "tokyo", city: "Tokyo", title: "Tokyo", summary: "Two days", dayIds: ["d1"] }]
+  };
+  value.places[2] = {
+    ...value.places[2]!,
+    schedulingEligibility: { decision: "schedulable", reason: "Works as a same-city alternative.", suitableDayIds: ["d1"] },
+    fieldEvidence: [{ path: "whyWorthIt", status: "recheck", evidence: [] }]
+  };
+  value.guideRelationshipGraph = { relationships: [{ id: "rel-1", kind: "alternative", fromPlaceId: "c", toPlaceId: "a", rationale: "Use C when A is crowded.", dayIds: ["d1"], evidence: [] }] };
+  value.days[0] = {
+    ...value.days[0]!,
+    blocks: [
+      { id: "block-1", kind: "stop", order: 1, placeId: "a", evidence: [] },
+      { id: "block-2", kind: "stop", order: 2, placeId: "b", evidence: [] }
+    ]
+  };
+  assert.deepEqual(tripBlueprintIntegrityIssues(value), []);
+
+  value.guideRelationshipGraph.relationships[0] = { ...value.guideRelationshipGraph.relationships[0]!, toPlaceId: "missing", dayIds: ["missing-day"] };
+  value.days[0].blocks![1] = { ...value.days[0].blocks![1]!, order: 4 };
+  value.places[2]!.schedulingEligibility = { decision: "high_impact", reason: "Requires a new city day.", suitableDayIds: ["missing-day"] };
+  value.fieldEvidence = [{ path: "summary", status: "verified", evidence: [{ sourceId: "missing-source", status: "verified" }] }];
+  const issues = tripBlueprintIntegrityIssues(value);
+  assert.ok(issues.some((issue) => issue.includes("guide relationship rel-1 references unknown place missing")));
+  assert.ok(issues.some((issue) => issue.includes("guide relationship rel-1 references unknown day missing-day")));
+  assert.ok(issues.some((issue) => issue.includes("day d1 block order must be contiguous")));
+  assert.ok(issues.some((issue) => issue.includes("place c high-impact scheduling eligibility requires reasons")));
+  assert.ok(issues.some((issue) => issue.includes("place c scheduling eligibility references unknown suitable day missing-day")));
+  assert.ok(issues.some((issue) => issue.includes("blueprint field evidence summary references unknown source missing-source")));
+});
+
 test("Trip Blueprint rejects missing dates, unresolved places, and missing movements", () => {
   const value = blueprint();
   value.days = [

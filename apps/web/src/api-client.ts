@@ -3,6 +3,7 @@ import type { ConnectorResult, WeatherSnapshot } from "@c-assistant/connectors";
 import type {
   AgentRuntimeKind,
   BookingImportPreview,
+  DirectBlueprintRevision,
   Plan,
   PlanChangeImpactPreview,
   PlanChangeSet,
@@ -73,6 +74,12 @@ export type PlanPresentationResponse = WorkspaceSnapshot & {
   workspace?: WorkspaceSnapshot;
   error?: string;
 };
+
+export type DirectBlueprintRevisionRequest = DirectBlueprintRevision extends infer Revision
+  ? Revision extends DirectBlueprintRevision
+    ? Omit<Revision, "createdAt"> & { expectedVersion: number }
+    : never
+  : never;
 
 export type ConnectorTestKind = "google" | "uber" | "telegram";
 
@@ -166,6 +173,14 @@ export async function undoPlanChange(planId: string, changeId: string, expectedV
     `/api/plans/${encodeURIComponent(planId)}/changes/${encodeURIComponent(changeId)}/undo`,
     jsonRequest("POST", { expectedVersion }),
     "Unable to undo the change."
+  );
+}
+
+export async function applyDirectBlueprintRevision(planId: string, body: DirectBlueprintRevisionRequest): Promise<WorkspaceSnapshot> {
+  return await requestJson<WorkspaceSnapshot>(
+    `/api/plans/${encodeURIComponent(planId)}/blueprint-revisions/direct`,
+    jsonRequest("POST", body),
+    "Unable to update this itinerary directly."
   );
 }
 

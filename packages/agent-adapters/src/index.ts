@@ -108,6 +108,9 @@ export interface PlanResearchBrief {
   }>;
 }
 
+type PlaceDisplayIntent = NonNullable<SkillResearchBatchArtifact["places"][number]["display"]>;
+type PlaceDisplayType = PlaceDisplayIntent["type"];
+
 export class CodexRuntimeAdapter {
   private readonly run: RuntimeProcess;
   private readonly environment: NodeJS.ProcessEnv;
@@ -567,18 +570,26 @@ export function parsePlanResearchBrief(value: string): PlanResearchBrief {
 export function parseSkillResearchBatchArtifact(value: string, batch: { id: string; scopeLabel: string }, completedAt: string): SkillResearchBatchArtifact {
   let parsed: unknown;
   try { parsed = normalizePlanDraftNulls(JSON.parse(value)); } catch { throw new RuntimeAdapterError("invalid_output", "The Skill research stage returned unreadable JSON."); }
-  if (!isRecord(parsed) || !Array.isArray(parsed.sources) || !parsed.sources.every(isResearchSource) || !Array.isArray(parsed.places) || !parsed.places.every(isSkillResearchPlace) || !Array.isArray(parsed.events) || !parsed.events.every(isSkillResearchEvent) || !Array.isArray(parsed.actionRequirements) || !parsed.actionRequirements.every(isSkillActionRequirement)) {
+  const parsedRelationships = parsed && isRecord(parsed) && Array.isArray(parsed.relationships) ? parsed.relationships : [];
+  if (!isRecord(parsed) || !Array.isArray(parsed.sources) || !parsed.sources.every(isResearchSource) || !Array.isArray(parsed.places) || !parsed.places.every(isSkillResearchPlace) || !Array.isArray(parsed.events) || !parsed.events.every(isSkillResearchEvent) || !parsedRelationships.every(isSkillPlaceRelationship) || !Array.isArray(parsed.actionRequirements) || !parsed.actionRequirements.every(isSkillActionRequirement)) {
     throw new RuntimeAdapterError("invalid_output", "The Skill research stage did not match the rich Research Batch contract.");
   }
   const rawPlaces = parsed.places as SkillResearchBatchArtifact["places"];
   const placeIdMap = new Map(rawPlaces.flatMap((place) => place.id ? [[place.id, `${batch.id}-${place.id}`] as const] : []));
+  const rawSources = parsed.sources as SkillResearchBatchArtifact["sources"];
+  const sourceIdMap = new Map(rawSources.flatMap((source) => source.id ? [[source.id, `${batch.id}-${source.id}`] as const] : []));
+  const remapFieldEvidence = (items: NonNullable<SkillResearchBatchArtifact["places"][number]["fieldEvidence"]> | undefined) => items?.map((item) => ({
+    ...item,
+    evidence: item.evidence.map((ref) => ({ ...ref, sourceId: sourceIdMap.get(ref.sourceId) ?? ref.sourceId }))
+  }));
   return {
     id: batch.id,
     scopeLabel: batch.scopeLabel,
     completedAt,
-    sources: (parsed.sources as SkillResearchBatchArtifact["sources"]).map((source) => ({ ...source, ...(source.id ? { id: `${batch.id}-${source.id}` } : {}) })),
-    places: rawPlaces.map((place) => ({ ...place, ...(place.id ? { id: placeIdMap.get(place.id)! } : {}) })),
+    sources: rawSources.map((source) => ({ ...source, ...(source.id ? { id: `${batch.id}-${source.id}` } : {}) })),
+    places: rawPlaces.map((place) => ({ ...place, ...(place.id ? { id: placeIdMap.get(place.id)! } : {}), ...(place.fieldEvidence?.length ? { fieldEvidence: remapFieldEvidence(place.fieldEvidence)! } : {}) })),
     events: (parsed.events as SkillResearchBatchArtifact["events"]).map((event) => ({ ...event, ...(event.id ? { id: `${batch.id}-${event.id}` } : {}), ...(event.placeId ? { placeId: placeIdMap.get(event.placeId) ?? event.placeId } : {}) })),
+    relationships: parsedRelationships.map((relationship) => ({ ...relationship, ...(relationship.id ? { id: `${batch.id}-${relationship.id}` } : {}), fromPlaceId: placeIdMap.get(relationship.fromPlaceId) ?? relationship.fromPlaceId, toPlaceId: placeIdMap.get(relationship.toPlaceId) ?? relationship.toPlaceId })),
     actionRequirements: (parsed.actionRequirements as NonNullable<SkillResearchBatchArtifact["actionRequirements"]>).map((requirement) => ({ ...requirement, ...(requirement.id ? { id: `${batch.id}-${requirement.id}` } : {}), ...(requirement.placeId ? { placeId: placeIdMap.get(requirement.placeId) ?? requirement.placeId } : {}) }))
   };
 }
@@ -611,6 +622,11 @@ export function planResearchBriefToSkillBatch(brief: PlanResearchBrief, batch: {
       category: place.category,
       priority: "preferred",
       ...(place.coordinates ? { coordinates: place.coordinates } : {}),
+      display: inferredPlaceDisplayIntent(place),
+      schedulingEligibility: {
+        decision: place.coordinates ? "schedulable" : "informational",
+        reason: place.coordinates ? "This researched place has map-ready identity and can be considered for itinerary scheduling." : "This researched place needs location verification before it can be inserted into a mapped itinerary."
+      },
       contentTier: "standard",
       whyWorthIt: place.whyCandidate,
       plan: place.whyCandidate,
@@ -618,6 +634,7 @@ export function planResearchBriefToSkillBatch(brief: PlanResearchBrief, batch: {
       ...(place.bookingUrl ? { bookingUrl: place.bookingUrl } : {}),
       sourceUrls: place.sourceUrls
     })),
+    relationships: [],
     events: brief.planningFacts.filter((fact) => fact.kind === "event").map((fact, index) => ({
       id: `${batch.id}-event-${index + 1}`,
       title: fact.subject,
@@ -633,8 +650,60 @@ function isSkillResearchPlace(value: unknown): boolean {
   return isRecord(value)
     && ["name", "locationLabel", "category", "whyWorthIt", "plan"].every((key) => isString(value[key]))
     && (value.coordinates === undefined || (Array.isArray(value.coordinates) && value.coordinates.length === 2 && value.coordinates.every((coordinate) => typeof coordinate === "number" && Number.isFinite(coordinate))))
+    && (value.display === undefined || isPlaceDisplayIntent(value.display))
+    && (value.schedulingEligibility === undefined || isSchedulingEligibility(value.schedulingEligibility))
+    && (value.fieldEvidence === undefined || (Array.isArray(value.fieldEvidence) && value.fieldEvidence.every(isFieldEvidence)))
     && (value.sourceUrls === undefined || (Array.isArray(value.sourceUrls) && value.sourceUrls.every((url) => isString(url) && url.startsWith("https://"))))
     && (value.detailSections === undefined || (Array.isArray(value.detailSections) && value.detailSections.every((section) => isRecord(section) && isString(section.title))));
+}
+
+function isPlaceDisplayIntent(value: unknown): value is PlaceDisplayIntent {
+  return isRecord(value)
+    && isPlaceDisplayType(value.type)
+    && (value.markerKind === undefined || isPlaceDisplayType(value.markerKind));
+}
+
+function isSkillPlaceRelationship(value: unknown): value is NonNullable<SkillResearchBatchArtifact["relationships"]>[number] {
+  return isRecord(value)
+    && ["same_area", "same_direction", "alternative", "supports_anchor", "meal_support", "rainy_day_alternative", "low_energy_alternative", "event_link", "similar"].includes(String(value.kind))
+    && isString(value.fromPlaceId)
+    && isString(value.toPlaceId)
+    && isString(value.rationale)
+    && (value.sourceUrls === undefined || (Array.isArray(value.sourceUrls) && value.sourceUrls.every((url) => isString(url) && url.startsWith("https://"))));
+}
+
+function isSchedulingEligibility(value: unknown): boolean {
+  return isRecord(value)
+    && ["schedulable", "informational", "blocked", "high_impact"].includes(String(value.decision))
+    && isString(value.reason)
+    && (value.suitableDayIds === undefined || isStringArray(value.suitableDayIds))
+    && (value.blockedDayIds === undefined || isStringArray(value.blockedDayIds))
+    && (value.highImpactReasons === undefined || isStringArray(value.highImpactReasons));
+}
+
+function isFieldEvidence(value: unknown): boolean {
+  return isRecord(value)
+    && isString(value.path)
+    && ["verified", "recheck", "stale"].includes(String(value.status))
+    && Array.isArray(value.evidence)
+    && value.evidence.every((ref) => isRecord(ref) && isString(ref.sourceId) && ["verified", "recheck", "stale"].includes(String(ref.status)));
+}
+
+function isPlaceDisplayType(value: unknown): value is PlaceDisplayType {
+  return value === "attraction" || value === "dining" || value === "shopping" || value === "experience";
+}
+
+function inferredPlaceDisplayIntent(place: Pick<PlanResearchBrief["candidatePlaces"][number], "category" | "name" | "whyCandidate">): PlaceDisplayIntent {
+  const type = inferredPlaceDisplayType(`${place.category} ${place.name} ${place.whyCandidate}`);
+  return { type, markerKind: type };
+}
+
+function inferredPlaceDisplayType(value: string): PlaceDisplayType {
+  const text = value.normalize("NFKD").toLocaleLowerCase().replace(/[\u0300-\u036f]/g, "");
+  if (/\b(experience|workshop|class|tour|show|performance|theatre|theater|festival|ceremony|onsen|spa|cruise|ride|activity)\b/.test(text)) return "experience";
+  if (/\b(shopping|shop|store|mall|craft|souvenir|product|design|boutique|bookstore|department)\b/.test(text)) return "shopping";
+  if (/\b(restaurant|dining|food|meal|breakfast|lunch|dinner|cafe|coffee|tea|dessert|bar|market|izakaya|ramen|sushi|noodle|bakery)\b/.test(text)) return "dining";
+  return "attraction";
 }
 
 function isSkillResearchEvent(value: unknown): boolean {
@@ -656,13 +725,13 @@ export function parseSkillItineraryArtifact(value: string, knownPlaceIds: Set<st
   let parsed: unknown;
   try { parsed = normalizePlanDraftNulls(JSON.parse(value)); } catch { throw new RuntimeAdapterError("invalid_output", "The itinerary stage returned unreadable JSON."); }
   if (!isRecord(parsed) || !["title", "summary", "language", "startDate", "endDate"].every((key) => isString(parsed[key])) || !isStringArray(parsed.destinations) || !Array.isArray(parsed.days) || !Array.isArray(parsed.movements)) throw new RuntimeAdapterError("invalid_output", "The itinerary stage did not match the Blueprint artifact contract.");
-  const days = parsed.days.map((day, index) => normalizeSkillItineraryDay(day, knownPlaceIds, index)).filter((day): day is SkillItineraryArtifact["days"][number] => Boolean(day));
+  const days = parsed.days.map((day, index) => normalizeSkillItineraryDay(day, knownPlaceIds, knownSourceIds, index)).filter((day): day is SkillItineraryArtifact["days"][number] => Boolean(day));
   if (!days.length) throw new RuntimeAdapterError("invalid_output", "The itinerary stage did not include any usable itinerary days.");
   const movements = normalizeSkillItineraryMovements(parsed.movements, days, knownPlaceIds, knownSourceIds);
   return { ...(parsed as unknown as SkillItineraryArtifact), days, movements };
 }
 
-function normalizeSkillItineraryDay(value: unknown, knownPlaceIds: Set<string>, index: number): SkillItineraryArtifact["days"][number] | undefined {
+function normalizeSkillItineraryDay(value: unknown, knownPlaceIds: Set<string>, knownSourceIds: Set<string>, index: number): SkillItineraryArtifact["days"][number] | undefined {
   if (!isRecord(value) || !["date", "city", "title", "summary"].every((key) => isString(value[key])) || !Array.isArray(value.stops) || !isStringArray(value.candidatePlaceIds)) return undefined;
   const id = isString(value.id) && value.id.trim() ? value.id.trim() : `day-${index + 1}`;
   const date = value.date as string;
@@ -696,8 +765,31 @@ function normalizeSkillItineraryDay(value: unknown, knownPlaceIds: Set<string>, 
     title: title.trim(),
     summary: summary.trim(),
     stops: recoveredStops,
+    ...(Array.isArray(value.blocks) ? { blocks: normalizeSkillItineraryBlocks(value.blocks, knownPlaceIds, knownSourceIds) } : {}),
     candidatePlaceIds: recoveredCandidatePlaceIds
   };
+}
+
+function normalizeSkillItineraryBlocks(values: unknown[], knownPlaceIds: Set<string>, knownSourceIds: Set<string>): NonNullable<SkillItineraryArtifact["days"][number]["blocks"]> {
+  return values
+    .filter((value): value is Record<string, unknown> => isRecord(value) && isString(value.id) && isString(value.kind) && Number.isInteger(value.order))
+    .filter((block) => ["stop", "flexible", "meal", "rest", "transfer", "lodging", "event"].includes(String(block.kind)))
+    .filter((block) => !isString(block.placeId) || knownPlaceIds.has(block.placeId))
+    .sort((left, right) => Number(left.order) - Number(right.order))
+    .map((block, index) => ({
+      id: (block.id as string).trim(),
+      kind: block.kind as NonNullable<SkillItineraryArtifact["days"][number]["blocks"]>[number]["kind"],
+      order: index + 1,
+      ...(isString(block.placeId) && block.placeId.trim() ? { placeId: block.placeId.trim() } : {}),
+      ...(isString(block.eventId) && block.eventId.trim() ? { eventId: block.eventId.trim() } : {}),
+      ...(isString(block.startTime) && block.startTime.trim() ? { startTime: block.startTime.trim() } : {}),
+      ...(isString(block.endTime) && block.endTime.trim() ? { endTime: block.endTime.trim() } : {}),
+      ...(isString(block.title) && block.title.trim() ? { title: block.title.trim() } : {}),
+      ...(isString(block.summary) && block.summary.trim() ? { summary: block.summary.trim() } : {}),
+      ...(Number.isInteger(block.durationMinutes) && Number(block.durationMinutes) > 0 ? { durationMinutes: Number(block.durationMinutes) } : {}),
+      ...(isString(block.role) && block.role.trim() ? { role: block.role.trim() } : {}),
+      evidence: Array.isArray(block.evidence) ? block.evidence.filter((ref): ref is NonNullable<SkillItineraryArtifact["days"][number]["blocks"]>[number]["evidence"][number] => isRecord(ref) && isString(ref.sourceId) && knownSourceIds.has(ref.sourceId) && ["verified", "recheck", "stale"].includes(String(ref.status))).map((ref) => ({ sourceId: ref.sourceId, status: ref.status, ...(isString(ref.checkedAt) ? { checkedAt: ref.checkedAt } : {}), ...(Array.isArray(ref.supports) && ref.supports.every(isString) ? { supports: ref.supports } : {}) })) : []
+    }));
 }
 
 function normalizeSkillItineraryMovements(values: unknown[], days: SkillItineraryArtifact["days"], knownPlaceIds: Set<string>, knownSourceIds: Set<string>): SkillItineraryArtifact["movements"] {
@@ -931,7 +1023,7 @@ async function readCodexStructuredOutput(path: string, command: RuntimeProcessRe
 export const skillResearchBatchSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["id", "scopeLabel", "places", "events", "sources", "actionRequirements", "completedAt"],
+  required: ["id", "scopeLabel", "places", "events", "relationships", "sources", "actionRequirements", "completedAt"],
   properties: {
     id: { type: "string", minLength: 1, maxLength: 100 },
     scopeLabel: { type: "string", minLength: 1, maxLength: 200 },
@@ -939,11 +1031,14 @@ export const skillResearchBatchSchema = {
     sources: { type: "array", maxItems: 160, items: { type: "object", additionalProperties: false, required: ["title", "authority", "url", "retrievedAt"], properties: {
       id: { type: "string", maxLength: 100 }, title: { type: "string", minLength: 1, maxLength: 240 }, authority: { type: "string", minLength: 1, maxLength: 200 }, url: { type: "string", pattern: "^https://" }, retrievedAt: { type: "string", minLength: 1, maxLength: 40 }, status: { type: "string", enum: ["verified", "recheck", "stale"] }, official: { type: "boolean" }
     } } },
-    places: { type: "array", maxItems: 240, items: { type: "object", additionalProperties: false, required: ["name", "locationLabel", "category", "whyWorthIt", "plan"], properties: {
-      id: { type: "string", maxLength: 100 }, externalIdentity: { type: "string", maxLength: 200 }, name: { type: "string", minLength: 1, maxLength: 200 }, localizedName: { type: "string", maxLength: 200 }, locationLabel: { type: "string", minLength: 1, maxLength: 240 }, city: { type: "string", maxLength: 160 }, area: { type: "string", maxLength: 160 }, category: { type: "string", minLength: 1, maxLength: 100 }, priority: { type: "string", enum: ["must", "preferred", "nearby", "archive", "pending", "recheck", "booked"] }, coordinates: { anyOf: [{ type: "array", minItems: 2, maxItems: 2, items: { type: "number" } }, { type: "null" }] }, contentTier: { type: "string", enum: ["deep", "standard", "compact"] }, visitRole: { type: "string", maxLength: 160 }, durationMinutes: { type: "integer", minimum: 1, maximum: 10080 }, whyWorthIt: { type: "string", minLength: 1, maxLength: 1200 }, plan: { type: "string", minLength: 1, maxLength: 1200 }, tip: { type: "string", maxLength: 800 }, detailSections: { type: "array", maxItems: 8, items: { type: "object", additionalProperties: false, required: ["title", "body", "items"], properties: { title: { type: "string", minLength: 1, maxLength: 120 }, body: { type: "string", maxLength: 1200 }, items: { type: "array", maxItems: 8, items: { type: "string", maxLength: 500 } } } } }, officialUrl: { type: "string", pattern: "^https://" }, bookingUrl: { type: "string", pattern: "^https://" }, mapUrl: { type: "string", pattern: "^https://" }, experienceUrl: { type: "string", pattern: "^https://" }, sourceUrls: { type: "array", maxItems: 12, items: { type: "string", pattern: "^https://" } }
+    places: { type: "array", maxItems: 240, items: { type: "object", additionalProperties: false, required: ["name", "locationLabel", "category", "display", "schedulingEligibility", "whyWorthIt", "plan"], properties: {
+      id: { type: "string", maxLength: 100 }, externalIdentity: { type: "string", maxLength: 200 }, name: { type: "string", minLength: 1, maxLength: 200 }, localizedName: { type: "string", maxLength: 200 }, locationLabel: { type: "string", minLength: 1, maxLength: 240 }, city: { type: "string", maxLength: 160 }, area: { type: "string", maxLength: 160 }, category: { type: "string", minLength: 1, maxLength: 100 }, priority: { type: "string", enum: ["must", "preferred", "nearby", "archive", "pending", "recheck", "booked"] }, coordinates: { anyOf: [{ type: "array", minItems: 2, maxItems: 2, items: { type: "number" } }, { type: "null" }] }, display: { type: "object", additionalProperties: false, required: ["type"], properties: { type: { type: "string", enum: ["attraction", "dining", "shopping", "experience"] }, markerKind: { type: "string", enum: ["attraction", "dining", "shopping", "experience"] } } }, schedulingEligibility: { type: "object", additionalProperties: false, required: ["decision", "reason"], properties: { decision: { type: "string", enum: ["schedulable", "informational", "blocked", "high_impact"] }, reason: { type: "string", minLength: 1, maxLength: 800 }, suitableDayIds: { type: "array", maxItems: 120, items: { type: "string", maxLength: 100 } }, blockedDayIds: { type: "array", maxItems: 120, items: { type: "string", maxLength: 100 } }, highImpactReasons: { type: "array", maxItems: 12, items: { type: "string", maxLength: 300 } } } }, contentTier: { type: "string", enum: ["deep", "standard", "compact"] }, visitRole: { type: "string", maxLength: 160 }, durationMinutes: { type: "integer", minimum: 1, maximum: 10080 }, whyWorthIt: { type: "string", minLength: 1, maxLength: 1200 }, plan: { type: "string", minLength: 1, maxLength: 1200 }, tip: { type: "string", maxLength: 800 }, detailSections: { type: "array", maxItems: 8, items: { type: "object", additionalProperties: false, required: ["title", "body", "items"], properties: { title: { type: "string", minLength: 1, maxLength: 120 }, body: { type: "string", maxLength: 1200 }, items: { type: "array", maxItems: 8, items: { type: "string", maxLength: 500 } } } } }, fieldEvidence: { type: "array", maxItems: 24, items: { type: "object", additionalProperties: false, required: ["path", "status", "evidence"], properties: { path: { type: "string", minLength: 1, maxLength: 160 }, status: { type: "string", enum: ["verified", "recheck", "stale"] }, evidence: { type: "array", maxItems: 12, items: { type: "object", additionalProperties: false, required: ["sourceId", "status"], properties: { sourceId: { type: "string", minLength: 1, maxLength: 100 }, status: { type: "string", enum: ["verified", "recheck", "stale"] }, checkedAt: { type: "string", maxLength: 40 }, supports: { type: "array", maxItems: 12, items: { type: "string", maxLength: 300 } } } } } } } }, officialUrl: { type: "string", pattern: "^https://" }, bookingUrl: { type: "string", pattern: "^https://" }, mapUrl: { type: "string", pattern: "^https://" }, experienceUrl: { type: "string", pattern: "^https://" }, sourceUrls: { type: "array", maxItems: 12, items: { type: "string", pattern: "^https://" } }
     } } },
     events: { type: "array", maxItems: 120, items: { type: "object", additionalProperties: false, required: ["title", "description"], properties: {
       id: { type: "string", maxLength: 100 }, title: { type: "string", minLength: 1, maxLength: 240 }, startDate: { type: "string", maxLength: 40 }, endDate: { type: "string", maxLength: 40 }, locationLabel: { type: "string", maxLength: 240 }, placeId: { type: "string", maxLength: 100 }, description: { type: "string", minLength: 1, maxLength: 1200 }, sourceUrls: { type: "array", maxItems: 12, items: { type: "string", pattern: "^https://" } }
+    } } },
+    relationships: { type: "array", maxItems: 400, items: { type: "object", additionalProperties: false, required: ["kind", "fromPlaceId", "toPlaceId", "rationale"], properties: {
+      id: { type: "string", maxLength: 100 }, kind: { type: "string", enum: ["same_area", "same_direction", "alternative", "supports_anchor", "meal_support", "rainy_day_alternative", "low_energy_alternative", "event_link", "similar"] }, fromPlaceId: { type: "string", minLength: 1, maxLength: 100 }, toPlaceId: { type: "string", minLength: 1, maxLength: 100 }, rationale: { type: "string", minLength: 1, maxLength: 800 }, sourceUrls: { type: "array", maxItems: 12, items: { type: "string", pattern: "^https://" } }
     } } },
     actionRequirements: { type: "array", maxItems: 160, items: { type: "object", additionalProperties: false, required: ["kind", "title", "description", "accountableParty", "completionCondition"], properties: {
       id: { type: "string", maxLength: 100 }, kind: { type: "string", enum: ["reservation", "travel_authorization", "time_sensitive_recheck", "preparation", "transport", "other"] }, title: { type: "string", minLength: 1, maxLength: 240 }, description: { type: "string", minLength: 1, maxLength: 1200 }, accountableParty: { type: "string", enum: ["assistant", "traveler", "external"] }, completionCondition: { type: "string", minLength: 1, maxLength: 1000 }, relevantAt: { type: "string", maxLength: 80 }, placeId: { type: "string", maxLength: 100 }, sourceUrls: { type: "array", maxItems: 12, items: { type: "string", pattern: "^https://" } }
@@ -954,7 +1049,7 @@ export const skillResearchBatchSchema = {
 export const skillItinerarySchema = {
   type: "object",
   additionalProperties: false,
-  required: ["title", "summary", "language", "destinations", "startDate", "endDate", "days", "movements"],
+  required: ["title", "summary", "language", "destinations", "startDate", "endDate", "guideTheme", "days", "movements"],
   properties: {
     title: { type: "string", minLength: 1, maxLength: 200 },
     summary: { type: "string", minLength: 1, maxLength: 1000 },
@@ -962,6 +1057,13 @@ export const skillItinerarySchema = {
     destinations: { type: "array", minItems: 1, maxItems: 30, items: { type: "string", minLength: 1, maxLength: 160 } },
     startDate: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
     endDate: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+    guideTheme: { type: "object", additionalProperties: false, required: ["title", "narrative"], properties: {
+      title: { type: "string", minLength: 1, maxLength: 200 },
+      narrative: { type: "string", minLength: 1, maxLength: 1200 },
+      visitorMode: { type: "string", enum: ["first-visit", "return-visit", "landmark-light", "local-only", "balanced-visitor"] },
+      tasteModels: { type: "array", maxItems: 6, items: { type: "string", minLength: 1, maxLength: 100 } },
+      citySegments: { type: "array", maxItems: 40, items: { type: "object", additionalProperties: false, required: ["id", "city", "title", "summary"], properties: { id: { type: "string", minLength: 1, maxLength: 100 }, city: { type: "string", minLength: 1, maxLength: 160 }, title: { type: "string", minLength: 1, maxLength: 200 }, summary: { type: "string", minLength: 1, maxLength: 1000 }, dayIds: { type: "array", maxItems: 120, items: { type: "string", minLength: 1, maxLength: 100 } } } } }
+    } },
     days: {
       type: "array", minItems: 1, maxItems: 120,
       items: {
@@ -975,6 +1077,7 @@ export const skillItinerarySchema = {
           title: { type: "string", minLength: 1, maxLength: 200 },
           summary: { type: "string", minLength: 1, maxLength: 1000 },
           stops: { type: "array", maxItems: 30, items: { type: "object", additionalProperties: false, required: ["placeId", "order"], properties: { placeId: { type: "string", minLength: 1, maxLength: 100 }, order: { type: "integer", minimum: 1, maximum: 30 }, time: { type: "string", maxLength: 20 }, role: { type: "string", maxLength: 100 } } } },
+          blocks: { type: "array", maxItems: 50, items: { type: "object", additionalProperties: false, required: ["id", "kind", "order", "evidence"], properties: { id: { type: "string", minLength: 1, maxLength: 100 }, kind: { type: "string", enum: ["stop", "flexible", "meal", "rest", "transfer", "lodging", "event"] }, order: { type: "integer", minimum: 1, maximum: 50 }, placeId: { type: "string", maxLength: 100 }, eventId: { type: "string", maxLength: 100 }, startTime: { type: "string", maxLength: 20 }, endTime: { type: "string", maxLength: 20 }, title: { type: "string", maxLength: 200 }, summary: { type: "string", maxLength: 1000 }, durationMinutes: { type: "integer", minimum: 1, maximum: 10080 }, role: { type: "string", maxLength: 100 }, evidence: { type: "array", maxItems: 12, items: { type: "object", additionalProperties: false, required: ["sourceId", "status"], properties: { sourceId: { type: "string", minLength: 1, maxLength: 100 }, status: { type: "string", enum: ["verified", "recheck", "stale"] }, checkedAt: { type: "string", maxLength: 40 }, supports: { type: "array", maxItems: 12, items: { type: "string", maxLength: 300 } } } } } } } },
           candidatePlaceIds: { type: "array", maxItems: 240, items: { type: "string", minLength: 1, maxLength: 100 } }
         }
       }
@@ -1220,12 +1323,16 @@ Batch rules:
 - Do not reduce or cap valid distinct places because of output length. Coverage targets are guidance, never a validity quota.
 - Keep nearby Discovery Areas as candidates; do not silently promote them into primary destinations.
 - Preserve place-specific whyWorthIt, actionable plan, contentTier, visitRole, tip, and type-appropriate detailSections. Do not flatten rich place content into a generic summary.
+- For every place, include display.type as one of attraction, dining, shopping, or experience. Use attraction for sights, museums, gardens, viewpoints, neighborhoods, and landmarks; dining for restaurants, cafes, bars, bakeries, and markets when the primary use is eating; shopping for shopping streets, craft stores, boutiques, bookstores, department stores, and markets when the primary use is browsing or buying; experience for tours, workshops, classes, ceremonies, spas, shows, festivals, cruises, rides, and other activity bookings. Set display.markerKind to the same value unless the map icon should intentionally emphasize a different branch.
+- For every place, include schedulingEligibility.decision and reason. Use schedulable for ordinary map-ready places, informational for useful context that should not be directly inserted into a day, blocked for places that cannot fit the confirmed trip, and high_impact when adding it would require city/date/hard-constraint replanning.
+- Add relationships that help the Web workspace compare and modify the plan: same_area, same_direction, alternative, supports_anchor, meal_support, rainy_day_alternative, low_energy_alternative, event_link, or similar. Use stable local place ids, not names.
+- Use fieldEvidence for place fields only when a specific source supports that field. Do not mark a field verified unless the referenced source is returned in this batch and truly supports the claim.
 - Include reservations, travel authorization, transport preparation, and time-sensitive rechecks only as structured actionRequirements with a clear accountable party and completion condition.
-- Return only this batch's sources, rich places, events, and actionRequirements in the supplied JSON contract. Do not create itinerary days, Plan Stages, Tasks, or Reminders.`;
+- Return only this batch's sources, rich places, events, relationships, and actionRequirements in the supplied JSON contract. Do not create itinerary days, Plan Stages, Tasks, or Reminders.`;
 }
 
 export function buildSkillItineraryPrompt(input: SkillItineraryRequest): string {
-  const compactPlaces = input.research.places.map((place) => ({ id: place.id, name: place.name, localizedName: place.localizedName, city: place.city, area: place.area, category: place.category, priority: place.priority, contentTier: place.contentTier, visitRole: place.visitRole, durationMinutes: place.durationMinutes, whyWorthIt: place.whyWorthIt, plan: place.plan, tip: place.tip }));
+  const compactPlaces = input.research.places.map((place) => ({ id: place.id, name: place.name, localizedName: place.localizedName, city: place.city, area: place.area, category: place.category, display: place.display, priority: place.priority, contentTier: place.contentTier, visitRole: place.visitRole, durationMinutes: place.durationMinutes, whyWorthIt: place.whyWorthIt, plan: place.plan, tip: place.tip }));
   return `Use $interactive-trip-planner to perform itinerary design for one confirmed Landi trip. Return only JSON matching the supplied itinerary artifact schema.
 
 Confirmed request: ${input.request.trim()}
@@ -1238,11 +1345,13 @@ Action requirements that may constrain timing: ${JSON.stringify(input.research.a
 Rules:
 - The host completed Skill intake and place research. Execute itinerary clustering and day-by-day design now; do not restart intake or research.
 - Use only the supplied stable place IDs. Never invent a new place or refer to a place by name instead of ID.
+- Include guideTheme with the trip theme, visitor mode when known, taste model labels when used, and citySegments tied to day ids.
 - Preserve the full date range with one day per calendar date. A deliberate transit, rest, or free-time day is valid with no stops when its kind, title, and summary say so.
 - Optimize for a reasonable trip a traveler could actually follow, not for maximum daily density. Use 1-3 anchors and usually 3-5 scheduled stops on a full sightseeing day; keep arrival, departure, jet-lag, luggage, and city-transfer days deliberately lighter.
 - Schedule a practical subset; every unscheduled Research Set place remains in the Blueprint automatically and does not need to be repeated in every day's candidates.
 - Candidate IDs are alternatives for that day and cannot also be scheduled stops. Use them as direct replacements, meal/café/rest stops, rainy-day options, low-energy options, or nearby extensions, not as extra obligations.
 - Stops use contiguous order starting at 1. Times are optional planning advice, not claimed opening times. Give realistic buffers for meals, rest, hotel returns, luggage handling, and transfers when those shape the day.
+- Also include typed day.blocks for the visible day sequence. Use stop, flexible, meal, rest, transfer, lodging, or event; reference placeId or eventId only when it exists in the supplied Research Set.
 - Every adjacent pair of scheduled stops needs exactly one movement. A route may use mode unknown and status recheck when reliable details are unavailable; do not invent verified duration or geometry. If exact routing is unavailable, include a conservative planned duration and detail that live routing must be refreshed before execution.
 - Evidence gaps do not collapse the itinerary. Keep the relationship and mark it recheck.
 - Do not return place records, sources, Plan Stages, Tasks, Reminders, map HTML, or Landi persistence fields.
