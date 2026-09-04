@@ -2,8 +2,74 @@ export const TRIP_BLUEPRINT_SCHEMA_VERSION = 1 as const;
 
 export type BlueprintEvidenceStatus = "verified" | "recheck" | "stale";
 export type BlueprintPlacePriority = "must" | "preferred" | "nearby" | "archive" | "pending" | "recheck" | "booked";
+export type BlueprintPlaceDisplayType = "attraction" | "dining" | "shopping" | "experience";
 export type BlueprintMovementMode = "walking" | "transit" | "driving" | "rail" | "flight" | "unknown";
 export type BlueprintDayKind = "scheduled" | "transit" | "rest" | "free_time";
+export type BlueprintWorkspaceModuleId = "itinerary" | "preparation" | "tips" | "sources";
+export type BlueprintVisitorMode = "first-visit" | "return-visit" | "landmark-light" | "local-only" | "balanced-visitor";
+export type BlueprintItineraryBlockKind = "stop" | "flexible" | "meal" | "rest" | "transfer" | "lodging" | "event";
+export type BlueprintSchedulingDecision = "schedulable" | "informational" | "blocked" | "high_impact";
+export type BlueprintPlaceRelationshipKind = "same_area" | "same_direction" | "alternative" | "supports_anchor" | "meal_support" | "rainy_day_alternative" | "low_energy_alternative" | "event_link" | "similar";
+
+export interface BlueprintPlaceDisplayIntent {
+  /** Primary Web workspace branch for this place. */
+  type: BlueprintPlaceDisplayType;
+  /** Optional map marker override when the marker should differ from the branch. */
+  markerKind?: BlueprintPlaceDisplayType;
+}
+
+export interface BlueprintFieldEvidence {
+  path: string;
+  status: BlueprintEvidenceStatus;
+  evidence: BlueprintEvidenceRef[];
+  note?: string;
+}
+
+export interface BlueprintModuleIdentity {
+  primaryModule: BlueprintWorkspaceModuleId;
+  enabledModules: Array<{
+    id: BlueprintWorkspaceModuleId;
+    title: string;
+    source: "blueprint" | "compiled_plan";
+  }>;
+}
+
+export interface BlueprintGuideTheme {
+  title: string;
+  narrative: string;
+  visitorMode?: BlueprintVisitorMode;
+  tasteModels?: string[];
+  citySegments?: Array<{
+    id: string;
+    city: string;
+    title: string;
+    summary: string;
+    dayIds?: string[];
+  }>;
+}
+
+export interface BlueprintSchedulingEligibility {
+  decision: BlueprintSchedulingDecision;
+  reason: string;
+  suitableDayIds?: string[];
+  blockedDayIds?: string[];
+  highImpactReasons?: string[];
+  evidence?: BlueprintEvidenceRef[];
+}
+
+export interface BlueprintPlaceRelationship {
+  id: string;
+  kind: BlueprintPlaceRelationshipKind;
+  fromPlaceId: string;
+  toPlaceId: string;
+  rationale: string;
+  dayIds?: string[];
+  evidence: BlueprintEvidenceRef[];
+}
+
+export interface BlueprintGuideRelationshipGraph {
+  relationships: BlueprintPlaceRelationship[];
+}
 
 export interface SkillLineage {
   skillId: "interactive-trip-planner" | string;
@@ -42,6 +108,7 @@ export interface BlueprintPlace {
   category: string;
   priority: BlueprintPlacePriority;
   coordinates?: [number, number];
+  display?: BlueprintPlaceDisplayIntent;
   contentTier?: "deep" | "standard" | "compact";
   visitRole?: string;
   durationMinutes?: number;
@@ -54,6 +121,8 @@ export interface BlueprintPlace {
   mapUrl?: string;
   experienceUrl?: string;
   evidence: BlueprintEvidenceRef[];
+  fieldEvidence?: BlueprintFieldEvidence[];
+  schedulingEligibility?: BlueprintSchedulingEligibility;
   possibleDuplicateOf?: string[];
 }
 
@@ -132,6 +201,7 @@ export interface ResearchSet {
   places: BlueprintPlace[];
   events: BlueprintEvent[];
   sources: BlueprintSource[];
+  guideRelationships?: BlueprintPlaceRelationship[];
   actionRequirements: BlueprintActionRequirement[];
   createdAt: string;
   updatedAt: string;
@@ -192,6 +262,21 @@ export interface BlueprintStop {
   role?: string;
 }
 
+export interface BlueprintItineraryBlock {
+  id: string;
+  kind: BlueprintItineraryBlockKind;
+  order: number;
+  placeId?: string;
+  eventId?: string;
+  startTime?: string;
+  endTime?: string;
+  title?: string;
+  summary?: string;
+  durationMinutes?: number;
+  role?: string;
+  evidence: BlueprintEvidenceRef[];
+}
+
 export interface BlueprintItineraryDay {
   id: string;
   date: string;
@@ -200,6 +285,7 @@ export interface BlueprintItineraryDay {
   title: string;
   summary: string;
   stops: BlueprintStop[];
+  blocks?: BlueprintItineraryBlock[];
   candidatePlaceIds: string[];
 }
 
@@ -231,6 +317,9 @@ export interface TripBlueprint {
   destinations: string[];
   startDate: string;
   endDate: string;
+  moduleIdentity?: BlueprintModuleIdentity;
+  guideTheme?: BlueprintGuideTheme;
+  guideRelationshipGraph?: BlueprintGuideRelationshipGraph;
   places: BlueprintPlace[];
   events: BlueprintEvent[];
   sources: BlueprintSource[];
@@ -238,6 +327,7 @@ export interface TripBlueprint {
   movements: BlueprintMovement[];
   bookingConstraints?: BlueprintBookingConstraint[];
   actionRequirements: BlueprintActionRequirement[];
+  fieldEvidence?: BlueprintFieldEvidence[];
   createdAt: string;
 }
 
@@ -256,10 +346,12 @@ export function researchSetIntegrityIssues(research: ResearchSet): string[] {
   const placeIds = uniqueIdentityIssues("research.places", research.places.map((place) => place.id), issues);
   const eventIds = uniqueIdentityIssues("research.events", research.events.map((event) => event.id), issues);
   const sourceIds = uniqueIdentityIssues("research.sources", research.sources.map((source) => source.id), issues);
+  uniqueIdentityIssues("research.guideRelationships", (research.guideRelationships ?? []).map((relationship) => relationship.id), issues);
   uniqueIdentityIssues("research.actionRequirements", research.actionRequirements.map((requirement) => requirement.id), issues);
   uniqueIdentityIssues("research.batches", research.batches.map((batch) => batch.id), issues);
 
   for (const place of research.places) validatePlace(place, sourceIds, placeIds, issues, `place ${place.id || "<missing>"}`);
+  for (const relationship of research.guideRelationships ?? []) validatePlaceRelationship(relationship, placeIds, new Set<string>(), sourceIds, issues, `research guide relationship ${relationship.id || "<missing>"}`);
   for (const event of research.events) {
     if (event.placeId && !placeIds.has(event.placeId)) issues.push(`event ${event.id} references unknown place ${event.placeId}`);
     validateEvidence(event.evidence, sourceIds, issues, `event ${event.id}`);
@@ -291,6 +383,7 @@ export function tripBlueprintIntegrityIssues(blueprint: TripBlueprint, options: 
   uniqueIdentityIssues("blueprint.movements", blueprint.movements.map((movement) => movement.id), issues);
   uniqueIdentityIssues("blueprint.bookingConstraints", (blueprint.bookingConstraints ?? []).map((constraint) => constraint.id), issues);
   uniqueIdentityIssues("blueprint.actionRequirements", blueprint.actionRequirements.map((requirement) => requirement.id), issues);
+  uniqueIdentityIssues("blueprint.guideRelationshipGraph.relationships", (blueprint.guideRelationshipGraph?.relationships ?? []).map((relationship) => relationship.id), issues);
 
   for (const place of blueprint.places) validatePlace(place, sourceIds, placeIds, issues, `place ${place.id || "<missing>"}`);
   for (const event of blueprint.events) {
@@ -299,6 +392,7 @@ export function tripBlueprintIntegrityIssues(blueprint: TripBlueprint, options: 
   }
   for (const requirement of blueprint.actionRequirements) validateRequirement(requirement, placeIds, sourceIds, issues);
   for (const constraint of blueprint.bookingConstraints ?? []) validateBookingConstraint(constraint, issues);
+  if (blueprint.moduleIdentity) validateModuleIdentity(blueprint.moduleIdentity, issues);
 
   const daysById = new Map(blueprint.days.map((day) => [day.id, day] as const));
   const seenDates = new Set<string>();
@@ -314,7 +408,13 @@ export function tripBlueprintIntegrityIssues(blueprint: TripBlueprint, options: 
     if (day.stops.some((stop, index) => stop.order !== index + 1)) issues.push(`day ${day.id} stop order must be contiguous`);
     for (const id of [...stopIds, ...day.candidatePlaceIds]) if (!placeIds.has(id)) issues.push(`day ${day.id} references unknown place ${id}`);
     if (day.candidatePlaceIds.some((id) => stopIds.includes(id))) issues.push(`day ${day.id} schedules a candidate place`);
+    if (day.blocks) validateItineraryBlocks(day, placeIds, eventIds, sourceIds, issues);
   }
+  const knownDayIds = new Set(blueprint.days.map((day) => day.id));
+  if (blueprint.guideTheme) validateGuideTheme(blueprint.guideTheme, knownDayIds, issues);
+  for (const relationship of blueprint.guideRelationshipGraph?.relationships ?? []) validatePlaceRelationship(relationship, placeIds, knownDayIds, sourceIds, issues, `guide relationship ${relationship.id || "<missing>"}`);
+  for (const place of blueprint.places) validateSchedulingEligibilityDayRefs(place.schedulingEligibility, knownDayIds, sourceIds, issues, `place ${place.id || "<missing>"}`);
+  validateFieldEvidence(blueprint.fieldEvidence ?? [], sourceIds, issues, "blueprint");
   if (validDate(blueprint.startDate) && validDate(blueprint.endDate) && blueprint.startDate <= blueprint.endDate) {
     for (const date of datesBetween(blueprint.startDate, blueprint.endDate)) if (!seenDates.has(date)) issues.push(`blueprint is missing itinerary date ${date}`);
     for (const date of seenDates) if (date < blueprint.startDate || date > blueprint.endDate) issues.push(`itinerary date ${date} is outside the blueprint range`);
@@ -363,14 +463,92 @@ function validatePlace(place: BlueprintPlace, sourceIds: Set<string>, placeIds: 
   if (!place.id.trim() || !place.name.trim() || !place.locationLabel.trim() || !place.category.trim()) issues.push(`${path} requires identity, name, location, and category`);
   if (!place.whyWorthIt.trim() || !place.plan.trim()) issues.push(`${path} requires travel rationale and plan`);
   if (place.coordinates && !validCoordinates(place.coordinates)) issues.push(`${path} has invalid coordinates`);
+  if (place.display) validatePlaceDisplay(place.display, issues, path);
+  validateFieldEvidence(place.fieldEvidence ?? [], sourceIds, issues, path);
+  validateSchedulingEligibilityShape(place.schedulingEligibility, issues, path);
   if (place.possibleDuplicateOf?.some((id) => !placeIds.has(id) || id === place.id)) issues.push(`${path} has invalid possible duplicate reference`);
   validateEvidence(place.evidence, sourceIds, issues, path);
+}
+
+function validatePlaceDisplay(display: BlueprintPlaceDisplayIntent, issues: string[], path: string): void {
+  if (!validPlaceDisplayType(display.type)) issues.push(`${path} has invalid display type`);
+  if (display.markerKind && !validPlaceDisplayType(display.markerKind)) issues.push(`${path} has invalid display marker kind`);
 }
 
 function validateRequirement(requirement: BlueprintActionRequirement, placeIds: Set<string>, sourceIds: Set<string>, issues: string[]): void {
   if (!requirement.id.trim() || !requirement.title.trim() || !requirement.description.trim() || !requirement.completionCondition.trim()) issues.push(`action requirement ${requirement.id || "<missing>"} is incomplete`);
   if (requirement.placeId && !placeIds.has(requirement.placeId)) issues.push(`action requirement ${requirement.id} references unknown place ${requirement.placeId}`);
   validateEvidence(requirement.evidence, sourceIds, issues, `action requirement ${requirement.id}`);
+}
+
+function validateModuleIdentity(identity: BlueprintModuleIdentity, issues: string[]): void {
+  if (identity.primaryModule !== "itinerary") issues.push("blueprint module identity must use itinerary as the primary module");
+  const moduleIds = uniqueIdentityIssues("blueprint.moduleIdentity.enabledModules", identity.enabledModules.map((module) => module.id), issues);
+  for (const module of identity.enabledModules) {
+    if (!validWorkspaceModule(module.id)) issues.push(`blueprint module identity has invalid module ${module.id}`);
+    if (!module.title.trim()) issues.push(`blueprint module ${module.id} requires a title`);
+    if (module.source !== "blueprint" && module.source !== "compiled_plan") issues.push(`blueprint module ${module.id} has invalid source`);
+  }
+  if (!moduleIds.has(identity.primaryModule)) issues.push("blueprint module identity must include the primary module");
+}
+
+function validateGuideTheme(theme: BlueprintGuideTheme, dayIds: Set<string>, issues: string[]): void {
+  if (!theme.title.trim() || !theme.narrative.trim()) issues.push("blueprint guide theme requires title and narrative");
+  if (theme.visitorMode && !validVisitorMode(theme.visitorMode)) issues.push("blueprint guide theme has invalid visitor mode");
+  if (theme.tasteModels?.some((item) => !item.trim())) issues.push("blueprint guide theme contains an empty taste model");
+  const segmentIds = new Set<string>();
+  for (const segment of theme.citySegments ?? []) {
+    if (!segment.id.trim() || segmentIds.has(segment.id)) issues.push(`guide theme contains invalid city segment ${segment.id || "<missing>"}`);
+    segmentIds.add(segment.id);
+    if (!segment.city.trim() || !segment.title.trim() || !segment.summary.trim()) issues.push(`guide theme segment ${segment.id} is incomplete`);
+    for (const dayId of segment.dayIds ?? []) if (!dayIds.has(dayId)) issues.push(`guide theme segment ${segment.id} references unknown day ${dayId}`);
+  }
+}
+
+function validateItineraryBlocks(day: BlueprintItineraryDay, placeIds: Set<string>, eventIds: Set<string>, sourceIds: Set<string>, issues: string[]): void {
+  uniqueIdentityIssues(`day ${day.id}.blocks`, day.blocks!.map((block) => block.id), issues);
+  if (day.blocks!.some((block, index) => block.order !== index + 1)) issues.push(`day ${day.id} block order must be contiguous`);
+  for (const block of day.blocks!) {
+    if (!validItineraryBlockKind(block.kind)) issues.push(`day ${day.id} block ${block.id} has invalid kind`);
+    if (block.kind === "stop" && !block.placeId) issues.push(`day ${day.id} stop block ${block.id} requires a place`);
+    if (block.kind === "event" && !block.eventId && !block.placeId) issues.push(`day ${day.id} event block ${block.id} requires an event or place`);
+    if (block.placeId && !placeIds.has(block.placeId)) issues.push(`day ${day.id} block ${block.id} references unknown place ${block.placeId}`);
+    if (block.eventId && !eventIds.has(block.eventId)) issues.push(`day ${day.id} block ${block.id} references unknown event ${block.eventId}`);
+    if (block.durationMinutes !== undefined && (!Number.isInteger(block.durationMinutes) || block.durationMinutes < 1)) issues.push(`day ${day.id} block ${block.id} has invalid duration`);
+    validateEvidence(block.evidence, sourceIds, issues, `day ${day.id} block ${block.id}`);
+  }
+}
+
+function validatePlaceRelationship(relationship: BlueprintPlaceRelationship, placeIds: Set<string>, dayIds: Set<string>, sourceIds: Set<string>, issues: string[], path: string): void {
+  if (!relationship.id.trim() || !relationship.rationale.trim()) issues.push(`${path} is incomplete`);
+  if (!validPlaceRelationshipKind(relationship.kind)) issues.push(`${path} has invalid kind`);
+  if (!placeIds.has(relationship.fromPlaceId)) issues.push(`${path} references unknown place ${relationship.fromPlaceId}`);
+  if (!placeIds.has(relationship.toPlaceId)) issues.push(`${path} references unknown place ${relationship.toPlaceId}`);
+  if (relationship.fromPlaceId === relationship.toPlaceId) issues.push(`${path} cannot relate a place to itself`);
+  for (const dayId of relationship.dayIds ?? []) if (!dayIds.has(dayId)) issues.push(`${path} references unknown day ${dayId}`);
+  validateEvidence(relationship.evidence, sourceIds, issues, path);
+}
+
+function validateSchedulingEligibilityShape(eligibility: BlueprintSchedulingEligibility | undefined, issues: string[], path: string): void {
+  if (!eligibility) return;
+  if (!validSchedulingDecision(eligibility.decision)) issues.push(`${path} has invalid scheduling decision`);
+  if (!eligibility.reason.trim()) issues.push(`${path} scheduling eligibility requires a reason`);
+  if (eligibility.decision === "high_impact" && !(eligibility.highImpactReasons?.length)) issues.push(`${path} high-impact scheduling eligibility requires reasons`);
+}
+
+function validateSchedulingEligibilityDayRefs(eligibility: BlueprintSchedulingEligibility | undefined, dayIds: Set<string>, sourceIds: Set<string>, issues: string[], path: string): void {
+  if (!eligibility) return;
+  for (const dayId of eligibility.suitableDayIds ?? []) if (!dayIds.has(dayId)) issues.push(`${path} scheduling eligibility references unknown suitable day ${dayId}`);
+  for (const dayId of eligibility.blockedDayIds ?? []) if (!dayIds.has(dayId)) issues.push(`${path} scheduling eligibility references unknown blocked day ${dayId}`);
+  validateEvidence(eligibility.evidence ?? [], sourceIds, issues, `${path} scheduling eligibility`);
+}
+
+function validateFieldEvidence(items: BlueprintFieldEvidence[], sourceIds: Set<string>, issues: string[], path: string): void {
+  for (const item of items) {
+    if (!item.path.trim()) issues.push(`${path} field evidence requires a path`);
+    if (!["verified", "recheck", "stale"].includes(item.status)) issues.push(`${path} field evidence ${item.path || "<missing>"} has invalid status`);
+    validateEvidence(item.evidence, sourceIds, issues, `${path} field evidence ${item.path || "<missing>"}`);
+  }
 }
 
 function validateBookingConstraint(constraint: BlueprintBookingConstraint, issues: string[]): void {
@@ -411,6 +589,30 @@ function validSkillLineage(value: SkillLineage): boolean {
 
 function validCoordinates(value: [number, number]): boolean {
   return Number.isFinite(value[0]) && value[0] >= -90 && value[0] <= 90 && Number.isFinite(value[1]) && value[1] >= -180 && value[1] <= 180;
+}
+
+function validPlaceDisplayType(value: unknown): value is BlueprintPlaceDisplayType {
+  return value === "attraction" || value === "dining" || value === "shopping" || value === "experience";
+}
+
+function validWorkspaceModule(value: unknown): value is BlueprintWorkspaceModuleId {
+  return value === "itinerary" || value === "preparation" || value === "tips" || value === "sources";
+}
+
+function validVisitorMode(value: unknown): value is BlueprintVisitorMode {
+  return value === "first-visit" || value === "return-visit" || value === "landmark-light" || value === "local-only" || value === "balanced-visitor";
+}
+
+function validItineraryBlockKind(value: unknown): value is BlueprintItineraryBlockKind {
+  return value === "stop" || value === "flexible" || value === "meal" || value === "rest" || value === "transfer" || value === "lodging" || value === "event";
+}
+
+function validSchedulingDecision(value: unknown): value is BlueprintSchedulingDecision {
+  return value === "schedulable" || value === "informational" || value === "blocked" || value === "high_impact";
+}
+
+function validPlaceRelationshipKind(value: unknown): value is BlueprintPlaceRelationshipKind {
+  return value === "same_area" || value === "same_direction" || value === "alternative" || value === "supports_anchor" || value === "meal_support" || value === "rainy_day_alternative" || value === "low_energy_alternative" || value === "event_link" || value === "similar";
 }
 
 function validDate(value: string): boolean {

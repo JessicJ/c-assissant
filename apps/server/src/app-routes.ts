@@ -50,7 +50,7 @@ export async function registerAppRoutes(server: FastifyInstance, dependencies: {
 
   await registerLocalWebRoutes(server, { store, webAssetsPath, webTripMapPath, webIndexPath });
   registerPlanningSessionRoutes(server, { store, generation: runtimeServices.planningGeneration });
-  registerPlanManagementRoutes(server, { store, getMaps: () => getConnectors().maps, startActivePlanMonitoring: messagingServices.activePlanMonitoring.startActivePlanMonitoring });
+  registerPlanManagementRoutes(server, { store, getMaps: () => getConnectors().maps, startActivePlanMonitoring: messagingServices.activePlanMonitoring.startActivePlanMonitoring, getGeneratingPlan: runtimeServices.getGeneratingPlan });
   registerBookingRoutes(server, { store });
   registerMaintenanceRoutes(server, { store });
 

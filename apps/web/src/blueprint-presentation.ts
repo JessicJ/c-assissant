@@ -26,7 +26,8 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
       title: day.title,
       summary: day.summary,
       candidates,
-      stops
+      stops,
+      ...(day.blocks ? { blocks: structuredClone(day.blocks) } : {})
     };
   });
   const dayById = new Map(days.map((day) => [day.id, day] as const));
@@ -61,6 +62,10 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
     startDate: blueprint.startDate,
     endDate: blueprint.endDate,
     cities: blueprint.destinations,
+    ...(blueprint.moduleIdentity ? { moduleIdentity: structuredClone(blueprint.moduleIdentity) } : {}),
+    ...(blueprint.guideTheme ? { guideTheme: structuredClone(blueprint.guideTheme) } : {}),
+    ...(blueprint.guideRelationshipGraph ? { guideRelationshipGraph: structuredClone(blueprint.guideRelationshipGraph) } : {}),
+    ...(blueprint.fieldEvidence ? { fieldEvidence: structuredClone(blueprint.fieldEvidence) } : {}),
     places: blueprint.places.map((place) => {
       const evidenceSources = place.evidence.flatMap((ref) => {
         const source = sources.get(ref.sourceId);
@@ -84,6 +89,9 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
         ...(place.area ? { area: place.area } : {}),
         category: place.category,
         priority: place.priority,
+        ...(place.display ? { display: structuredClone(place.display) } : {}),
+        ...(place.schedulingEligibility ? { schedulingEligibility: structuredClone(place.schedulingEligibility) } : {}),
+        ...(place.fieldEvidence ? { fieldEvidence: structuredClone(place.fieldEvidence) } : {}),
         ...(place.contentTier ? { contentTier: place.contentTier } : {}),
         ...(place.visitRole ? { visitRole: place.visitRole } : {}),
         ...(place.durationMinutes ? { durationMinutes: place.durationMinutes } : {}),
@@ -95,11 +103,21 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
         ...(place.bookingUrl ? { bookingUrl: place.bookingUrl } : {}),
         ...(place.mapUrl ? { mapUrl: place.mapUrl } : {}),
         ...(place.experienceUrl ? { experienceUrl: place.experienceUrl } : {}),
-        ...(reservation ? { reservation: { requirement: "unknown" as const, verification: reservation.evidence.some((item) => item.status === "verified") ? "verified" as const : "needs_recheck" as const, note: reservation.description } } : {}),
+        ...(reservation ? { reservation: { requirement: "required" as const, verification: reservation.evidence.some((item) => item.status === "verified") ? "verified" as const : "needs_recheck" as const, note: reservation.description } } : {}),
         ...(evidenceSources.length ? { evidenceSources } : {}),
         sourceRefs: evidenceSources.map((source) => source.url)
       };
     }),
+    events: blueprint.events.map((event) => ({
+      id: event.id,
+      title: event.title,
+      description: event.description,
+      ...(event.startDate ? { startDate: event.startDate } : {}),
+      ...(event.endDate ? { endDate: event.endDate } : {}),
+      ...(event.locationLabel ? { locationLabel: event.locationLabel } : {}),
+      ...(event.placeId ? { placeId: event.placeId } : {}),
+      sourceRefs: event.evidence.flatMap((ref) => sources.get(ref.sourceId)?.url ?? [])
+    })),
     days,
     routeSegments
   };

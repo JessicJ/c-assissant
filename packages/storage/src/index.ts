@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   confirmPlan,
+  applyDirectBlueprintRevision,
   assertPlanPresentationIntegrity,
   assertResearchSetIntegrity,
   assertTripBlueprintIntegrity,
@@ -11,10 +12,12 @@ import {
   createPlanFromDraft,
   createPlanFromRequest,
   createDefaultPlanConfiguration,
+  compileTripBlueprint,
   isPreDepartureChecklistTask,
   type CreatePlanInput,
   type CountryPackSkillRun,
   type DestinationArrivalEvent,
+  type DirectBlueprintRevision,
   type AgentRuntimeKind,
   type AgentRun,
   type BlueprintGeneration,
@@ -414,7 +417,7 @@ const TASK_REMINDER_RETRY_DELAYS_MS = [60_000, 5 * 60_000] as const;
 const ITINERARY_REMINDER_CATCH_UP_MS = 20 * 60_000;
 const ITINERARY_REMINDER_ATTEMPT_LEASE_MS = 60_000;
 const ITINERARY_REMINDER_RETRY_DELAYS_MS = [60_000, 5 * 60_000] as const;
-const CURRENT_SCHEMA_VERSION = 18;
+const CURRENT_SCHEMA_VERSION = 19;
 
 export interface DatabaseMaintenanceStatus {
   schemaVersion: number;
@@ -1910,6 +1913,16 @@ export class SqliteWorkspaceStore {
     return this.getWorkspace();
   }
 
+  applyDirectBlueprintRevision(input: { expectedPlanId: string; expectedVersion: number; revision: DirectBlueprintRevision; runtime?: AgentRuntimeKind }): WorkspaceSnapshot {
+    const workspace = this.getWorkspace();
+    if (workspace.activePlan.id !== input.expectedPlanId || workspace.activePlan.version !== input.expectedVersion) throw new Error("The Plan changed before this Blueprint Revision was applied.");
+    if (!workspace.activeBlueprint) throw new Error("Direct Blueprint Revision requires a current Trip Blueprint.");
+    const revised = applyDirectBlueprintRevision(workspace.activeBlueprint, input.revision);
+    const saved = this.saveTripBlueprint(revised);
+    const compilation = compileTripBlueprint(saved, { createdAt: input.revision.createdAt, completedRequirementIds: completedRequirementIdsForWorkspace(workspace) });
+    return this.createCompiledBlueprintPlan(compilation, input.runtime);
+  }
+
   saveGeneratedPlanArrivalTimeZone(input: { planId: string; expectedVersion: number; timeZone: string }): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
     const plan = workspace.activePlan;
@@ -2783,7 +2796,7 @@ export class SqliteWorkspaceStore {
       CREATE TABLE IF NOT EXISTS trip_blueprints (
         id TEXT NOT NULL,
         version INTEGER NOT NULL CHECK (version > 0),
-        generation_key TEXT NOT NULL UNIQUE REFERENCES blueprint_generations(generation_key) ON DELETE RESTRICT,
+        generation_key TEXT NOT NULL REFERENCES blueprint_generations(generation_key) ON DELETE RESTRICT,
         research_set_id TEXT NOT NULL REFERENCES research_sets(id) ON DELETE RESTRICT,
         schema_version INTEGER NOT NULL,
         content_json TEXT NOT NULL,
@@ -3022,6 +3035,7 @@ export class SqliteWorkspaceStore {
       CREATE INDEX IF NOT EXISTS idx_travel_bookings_source_hash ON travel_bookings(source_hash);
       CREATE INDEX IF NOT EXISTS idx_protected_booking_attachments_booking ON protected_booking_attachments(booking_id);
       CREATE INDEX IF NOT EXISTS idx_blueprint_generations_recent ON blueprint_generations(updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_trip_blueprints_generation_version ON trip_blueprints(generation_key, version DESC);
       CREATE INDEX IF NOT EXISTS idx_blueprint_generation_events_stream ON blueprint_generation_events(generation_key, sequence);
       CREATE INDEX IF NOT EXISTS idx_blueprint_diagnostic_expiry ON blueprint_diagnostic_artifacts(expires_at);
       CREATE INDEX IF NOT EXISTS idx_plan_change_sets_recent ON plan_change_sets(plan_id, created_at DESC);
@@ -3108,6 +3122,7 @@ export class SqliteWorkspaceStore {
         CREATE INDEX idx_agent_runs_recent ON agent_runs(started_at DESC);
         COMMIT;`);
     }
+    this.migrateTripBlueprintGenerationKeyUniqueness();
     this.database.prepare("INSERT OR IGNORE INTO runtime_settings (id, selected_runtime, updated_at) VALUES (1, 'codex', ?)").run(new Date().toISOString());
     const migrationTime = new Date().toISOString();
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (1, 'v1-local-workspace-baseline', ?)").run(migrationTime);
@@ -3128,6 +3143,37 @@ export class SqliteWorkspaceStore {
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (16, 'booking-evidence-imports', ?)").run(migrationTime);
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (17, 'telegram-uber-handoff-test', ?)").run(migrationTime);
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (18, 'telegram-movement-go-location-intent', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (19, 'trip-blueprint-direct-revision-versions', ?)").run(migrationTime);
+  }
+
+  private migrateTripBlueprintGenerationKeyUniqueness(): void {
+    const schema = this.database.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'trip_blueprints'").get() as { sql: string } | undefined;
+    if (!schema?.sql || !/generation_key\s+TEXT\s+NOT\s+NULL\s+UNIQUE/i.test(schema.sql)) return;
+    this.database.exec("PRAGMA foreign_keys = OFF;");
+    try {
+      this.database.exec(`BEGIN;
+        CREATE TABLE trip_blueprints_next (
+          id TEXT NOT NULL,
+          version INTEGER NOT NULL CHECK (version > 0),
+          generation_key TEXT NOT NULL REFERENCES blueprint_generations(generation_key) ON DELETE RESTRICT,
+          research_set_id TEXT NOT NULL REFERENCES research_sets(id) ON DELETE RESTRICT,
+          schema_version INTEGER NOT NULL,
+          content_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (id, version)
+        );
+        INSERT INTO trip_blueprints_next (id, version, generation_key, research_set_id, schema_version, content_json, created_at)
+          SELECT id, version, generation_key, research_set_id, schema_version, content_json, created_at FROM trip_blueprints;
+        DROP TABLE trip_blueprints;
+        ALTER TABLE trip_blueprints_next RENAME TO trip_blueprints;
+        CREATE INDEX IF NOT EXISTS idx_trip_blueprints_generation_version ON trip_blueprints(generation_key, version DESC);
+        COMMIT;`);
+    } catch (error) {
+      try { this.database.exec("ROLLBACK;"); } catch { /* Nothing to roll back. */ }
+      throw error;
+    } finally {
+      this.database.exec("PRAGMA foreign_keys = ON;");
+    }
   }
 
   private seedIfEmpty(): void {
@@ -3801,6 +3847,14 @@ function isFinishedRunStatus(value: unknown): value is Exclude<RunStatus, "runni
 
 function runtimeDisplayName(kind: AgentRuntimeKind): string {
   return kind === "claude-code" ? "Claude Code" : "Codex";
+}
+
+function completedRequirementIdsForWorkspace(workspace: WorkspaceSnapshot): string[] {
+  return [workspace.activePlan, workspace.executionPlan]
+    .filter((plan): plan is Plan => Boolean(plan))
+    .flatMap((plan) => plan.stages.flatMap((stage) => stage.tasks))
+    .filter((task) => task.status === "completed" && Boolean(task.requirementId))
+    .map((task) => task.requirementId!);
 }
 
 function samePlanCity(left: string, right: string): boolean {

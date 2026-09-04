@@ -188,6 +188,30 @@ _Avoid_: Scheduled stops, map viewport results
 The shared set of user-facing attraction, shopping, dining, and local-experience content in a Trip Blueprint. It belongs under the Itinerary workspace as schedulable planning material rather than as separate top-level Plan workspace modules.
 _Avoid_: Separate guide lists, static articles, top-level plan modules
 
+**Blueprint Module Identity**:
+The Trip Blueprint declaration of which workspace modules its content can truthfully power, with Itinerary as the primary travel-planning module and Preparation, Tips, and Sources as supporting views.
+_Avoid_: Web tab state, Plan stage title, visual navigation
+
+**Guide Theme**:
+The traveler-facing narrative frame for a Trip Blueprint, including the trip theme, visitor mode, taste model when used, and city or route segments that explain how the Place Catalog is organized.
+_Avoid_: UI theme, color palette, marketing copy
+
+**Guide Relationship Graph**:
+The structured relationships between Place Catalog entries, such as alternatives, same-direction additions, meal support, rainy-day swaps, and anchor support. It helps the workspace compare and revise places without inventing relationships from display text.
+_Avoid_: Map route, category filter, ranking list
+
+**Scheduling Eligibility**:
+The per-place planning judgment that says whether and how a Place Catalog entry may be inserted into itinerary days, including ordinary schedulable places, informational context, blocked places, and high-impact edits that require replanning.
+_Avoid_: Current scheduled status, user preference, map eligibility
+
+**Typed Itinerary Block**:
+A structured itinerary unit that explains what a day sequence element is, such as a stop, flexible block, meal, rest, transfer, lodging anchor, or event. It keeps day structure separate from generic Plan Tasks.
+_Avoid_: Task, route segment, untyped stop list
+
+**Field Evidence Link**:
+Evidence attached to a specific Blueprint field or claim rather than only to the whole place or movement. It allows verified claims, recheck claims, and stale claims to remain distinguishable during import and revision.
+_Avoid_: Source list entry, whole-place credibility, citation badge
+
 **Place Identity**:
 The stable identifier of one Place Catalog entry, used by itinerary stops and candidates. An itinerary may reference an identity only after the corresponding complete place record belongs to its Research Set.
 _Avoid_: Place name, list position

@@ -5,11 +5,18 @@ import {
   type BlueprintActionRequirement,
   type BlueprintBookingConstraint,
   type BlueprintEvent,
+  type BlueprintFieldEvidence,
+  type BlueprintGuideRelationshipGraph,
+  type BlueprintGuideTheme,
   type BlueprintEvidenceRef,
+  type BlueprintItineraryBlock,
   type BlueprintItineraryDay,
+  type BlueprintModuleIdentity,
   type BlueprintMovement,
   type BlueprintPlace,
+  type BlueprintPlaceRelationship,
   type BlueprintProposalRef,
+  type BlueprintSchedulingEligibility,
   type BlueprintSource,
   type ResearchBatch,
   type ResearchSet,
@@ -40,6 +47,7 @@ export interface SkillResearchPlaceArtifact {
   category: string;
   priority?: BlueprintPlace["priority"];
   coordinates?: [number, number] | null;
+  display?: BlueprintPlace["display"];
   contentTier?: BlueprintPlace["contentTier"];
   visitRole?: string;
   durationMinutes?: number;
@@ -51,6 +59,17 @@ export interface SkillResearchPlaceArtifact {
   bookingUrl?: string;
   mapUrl?: string;
   experienceUrl?: string;
+  sourceUrls?: string[];
+  fieldEvidence?: BlueprintFieldEvidence[];
+  schedulingEligibility?: BlueprintSchedulingEligibility;
+}
+
+export interface SkillPlaceRelationshipArtifact {
+  id?: string;
+  kind: BlueprintPlaceRelationship["kind"];
+  fromPlaceId: string;
+  toPlaceId: string;
+  rationale: string;
   sourceUrls?: string[];
 }
 
@@ -82,6 +101,7 @@ export interface SkillResearchBatchArtifact {
   scopeLabel: string;
   places: SkillResearchPlaceArtifact[];
   events: SkillResearchEventArtifact[];
+  relationships?: SkillPlaceRelationshipArtifact[];
   sources: SkillResearchSourceArtifact[];
   actionRequirements?: SkillActionRequirementArtifact[];
   completedAt: string;
@@ -94,6 +114,7 @@ export interface SkillItineraryArtifact {
   destinations: string[];
   startDate: string;
   endDate: string;
+  guideTheme?: BlueprintGuideTheme;
   days: BlueprintItineraryDay[];
   movements: BlueprintMovement[];
 }
@@ -151,6 +172,11 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
   }
   const sources = [...sourceByUrl.values()];
   const sourceIdByUrl = new Map(sources.map((source) => [source.url, source.id]));
+  const sourceIdByArtifactId = new Map<string, string>();
+  for (const artifact of artifacts.flatMap((batch) => batch.sources)) {
+    if (!artifact.id) continue;
+    sourceIdByArtifactId.set(artifact.id, sourceIdByUrl.get(normalizedHttpsUrl(artifact.url))!);
+  }
 
   const places: BlueprintPlace[] = [];
   const placeIdByExternalIdentity = new Map<string, string>();
@@ -172,6 +198,7 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
       category: artifact.category.trim(),
       priority: artifact.priority ?? "preferred",
       ...(artifact.coordinates ? { coordinates: artifact.coordinates } : {}),
+      ...(artifact.display ? { display: structuredClone(artifact.display) } : {}),
       ...(artifact.contentTier ? { contentTier: artifact.contentTier } : {}),
       ...(artifact.visitRole?.trim() ? { visitRole: artifact.visitRole.trim() } : {}),
       ...(artifact.durationMinutes ? { durationMinutes: artifact.durationMinutes } : {}),
@@ -180,10 +207,26 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
       ...(artifact.tip?.trim() ? { tip: artifact.tip.trim() } : {}),
       ...(artifact.detailSections ? { detailSections: structuredClone(artifact.detailSections) } : {}),
       ...optionalHttpsLinks(artifact),
-      evidence: evidenceForUrls(artifact.sourceUrls, sourceIdByUrl)
+      evidence: evidenceForUrls(artifact.sourceUrls, sourceIdByUrl),
+      ...(artifact.fieldEvidence?.length ? { fieldEvidence: remapFieldEvidence(artifact.fieldEvidence, sourceIdByArtifactId) } : {}),
+      ...(artifact.schedulingEligibility ? { schedulingEligibility: structuredClone(artifact.schedulingEligibility) } : {})
     });
   }
   const placeIds = new Set(places.map((place) => place.id));
+
+  const guideRelationships: BlueprintPlaceRelationship[] = artifacts.flatMap((batch) => batch.relationships ?? []).flatMap((artifact) => {
+    const fromPlaceId = resolvePlaceId(artifact.fromPlaceId, inputPlaceIdMap, placeIds);
+    const toPlaceId = resolvePlaceId(artifact.toPlaceId, inputPlaceIdMap, placeIds);
+    if (fromPlaceId === toPlaceId) return [];
+    return [{
+      id: stableIdentity("relationship", artifact.id || `${artifact.kind}\0${fromPlaceId}\0${toPlaceId}`),
+      kind: artifact.kind,
+      fromPlaceId,
+      toPlaceId,
+      rationale: artifact.rationale.trim(),
+      evidence: evidenceForUrls(artifact.sourceUrls, sourceIdByUrl)
+    }];
+  });
 
   const events: BlueprintEvent[] = artifacts.flatMap((batch) => batch.events).map((artifact) => ({
     id: stableIdentity("event", artifact.id || `${artifact.title}\0${artifact.startDate ?? ""}\0${artifact.locationLabel ?? ""}`),
@@ -228,6 +271,7 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
     places,
     events,
     sources,
+    ...(guideRelationships.length ? { guideRelationships } : {}),
     actionRequirements,
     createdAt: context.createdAt,
     updatedAt: context.updatedAt,
@@ -253,7 +297,10 @@ export function importSkillItinerary(research: ResearchSet, artifact: SkillItine
     destinations: artifact.destinations.map((value) => value.trim()).filter(Boolean),
     startDate: artifact.startDate,
     endDate: artifact.endDate,
-    places: structuredClone(research.places),
+    moduleIdentity: defaultBlueprintModuleIdentity(),
+    guideTheme: normalizeGuideTheme(artifact.guideTheme, reasonableItinerary.days, artifact),
+    guideRelationshipGraph: normalizeGuideRelationshipGraph(research.guideRelationships, reasonableItinerary.days),
+    places: normalizeBlueprintPlaces(research.places, reasonableItinerary.days),
     events: structuredClone(research.events),
     sources: structuredClone(research.sources),
     days: reasonableItinerary.days,
@@ -274,10 +321,131 @@ function normalizeItineraryReasonableness(research: ResearchSet, artifact: Skill
     return {
       ...structuredClone(day),
       summary: enrichDaySummary(day),
+      blocks: normalizeItineraryBlocks(day),
       candidatePlaceIds: candidates
     };
   });
   return { days, movements: normalizeMovementsForReasonableness(artifact.movements, days, placeById) };
+}
+
+function normalizeItineraryBlocks(day: BlueprintItineraryDay): BlueprintItineraryBlock[] {
+  const inputBlocks = day.blocks ?? [];
+  if (inputBlocks.length) {
+    return inputBlocks
+      .filter((block) => block.id.trim())
+      .sort((left, right) => left.order - right.order)
+      .map((block, index) => ({ ...structuredClone(block), order: index + 1, evidence: structuredClone(block.evidence ?? []) }));
+  }
+  return day.stops.map((stop, index) => ({
+    id: `block-${day.id}-${index + 1}`,
+    kind: inferItineraryBlockKind(stop.role),
+    order: index + 1,
+    placeId: stop.placeId,
+    ...(stop.time ? { startTime: stop.time } : {}),
+    ...(stop.role ? { role: stop.role } : {}),
+    evidence: []
+  }));
+}
+
+function inferItineraryBlockKind(role: string | undefined): BlueprintItineraryBlock["kind"] {
+  const text = normalizeSearchText(role ?? "");
+  if (/\b(lunch|dinner|breakfast|meal|coffee|cafe|café|snack|dessert|bar)\b/.test(text)) return "meal";
+  if (/\b(hotel|lodging|check-in|checkout|luggage)\b/.test(text)) return "lodging";
+  if (/\b(transfer|transit|rail|flight|airport|station)\b/.test(text)) return "transfer";
+  if (/\b(rest|break|pause)\b/.test(text)) return "rest";
+  if (/\b(flexible|optional|candidate|backup)\b/.test(text)) return "flexible";
+  return "stop";
+}
+
+function defaultBlueprintModuleIdentity(): BlueprintModuleIdentity {
+  return {
+    primaryModule: "itinerary",
+    enabledModules: [
+      { id: "itinerary", title: "Itinerary", source: "blueprint" },
+      { id: "preparation", title: "Preparation", source: "blueprint" },
+      { id: "tips", title: "Tips", source: "blueprint" },
+      { id: "sources", title: "Sources", source: "blueprint" }
+    ]
+  };
+}
+
+function normalizeGuideTheme(theme: BlueprintGuideTheme | undefined, days: BlueprintItineraryDay[], artifact: SkillItineraryArtifact): BlueprintGuideTheme {
+  if (theme) {
+    return {
+      ...structuredClone(theme),
+      title: theme.title.trim(),
+      narrative: theme.narrative.trim(),
+      ...(theme.citySegments ? { citySegments: theme.citySegments.map((segment) => {
+        const dayIds = segment.dayIds?.filter((id, index, all) => days.some((day) => day.id === id) && all.indexOf(id) === index);
+        return {
+          id: segment.id.trim(),
+          city: segment.city.trim(),
+          title: segment.title.trim(),
+          summary: segment.summary.trim(),
+          ...(dayIds?.length ? { dayIds } : {})
+        };
+      }) } : {})
+    };
+  }
+  return {
+    title: artifact.title.trim(),
+    narrative: artifact.summary.trim(),
+    visitorMode: "balanced-visitor",
+    citySegments: destinationsFromDays(days).map((city, index) => ({
+      id: `segment-${index + 1}`,
+      city,
+      title: city,
+      summary: days.filter((day) => day.city === city).map((day) => day.title).join("; ") || city,
+      dayIds: days.filter((day) => day.city === city).map((day) => day.id)
+    }))
+  };
+}
+
+function destinationsFromDays(days: BlueprintItineraryDay[]): string[] {
+  return days.map((day) => day.city).filter((city, index, all) => city && all.indexOf(city) === index);
+}
+
+function normalizeGuideRelationshipGraph(relationships: BlueprintPlaceRelationship[] | undefined, days: BlueprintItineraryDay[]): BlueprintGuideRelationshipGraph {
+  const dayByPlace = new Map<string, string[]>();
+  for (const day of days) {
+    for (const stop of day.stops) dayByPlace.set(stop.placeId, [...(dayByPlace.get(stop.placeId) ?? []), day.id]);
+    for (const candidateId of day.candidatePlaceIds) dayByPlace.set(candidateId, [...(dayByPlace.get(candidateId) ?? []), day.id]);
+  }
+  return {
+    relationships: (relationships ?? []).map((relationship) => ({
+      ...structuredClone(relationship),
+      dayIds: relationship.dayIds ?? [...new Set([...(dayByPlace.get(relationship.fromPlaceId) ?? []), ...(dayByPlace.get(relationship.toPlaceId) ?? [])])]
+    }))
+  };
+}
+
+function normalizeBlueprintPlaces(places: BlueprintPlace[], days: BlueprintItineraryDay[]): BlueprintPlace[] {
+  const scheduled = new Set(days.flatMap((day) => day.stops.map((stop) => stop.placeId)));
+  const candidateDaysByPlace = new Map<string, string[]>();
+  const scheduledDaysByPlace = new Map<string, string[]>();
+  for (const day of days) {
+    for (const stop of day.stops) scheduledDaysByPlace.set(stop.placeId, [...(scheduledDaysByPlace.get(stop.placeId) ?? []), day.id]);
+    for (const candidateId of day.candidatePlaceIds) candidateDaysByPlace.set(candidateId, [...(candidateDaysByPlace.get(candidateId) ?? []), day.id]);
+  }
+  return places.map((place) => {
+    if (place.schedulingEligibility) return structuredClone(place);
+    const suitableDayIds = [...new Set([...(scheduledDaysByPlace.get(place.id) ?? []), ...(candidateDaysByPlace.get(place.id) ?? [])])];
+    const decision: BlueprintSchedulingEligibility["decision"] = place.coordinates ? "schedulable" : "informational";
+    return {
+      ...structuredClone(place),
+      schedulingEligibility: {
+        decision,
+        reason: scheduled.has(place.id)
+          ? "This place is already part of the day-by-day itinerary and can be moved through itinerary editing."
+          : suitableDayIds.length
+            ? "This place is suitable for the listed itinerary day as an alternative or addition."
+            : decision === "schedulable"
+              ? "This place has map-ready identity and may be considered during replanning."
+              : "This place lacks map-ready coordinates, so it remains useful written context until its location is verified.",
+        ...(suitableDayIds.length ? { suitableDayIds } : {})
+      }
+    };
+  });
 }
 
 function enrichDayCandidates(day: BlueprintItineraryDay, places: BlueprintPlace[], stopIds: Set<string>): string[] {
@@ -463,6 +631,7 @@ export function mergeResearchSetCheckpoint(current: ResearchSet | undefined, inc
   const places = appendUnique(current.places, incoming.places.map((place) => ({ ...place, evidence: remapEvidence(place.evidence) })), (item) => item.id);
   const events = appendUnique(current.events, incoming.events.map((event) => ({ ...event, evidence: remapEvidence(event.evidence) })), (item) => item.id);
   const actionRequirements = appendUnique(current.actionRequirements, incoming.actionRequirements.map((requirement) => ({ ...requirement, evidence: remapEvidence(requirement.evidence) })), (item) => item.id);
+  const guideRelationships = appendUnique(current.guideRelationships ?? [], (incoming.guideRelationships ?? []).map((relationship) => ({ ...relationship, evidence: remapEvidence(relationship.evidence) })), (item) => item.id);
   const batches = appendUnique(current.batches, incoming.batches.map((batch) => ({ ...batch, sourceIds: batch.sourceIds.map((id) => incomingSourceRemap.get(id) ?? id) })), (item) => item.id);
   const merged: ResearchSet = {
     ...current,
@@ -471,6 +640,7 @@ export function mergeResearchSetCheckpoint(current: ResearchSet | undefined, inc
     places,
     events,
     sources: [...sourceByUrl.values()],
+    ...(guideRelationships.length ? { guideRelationships } : {}),
     actionRequirements,
     updatedAt: input.updatedAt,
     ...(input.status === "completed" ? { completedAt: input.updatedAt } : {})
@@ -485,6 +655,16 @@ function evidenceForUrls(urls: string[] | undefined, sourceIdByUrl: Map<string, 
     if (!sourceId) throw new Error(`Skill artifact references an unknown source URL: ${url}`);
     return { sourceId, status: "recheck" as const };
   }).filter((value, index, all) => all.findIndex((candidate) => candidate.sourceId === value.sourceId) === index);
+}
+
+function remapFieldEvidence(items: BlueprintFieldEvidence[], sourceIdByArtifactId: Map<string, string>): BlueprintFieldEvidence[] {
+  return items.map((item) => ({
+    ...structuredClone(item),
+    evidence: item.evidence.map((ref) => ({
+      ...ref,
+      sourceId: sourceIdByArtifactId.get(ref.sourceId) ?? ref.sourceId
+    }))
+  }));
 }
 
 function resolvePlaceId(value: string, imported: Map<string, string>, placeIds: Set<string>): string {

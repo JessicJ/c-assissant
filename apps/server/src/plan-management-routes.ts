@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { PlanAccommodationInput, PlanArrivalInput, PlanTransportPreferenceInput, PlanTravelContextInput } from "@c-assistant/core";
+import type { DirectBlueprintRevision, PlanAccommodationInput, PlanArrivalInput, PlanTransportPreferenceInput, PlanTravelContextInput } from "@c-assistant/core";
 import type { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { prepareAccommodationDepartures } from "./accommodation-departure.js";
 import { connectorResponseStatus } from "./connector-bundle.js";
@@ -10,8 +10,9 @@ export function registerPlanManagementRoutes(server: FastifyInstance, dependenci
   store: SqliteWorkspaceStore;
   getMaps: () => PlanRouteMaps;
   startActivePlanMonitoring: () => void;
+  getGeneratingPlan?: () => boolean;
 }): void {
-  const { store, getMaps, startActivePlanMonitoring } = dependencies;
+  const { store, getMaps, startActivePlanMonitoring, getGeneratingPlan = () => false } = dependencies;
 
   server.delete("/api/plans", async () => store.resetPlansToEmptyState());
   server.delete<{ Params: { planId: string } }>("/api/plans/:planId", async (request, reply) => {
@@ -74,6 +75,29 @@ export function registerPlanManagementRoutes(server: FastifyInstance, dependenci
     } catch (error) {
       const message = error instanceof Error ? error.message : "The Plan change could not be undone.";
       return reply.code(/changed before|latest Plan change/i.test(message) ? 409 : 400).send({ error: message });
+    }
+  });
+
+  server.post<{ Params: { planId: string }; Body: unknown }>("/api/plans/:planId/blueprint-revisions/direct", async (request, reply) => {
+    if (getGeneratingPlan()) return reply.code(409).send({ error: "Another Plan generation is already running." });
+    let revision: DirectBlueprintRevision;
+    let expectedVersion: number;
+    try {
+      expectedVersion = expectedVersionFromBody(request.body);
+      revision = parseDirectBlueprintRevision(request.body, new Date().toISOString());
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "This Blueprint Revision is invalid." });
+    }
+    try {
+      return store.applyDirectBlueprintRevision({
+        expectedPlanId: request.params.planId,
+        expectedVersion,
+        revision,
+        runtime: store.getWorkspace().runtime.selectedKind
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "This Blueprint Revision could not be applied.";
+      return reply.code(/changed before|already working|already scheduled/i.test(message) ? 409 : 400).send({ error: message });
     }
   });
   server.post<{ Params: { planId: string }; Body: { message?: string; expectedVersion?: number } }>("/api/plans/:planId/change-impact", async (request, reply) => {
@@ -214,4 +238,39 @@ export function registerPlanManagementRoutes(server: FastifyInstance, dependenci
       });
     }
   });
+}
+
+function parseDirectBlueprintRevision(value: unknown, createdAt: string): DirectBlueprintRevision {
+  if (!isRecord(value)) throw new Error("Direct itinerary edits need a structured request.");
+  if (value.kind !== "add_place_to_day" && value.kind !== "move_place_within_day") throw new Error("Direct itinerary edits currently support adding or moving a place within a day.");
+  const placeId = stringField(value, "placeId");
+  const dayId = stringField(value, "dayId");
+  const position = directRevisionPosition(value.position);
+  if (value.kind === "move_place_within_day") return { kind: "move_place_within_day", placeId, dayId, position, createdAt };
+  return { kind: "add_place_to_day", placeId, dayId, position, createdAt };
+}
+
+function expectedVersionFromBody(value: unknown): number {
+  if (!isRecord(value) || typeof value.expectedVersion !== "number" || !Number.isInteger(value.expectedVersion) || value.expectedVersion <= 0) {
+    throw new Error("Direct itinerary edits need the current Plan version.");
+  }
+  return value.expectedVersion;
+}
+
+function directRevisionPosition(value: unknown): DirectBlueprintRevision["position"] {
+  if (!isRecord(value)) throw new Error("Direct itinerary edits need a placement position.");
+  if (value.kind === "start") return { kind: "start" };
+  if (value.kind === "end") return { kind: "end" };
+  if (value.kind === "after") return { kind: "after", afterPlaceId: stringField(value, "afterPlaceId") };
+  throw new Error("Direct itinerary edits need a supported placement position.");
+}
+
+function stringField(value: Record<string, unknown>, key: string): string {
+  const field = value[key];
+  if (typeof field !== "string" || !field.trim()) throw new Error(`Direct itinerary edits need ${key}.`);
+  return field;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

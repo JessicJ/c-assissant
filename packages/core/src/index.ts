@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PlanCompilationOrigin } from "./plan-compiler.js";
 import type { DestinationArrivalEvent } from "./current-destination.js";
-import type { TripBlueprint } from "./trip-blueprint.js";
+import type { BlueprintFieldEvidence, BlueprintGuideRelationshipGraph, BlueprintGuideTheme, BlueprintItineraryBlock, BlueprintModuleIdentity, BlueprintPlaceDisplayIntent, BlueprintSchedulingEligibility, TripBlueprint } from "./trip-blueprint.js";
 
 export { recommendPlanTransport, type TransportMode, type TransportRecommendation, type TransportRouteFact } from "./transport.js";
 export { assessPolicyPreparation, type PolicyPreparationAssessment, type PolicyPreparationItem, type PolicyPreparationStatus } from "./policy-applicability.js";
@@ -14,6 +14,10 @@ export {
   type BlueprintPlanCompilerInput
 } from "./blueprint-plan-compiler.js";
 export {
+  applyDirectBlueprintRevision,
+  type DirectBlueprintRevision
+} from "./blueprint-revision.js";
+export {
   SKILL_IMPORTER_VERSION,
   importSkillItinerary,
   importSkillResearchBatches,
@@ -24,6 +28,7 @@ export {
   type SkillItineraryArtifact,
   type SkillResearchBatchArtifact,
   type SkillResearchEventArtifact,
+  type SkillPlaceRelationshipArtifact,
   type SkillResearchPlaceArtifact,
   type SkillResearchSourceArtifact
 } from "./skill-importer.js";
@@ -43,20 +48,34 @@ export {
   type BlueprintEvidenceRef,
   type BlueprintEvidenceStatus,
   type BlueprintEvent,
+  type BlueprintFieldEvidence,
   type BlueprintGeneration,
   type BlueprintGenerationEvent,
   type BlueprintGenerationFailure,
   type BlueprintGenerationStage,
   type BlueprintGenerationStatus,
+  type BlueprintGuideRelationshipGraph,
+  type BlueprintGuideTheme,
   type BlueprintIntegrityOptions,
+  type BlueprintItineraryBlock,
+  type BlueprintItineraryBlockKind,
   type BlueprintItineraryDay,
+  type BlueprintModuleIdentity,
   type BlueprintMovement,
   type BlueprintMovementMode,
   type BlueprintPlace,
+  type BlueprintPlaceDisplayIntent,
+  type BlueprintPlaceDisplayType,
   type BlueprintPlacePriority,
+  type BlueprintPlaceRelationship,
+  type BlueprintPlaceRelationshipKind,
   type BlueprintProposalRef,
+  type BlueprintSchedulingDecision,
+  type BlueprintSchedulingEligibility,
   type BlueprintSource,
   type BlueprintStop,
+  type BlueprintVisitorMode,
+  type BlueprintWorkspaceModuleId,
   type PlanBlueprintLineage,
   type ResearchBatch,
   type ResearchSet,
@@ -185,6 +204,9 @@ export interface PlanPlace {
   area?: string;
   category: string;
   priority: PlanPlacePriority;
+  display?: BlueprintPlaceDisplayIntent;
+  schedulingEligibility?: BlueprintSchedulingEligibility;
+  fieldEvidence?: BlueprintFieldEvidence[];
   contentTier?: "deep" | "standard" | "compact";
   visitRole?: string;
   durationMinutes?: number;
@@ -230,6 +252,7 @@ export interface ItineraryDay {
   anchors?: string[];
   candidates?: string[];
   stops?: Array<{ placeId: string; order: number; time?: string; role?: string }>;
+  blocks?: BlueprintItineraryBlock[];
   /** Current accommodation to the first scheduled place; host-managed after the user saves a stay. */
   accommodationDeparture?: {
     accommodationName: string;
@@ -251,6 +274,17 @@ export interface ItineraryDay {
     intentionalDetours?: string[];
     routingMethod?: string;
   };
+}
+
+export interface PlanPresentationEvent {
+  id: string;
+  title: string;
+  description: string;
+  startDate?: string;
+  endDate?: string;
+  locationLabel?: string;
+  placeId?: string;
+  sourceRefs: string[];
 }
 
 export interface PlanRouteSegment {
@@ -277,8 +311,13 @@ export interface PlanPresentation {
   startDate?: string;
   endDate?: string;
   cities?: string[];
+  moduleIdentity?: BlueprintModuleIdentity;
+  guideTheme?: BlueprintGuideTheme;
+  guideRelationshipGraph?: BlueprintGuideRelationshipGraph;
+  fieldEvidence?: BlueprintFieldEvidence[];
   days: ItineraryDay[];
   places: PlanPlace[];
+  events?: PlanPresentationEvent[];
   routeSegments: PlanRouteSegment[];
 }
 
@@ -318,6 +357,14 @@ export function planPresentationIntegrityIssues(presentation: PlanPresentation, 
     }
     const stops = day.stops ?? [];
     if (stops.length !== day.placeIds.length || stops.some((stop, index) => stop.placeId !== day.placeIds[index] || stop.order !== index + 1)) issues.push(`day ${day.id} stops must exactly match scheduled order`);
+    const blocks = day.blocks ?? [];
+    if (blocks.length) {
+      if (blocks.some((block, index) => block.order !== index + 1)) issues.push(`day ${day.id} blocks must use contiguous order`);
+      for (const block of blocks) {
+        if (block.placeId && !placeById.has(block.placeId)) issues.push(`day ${day.id} block ${block.id} references unknown place ${block.placeId}`);
+        if (block.kind === "stop" && !block.placeId) issues.push(`day ${day.id} stop block ${block.id} requires a place`);
+      }
+    }
     if (executionReady) {
       const stopMinutes = stops.map((stop) => itineraryClockMinutes(stop.time));
       if (stops.some((stop, index) => stopMinutes[index] === undefined)) issues.push(`day ${day.id} every scheduled stop must have a local HH:mm start time`);

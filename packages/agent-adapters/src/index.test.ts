@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
 
-import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError, areLocationsCompatible, buildPlanDraftPrompt, buildPlanRepairPrompt, buildPlanResearchPrompt, buildSkillItineraryPrompt, buildSkillResearchBatchPrompt, codexStrictOutputSchema, parseClaudePrintResult, parsePlanDraft, parsePlanResearchBrief, parsePlanningConversationTurn, parseSkillItineraryArtifact, parseSkillResearchBatchArtifact, planDraftSchema, planResearchSchema, skillItinerarySchema, skillResearchBatchSchema, type RuntimeProcess } from "./index.js";
+import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError, areLocationsCompatible, buildPlanDraftPrompt, buildPlanRepairPrompt, buildPlanResearchPrompt, buildSkillItineraryPrompt, buildSkillResearchBatchPrompt, codexStrictOutputSchema, parseClaudePrintResult, parsePlanDraft, parsePlanResearchBrief, parsePlanningConversationTurn, parseSkillItineraryArtifact, parseSkillResearchBatchArtifact, planDraftSchema, planResearchBriefToSkillBatch, planResearchSchema, skillItinerarySchema, skillResearchBatchSchema, type RuntimeProcess } from "./index.js";
 
 const validDraft = JSON.stringify({
   title: "Attend an exhibition in Shanghai",
@@ -200,6 +200,26 @@ test("Codex research brief preserves useful content when official evidence is un
   assert.match(cleaned.applicabilityNotes.at(-1) ?? "", /1 place record.*1 planning fact/i);
 });
 
+test("Plan research fallback emits Blueprint display intent for candidate places", () => {
+  const brief = parsePlanResearchBrief(JSON.stringify({
+    resolvedDestination: "Kyoto, Japan",
+    destinationConfidence: "confirmed",
+    applicabilityNotes: ["Use a balanced place mix."],
+    sources: [{ title: "Kyoto shopping guide", authority: "Kyoto tourism", url: "https://example.com/kyoto", retrievedAt: "2026-08-11" }],
+    candidatePlaces: [
+      { name: "Teramachi Shopping Arcade", locationLabel: "Central Kyoto", city: "Kyoto", area: "Central Kyoto", category: "shopping arcade", coordinates: [35.005, 135.765], whyCandidate: "A covered browsing stop for local products and rainy-day flexibility.", officialUrl: null, bookingUrl: null, reservation: "unknown", sourceUrls: ["https://example.com/kyoto"] },
+      { name: "Tea Ceremony Studio", locationLabel: "Gion", city: "Kyoto", area: "Gion", category: "tea ceremony class", coordinates: [35.003, 135.778], whyCandidate: "A structured cultural activity that needs a booked session.", officialUrl: null, bookingUrl: null, reservation: "unknown", sourceUrls: ["https://example.com/kyoto"] }
+    ],
+    planningFacts: []
+  }));
+  const batch = planResearchBriefToSkillBatch(brief, { id: "kyoto", scopeLabel: "Kyoto" }, "2026-08-11T00:00:00.000Z");
+  assert.deepEqual(batch.places.map((place) => place.display), [
+    { type: "shopping", markerKind: "shopping" },
+    { type: "experience", markerKind: "experience" }
+  ]);
+  assert.deepEqual(batch.places.map((place) => place.schedulingEligibility?.decision), ["schedulable", "schedulable"]);
+});
+
 test("Codex research prompt disambiguates campus names before city-level planning", () => {
   const prompt = buildPlanResearchPrompt({
     request: "I am going to Fudan University's Handan Campus to study.",
@@ -231,21 +251,43 @@ test("Skill research batch prompt scopes work without quotas or Xiaohongshu impo
   assert.match(prompt, /Do not import from Xiaohongshu/i);
   assert.match(prompt, /never a validity quota/i);
   assert.match(prompt, /Do not flatten rich place content/i);
+  assert.match(prompt, /include display\.type as one of attraction, dining, shopping, or experience/i);
+  assert.match(prompt, /display\.markerKind/i);
+  assert.match(prompt, /schedulingEligibility\.decision/i);
+  assert.match(prompt, /Add relationships/i);
+  assert.ok(skillResearchBatchSchema.properties.places.items.required.includes("display"));
+  assert.ok(skillResearchBatchSchema.properties.places.items.required.includes("schedulingEligibility"));
+  assert.ok(skillResearchBatchSchema.required.includes("relationships"));
 });
 
 test("Skill research batch keeps rich place content and namespaces local identities", () => {
   const parsed = parseSkillResearchBatchArtifact(JSON.stringify({
     id: "ignored", scopeLabel: "ignored", completedAt: "ignored",
     sources: [{ id: "source-1", title: "Official place", authority: "City", url: "https://example.com/place", retrievedAt: "2026-08-26", status: "verified", official: true }],
-    places: [{ id: "place-1", name: "Place", localizedName: "地点", locationLabel: "Center", city: "Lisbon", area: "Baixa", category: "architecture", priority: "must", coordinates: null, contentTier: "deep", visitRole: "anchor", durationMinutes: 120, whyWorthIt: "Specific architectural value.", plan: "Inspect the facade and interior sequence.", tip: "Reserve energy.", detailSections: [{ title: "Look for", body: "Stone and light.", items: ["Facade", "Courtyard"] }], sourceUrls: ["https://example.com/place"] }],
+    places: [{ id: "place-1", name: "Place", localizedName: "地点", locationLabel: "Center", city: "Lisbon", area: "Baixa", category: "architecture", priority: "must", coordinates: null, display: { type: "attraction", markerKind: "attraction" }, schedulingEligibility: { decision: "schedulable", reason: "Fits central Lisbon days." }, fieldEvidence: [{ path: "whyWorthIt", status: "verified", evidence: [{ sourceId: "source-1", status: "verified" }] }], contentTier: "deep", visitRole: "anchor", durationMinutes: 120, whyWorthIt: "Specific architectural value.", plan: "Inspect the facade and interior sequence.", tip: "Reserve energy.", detailSections: [{ title: "Look for", body: "Stone and light.", items: ["Facade", "Courtyard"] }], sourceUrls: ["https://example.com/place"] }],
     events: [{ id: "event-1", title: "Event", placeId: "place-1", description: "Program", sourceUrls: ["https://example.com/place"] }],
+    relationships: [{ id: "rel-1", kind: "supports_anchor", fromPlaceId: "place-1", toPlaceId: "place-1-alt", rationale: "Alternative if the anchor is crowded." }],
     actionRequirements: [{ id: "requirement-1", kind: "reservation", title: "Reserve", description: "Choose a slot.", accountableParty: "traveler", completionCondition: "A slot is confirmed.", placeId: "place-1", sourceUrls: ["https://example.com/place"] }]
   }), { id: "lisbon", scopeLabel: "Lisbon" }, "2026-08-26T00:00:00.000Z");
   assert.equal(parsed.places[0]?.id, "lisbon-place-1");
   assert.equal(parsed.events[0]?.placeId, "lisbon-place-1");
   assert.equal(parsed.actionRequirements?.[0]?.placeId, "lisbon-place-1");
+  assert.deepEqual(parsed.places[0]?.display, { type: "attraction", markerKind: "attraction" });
+  assert.deepEqual(parsed.places[0]?.schedulingEligibility, { decision: "schedulable", reason: "Fits central Lisbon days." });
+  assert.equal(parsed.places[0]?.fieldEvidence?.[0]?.evidence[0]?.sourceId, "lisbon-source-1");
+  assert.equal(parsed.relationships?.[0]?.fromPlaceId, "lisbon-place-1");
   assert.equal(parsed.places[0]?.detailSections?.[0]?.items?.length, 2);
   assert.equal(skillResearchBatchSchema.properties.places.maxItems, 240);
+});
+
+test("Skill research batch rejects invalid place display intent", () => {
+  assert.throws(() => parseSkillResearchBatchArtifact(JSON.stringify({
+    id: "ignored", scopeLabel: "ignored", completedAt: "ignored",
+    sources: [],
+    places: [{ id: "place-1", name: "Place", locationLabel: "Center", category: "architecture", display: { type: "landmark" }, whyWorthIt: "Specific architectural value.", plan: "Inspect the facade." }],
+    events: [],
+    actionRequirements: []
+  }), { id: "lisbon", scopeLabel: "Lisbon" }, "2026-08-26T00:00:00.000Z"), RuntimeAdapterError);
 });
 
 test("Skill research classifies a Codex usage limit without immediate transient retry semantics", async () => {
@@ -270,7 +312,9 @@ test("Skill itinerary artifact contains only known place identities and allows r
   const parsed = parseSkillItineraryArtifact(JSON.stringify(value), new Set(["a", "b"]));
   assert.equal(parsed.days[1]?.kind, "rest");
   assert.throws(() => parseSkillItineraryArtifact(JSON.stringify({ ...value, days: [{ ...value.days[0], stops: "missing" }] }), new Set(["a", "b"])), /usable itinerary days/i);
-  assert.deepEqual(Object.keys(skillItinerarySchema.properties).sort(), ["days", "destinations", "endDate", "language", "movements", "startDate", "summary", "title"]);
+  assert.deepEqual(Object.keys(skillItinerarySchema.properties).sort(), ["days", "destinations", "endDate", "guideTheme", "language", "movements", "startDate", "summary", "title"]);
+  assert.ok(skillItinerarySchema.required.includes("guideTheme"));
+  assert.ok(skillItinerarySchema.properties.days.items.properties.blocks);
 });
 
 test("Skill itinerary parser degrades invalid place candidates and movements instead of rejecting the whole itinerary", () => {
@@ -338,10 +382,13 @@ test("Skill itinerary prompt uses a compact Research Set and forbids Plan execut
     profile: { preferredLanguage: "English", nationality: "Canada", gender: "not_specified", immigrationStatus: "not_obtained" },
     research: {
       schemaVersion: 1, id: "research-1", generationKey: "generation-1", proposalRef: { sessionId: "session-1", proposalVersion: 1 }, skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" }, status: "completed", batches: [],
-      places: [{ id: "a", name: "A", locationLabel: "Tokyo", category: "sight", priority: "preferred", whyWorthIt: "Worth it", plan: "Visit", evidence: [] }], events: [], sources: [], actionRequirements: [], createdAt: "2026-08-26T00:00:00.000Z", updatedAt: "2026-08-26T00:00:00.000Z", completedAt: "2026-08-26T00:00:00.000Z"
+      places: [{ id: "a", name: "A", locationLabel: "Tokyo", category: "sight", display: { type: "attraction", markerKind: "attraction" }, priority: "preferred", whyWorthIt: "Worth it", plan: "Visit", evidence: [] }], events: [], sources: [], actionRequirements: [], createdAt: "2026-08-26T00:00:00.000Z", updatedAt: "2026-08-26T00:00:00.000Z", completedAt: "2026-08-26T00:00:00.000Z"
     }
   });
   assert.match(prompt, /Use only the supplied stable place IDs/i);
+  assert.match(prompt, /Include guideTheme/i);
+  assert.match(prompt, /typed day\.blocks/i);
+  assert.match(prompt, /"display":\{"type":"attraction","markerKind":"attraction"\}/i);
   assert.match(prompt, /Do not return place records, sources, Plan Stages, Tasks, Reminders/i);
 });
 
