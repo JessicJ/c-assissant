@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { importSkillItinerary, importSkillResearchBatches, type SkillResearchBatchArtifact } from "./skill-importer.js";
+import { importSkillItinerary, importSkillResearchBatches, mergeResearchSetCheckpoint, type SkillResearchBatchArtifact } from "./skill-importer.js";
 
 const batch = (): SkillResearchBatchArtifact => ({
   id: "tokyo",
@@ -78,6 +78,105 @@ test("Skill Importer keeps an orphan HTTPS source reference as a local recheck g
   const source = research.sources.find((item) => item.url === "https://unknown.example/place");
   assert.equal(source?.status, "recheck");
   assert.equal(research.places[0]?.evidence.some((item) => item.sourceId === source?.id), true);
+});
+
+test("Skill Importer keeps explicit empty Blueprint guidance authoritative", () => {
+  const value = batch();
+  value.places = [
+    { id: "a", name: "A", locationLabel: "Tokyo", city: "Tokyo", category: "sight", whyWorthIt: "A matters", plan: "Visit A", tip: "Temple etiquette: keep voices low near worship halls." }
+  ];
+  value.relationships = [];
+  value.actionRequirements = [{
+    id: "passport",
+    kind: "travel_authorization",
+    title: "Check passport",
+    description: "Confirm passport validity for entry.",
+    accountableParty: "traveler",
+    completionCondition: "Passport is confirmed."
+  }];
+  value.travelTips = [];
+  value.preparationChecklist = [];
+  const research = importSkillResearchBatches([value], {
+    researchSetId: "research-1", generationKey: "generation-1", proposalRef: { sessionId: "session-1", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" }, createdAt: "2026-08-26T00:00:00.000Z", updatedAt: "2026-08-26T00:00:00.000Z"
+  });
+  assert.deepEqual(research.travelTips, []);
+  assert.deepEqual(research.preparationChecklist, []);
+
+  const blueprint = importSkillItinerary(research, {
+    title: "Tokyo", summary: "Tokyo", language: "en", destinations: ["Tokyo"], startDate: "2026-09-01", endDate: "2026-09-01",
+    days: [{ id: "d1", date: "2026-09-01", kind: "scheduled", city: "Tokyo", title: "Day", summary: "Flow", stops: [{ placeId: research.places[0]!.id, order: 1 }], candidatePlaceIds: [] }],
+    movements: []
+  }, { blueprintId: "blueprint-1", blueprintVersion: 1, createdAt: "2026-08-26T01:00:00.000Z" });
+  assert.deepEqual(blueprint.travelTips, []);
+  assert.deepEqual(blueprint.preparationChecklist, []);
+});
+
+test("Skill Importer keeps canonical guidance source-backed and remaps checklist requirements", () => {
+  const value = batch();
+  value.places = batch().places.slice(0, 1);
+  value.relationships = [];
+  value.travelTips = [{
+    id: "cash",
+    title: "Carry cash",
+    body: "Small local shops may prefer cash around temple markets.",
+    theme: "payment",
+    context: "Tokyo temple markets",
+    placeId: "a",
+    sourceUrls: ["https://example.com/place#visit"]
+  }];
+  value.actionRequirements = [{
+    id: "reserve-a",
+    kind: "reservation",
+    title: "Reserve A",
+    description: "Confirm the entry slot.",
+    accountableParty: "traveler",
+    completionCondition: "Entry slot is confirmed.",
+    placeId: "a",
+    sourceUrls: ["https://example.com/place#visit"]
+  }];
+  value.preparationChecklist = [{
+    id: "prep-reserve-a",
+    title: "Reserve A",
+    description: "Use the official booking page.",
+    group: "bookings_departure",
+    completionCondition: "Entry slot is confirmed.",
+    requirementId: "reserve-a",
+    placeId: "a",
+    sourceUrls: ["https://example.com/place#visit"]
+  }];
+  const research = importSkillResearchBatches([value], {
+    researchSetId: "research-1", generationKey: "generation-1", proposalRef: { sessionId: "session-1", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" }, createdAt: "2026-08-26T00:00:00.000Z", updatedAt: "2026-08-26T00:00:00.000Z"
+  });
+  assert.equal(research.travelTips?.[0]?.evidence[0]?.status, "recheck");
+  assert.equal(research.preparationChecklist?.[0]?.requirementId, research.actionRequirements[0]?.id);
+  assert.equal(research.preparationChecklist?.[0]?.evidence[0]?.status, "recheck");
+});
+
+test("Skill Importer rejects canonical guidance that references unknown structure", () => {
+  assert.throws(() => importSkillResearchBatches([{ ...batch(), travelTips: [{ id: "bad", title: "Bad", body: "Carry cash near local temple markets.", theme: "payment", context: "Tokyo", placeId: "missing" }] }], {
+    researchSetId: "research-1", generationKey: "generation-1", proposalRef: { sessionId: "session-1", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" }, createdAt: "2026-08-26T00:00:00.000Z", updatedAt: "2026-08-26T00:00:00.000Z"
+  }), /unknown place/);
+  assert.throws(() => importSkillResearchBatches([{ ...batch(), preparationChecklist: [{ id: "bad", title: "Bad", group: "documents", completionCondition: "Done.", requirementId: "missing" }] }], {
+    researchSetId: "research-1", generationKey: "generation-1", proposalRef: { sessionId: "session-1", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" }, createdAt: "2026-08-26T00:00:00.000Z", updatedAt: "2026-08-26T00:00:00.000Z"
+  }), /unknown action requirement/);
+});
+
+test("Skill Importer merge preserves explicit empty Blueprint guidance fields", () => {
+  const current = importSkillResearchBatches([{ ...batch(), travelTips: [], preparationChecklist: [] }], {
+    researchSetId: "research-1", generationKey: "generation-1", proposalRef: { sessionId: "session-1", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" }, createdAt: "2026-08-26T00:00:00.000Z", updatedAt: "2026-08-26T00:00:00.000Z"
+  });
+  const incoming = importSkillResearchBatches([{ ...batch(), id: "tokyo-follow-up" }], {
+    researchSetId: "research-1", generationKey: "generation-1", proposalRef: { sessionId: "session-1", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" }, createdAt: "2026-08-26T00:00:00.000Z", updatedAt: "2026-08-26T01:00:00.000Z"
+  });
+  const merged = mergeResearchSetCheckpoint(current, incoming, { status: "completed", updatedAt: "2026-08-26T02:00:00.000Z" });
+  assert.deepEqual(merged.travelTips, []);
+  assert.deepEqual(merged.preparationChecklist, []);
 });
 
 test("Skill Importer preserves Landi-native place presentation fields into the Trip Blueprint", () => {

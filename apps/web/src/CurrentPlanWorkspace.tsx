@@ -7,7 +7,7 @@ import { PlanMapWorkspace } from "./PlanMapWorkspace.js";
 import { PlanChangeNotice, PlanCommandCenter, PlanDecisionBoard, PlanGrounding, PlanReplacementNotice } from "./PlanStatusWidgets.js";
 import { PlanRemindersView, PlanSourcesView, WorkspaceEmpty } from "./PlanSupportingViews.js";
 import { FeaturedChecklist, FeaturedTimeline, PlanContentSection } from "./PlanTaskSections.js";
-import { blueprintPresentation } from "./blueprint-presentation.js";
+import { currentPlanReadModel } from "./current-plan-read-model.js";
 import { compactPendingItineraryEdits, pendingItineraryDraftSummary, type ItineraryRouteRefreshDisplay, type PendingItineraryEditDisplay } from "./landi-blueprint-workspace-display.js";
 import { planRefinementQuestion } from "./plan-display.js";
 import { visibleDocumentPolicySources } from "./plan-external-display.js";
@@ -28,7 +28,9 @@ function itineraryRevisionImpactStatus(revision: DirectBlueprintRevisionBatchMet
 }
 
 export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanChange, latestPlanReplacement, onRevise, onTaskToggle, onTaskReorder, onUndoChange, onConfirm, onWorkspace, onStatus, onError, onOperationBusy, confirming }: { plan: Plan; blueprint?: TripBlueprint | undefined; destinationArrivals: DestinationArrivalEvent[]; latestPlanChange?: PlanChangeSet | undefined; latestPlanReplacement?: PlanReplacementAudit | undefined; onRevise: (message?: string) => void; onTaskToggle: (planId: string, taskId: string, checked: boolean) => Promise<void>; onTaskReorder: (planId: string, taskId: string, direction: "up" | "down") => Promise<void>; onUndoChange: (planId: string, changeId: string) => Promise<void>; onConfirm: (planId: string) => Promise<void>; onWorkspace: (workspace: WorkspaceSnapshot) => Promise<void>; onStatus: (status: AgentStatus) => void; onError: (message: string) => void; onOperationBusy: (busy: boolean) => void; confirming: boolean }) {
-  if (blueprint) plan = { ...plan, presentation: blueprintPresentation(blueprint) };
+  const planReadModel = currentPlanReadModel(plan, blueprint);
+  plan = planReadModel.plan;
+  const presentation = planReadModel.presentation;
   const [workspaceView, setWorkspaceView] = useState<PlanWorkspaceView>("plan");
   const [discarding, setDiscarding] = useState(false);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
@@ -197,17 +199,17 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
   const abandonControl = (disabled = false) => confirmingDiscard
     ? <><button className="secondary-action" disabled={discarding} onClick={() => setConfirmingDiscard(false)}>Keep plan</button><button className="discard-plan-button confirm" disabled={discarding || disabled} onClick={() => void abandonActive()}>{discarding ? "Abandoning…" : "Confirm abandon"}</button></>
     : <button className="discard-plan-button" disabled={discarding || disabled} onClick={() => setConfirmingDiscard(true)}>Abandon plan</button>;
-  if (isTravelPlan && (plan.presentation?.kind !== "itinerary" || !plan.presentation.places.length)) {
+  if (isTravelPlan && (presentation?.kind !== "itinerary" || !presentation.places.length)) {
     return <article className="current-plan-card native-trip-plan itinerary-generation-gap">
       <header><div><span className="section-eyebrow">TRIP ITINERARY</span><h2>{displayPlanTitle(plan)}</h2><p>{plan.location} · {plan.dates}</p></div><span className="plan-status draft">Mapped itinerary pending</span></header>
       <section><span>Trip details saved</span><h3>{regenerating ? "Landi is creating the complete itinerary" : "This itinerary is not complete yet"}</h3><p>{regenerating ? "Stay on this page to follow progress. The map and daily timeline will appear here when generation finishes." : "Regeneration will reuse confirmed dates, flights, party size, transport preferences, and trip goals. You will not need to answer the same questions again."}</p>{regenerationStatus ? <div className={regenerating ? "generation-progress working" : "generation-progress"} role="status"><i />{regenerationStatus}</div> : null}<button className="primary-action" disabled={regenerating || discarding} onClick={() => void regenerateItinerary()}>{regenerating ? "Creating itinerary…" : regenerationStatus ? "Generate again" : "Create mapped itinerary"}</button></section>
       <footer className="plan-footer"><div><strong>Create the itinerary or discard this plan</strong><span>Discarding returns to the previous plan, or to an empty workspace if none exists.</span></div><div className="plan-footer-actions">{discardControl(regenerating)}</div></footer>
     </article>;
   }
-  if (plan.presentation?.kind === "itinerary" && plan.presentation.places.length) {
+  if (presentation?.kind === "itinerary" && presentation.places.length) {
     return <article className="current-plan-card native-trip-plan">
       {latestPlanReplacement ? <PlanReplacementNotice audit={latestPlanReplacement} active={plan.status === "active"} onUndo={undoReplacement} /> : null}
-      <LandiBlueprintWorkspace plan={plan} presentation={plan.presentation} onTaskToggle={onTaskToggle} onApplyItineraryEdits={applyBlueprintItineraryEdits} onRequestRouteRefresh={refreshItineraryRoutes} itineraryEditBusy={applyingItineraryEdits} routeRefreshBusy={refreshingRoutes} />
+      <LandiBlueprintWorkspace key={planReadModel.presentationKey} plan={plan} presentation={presentation} onTaskToggle={onTaskToggle} onApplyItineraryEdits={applyBlueprintItineraryEdits} onRequestRouteRefresh={refreshItineraryRoutes} itineraryEditBusy={applyingItineraryEdits} routeRefreshBusy={refreshingRoutes} />
       <footer className="plan-footer actions-only"><div className="plan-footer-actions">{plan.status === "draft" ? discardControl() : abandonControl()}<button className="secondary-action" onClick={() => onRevise()}>Adjust in conversation</button>{plan.status === "draft" ? <button className="primary-action" disabled={confirming} onClick={() => void onConfirm(plan.id)}>{confirming ? "Confirming…" : "Confirm and activate"}</button> : null}</div></footer>
     </article>;
   }
@@ -217,7 +219,7 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
     {latestPlanReplacement ? <PlanReplacementNotice audit={latestPlanReplacement} active={plan.status === "active"} onUndo={undoReplacement} /> : null}
     {latestPlanChange ? <PlanChangeNotice change={latestPlanChange} onUndo={() => onUndoChange(plan.id, latestPlanChange.id)} /> : null}
     <nav className="plan-workspace-tabs" aria-label="Plan workspace views">{workspaceViews.map((item) => <button type="button" className={visibleWorkspaceView === item.id ? "active" : ""} aria-current={visibleWorkspaceView === item.id ? "page" : undefined} onClick={() => setWorkspaceView(item.id)} key={item.id}>{item.label}{item.count !== undefined ? <span>{item.count}</span> : null}</button>)}</nav>
-    {visibleWorkspaceView === "plan" ? <><PlanGrounding plan={plan} onContinue={onRevise} />{plan.presentation ? <PlanMapWorkspace planId={plan.id} planVersion={plan.version} presentation={plan.presentation} partySize={plan.configuration.travelContext.partySize} arrivals={destinationArrivals} editable={plan.status === "draft"} onWorkspace={onWorkspace} onStatus={(text) => onStatus({ tone: "success", text })} onError={onError} onRevise={onRevise} /> : null}<section className="plan-sections">{timelineItems.length ? <FeaturedTimeline plan={plan} index={0} items={timelineItems} onTaskReorder={onTaskReorder} /> : null}{remainingStages.map((stage, index) => <PlanContentSection key={stage.id} plan={plan} stage={stage} index={index + leadSectionCount} onTaskToggle={onTaskToggle} onTaskReorder={onTaskReorder} />)}</section></> : null}
+    {visibleWorkspaceView === "plan" ? <><PlanGrounding plan={plan} onContinue={onRevise} />{presentation ? <PlanMapWorkspace key={planReadModel.presentationKey} planId={plan.id} planVersion={plan.version} presentation={presentation} partySize={plan.configuration.travelContext.partySize} arrivals={destinationArrivals} editable={plan.status === "draft"} onWorkspace={onWorkspace} onStatus={(text) => onStatus({ tone: "success", text })} onError={onError} onRevise={onRevise} /> : null}<section className="plan-sections">{timelineItems.length ? <FeaturedTimeline plan={plan} index={0} items={timelineItems} onTaskReorder={onTaskReorder} /> : null}{remainingStages.map((stage, index) => <PlanContentSection key={stage.id} plan={plan} stage={stage} index={index + leadSectionCount} onTaskToggle={onTaskToggle} onTaskReorder={onTaskReorder} />)}</section></> : null}
     {visibleWorkspaceView === "preparation" ? checklistItems.length ? <section className="plan-sections"><FeaturedChecklist plan={plan} index={0} items={checklistItems} onTaskToggle={onTaskToggle} /></section> : <WorkspaceEmpty title="No pre-departure tasks" detail="Items to pack or complete before departure will appear here." /> : null}
     {visibleWorkspaceView === "bookings" ? <section className="plan-sections"><BookingImportPanel scope={{ type: "plan", planId: plan.id }} expectedVersion={plan.version} onWorkspace={onWorkspace} onStatus={onStatus} onError={onError} /></section> : null}
     {visibleWorkspaceView === "decisions" ? plan.assumptions.length ? <PlanDecisionBoard assumptions={plan.assumptions} onRevise={onRevise} /> : <WorkspaceEmpty title="No pending decisions" detail="The plan currently has no assumptions or tradeoffs that need your decision." /> : null}

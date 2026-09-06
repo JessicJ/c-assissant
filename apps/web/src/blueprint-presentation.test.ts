@@ -69,6 +69,36 @@ test("Web derives a complete read model from the linked Trip Blueprint", () => {
   assert.equal(buildBlueprintWorkspaceDisplay({ id: "plan-1", version: 1, title: "Lisbon", location: "Lisbon", dates: "2026-10-12", status: "draft", knownInformation: [], assumptions: [], nextAction: "Review.", configuration: { accommodation: { status: "not_set" }, arrival: {}, transport: { preference: "plan_recommended" }, travelContext: { luggage: "unknown" } }, stages: [], sources: [], createdAt: "2026-08-26T00:00:00.000Z", presentation }, presentation).sources.some((source) => source.summary === "Official · City · 2026-08-26"), true);
 });
 
+test("Web Blueprint read model preserves explicit empty tips and preparation checklist", () => {
+  const blueprint: TripBlueprint = {
+    schemaVersion: 1,
+    id: "blueprint-empty-guidance",
+    version: 1,
+    generationKey: "generation-empty-guidance",
+    proposalRef: { sessionId: "session-empty-guidance", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+    researchSetId: "research-empty-guidance",
+    title: "Tokyo",
+    summary: "Neighborhood route.",
+    language: "en",
+    destinations: ["Tokyo"],
+    startDate: "2026-10-12",
+    endDate: "2026-10-12",
+    sources: [],
+    places: [{ id: "a", name: "A", locationLabel: "Tokyo", city: "Tokyo", category: "museum", priority: "must", coordinates: [35.68, 139.76], whyWorthIt: "A", plan: "Visit A", evidence: [] }],
+    events: [],
+    days: [{ id: "day-1", date: "2026-10-12", kind: "scheduled", city: "Tokyo", title: "Day", summary: "Flow", stops: [{ placeId: "a", order: 1 }], candidatePlaceIds: [] }],
+    movements: [],
+    actionRequirements: [],
+    travelTips: [],
+    preparationChecklist: [],
+    createdAt: "2026-08-26T00:00:00.000Z"
+  };
+  const presentation = blueprintPresentation(blueprint);
+  assert.deepEqual(presentation.travelTips, []);
+  assert.deepEqual(presentation.preparationChecklist, []);
+});
+
 test("Web Blueprint read model filters invalid itinerary references and preserves a displayable route", () => {
   const blueprint: TripBlueprint = {
     schemaVersion: 1,

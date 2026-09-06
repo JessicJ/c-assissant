@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { assessPolicyPreparation, compilePlanProposal, confirmPlan, createInitialWorkspace, createPlanFromDraft, createPlanFromRequest, inferStagePresentationKind, isPreDepartureChecklistTask, planPresentationIntegrityIssues, recommendPlanTransport, resolveCurrentPlanDestination, type PlanCompilationProposal, type PlanPresentation } from "./index.js";
+import { assessPolicyPreparation, blueprintPresentation, compilePlanProposal, confirmPlan, createInitialWorkspace, createPlanFromDraft, createPlanFromRequest, inferStagePresentationKind, isPreDepartureChecklistTask, planPresentationIntegrityIssues, recommendPlanTransport, resolveCurrentPlanDestination, type PlanCompilationProposal, type PlanPresentation, type TripBlueprint } from "./index.js";
 
 function compilationProposal(planId: string, planVersion: number): PlanCompilationProposal {
   return {
@@ -31,6 +31,36 @@ test("a confirmed demo Plan becomes active and leaves an inbox receipt", () => {
 
   assert.equal(confirmed.activePlan.status, "active");
   assert.equal(confirmed.inbox[0]?.tone, "ready");
+});
+
+test("Blueprint presentation preserves explicit empty tips and preparation checklist", () => {
+  const blueprint: TripBlueprint = {
+    schemaVersion: 1,
+    id: "blueprint-empty-guidance",
+    version: 1,
+    generationKey: "generation-empty-guidance",
+    proposalRef: { sessionId: "session-empty-guidance", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+    researchSetId: "research-empty-guidance",
+    title: "Tokyo",
+    summary: "Neighborhood route.",
+    language: "en",
+    destinations: ["Tokyo"],
+    startDate: "2026-10-12",
+    endDate: "2026-10-12",
+    sources: [],
+    places: [{ id: "a", name: "A", locationLabel: "Tokyo", city: "Tokyo", category: "museum", priority: "must", coordinates: [35.68, 139.76], whyWorthIt: "A", plan: "Visit A", evidence: [] }],
+    events: [],
+    days: [{ id: "day-1", date: "2026-10-12", kind: "scheduled", city: "Tokyo", title: "Day", summary: "Flow", stops: [{ placeId: "a", order: 1 }], candidatePlaceIds: [] }],
+    movements: [],
+    actionRequirements: [],
+    travelTips: [],
+    preparationChecklist: [],
+    createdAt: "2026-08-26T00:00:00.000Z"
+  };
+  const presentation = blueprintPresentation(blueprint);
+  assert.deepEqual(presentation.travelTips, []);
+  assert.deepEqual(presentation.preparationChecklist, []);
 });
 
 const multiCityPresentation: PlanPresentation = {
