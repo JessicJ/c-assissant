@@ -144,6 +144,17 @@ export interface SkillTravelTipArtifact {
   sourceUrls?: string[];
 }
 
+export interface SkillPreparationChecklistArtifact {
+  id?: string;
+  title: string;
+  description?: string;
+  group: BlueprintPreparationChecklistItem["group"];
+  completionCondition: string;
+  requirementId?: string;
+  placeId?: string;
+  sourceUrls?: string[];
+}
+
 export interface SkillResearchBatchArtifact {
   id: string;
   scopeLabel: string;
@@ -154,6 +165,7 @@ export interface SkillResearchBatchArtifact {
   localProducts?: SkillLocalProductArtifact[];
   experienceThemes?: SkillExperienceThemeArtifact[];
   travelTips?: SkillTravelTipArtifact[];
+  preparationChecklist?: SkillPreparationChecklistArtifact[];
   sources: SkillResearchSourceArtifact[];
   actionRequirements?: SkillActionRequirementArtifact[];
   completedAt: string;
@@ -211,6 +223,7 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
     ...(batch.localProducts ?? []).flatMap((item) => item.sourceUrls ?? []),
     ...(batch.experienceThemes ?? []).flatMap((item) => item.sourceUrls ?? []),
     ...(batch.travelTips ?? []).flatMap((tip) => tip.sourceUrls ?? []),
+    ...(batch.preparationChecklist ?? []).flatMap((item) => item.sourceUrls ?? []),
     ...(batch.actionRequirements ?? []).flatMap((requirement) => requirement.sourceUrls ?? [])
   ]);
   for (const referenced of referencedUrls) {
@@ -313,17 +326,23 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
     description: artifact.description.trim(),
     evidence: evidenceForUrls(artifact.sourceUrls, sourceIdByUrl)
   }));
-  const actionRequirements: BlueprintActionRequirement[] = artifacts.flatMap((batch) => batch.actionRequirements ?? []).map((artifact) => ({
-    id: stableIdentity("requirement", artifact.id || `${artifact.kind}\0${artifact.title}`),
-    kind: artifact.kind,
-    title: artifact.title.trim(),
-    description: artifact.description.trim(),
-    accountableParty: artifact.accountableParty,
-    completionCondition: artifact.completionCondition.trim(),
-    ...(artifact.relevantAt?.trim() ? { relevantAt: artifact.relevantAt.trim() } : {}),
-    ...(artifact.placeId ? { placeId: resolvePlaceId(artifact.placeId, inputPlaceIdMap, placeIds) } : {}),
-    evidence: evidenceForUrls(artifact.sourceUrls, sourceIdByUrl)
-  }));
+  const inputRequirementIdMap = new Map<string, string>();
+  const actionRequirements: BlueprintActionRequirement[] = artifacts.flatMap((batch) => batch.actionRequirements ?? []).map((artifact) => {
+    const id = stableIdentity("requirement", artifact.id || `${artifact.kind}\0${artifact.title}`);
+    if (artifact.id) inputRequirementIdMap.set(artifact.id, id);
+    return {
+      id,
+      kind: artifact.kind,
+      title: artifact.title.trim(),
+      description: artifact.description.trim(),
+      accountableParty: artifact.accountableParty,
+      completionCondition: artifact.completionCondition.trim(),
+      ...(artifact.relevantAt?.trim() ? { relevantAt: artifact.relevantAt.trim() } : {}),
+      ...(artifact.placeId ? { placeId: resolvePlaceId(artifact.placeId, inputPlaceIdMap, placeIds) } : {}),
+      evidence: evidenceForUrls(artifact.sourceUrls, sourceIdByUrl)
+    };
+  });
+  const requirementIds = new Set(actionRequirements.map((requirement) => requirement.id));
   const localFoods: BlueprintLocalFood[] = artifacts.flatMap((batch) => batch.localFoods ?? []).map((artifact) => ({
     id: stableIdentity("food", artifact.id || artifact.title),
     title: artifact.title.trim(),
@@ -348,6 +367,7 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
     offeringPlaceIds: artifact.offeringPlaceIds.map((id) => resolvePlaceId(id, inputPlaceIdMap, placeIds)).filter(uniqueFilter),
     evidence: evidenceForUrls(artifact.sourceUrls, sourceIdByUrl)
   }));
+  const hasExplicitTravelTips = artifacts.some((batch) => batch.travelTips !== undefined);
   const travelTips: BlueprintTravelTip[] = artifacts.flatMap((batch) => batch.travelTips ?? []).flatMap((artifact) => {
     const body = artifact.body.trim();
     if (!isDestinationRelevantTip(body)) return [];
@@ -361,7 +381,19 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
       evidence: evidenceForUrls(artifact.sourceUrls, sourceIdByUrl)
     }];
   });
-  const preparationChecklist = preparationItemsFromRequirements(actionRequirements);
+  const hasExplicitPreparationChecklist = artifacts.some((batch) => batch.preparationChecklist !== undefined);
+  const preparationChecklist = hasExplicitPreparationChecklist
+    ? artifacts.flatMap((batch) => batch.preparationChecklist ?? []).map((artifact) => ({
+      id: stableIdentity("prep", artifact.id || `${artifact.group}\0${artifact.title}`),
+      title: artifact.title.trim(),
+      ...(artifact.description?.trim() ? { description: artifact.description.trim() } : {}),
+      group: artifact.group,
+      completionCondition: artifact.completionCondition.trim(),
+      ...(artifact.requirementId ? { requirementId: resolveRequirementId(artifact.requirementId, inputRequirementIdMap, requirementIds) } : {}),
+      ...(artifact.placeId ? { placeId: resolvePlaceId(artifact.placeId, inputPlaceIdMap, placeIds) } : {}),
+      evidence: evidenceForUrls(artifact.sourceUrls, sourceIdByUrl)
+    }))
+    : preparationItemsFromRequirements(actionRequirements);
   const eventIdByArtifact = new Map<string, string>();
   artifacts.flatMap((batch) => batch.events).forEach((artifact, index) => { if (artifact.id) eventIdByArtifact.set(artifact.id, events[index]!.id); });
   const batches: ResearchBatch[] = artifacts.map((artifact) => ({
@@ -387,8 +419,8 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
     ...(localFoods.length ? { localFoods } : {}),
     ...(localProducts.length ? { localProducts } : {}),
     ...(experienceThemes.length ? { experienceThemes } : {}),
-    ...(travelTips.length ? { travelTips: dedupeTravelTips(travelTips) } : {}),
-    ...(preparationChecklist.length ? { preparationChecklist } : {}),
+    ...(hasExplicitTravelTips ? { travelTips: dedupeTravelTips(travelTips) } : {}),
+    ...(hasExplicitPreparationChecklist || preparationChecklist.length ? { preparationChecklist } : {}),
     ...(guideRelationships.length ? { guideRelationships } : {}),
     actionRequirements,
     createdAt: context.createdAt,
@@ -430,8 +462,8 @@ export function importSkillItinerary(research: ResearchSet, artifact: SkillItine
     ...(research.localFoods?.length ? { localFoods: structuredClone(research.localFoods) } : {}),
     ...(research.localProducts?.length ? { localProducts: structuredClone(research.localProducts) } : {}),
     ...(research.experienceThemes?.length ? { experienceThemes: structuredClone(research.experienceThemes) } : {}),
-    ...(travelTips.length ? { travelTips } : {}),
-    ...(preparationChecklist.length ? { preparationChecklist } : {}),
+    ...(research.travelTips !== undefined ? { travelTips } : {}),
+    ...(research.preparationChecklist !== undefined || preparationChecklist.length ? { preparationChecklist } : {}),
     createdAt: context.createdAt
   };
   assertTripBlueprintIntegrity(blueprint, { expectedResearchPlaceIds: research.places.map((place) => place.id) });
@@ -742,33 +774,13 @@ function normalizeSearchText(value: string): string {
 }
 
 function normalizeTravelTips(research: ResearchSet, days: BlueprintItineraryDay[]): BlueprintTravelTip[] {
-  const explicit = dedupeTravelTips(research.travelTips ?? []);
-  if (explicit.length) return explicit;
-  const scheduledDayByPlace = new Map<string, string>();
-  for (const day of days) {
-    for (const stop of day.stops) if (!scheduledDayByPlace.has(stop.placeId)) scheduledDayByPlace.set(stop.placeId, day.id);
-    for (const candidateId of day.candidatePlaceIds) if (!scheduledDayByPlace.has(candidateId)) scheduledDayByPlace.set(candidateId, day.id);
-  }
-  return dedupeTravelTips(research.places.flatMap((place) => {
-    const body = place.tip?.trim();
-    if (!body || !isDestinationRelevantTip(body)) return [];
-    const dayId = scheduledDayByPlace.get(place.id);
-    return [{
-      id: stableIdentity("tip", `place:${place.id}:${body}`),
-      title: tipTitle(body),
-      body,
-      theme: inferTravelTipTheme(body),
-      context: [place.area, place.city, place.name].filter(Boolean).join(" · ") || place.locationLabel,
-      ...(dayId ? { dayId } : {}),
-      placeId: place.id,
-      evidence: structuredClone(place.evidence)
-    }];
-  })).slice(0, 12);
+  if (research.travelTips !== undefined) return dedupeTravelTips(structuredClone(research.travelTips));
+  void days;
+  return [];
 }
 
 function normalizePreparationChecklist(research: ResearchSet): BlueprintPreparationChecklistItem[] {
-  const explicit = research.preparationChecklist ?? [];
-  if (explicit.length) return structuredClone(explicit);
+  if (research.preparationChecklist !== undefined) return structuredClone(research.preparationChecklist);
   return preparationItemsFromRequirements(research.actionRequirements);
 }
 
@@ -832,16 +844,6 @@ function isDestinationRelevantTip(value: string): boolean {
   return /local|custom|etiquette|safety|safe|scam|payment|cash|card|transport|taxi|metro|train|bus|weather|dress|temple|shrine|market|queue|reservation|opening|hours|passport|visa|entry|neighborhood|area|language|tip|礼仪|安全|支付|现金|交通|天气|寺|神社|市场|排队|预约|营业|签证|入境/.test(text);
 }
 
-function tipTitle(value: string): string {
-  const first = value.split(/(?<=[.!?。！？])\s+/)[0]?.replace(/[:：].*$/, "").trim();
-  return shorten(first || "Local tip", 54);
-}
-
-function shorten(value: string, max: number): string {
-  if (value.length <= max) return value;
-  return `${value.slice(0, max - 1).replace(/\s+\S*$/, "")}…`;
-}
-
 export function mergeResearchSetCheckpoint(current: ResearchSet | undefined, incoming: ResearchSet, input: { status: ResearchSet["status"]; updatedAt: string }): ResearchSet {
   if (!current) {
     const first = { ...incoming, status: input.status, updatedAt: input.updatedAt, ...(input.status === "completed" ? { completedAt: input.updatedAt } : {}) };
@@ -870,6 +872,8 @@ export function mergeResearchSetCheckpoint(current: ResearchSet | undefined, inc
   const localFoods = appendUnique(current.localFoods ?? [], (incoming.localFoods ?? []).map((item) => ({ ...item, evidence: remapEvidence(item.evidence) })), (item) => item.id);
   const localProducts = appendUnique(current.localProducts ?? [], (incoming.localProducts ?? []).map((item) => ({ ...item, evidence: remapEvidence(item.evidence) })), (item) => item.id);
   const experienceThemes = appendUnique(current.experienceThemes ?? [], (incoming.experienceThemes ?? []).map((item) => ({ ...item, evidence: remapEvidence(item.evidence) })), (item) => item.id);
+  const hasTravelTips = current.travelTips !== undefined || incoming.travelTips !== undefined;
+  const hasPreparationChecklist = current.preparationChecklist !== undefined || incoming.preparationChecklist !== undefined;
   const travelTips = appendUnique(current.travelTips ?? [], (incoming.travelTips ?? []).map((tip) => ({ ...tip, evidence: remapEvidence(tip.evidence) })), (item) => item.id);
   const preparationChecklist = appendUnique(current.preparationChecklist ?? [], (incoming.preparationChecklist ?? []).map((item) => ({ ...item, evidence: remapEvidence(item.evidence) })), (item) => item.id);
   const guideRelationships = appendUnique(current.guideRelationships ?? [], (incoming.guideRelationships ?? []).map((relationship) => ({ ...relationship, evidence: remapEvidence(relationship.evidence) })), (item) => item.id);
@@ -884,8 +888,8 @@ export function mergeResearchSetCheckpoint(current: ResearchSet | undefined, inc
     ...(localFoods.length ? { localFoods } : {}),
     ...(localProducts.length ? { localProducts } : {}),
     ...(experienceThemes.length ? { experienceThemes } : {}),
-    ...(travelTips.length ? { travelTips } : {}),
-    ...(preparationChecklist.length ? { preparationChecklist } : {}),
+    ...(hasTravelTips ? { travelTips } : {}),
+    ...(hasPreparationChecklist ? { preparationChecklist } : {}),
     ...(guideRelationships.length ? { guideRelationships } : {}),
     actionRequirements,
     updatedAt: input.updatedAt,
@@ -990,6 +994,12 @@ function remapGuideDisplayEvidence(display: NonNullable<BlueprintPlace["guideDis
 function resolvePlaceId(value: string, imported: Map<string, string>, placeIds: Set<string>): string {
   const resolved = imported.get(value) ?? value;
   if (!placeIds.has(resolved)) throw new Error(`Skill artifact references an unknown place: ${value}`);
+  return resolved;
+}
+
+function resolveRequirementId(value: string, imported: Map<string, string>, requirementIds: Set<string>): string {
+  const resolved = imported.get(value) ?? value;
+  if (!requirementIds.has(resolved)) throw new Error(`Skill artifact references an unknown action requirement: ${value}`);
   return resolved;
 }
 

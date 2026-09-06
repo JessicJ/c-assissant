@@ -863,14 +863,14 @@ function groupTipsByTheme(tips: TipDisplay[]): TipGroupDisplay[] {
 }
 
 function tipsForPresentation(plan: Plan, presentation: PlanPresentation): TipDisplay[] {
-  const canonical = presentation.travelTips?.map((tip) => ({
+  if (presentation.travelTips === undefined) return localTipsForPlan(plan);
+  return presentation.travelTips.map((tip) => ({
     id: tip.id,
     title: tip.title,
     body: tip.body,
     context: tip.context,
     theme: tip.theme
-  })) ?? [];
-  return canonical.length ? canonical : localTipsForPlan(plan);
+  }));
 }
 
 function localTipsForPlan(plan: Pick<Plan, "stages" | "presentation" | "location">): TipDisplay[] {
@@ -893,8 +893,8 @@ function localTipsForPlan(plan: Pick<Plan, "stages" | "presentation" | "location
 }
 
 function preparationGroupsForPresentation(plan: Plan, presentation: PlanPresentation): PreparationGroupDisplay[] {
-  const canonical = presentation.preparationChecklist ?? [];
-  if (!canonical.length) return preparationGroupsForPlan(plan);
+  if (presentation.preparationChecklist === undefined) return preparationGroupsForPlan(plan);
+  const canonical = presentation.preparationChecklist;
   const completedTaskIds = new Set(plan.stages.flatMap((stage) => stage.tasks.filter((task) => task.status === "completed").map((task) => task.id)));
   const completedRequirementIds = new Set(plan.stages.flatMap((stage) => stage.tasks.flatMap((task) => task.status === "completed" && task.requirementId ? [task.requirementId] : [])));
   const groups = new Map<BlueprintPreparationGroup, PreparationChecklistItemDisplay[]>();

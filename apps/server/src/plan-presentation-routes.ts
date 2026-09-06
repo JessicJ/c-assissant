@@ -101,8 +101,8 @@ function routeRefreshMaps(maps: PlanPresentationMaps): PlanRouteMaps {
 }
 
 function routeRefreshPlanForWorkspace(workspace: WorkspaceSnapshot): Plan {
-  if (workspace.activePlan.presentation?.kind === "itinerary") return workspace.activePlan;
   if (workspace.activeBlueprint) return { ...workspace.activePlan, presentation: blueprintPresentation(workspace.activeBlueprint) };
+  if (workspace.activePlan.presentation?.kind === "itinerary") return workspace.activePlan;
   return workspace.activePlan;
 }
 

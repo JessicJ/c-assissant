@@ -205,6 +205,11 @@ describe("Landi Blueprint workspace display helpers", () => {
 
   it("uses Blueprint travel tips and preparation checklist before plan inference", () => {
     const presentation = presentationFixture({
+      places: [
+        place("temple", { category: "temple", tip: "Temple etiquette: keep voices low near worship halls." }),
+        place("lunch", { category: "restaurant", plan: "Eat near the market without turning the card into a full guide." }),
+        place("craft", { category: "shopping craft store" })
+      ],
       travelTips: [{
         id: "tip-cash",
         title: "Carry small cash",
@@ -230,7 +235,7 @@ describe("Landi Blueprint workspace display helpers", () => {
         title: "Legacy prep",
         description: "Old compiled plan tasks.",
         tasks: [
-          { id: "legacy-tip", title: "Enjoy the journey", owner: "assistant", status: "ready", dueLabel: "Anytime" },
+          { id: "legacy-tip", title: "Local payment tip", description: "Carry cash near temple markets because small local shops may not accept cards.", owner: "assistant", status: "ready", dueLabel: "Anytime" },
           { id: "passport-task", title: "Old passport task", owner: "user", status: "completed", dueLabel: "Before departure", preparationCategory: "documents", requirementId: "passport-validity" }
         ]
       }]
@@ -243,6 +248,31 @@ describe("Landi Blueprint workspace display helpers", () => {
       title: "Documents",
       items: [{ id: "prep-passport", title: "Check passport validity", description: "Confirm passport validity before departure.", checked: true }]
     }]);
+  });
+
+  it("treats explicit empty Blueprint tips and preparation checklist as authoritative", () => {
+    const presentation = presentationFixture({
+      places: [
+        place("temple", { category: "temple", tip: "Temple etiquette: keep voices low near worship halls." }),
+        place("lunch", { category: "restaurant" }),
+        place("craft", { category: "shopping craft store" })
+      ],
+      travelTips: [],
+      preparationChecklist: []
+    });
+    const display = buildBlueprintWorkspaceDisplay(planFixture(presentation, {
+      stages: [{
+        id: "legacy",
+        title: "Legacy local safety tip",
+        description: "Old compiled plan tasks.",
+        tasks: [
+          { id: "legacy-tip", title: "Local safety tip", description: "Use extra care around busy temple markets and local cash-only shops.", owner: "assistant", status: "ready", dueLabel: "Anytime" },
+          { id: "legacy-prep", title: "Pack passport", owner: "user", status: "ready", dueLabel: "Before departure", preparationCategory: "documents" }
+        ]
+      }]
+    }), presentation);
+    assert.deepEqual(display.tipGroups, []);
+    assert.deepEqual(display.preparationGroups, []);
   });
 
   it("resolves Blueprint source catalog without falling back to Plan source guesses", () => {

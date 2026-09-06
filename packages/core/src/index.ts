@@ -472,8 +472,8 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
       ...(event.placeId ? { placeId: event.placeId } : {}),
       sourceRefs: event.evidence.flatMap((ref) => sources.get(ref.sourceId)?.url ?? [])
     })),
-    ...(blueprint.travelTips?.length ? { travelTips: structuredClone(blueprint.travelTips) } : {}),
-    ...(blueprint.preparationChecklist?.length ? { preparationChecklist: structuredClone(blueprint.preparationChecklist) } : {}),
+    ...(blueprint.travelTips ? { travelTips: structuredClone(blueprint.travelTips) } : {}),
+    ...(blueprint.preparationChecklist ? { preparationChecklist: structuredClone(blueprint.preparationChecklist) } : {}),
     days,
     routeSegments
   };
