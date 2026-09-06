@@ -10,6 +10,9 @@ import {
   filterGuideCards,
   guideFilterLabel,
   itineraryDisplayForWorkspace,
+  compactPendingItineraryEdits,
+  mergePendingItineraryEdit,
+  pendingItineraryDraftSummary,
   scheduledDayIdForPlace,
   type BlueprintMapMarkerDisplay,
   type BlueprintMapPointDisplay,
@@ -20,6 +23,7 @@ import {
   type GuideCardDisplay,
   type GuideFilter,
   type ItineraryCardDisplay,
+  type ItineraryRouteRefreshDisplay,
   type PendingItineraryEditDisplay
 } from "./landi-blueprint-workspace-display.js";
 
@@ -53,12 +57,14 @@ let leafletStylesMounted = false;
 let googleMapsLoader: Promise<GoogleMapsNamespace> | null = null;
 const MAP_MARKER_ANCHOR = { x: 16, y: 38 } as const;
 
-export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onApplyItineraryEdits, itineraryEditBusy = false }: {
+export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onApplyItineraryEdits, onRequestRouteRefresh, itineraryEditBusy = false, routeRefreshBusy = false }: {
   plan: Plan;
   presentation: PlanPresentation;
   onTaskToggle: (planId: string, taskId: string, checked: boolean) => Promise<void>;
   onApplyItineraryEdits?: (edits: PendingItineraryEditDisplay[]) => Promise<void>;
+  onRequestRouteRefresh?: (refresh: ItineraryRouteRefreshDisplay) => void;
   itineraryEditBusy?: boolean;
+  routeRefreshBusy?: boolean;
 }) {
   const workspace = useMemo(() => buildBlueprintWorkspaceDisplay(plan, presentation), [plan, presentation]);
   const [area, setArea] = useState<BlueprintWorkspaceArea>("itinerary");
@@ -79,6 +85,10 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
   const selectedDetail = detailDisplayForWorkspacePlace(workspace, selectedPlaceId);
   const itinerary = itineraryDisplayForWorkspace(workspace, selectedDay?.id ?? "", pendingEdits);
 
+  useEffect(() => {
+    setPendingEdits([]);
+  }, [plan.id, plan.version]);
+
   function selectPlace(placeId: string, mode: BlueprintPanelMode = "detail") {
     setSelectedPlaceId(placeId);
     const dayId = scheduledDayIdForPlace(workspace, placeId);
@@ -93,7 +103,7 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
   }
 
   function stagePendingEdit(edit: PendingItineraryEditDisplay) {
-    setPendingEdits((current) => [...current.filter((candidate) => `${candidate.kind}:${candidate.dayId}:${candidate.placeId}` !== `${edit.kind}:${edit.dayId}:${edit.placeId}`), edit]);
+    setPendingEdits((current) => mergePendingItineraryEdit(current, edit));
     setSelectedDayId(edit.dayId);
     setSelectedPlaceId(edit.placeId);
     setPanelMode("explore");
@@ -186,7 +196,7 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
   function dropPositionBefore(targetKey: string, movingPlaceId: string): PendingItineraryEditDisplay["position"] {
     const withoutDragged = itinerary.items.filter((item) => item.placeId !== movingPlaceId);
     const targetIndex = withoutDragged.findIndex((item) => item.key === targetKey);
-    const priorPlace = withoutDragged.slice(0, Math.max(0, targetIndex)).reverse().find((item) => item.placeId);
+    const priorPlace = withoutDragged.slice(0, Math.max(0, targetIndex)).reverse().find((item) => item.placeId && item.routeAnchor);
     return priorPlace?.placeId ? { kind: "after", afterPlaceId: priorPlace.placeId } : { kind: "start" };
   }
 
@@ -195,14 +205,19 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
   }
 
   function discardPendingEdits() {
+    const savedItinerary = itineraryDisplayForWorkspace(workspace, selectedDay?.id ?? "", null);
+    const savedPlaceIds = savedItinerary.items.flatMap((item) => item.kind === "block" && item.routeAnchor && item.placeId ? [item.placeId] : []);
     setPendingEdits([]);
+    if (selectedPlaceId && !savedPlaceIds.includes(selectedPlaceId)) {
+      setSelectedPlaceId(savedPlaceIds[0] ?? workspace.initialPlaceId);
+    }
     setPanelMode("explore");
   }
 
   async function confirmPendingEdits() {
     if (!pendingEdits.length || itineraryEditBusy || !onApplyItineraryEdits) return;
     try {
-      await onApplyItineraryEdits(pendingEdits);
+      await onApplyItineraryEdits(compactPendingItineraryEdits(pendingEdits));
       setPendingEdits([]);
       setPanelMode("explore");
     } catch {
@@ -281,7 +296,7 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
         </div>
       </aside>
 
-      <BlueprintMap routePlaces={itinerary.routePlaces} markers={itinerary.markers} selectedPlaceId={selectedPlaceId} onSelectPlace={selectMapPlace} />
+      <BlueprintMap routePlaces={itinerary.routePlaces} routeRefresh={itinerary.routeRefresh} markers={itinerary.markers} selectedPlaceId={selectedPlaceId} onSelectPlace={selectMapPlace} onRequestRouteRefresh={onRequestRouteRefresh} routeRefreshBusy={routeRefreshBusy} />
 
       <aside className="blueprint-side-panel" aria-label="Itinerary side panel">
         <div className="blueprint-panel-body">
@@ -322,18 +337,16 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
 }
 
 function ItineraryEditBar({ edits, onConfirm, onDiscard, canConfirm, busy }: { edits: PendingItineraryEditDisplay[]; onConfirm: () => void; onDiscard: () => void; canConfirm: boolean; busy: boolean }) {
-  const affectedDays = new Set(edits.map((edit) => edit.dayId)).size;
-  const changeLabel = `${edits.length} unsaved change${edits.length === 1 ? "" : "s"}`;
-  const dayLabel = `${affectedDays} day${affectedDays === 1 ? "" : "s"}`;
-  return <div className="blueprint-itinerary-edit-bar" role="status" aria-live="polite" aria-busy={busy || undefined}>
-    <span><strong>{changeLabel}</strong><small>{dayLabel}</small></span>
-    <button type="button" onClick={() => void onConfirm()} disabled={!canConfirm || busy}>{busy ? "Applying..." : "Confirm"}</button>
-    <button type="button" onClick={onDiscard} disabled={busy}>Discard</button>
+  const summary = pendingItineraryDraftSummary(edits);
+  return <div className="blueprint-itinerary-edit-bar" role="toolbar" aria-label="Unsaved itinerary edits" aria-live="polite" aria-busy={busy || undefined}>
+    <span><strong>{summary.changeLabel}</strong><small>{summary.affectedDayLabel}</small></span>
+    <button type="button" onClick={onDiscard} disabled={busy}>Cancel</button>
+    <button type="button" className="primary" onClick={() => void onConfirm()} disabled={!canConfirm || busy}>{busy ? "Applying..." : "Apply"}</button>
   </div>;
 }
 
 function scheduledBlockOrder(items: ItineraryCardDisplay[]): string[] {
-  return items.filter((item) => item.kind === "block" && item.placeId).map((item) => item.placeId);
+  return items.filter((item) => item.kind === "block" && item.placeId && item.routeAnchor).map((item) => item.placeId);
 }
 
 function moveItineraryPlaceOrder(placeIds: string[], placeId: string, position: PendingItineraryEditDisplay["position"]): string[] {
@@ -370,6 +383,7 @@ function ItineraryBlockCard({ item, selected, dragging, onSelect, onDragStart, o
         <strong>{item.title}</strong>
         {item.meta ? <small>{item.meta}</small> : null}
         {item.statusLabel ? <em>{item.statusLabel}</em> : null}
+        {item.routeStatusLabel ? <em className="route-refresh">{item.routeStatusLabel}</em> : null}
       </div>
     </button>
   </article>;
@@ -386,7 +400,7 @@ function PendingItineraryCard({ item, selected, onSelect }: { item: ItineraryCar
   </button>;
 }
 
-function BlueprintMap(props: { routePlaces: BlueprintMapPointDisplay[]; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void }) {
+function BlueprintMap(props: { routePlaces: BlueprintMapPointDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; onRequestRouteRefresh?: ((refresh: ItineraryRouteRefreshDisplay) => void) | undefined; routeRefreshBusy?: boolean }) {
   const [googleUnavailable, setGoogleUnavailable] = useState(false);
   const handleGoogleUnavailable = useCallback(() => setGoogleUnavailable(true), []);
   const apiKey = __LANDI_GOOGLE_MAPS_API_KEY__;
@@ -394,7 +408,7 @@ function BlueprintMap(props: { routePlaces: BlueprintMapPointDisplay[]; markers:
   return <LeafletBlueprintMap {...props} />;
 }
 
-function GoogleBlueprintMap({ routePlaces, markers, selectedPlaceId, onSelectPlace, apiKey, onUnavailable }: { routePlaces: BlueprintMapPointDisplay[]; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; apiKey: string; onUnavailable: () => void }) {
+function GoogleBlueprintMap({ routePlaces, routeRefresh, markers, selectedPlaceId, onSelectPlace, onRequestRouteRefresh, routeRefreshBusy, apiKey, onUnavailable }: { routePlaces: BlueprintMapPointDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; onRequestRouteRefresh?: ((refresh: ItineraryRouteRefreshDisplay) => void) | undefined; routeRefreshBusy?: boolean; apiKey: string; onUnavailable: () => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<GoogleMapInstance | null>(null);
   const mapsRef = useRef<GoogleMapsNamespace | null>(null);
@@ -460,8 +474,8 @@ function GoogleBlueprintMap({ routePlaces, markers, selectedPlaceId, onSelectPla
         geodesic: true,
         map,
         path: routeLatLngs,
-        strokeColor: "#276758",
-        strokeOpacity: 0.72,
+        strokeColor: routeRefresh ? "#6f97a8" : "#276758",
+        strokeOpacity: routeRefresh ? 0.38 : 0.72,
         strokeWeight: 3
       }));
     }
@@ -494,14 +508,15 @@ function GoogleBlueprintMap({ routePlaces, markers, selectedPlaceId, onSelectPla
       map.setZoom(11);
     }
     lastFitKeyRef.current = fitKey;
-  }, [fitKey, fitLatLngs, mapReady, onSelectPlace, points, routeLatLngs, selectedPlaceId]);
+  }, [fitKey, fitLatLngs, mapReady, onSelectPlace, points, routeLatLngs, routeRefresh, selectedPlaceId]);
 
-  return <section className="blueprint-map" aria-label="Itinerary map context">
+  return <section className={routeRefresh ? "blueprint-map needs-refresh" : "blueprint-map"} aria-label="Itinerary map context">
+    <MapRouteRefreshHeader routeRefresh={routeRefresh} onRequestRouteRefresh={onRequestRouteRefresh} routeRefreshBusy={Boolean(routeRefreshBusy)} />
     <div className="blueprint-map-stage blueprint-google-map" ref={hostRef} />
   </section>;
 }
 
-function LeafletBlueprintMap({ routePlaces, markers, selectedPlaceId, onSelectPlace }: { routePlaces: BlueprintMapPointDisplay[]; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void }) {
+function LeafletBlueprintMap({ routePlaces, routeRefresh, markers, selectedPlaceId, onSelectPlace, onRequestRouteRefresh, routeRefreshBusy }: { routePlaces: BlueprintMapPointDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; onRequestRouteRefresh?: ((refresh: ItineraryRouteRefreshDisplay) => void) | undefined; routeRefreshBusy?: boolean }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layersRef = useRef<L.LayerGroup | null>(null);
@@ -545,9 +560,10 @@ function LeafletBlueprintMap({ routePlaces, markers, selectedPlaceId, onSelectPl
 
     if (routeLatLngs.length > 1) {
       L.polyline(routeLatLngs, {
-        color: "#276758",
-        opacity: 0.72,
+        color: routeRefresh ? "#6f97a8" : "#276758",
+        opacity: routeRefresh ? 0.42 : 0.72,
         weight: 3,
+        ...(routeRefresh ? { dashArray: "6 8" } : {}),
         lineCap: "round",
         lineJoin: "round"
       }).addTo(layers);
@@ -580,11 +596,28 @@ function LeafletBlueprintMap({ routePlaces, markers, selectedPlaceId, onSelectPl
       map.setView([35.6812, 139.7671], 11);
     }
     lastFitKeyRef.current = fitKey;
-  }, [fitKey, fitLatLngs, onSelectPlace, points, routeLatLngs, selectedPlaceId]);
+  }, [fitKey, fitLatLngs, onSelectPlace, points, routeLatLngs, routeRefresh, selectedPlaceId]);
 
-  return <section className="blueprint-map" aria-label="Itinerary map context">
+  return <section className={routeRefresh ? "blueprint-map needs-refresh" : "blueprint-map"} aria-label="Itinerary map context">
+    <MapRouteRefreshHeader routeRefresh={routeRefresh} onRequestRouteRefresh={onRequestRouteRefresh} routeRefreshBusy={Boolean(routeRefreshBusy)} />
     <div className="blueprint-map-stage" ref={hostRef} />
   </section>;
+}
+
+function MapRouteRefreshHeader({ routeRefresh, onRequestRouteRefresh, routeRefreshBusy = false }: { routeRefresh?: ItineraryRouteRefreshDisplay | undefined; onRequestRouteRefresh?: ((refresh: ItineraryRouteRefreshDisplay) => void) | undefined; routeRefreshBusy?: boolean }) {
+  if (!routeRefresh) return null;
+  const requestRouteRefresh = onRequestRouteRefresh;
+  const canRefresh = routeRefresh.actionable !== false && routeRefresh.segmentIds.length > 0 && Boolean(requestRouteRefresh);
+  return <header className="blueprint-map-status">
+    <div>
+      <h3>Routes need refresh</h3>
+      <p>{routeRefresh.summary}</p>
+    </div>
+    <div className="blueprint-map-status-actions">
+      <span>{routeRefresh.actionable === false ? "After Apply" : "Routes need refresh"}</span>
+      {canRefresh && requestRouteRefresh ? <button type="button" disabled={routeRefreshBusy} onClick={() => requestRouteRefresh(routeRefresh)}>{routeRefreshBusy ? "Refreshing..." : "Refresh routes"}</button> : null}
+    </div>
+  </header>;
 }
 
 function ExplorePanel({ filters, cards, filter, hidden, onFilter, onSelect, onAdd }: { filters: readonly Exclude<GuideFilter, "all">[]; cards: GuideCardDisplay[]; filter: GuideFilter; hidden: boolean; onFilter: (filter: GuideFilter) => void; onSelect: (placeId: string) => void; onAdd: (placeId: string) => void }) {

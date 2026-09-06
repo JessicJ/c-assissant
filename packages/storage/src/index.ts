@@ -4,10 +4,11 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   confirmPlan,
-  applyDirectBlueprintRevision,
+  applyDirectBlueprintRevisionBatchWithMetadata,
   assertPlanPresentationIntegrity,
   assertResearchSetIntegrity,
   assertTripBlueprintIntegrity,
+  blueprintPresentation,
   createInitialWorkspace,
   createPlanFromDraft,
   createPlanFromRequest,
@@ -18,11 +19,16 @@ import {
   type CountryPackSkillRun,
   type DestinationArrivalEvent,
   type DirectBlueprintRevision,
+  type DirectBlueprintRevisionBatchMetadata,
   type AgentRuntimeKind,
   type AgentRun,
   type BlueprintGeneration,
   type BlueprintGenerationEvent,
+  type BlueprintItineraryBlock,
+  type BlueprintMovement,
   type BlueprintPlanCompilation,
+  type BlueprintSource,
+  type BlueprintStop,
   type GeneratedPlanDraft,
   type InboxItem,
   type ItineraryDay,
@@ -191,6 +197,11 @@ export interface TelegramPlanChangeProposal {
   status: "pending" | "applied" | "cancelled" | "stale";
   createdAt: string;
   resolvedAt?: string;
+}
+
+export interface DirectBlueprintRevisionSaveResult {
+  workspace: WorkspaceSnapshot;
+  revision: DirectBlueprintRevisionBatchMetadata;
 }
 
 interface TelegramPlanChangeProposalRow {
@@ -529,6 +540,7 @@ export class SqliteWorkspaceStore {
     const latestPlanReplacement = this.getLatestPlanReplacementAudit(activePlan.id);
     const activeLineage = this.getPlanBlueprintLineage(activePlan.id);
     const activeBlueprint = activeLineage ? this.getTripBlueprint(activeLineage.blueprintId, activeLineage.blueprintVersion) : undefined;
+    const presentedActivePlan = activeBlueprint ? { ...activePlan, presentation: blueprintPresentation(activeBlueprint) } : activePlan;
 
     return {
       profile: {
@@ -540,7 +552,7 @@ export class SqliteWorkspaceStore {
         status: profile.status
       },
       runtime: { selectedKind: runtime.selected_runtime },
-      activePlan,
+      activePlan: presentedActivePlan,
       ...(activeBlueprint ? { activeBlueprint } : {}),
       ...(planningSession ? { planningSession } : {}),
       ...(latestPlanChange ? { latestPlanChange } : {}),
@@ -1019,10 +1031,10 @@ export class SqliteWorkspaceStore {
     const workspace = this.getWorkspace();
     const plan = workspace.activePlan;
     if (plan.id !== input.planId || plan.version !== input.expectedVersion) throw new Error("The Plan changed before this route refresh was saved.");
-    if (!plan.presentation || plan.presentation.kind !== "itinerary") throw new Error("This Plan does not contain a structured itinerary presentation.");
+    const sourcePresentation = routeRefreshPresentationForWorkspace(workspace);
     if (!Number.isFinite(Date.parse(input.observedAt)) || !Number.isInteger(input.distanceMeters) || input.distanceMeters <= 0 || (input.durationSeconds !== undefined && (!Number.isInteger(input.durationSeconds) || input.durationSeconds <= 0))) throw new Error("A refreshed route needs valid observed distance and duration facts.");
     if (![input.originCoordinates, input.destinationCoordinates].every(([longitude, latitude]) => Number.isFinite(longitude) && longitude >= -180 && longitude <= 180 && Number.isFinite(latitude) && latitude >= -90 && latitude <= 90)) throw new Error("A refreshed route needs valid place coordinates.");
-    const presentation = structuredClone(plan.presentation);
+    const presentation = structuredClone(sourcePresentation);
     const segment = presentation.routeSegments.find((candidate) => candidate.id === input.segmentId);
     if (!segment) throw new Error("The Plan route segment was not found.");
     const origin = presentation.places.find((place) => place.id === segment.originPlaceId);
@@ -1042,6 +1054,22 @@ export class SqliteWorkspaceStore {
       sourceRefs: [input.provider]
     };
     presentation.routeSegments = presentation.routeSegments.map((candidate) => candidate.id === input.segmentId ? refreshed : candidate);
+    if (workspace.activeBlueprint) {
+      return this.saveBlueprintRouteRefresh({
+        workspace,
+        presentation,
+        routes: [{
+          segmentId: input.segmentId,
+          observedAt: input.observedAt,
+          distanceMeters: input.distanceMeters,
+          ...(input.durationSeconds !== undefined ? { durationSeconds: input.durationSeconds } : {}),
+          originCoordinates: input.originCoordinates,
+          destinationCoordinates: input.destinationCoordinates
+        }],
+        provider: input.provider,
+        observedAt: input.observedAt
+      });
+    }
     const updated = this.database.prepare("UPDATE plans SET presentation_json = ?, version = version + 1 WHERE id = ? AND version = ? AND is_current = 1").run(JSON.stringify(presentation), input.planId, input.expectedVersion);
     if (updated.changes !== 1) throw new Error("The Plan changed before this route refresh was saved.");
     this.addInbox({ id: `route-refreshed-${input.planId}-${input.segmentId}-${Date.now()}`, tone: "notice", title: "Route facts refreshed", body: "One Plan route segment was refreshed from Google Maps facts. No navigation, booking, or transport action was started.", timestamp: "Just now" });
@@ -1054,8 +1082,7 @@ export class SqliteWorkspaceStore {
     const workspace = this.getWorkspace();
     const plan = workspace.activePlan;
     if (plan.id !== input.planId || plan.version !== input.expectedVersion) throw new Error("The Plan changed before generated routes were saved.");
-    if (!plan.presentation || plan.presentation.kind !== "itinerary") throw new Error("This Plan does not contain a structured itinerary presentation.");
-    const presentation = structuredClone(plan.presentation);
+    const presentation = structuredClone(routeRefreshPresentationForWorkspace(workspace));
     const routeById = new Map(input.routes.map((route) => [route.segmentId, route]));
     const validCoordinate = ([longitude, latitude]: [number, number]) => Number.isFinite(longitude) && longitude >= -180 && longitude <= 180 && Number.isFinite(latitude) && latitude >= -90 && latitude <= 90;
     for (const route of input.routes) {
@@ -1153,9 +1180,101 @@ export class SqliteWorkspaceStore {
         }
       };
     });
+    if (workspace.activeBlueprint) {
+      return {
+        workspace: this.saveBlueprintRouteRefresh({
+          workspace,
+          presentation,
+          routes: input.routes,
+          provider: input.provider,
+          observedAt: latestRouteObservedAt(input.routes)
+        }),
+        scheduleConflictDayIds: [...scheduleConflictDayIds]
+      };
+    }
     const updated = this.database.prepare("UPDATE plans SET presentation_json = ?, version = version + 1 WHERE id = ? AND version = ? AND is_current = 1").run(JSON.stringify(presentation), input.planId, input.expectedVersion);
     if (updated.changes !== 1) throw new Error("The Plan changed before generated routes were saved.");
     return { workspace: this.getWorkspace(), scheduleConflictDayIds: [...scheduleConflictDayIds] };
+  }
+
+  private saveBlueprintRouteRefresh(input: { workspace: WorkspaceSnapshot; presentation: PlanPresentation; routes: Array<{ segmentId: string; observedAt: string; distanceMeters: number; durationSeconds?: number; originCoordinates: [number, number]; destinationCoordinates: [number, number]; geometry?: Array<[number, number]> }>; provider: "google_maps"; observedAt: string }): WorkspaceSnapshot {
+    const { workspace, presentation } = input;
+    const plan = workspace.activePlan;
+    const blueprint = workspace.activeBlueprint;
+    const lineage = this.getPlanBlueprintLineage(plan.id);
+    if (!blueprint || !lineage) throw new Error("Route refresh needs the current Trip Blueprint lineage.");
+    const routeById = new Map(input.routes.map((route) => [route.segmentId, route]));
+    const segmentById = new Map(presentation.routeSegments.map((segment) => [segment.id, segment]));
+    const providerSource = routeRefreshProviderSource(input.provider, input.observedAt);
+    const hasProviderSource = blueprint.sources.some((source) => source.id === providerSource.id);
+    const nextBlueprint: TripBlueprint = {
+      ...structuredClone(blueprint),
+      version: blueprint.version + 1,
+      createdAt: input.observedAt,
+      sources: hasProviderSource
+        ? blueprint.sources.map((source) => source.id === providerSource.id ? { ...source, retrievedAt: input.observedAt, status: "verified" } : source)
+        : [...blueprint.sources, providerSource],
+      places: blueprint.places.map((place) => {
+        const originRoute = input.routes.find((route) => segmentById.get(route.segmentId)?.originPlaceId === place.id);
+        const destinationRoute = input.routes.find((route) => segmentById.get(route.segmentId)?.destinationPlaceId === place.id);
+        const coordinates = originRoute ? providerCoordinatesToPlanCoordinates(originRoute.originCoordinates) : destinationRoute ? providerCoordinatesToPlanCoordinates(destinationRoute.destinationCoordinates) : undefined;
+        return coordinates ? { ...place, coordinates } : place;
+      }),
+      movements: blueprint.movements.map((movement) => {
+        const route = routeById.get(movement.id);
+        const segment = segmentById.get(movement.id);
+        if (!route || !segment) return movement;
+        const verification = segment.verification === "stale" ? "stale" : "verified";
+        const durationMinutes = segment.durationMinutes ?? (route.durationSeconds !== undefined ? Math.max(1, Math.round(route.durationSeconds / 60)) : undefined);
+        return {
+          ...movement,
+          status: verification,
+          distanceMeters: route.distanceMeters,
+          ...(durationMinutes ? { durationMinutes } : {}),
+          ...(segment.label ?? movement.label ? { label: segment.label ?? movement.label } : {}),
+          ...(segment.detail ?? movement.detail ? { detail: segment.detail ?? movement.detail } : {}),
+          evidence: [{
+            sourceId: providerSource.id,
+            status: "verified" as const,
+            checkedAt: route.observedAt,
+            supports: route.durationSeconds !== undefined ? ["route duration", "route distance"] : ["route distance"]
+          }]
+        } satisfies BlueprintMovement;
+      }),
+      days: blueprint.days.map((day) => {
+        const displayDay = presentation.days.find((candidate) => candidate.id === day.id);
+        if (!displayDay?.stops) return day;
+        return {
+          ...day,
+          stops: displayDay.stops.map((stop) => ({ placeId: stop.placeId, order: stop.order, ...(stop.time ? { time: stop.time } : {}), ...(stop.role ? { role: stop.role } : {}) })),
+          ...(day.blocks ? { blocks: updateBlueprintBlocksFromStops(day, displayDay.stops) } : {})
+        };
+      })
+    };
+    const saved = this.saveTripBlueprint(nextBlueprint);
+    const nextPresentation = blueprintPresentation(saved);
+    const nextPlanVersion = plan.version + 1;
+    this.database.exec("BEGIN");
+    try {
+      const updated = this.database.prepare("UPDATE plans SET version = ?, known_information_json = ?, assumptions_json = ?, sources_json = ?, presentation_json = ? WHERE id = ? AND version = ? AND is_current = 1").run(
+        nextPlanVersion,
+        JSON.stringify(routeRefreshKnownInformation(plan.knownInformation, saved)),
+        JSON.stringify(routeRefreshAssumptions(plan.assumptions, saved)),
+        JSON.stringify(saved.sources.map((source) => ({ title: source.title, authority: source.authority, url: source.url, retrievedAt: source.retrievedAt }))),
+        JSON.stringify(nextPresentation),
+        plan.id,
+        plan.version
+      );
+      if (updated.changes !== 1) throw new Error("The Plan changed before generated routes were saved.");
+      const nextCompilationKey = `route-refresh:${lineage.compilerVersion.replaceAll(".", "-")}:${plan.id}:plan-v${nextPlanVersion}:blueprint-${saved.id}-v${saved.version}`;
+      const lineageUpdated = this.database.prepare("UPDATE plan_blueprint_lineage SET plan_version = ?, blueprint_version = ?, compilation_key = ?, created_at = ? WHERE plan_id = ?").run(nextPlanVersion, saved.version, nextCompilationKey, input.observedAt, plan.id);
+      if (lineageUpdated.changes !== 1) throw new Error("The Plan Blueprint lineage changed before generated routes were saved.");
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getWorkspace();
   }
 
   /** Saves user-authored itinerary organization without pretending that routes were reverified. */
@@ -1897,10 +2016,12 @@ export class SqliteWorkspaceStore {
       if (existing.planId !== plan.id || existing.blueprintId !== lineage.blueprintId || existing.blueprintVersion !== lineage.blueprintVersion || existing.compilerVersion !== lineage.compilerVersion) throw new Error("Compilation Key already belongs to a different Draft Plan.");
       return this.getWorkspace();
     }
-    if (!this.getTripBlueprint(lineage.blueprintId, lineage.blueprintVersion)) throw new Error("Compile a Draft Plan only from a published Trip Blueprint.");
+    const blueprint = this.getTripBlueprint(lineage.blueprintId, lineage.blueprintVersion);
+    if (!blueprint) throw new Error("Compile a Draft Plan only from a published Trip Blueprint.");
+    const presentablePlan = { ...plan, presentation: blueprintPresentation(blueprint) };
     this.database.exec("BEGIN");
     try {
-      this.insertCurrentPlan(plan);
+      this.insertCurrentPlan(presentablePlan);
       this.database.prepare(`INSERT INTO plan_blueprint_lineage (plan_id, plan_version, blueprint_id, blueprint_version, compiler_version, compilation_key, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)`).run(lineage.planId, lineage.planVersion, lineage.blueprintId, lineage.blueprintVersion, lineage.compilerVersion, lineage.compilationKey, lineage.createdAt);
       this.database.prepare("UPDATE blueprint_generations SET status = 'completed', stage = 'ready', updated_at = ? WHERE blueprint_id = ? AND blueprint_version = ?").run(lineage.createdAt, lineage.blueprintId, lineage.blueprintVersion);
@@ -1914,13 +2035,26 @@ export class SqliteWorkspaceStore {
   }
 
   applyDirectBlueprintRevision(input: { expectedPlanId: string; expectedVersion: number; revision: DirectBlueprintRevision; runtime?: AgentRuntimeKind }): WorkspaceSnapshot {
+    const batchInput: { expectedPlanId: string; expectedVersion: number; revisions: DirectBlueprintRevision[]; runtime?: AgentRuntimeKind } = {
+      expectedPlanId: input.expectedPlanId,
+      expectedVersion: input.expectedVersion,
+      revisions: [input.revision]
+    };
+    if (input.runtime) batchInput.runtime = input.runtime;
+    return this.applyDirectBlueprintRevisionBatch(batchInput).workspace;
+  }
+
+  applyDirectBlueprintRevisionBatch(input: { expectedPlanId: string; expectedVersion: number; revisions: DirectBlueprintRevision[]; runtime?: AgentRuntimeKind }): DirectBlueprintRevisionSaveResult {
     const workspace = this.getWorkspace();
     if (workspace.activePlan.id !== input.expectedPlanId || workspace.activePlan.version !== input.expectedVersion) throw new Error("The Plan changed before this Blueprint Revision was applied.");
     if (!workspace.activeBlueprint) throw new Error("Direct Blueprint Revision requires a current Trip Blueprint.");
-    const revised = applyDirectBlueprintRevision(workspace.activeBlueprint, input.revision);
-    const saved = this.saveTripBlueprint(revised);
-    const compilation = compileTripBlueprint(saved, { createdAt: input.revision.createdAt, completedRequirementIds: completedRequirementIdsForWorkspace(workspace) });
-    return this.createCompiledBlueprintPlan(compilation, input.runtime);
+    const result = applyDirectBlueprintRevisionBatchWithMetadata(workspace.activeBlueprint, input.revisions);
+    const saved = this.saveTripBlueprint(result.blueprint);
+    const compilation = compileTripBlueprint(saved, { createdAt: result.metadata.createdAt, completedRequirementIds: completedRequirementIdsForWorkspace(workspace) });
+    return {
+      workspace: this.createCompiledBlueprintPlan(compilation, input.runtime),
+      revision: result.metadata
+    };
   }
 
   saveGeneratedPlanArrivalTimeZone(input: { planId: string; expectedVersion: number; timeZone: string }): WorkspaceSnapshot {
@@ -3543,6 +3677,61 @@ function editedItineraryRouteMode(preference: TransportPreference): PlanRouteSeg
   if (preference === "taxi") return "driving";
   if (preference === "walking") return "walking";
   return "transit";
+}
+
+function routeRefreshPresentationForWorkspace(workspace: WorkspaceSnapshot): PlanPresentation {
+  const presentation = workspace.activeBlueprint ? blueprintPresentation(workspace.activeBlueprint) : workspace.activePlan.presentation;
+  if (!presentation || presentation.kind !== "itinerary") throw new Error("This Plan does not contain a structured itinerary presentation.");
+  return presentation;
+}
+
+function latestRouteObservedAt(routes: Array<{ observedAt: string }>): string {
+  return routes.map((route) => route.observedAt).sort().at(-1) ?? new Date().toISOString();
+}
+
+function routeRefreshProviderSource(provider: "google_maps", observedAt: string): BlueprintSource {
+  return {
+    id: provider,
+    title: "Google Maps route facts",
+    authority: "Google Maps",
+    url: "https://www.google.com/maps",
+    retrievedAt: observedAt,
+    status: "verified"
+  };
+}
+
+function routeRefreshKnownInformation(knownInformation: string[], blueprint: TripBlueprint): string[] {
+  const blueprintLine = `Trip Blueprint: ${blueprint.id} v${blueprint.version}`;
+  const replaced = knownInformation.map((item) => item.startsWith("Trip Blueprint: ") ? blueprintLine : item);
+  return replaced.includes(blueprintLine) ? replaced : [blueprintLine, ...knownInformation];
+}
+
+function routeRefreshAssumptions(assumptions: string[], blueprint: TripBlueprint): string[] {
+  const retained = assumptions.filter((item) => !/travel facts? or map details? remain marked for recheck/i.test(item));
+  const recheckCount = blueprint.movements.filter((movement) => movement.status !== "verified").length;
+  if (!recheckCount) return retained;
+  const factLabel = recheckCount === 1 ? "fact" : "facts";
+  const detailLabel = recheckCount === 1 ? "detail" : "details";
+  return [`${recheckCount} travel ${factLabel} or map ${detailLabel} remain marked for recheck.`, ...retained];
+}
+
+function updateBlueprintBlocksFromStops(day: TripBlueprint["days"][number], stops: NonNullable<ItineraryDay["stops"]>): BlueprintItineraryBlock[] {
+  const scheduledPlaceIds = new Set(day.stops.map((stop) => stop.placeId));
+  let routeIndex = 0;
+  return [...(day.blocks ?? [])].sort((left, right) => left.order - right.order).flatMap((block) => {
+    if (!block.placeId || !scheduledPlaceIds.has(block.placeId) || block.kind === "event") return [{ ...block, evidence: [...block.evidence] }];
+    const stop = stops[routeIndex];
+    routeIndex += 1;
+    if (!stop) return [];
+    const { startTime: _startTime, role: _role, ...base } = block;
+    return [{
+      ...base,
+      placeId: stop.placeId,
+      ...(stop.time ? { startTime: stop.time } : block.startTime ? { startTime: block.startTime } : {}),
+      ...(stop.role ? { role: stop.role } : block.role ? { role: block.role } : {}),
+      evidence: [...block.evidence]
+    }];
+  }).map((block, index) => ({ ...block, order: index + 1 }));
 }
 
 function taskRemindersEqual(left: TaskReminder, right: TaskReminder): boolean {

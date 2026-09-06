@@ -1,6 +1,6 @@
 import { useState } from "react";
-import type { DestinationArrivalEvent, Plan, PlanChangeSet, PlanReplacementAudit, TripBlueprint, WorkspaceSnapshot } from "@c-assistant/core";
-import { abandonActivePlan, applyDirectBlueprintRevision, deletePlan, sendAgentChat, undoPlanReplacement } from "./api-client.js";
+import type { DestinationArrivalEvent, DirectBlueprintRevisionBatchMetadata, Plan, PlanChangeSet, PlanReplacementAudit, TripBlueprint, WorkspaceSnapshot } from "@c-assistant/core";
+import { abandonActivePlan, applyDirectBlueprintRevisionBatch, deletePlan, refreshPlanRoutes, sendAgentChat, undoPlanReplacement } from "./api-client.js";
 import { BookingImportPanel } from "./BookingImportPanel.js";
 import { LandiBlueprintWorkspace } from "./LandiBlueprintWorkspace.js";
 import { PlanMapWorkspace } from "./PlanMapWorkspace.js";
@@ -8,7 +8,7 @@ import { PlanChangeNotice, PlanCommandCenter, PlanDecisionBoard, PlanGrounding, 
 import { PlanRemindersView, PlanSourcesView, WorkspaceEmpty } from "./PlanSupportingViews.js";
 import { FeaturedChecklist, FeaturedTimeline, PlanContentSection } from "./PlanTaskSections.js";
 import { blueprintPresentation } from "./blueprint-presentation.js";
-import type { PendingItineraryEditDisplay } from "./landi-blueprint-workspace-display.js";
+import { compactPendingItineraryEdits, pendingItineraryDraftSummary, type ItineraryRouteRefreshDisplay, type PendingItineraryEditDisplay } from "./landi-blueprint-workspace-display.js";
 import { planRefinementQuestion } from "./plan-display.js";
 import { visibleDocumentPolicySources } from "./plan-external-display.js";
 import { isExplicitPreparationTask } from "./plan-preparation-display.js";
@@ -17,13 +17,24 @@ import type { AgentStatus } from "./ui-types.js";
 
 type PlanWorkspaceView = "plan" | "preparation" | "bookings" | "decisions" | "reminders" | "sources";
 
+function itineraryRevisionImpactStatus(revision: DirectBlueprintRevisionBatchMetadata, edits: PendingItineraryEditDisplay[]): string {
+  const draftSummary = pendingItineraryDraftSummary(edits);
+  const placeCount = revision.affectedPlaceIds.length;
+  const dayCount = revision.affectedDayIds.length;
+  const savedLabel = draftSummary.changeLabel.replace("unsaved", "itinerary");
+  if (edits.length) return `Applied ${savedLabel} for ${draftSummary.affectedDayLabel}. Routes need refresh.`;
+  if (placeCount === 1 && dayCount === 1) return "Updated 1 place. Routes need refresh.";
+  return `Updated ${placeCount} places across ${dayCount} days. Routes need refresh.`;
+}
+
 export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanChange, latestPlanReplacement, onRevise, onTaskToggle, onTaskReorder, onUndoChange, onConfirm, onWorkspace, onStatus, onError, onOperationBusy, confirming }: { plan: Plan; blueprint?: TripBlueprint | undefined; destinationArrivals: DestinationArrivalEvent[]; latestPlanChange?: PlanChangeSet | undefined; latestPlanReplacement?: PlanReplacementAudit | undefined; onRevise: (message?: string) => void; onTaskToggle: (planId: string, taskId: string, checked: boolean) => Promise<void>; onTaskReorder: (planId: string, taskId: string, direction: "up" | "down") => Promise<void>; onUndoChange: (planId: string, changeId: string) => Promise<void>; onConfirm: (planId: string) => Promise<void>; onWorkspace: (workspace: WorkspaceSnapshot) => Promise<void>; onStatus: (status: AgentStatus) => void; onError: (message: string) => void; onOperationBusy: (busy: boolean) => void; confirming: boolean }) {
-  if (blueprint && !plan.presentation) plan = { ...plan, presentation: blueprintPresentation(blueprint) };
+  if (blueprint) plan = { ...plan, presentation: blueprintPresentation(blueprint) };
   const [workspaceView, setWorkspaceView] = useState<PlanWorkspaceView>("plan");
   const [discarding, setDiscarding] = useState(false);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [applyingItineraryEdits, setApplyingItineraryEdits] = useState(false);
+  const [refreshingRoutes, setRefreshingRoutes] = useState(false);
   const [regenerationStatus, setRegenerationStatus] = useState<string | null>(null);
   async function discardDraft() {
     if (discarding || plan.status !== "draft") return;
@@ -80,20 +91,19 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
     onError("");
     onStatus({ tone: "working", text: "Updating the itinerary…" });
     try {
-      let latestWorkspace: WorkspaceSnapshot | undefined;
-      for (const edit of edits) {
-        const currentPlan = latestWorkspace?.activePlan ?? plan;
-        latestWorkspace = await applyDirectBlueprintRevision(currentPlan.id, {
-          expectedVersion: currentPlan.version,
+      const compactEdits = compactPendingItineraryEdits(edits);
+      if (!compactEdits.length) throw new Error("There were no itinerary edits to apply.");
+      const payload = await applyDirectBlueprintRevisionBatch(plan.id, {
+        expectedVersion: plan.version,
+        revisions: compactEdits.map((edit) => ({
           kind: edit.kind,
           placeId: edit.placeId,
           dayId: edit.dayId,
           position: edit.position
-        });
-      }
-      if (!latestWorkspace) throw new Error("There were no itinerary edits to apply.");
-      await onWorkspace(latestWorkspace);
-      onStatus({ tone: "success", text: edits.length === 1 ? "Itinerary updated." : "Itinerary updates saved." });
+        }))
+      });
+      await onWorkspace(payload.workspace);
+      onStatus({ tone: "success", text: itineraryRevisionImpactStatus(payload.revision, compactEdits) });
     } catch (caught) {
       const messageText = caught instanceof Error ? caught.message : "Landi could not update the itinerary.";
       onError(messageText);
@@ -101,6 +111,36 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
       throw caught;
     } finally {
       setApplyingItineraryEdits(false);
+      onOperationBusy(false);
+    }
+  }
+  async function refreshItineraryRoutes(refresh: ItineraryRouteRefreshDisplay) {
+    if (refreshingRoutes) return;
+    setRefreshingRoutes(true);
+    onOperationBusy(true);
+    onError("");
+    onStatus({ tone: "working", text: `Refreshing routes for ${refresh.dayLabel}...` });
+    try {
+      if (!refresh.segmentIds.length) throw new Error("There were no route legs to refresh.");
+      const payload = await refreshPlanRoutes(plan.id, {
+        expectedVersion: plan.version,
+        segmentIds: refresh.segmentIds
+      });
+      await onWorkspace(payload.workspace);
+      const refreshedCount = payload.routeRefresh.refreshedSegmentIds.length;
+      const conflictCount = payload.routeRefresh.scheduleConflictDayIds.length;
+      onStatus({
+        tone: "success",
+        text: conflictCount
+          ? `Routes refreshed for ${refresh.dayLabel}, but timing still needs review.`
+          : `Routes refreshed for ${refresh.dayLabel}${refreshedCount ? ` (${refreshedCount} legs)` : ""}.`
+      });
+    } catch (caught) {
+      const messageText = caught instanceof Error ? caught.message : "Landi could not refresh these routes.";
+      onError(messageText);
+      onStatus({ tone: "error", text: messageText });
+    } finally {
+      setRefreshingRoutes(false);
       onOperationBusy(false);
     }
   }
@@ -167,7 +207,7 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
   if (plan.presentation?.kind === "itinerary" && plan.presentation.places.length) {
     return <article className="current-plan-card native-trip-plan">
       {latestPlanReplacement ? <PlanReplacementNotice audit={latestPlanReplacement} active={plan.status === "active"} onUndo={undoReplacement} /> : null}
-      <LandiBlueprintWorkspace plan={plan} presentation={plan.presentation} onTaskToggle={onTaskToggle} onApplyItineraryEdits={applyBlueprintItineraryEdits} itineraryEditBusy={applyingItineraryEdits} />
+      <LandiBlueprintWorkspace plan={plan} presentation={plan.presentation} onTaskToggle={onTaskToggle} onApplyItineraryEdits={applyBlueprintItineraryEdits} onRequestRouteRefresh={refreshItineraryRoutes} itineraryEditBusy={applyingItineraryEdits} routeRefreshBusy={refreshingRoutes} />
       <footer className="plan-footer actions-only"><div className="plan-footer-actions">{plan.status === "draft" ? discardControl() : abandonControl()}<button className="secondary-action" onClick={() => onRevise()}>Adjust in conversation</button>{plan.status === "draft" ? <button className="primary-action" disabled={confirming} onClick={() => void onConfirm(plan.id)}>{confirming ? "Confirming…" : "Confirm and activate"}</button> : null}</div></footer>
     </article>;
   }

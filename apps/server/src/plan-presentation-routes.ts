@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { PlanPresentation } from "@c-assistant/core";
+import { blueprintPresentation, type Plan, type PlanPresentation, type WorkspaceSnapshot } from "@c-assistant/core";
 import type { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { connectorResponseStatus } from "./connector-bundle.js";
 import { PlanRouteRefreshError, refreshGeneratedPlanRoutes, refreshPlanRouteFacts, type PlanRouteMaps } from "./plan-route-refresh.js";
@@ -21,19 +21,46 @@ export function registerPlanPresentationRoutes(server: FastifyInstance, dependen
     if (workspace.activePlan.id !== request.params.planId || workspace.activePlan.version !== expectedVersion) return reply.code(409).send({ error: "The Plan changed before this route refresh started. Review the latest version and try again." });
     try {
       const maps = getMaps();
-      const facts = await refreshPlanRouteFacts(workspace.activePlan, request.params.segmentId, {
-        geocodeAddress: (input) => maps.geocodeAddress(input),
-        drivingRoute: (input) => maps.drivingRoute(input),
-        walkingRoute: (input) => maps.walkingRoute(input),
-        transitRoute: (input) => maps.transitRoute(input)
-      });
+      const facts = await refreshPlanRouteFacts(routeRefreshPlanForWorkspace(workspace), request.params.segmentId, routeRefreshMaps(maps));
       const { segmentId: _segmentId, geometry: _geometry, ...routeFacts } = facts;
       const updated = store.savePlanRouteRefresh({ planId: request.params.planId, segmentId: request.params.segmentId, expectedVersion, provider: "google_maps", ...routeFacts });
       return { workspace: updated, segment: updated.activePlan.presentation?.routeSegments.find((segment) => segment.id === request.params.segmentId) };
     } catch (error) {
       if (!(error instanceof PlanRouteRefreshError)) return reply.code(409).send({ error: error instanceof Error ? error.message : "The route refresh could not be saved." });
-      const status = error.connectorStatus ? connectorResponseStatus(error.connectorStatus) : error.code === "unsupported_mode" ? 422 : error.code === "missing_segment" ? 404 : 400;
-      return reply.code(status).send({ error: error.message, code: error.code });
+      return reply.code(routeRefreshStatus(error)).send({ error: error.message, code: error.code });
+    }
+  });
+
+  server.post<{ Params: { planId: string }; Body: { expectedVersion?: number; segmentIds?: unknown } }>("/api/plans/:planId/presentation/routes/refresh", async (request, reply) => {
+    const expectedVersion = Number(request.body?.expectedVersion);
+    const segmentIds = routeRefreshSegmentIds(request.body?.segmentIds);
+    if (!Number.isInteger(expectedVersion) || expectedVersion <= 0) return reply.code(400).send({ error: "A route refresh needs the current Plan version." });
+    if (!segmentIds.length) return reply.code(400).send({ error: "Choose at least one route leg to refresh." });
+    if (segmentIds.length > 36) return reply.code(400).send({ error: "Refresh 36 route legs or fewer at once." });
+    const workspace = store.getWorkspace();
+    if (workspace.activePlan.id !== request.params.planId || workspace.activePlan.version !== expectedVersion) return reply.code(409).send({ error: "The Plan changed before this route refresh started. Review the latest version and try again." });
+    try {
+      const plan = routeRefreshPlanForWorkspace(workspace);
+      const validationError = batchRouteRefreshValidationError(plan, segmentIds);
+      if (validationError) return reply.code(routeRefreshStatus(validationError)).send({ error: validationError.message, code: validationError.code });
+      const refreshed = await refreshGeneratedPlanRoutes(plan, routeRefreshMaps(getMaps()), { segmentIds });
+      const refreshedIds = new Set(refreshed.refreshed.map((route) => route.segmentId));
+      const failedSegmentIds = [...new Set([...refreshed.failedSegmentIds, ...segmentIds.filter((segmentId) => !refreshedIds.has(segmentId))])];
+      if (failedSegmentIds.length) {
+        return reply.code(424).send({ error: "Some route legs could not be refreshed. The itinerary was not changed.", failedSegmentIds });
+      }
+      const saved = store.saveGeneratedPlanRouteRefresh({ planId: request.params.planId, expectedVersion, provider: "google_maps", routes: refreshed.refreshed });
+      return {
+        workspace: saved.workspace,
+        routeRefresh: {
+          segmentIds,
+          refreshedSegmentIds: refreshed.refreshed.map((route) => route.segmentId),
+          scheduleConflictDayIds: saved.scheduleConflictDayIds
+        }
+      };
+    } catch (error) {
+      if (!(error instanceof PlanRouteRefreshError)) return reply.code(409).send({ error: error instanceof Error ? error.message : "The route refresh could not be saved." });
+      return reply.code(routeRefreshStatus(error)).send({ error: error.message, code: error.code });
     }
   });
 
@@ -51,12 +78,7 @@ export function registerPlanPresentationRoutes(server: FastifyInstance, dependen
       const pendingRoutes = plan.presentation?.kind === "itinerary" ? plan.presentation.routeSegments.filter((segment) => affectedDayIds.has(segment.dayId ?? "") && segment.verification === "needs_verification" && ["driving", "walking", "transit"].includes(segment.mode)) : [];
       if (!pendingRoutes.length || maps.configurationStatus().status !== "available") return saved;
       try {
-        const refreshed = await refreshGeneratedPlanRoutes(plan, {
-          geocodeAddress: (input) => maps.geocodeAddress(input),
-          drivingRoute: (input) => maps.drivingRoute(input),
-          walkingRoute: (input) => maps.walkingRoute(input),
-          transitRoute: (input) => maps.transitRoute(input)
-        }, { segmentIds: pendingRoutes.map((segment) => segment.id) });
+        const refreshed = await refreshGeneratedPlanRoutes(plan, routeRefreshMaps(maps), { segmentIds: pendingRoutes.map((segment) => segment.id) });
         if (!refreshed.refreshed.length) return saved;
         return store.saveGeneratedPlanRouteRefresh({ planId: plan.id, expectedVersion: plan.version, provider: "google_maps", routes: refreshed.refreshed }).workspace;
       } catch (error) {
@@ -67,6 +89,47 @@ export function registerPlanPresentationRoutes(server: FastifyInstance, dependen
       return reply.code(409).send({ error: error instanceof Error ? error.message : "The itinerary edits could not be saved." });
     }
   });
+}
+
+function routeRefreshMaps(maps: PlanPresentationMaps): PlanRouteMaps {
+  return {
+    geocodeAddress: (input) => maps.geocodeAddress(input),
+    drivingRoute: (input) => maps.drivingRoute(input),
+    walkingRoute: (input) => maps.walkingRoute(input),
+    transitRoute: (input) => maps.transitRoute(input)
+  };
+}
+
+function routeRefreshPlanForWorkspace(workspace: WorkspaceSnapshot): Plan {
+  if (workspace.activePlan.presentation?.kind === "itinerary") return workspace.activePlan;
+  if (workspace.activeBlueprint) return { ...workspace.activePlan, presentation: blueprintPresentation(workspace.activeBlueprint) };
+  return workspace.activePlan;
+}
+
+function routeRefreshSegmentIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean))];
+}
+
+function batchRouteRefreshValidationError(plan: Plan, segmentIds: string[]): PlanRouteRefreshError | undefined {
+  const presentation = plan.presentation;
+  if (!presentation || presentation.kind !== "itinerary") return new PlanRouteRefreshError("missing_presentation", "This Plan does not contain a structured itinerary presentation.");
+  const segmentById = new Map(presentation.routeSegments.map((segment) => [segment.id, segment]));
+  const placeIds = new Set(presentation.places.map((place) => place.id));
+  for (const segmentId of segmentIds) {
+    const segment = segmentById.get(segmentId);
+    if (!segment) return new PlanRouteRefreshError("missing_segment", "The Plan route segment was not found.");
+    if (segment.mode !== "driving" && segment.mode !== "walking" && segment.mode !== "transit") return new PlanRouteRefreshError("unsupported_mode", "Automatic refresh currently supports driving, walking, and public-transit segments only.");
+    if (!placeIds.has(segment.originPlaceId) || !placeIds.has(segment.destinationPlaceId)) return new PlanRouteRefreshError("missing_place", "The route references a place that is no longer in this Plan.");
+  }
+  return undefined;
+}
+
+function routeRefreshStatus(error: PlanRouteRefreshError): number {
+  if (error.connectorStatus) return connectorResponseStatus(error.connectorStatus);
+  if (error.code === "unsupported_mode") return 422;
+  if (error.code === "missing_segment") return 404;
+  return 400;
 }
 
 function itineraryEditAffectedDayIds(presentation: PlanPresentation, assignments: Record<string, string>, orders: Record<string, string[]>): Set<string> {

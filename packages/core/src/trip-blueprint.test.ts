@@ -84,6 +84,133 @@ test("Trip Blueprint validates optional place display intent", () => {
   assert.ok(issues.includes("place a has invalid display type"));
 });
 
+test("Trip Blueprint validates optional guide display intent", () => {
+  const value = blueprint();
+  value.places[0] = {
+    ...value.places[0]!,
+    guideDisplay: {
+      showInGuide: true,
+      state: "unscheduled",
+      cardSummary: "Short card copy written by the planning skill.",
+      tags: ["60 min", "Rain option"],
+      detailLeadTitle: "Why this fits",
+      detailPlanTitle: "How to use it",
+      comparisonTitle: "Compare nearby stops",
+      comparisonRows: [{
+        id: "row-b",
+        relatedPlaceId: "b",
+        area: "Tokyo",
+        routeFit: "Same direction",
+        timing: "Flexible morning",
+        effort: "Low-effort swap",
+        sourceState: "Verified source"
+      }]
+    }
+  };
+  assert.deepEqual(tripBlueprintIntegrityIssues(value), []);
+
+  value.places[0]!.guideDisplay = {
+    state: "hidden" as "informational",
+    tags: [""],
+    comparisonRows: [{
+      id: "",
+      relatedPlaceId: "a",
+      area: "",
+      routeFit: "",
+      timing: "",
+      effort: "",
+      sourceState: "",
+      evidence: [{ sourceId: "missing-source", status: "verified" }]
+    }]
+  };
+  const issues = tripBlueprintIntegrityIssues(value);
+  assert.ok(issues.includes("place a has invalid guide display state"));
+  assert.ok(issues.includes("place a guide display contains an empty tag"));
+  assert.ok(issues.includes("place a.guideDisplay.comparisonRows contains a missing identity"));
+  assert.ok(issues.some((issue) => issue.includes("place a guide display row <missing> is incomplete")));
+  assert.ok(issues.some((issue) => issue.includes("place a guide display row <missing> has invalid related place a")));
+  assert.ok(issues.some((issue) => issue.includes("place a guide display row <missing> references unknown source missing-source")));
+});
+
+test("Trip Blueprint validates canonical travel tips and preparation checklist", () => {
+  const value = blueprint();
+  value.actionRequirements = [{
+    id: "requirement-passport",
+    kind: "travel_authorization",
+    title: "Check passport validity",
+    description: "Passport validity must cover entry requirements.",
+    accountableParty: "traveler",
+    completionCondition: "Passport validity is confirmed.",
+    evidence: []
+  }];
+  value.travelTips = [{
+    id: "tip-etiquette",
+    title: "Temple etiquette",
+    body: "Temple visits require quiet behavior around worshippers.",
+    theme: "etiquette",
+    context: "Tokyo temples",
+    dayId: "d1",
+    placeId: "a",
+    evidence: []
+  }];
+  value.preparationChecklist = [{
+    id: "prep-passport",
+    title: "Check passport validity",
+    group: "documents",
+    completionCondition: "Passport validity is confirmed.",
+    requirementId: "requirement-passport",
+    evidence: []
+  }];
+  assert.deepEqual(tripBlueprintIntegrityIssues(value), []);
+
+  value.travelTips[0] = { ...value.travelTips[0]!, theme: "generic" as "etiquette", placeId: "missing", dayId: "missing-day" };
+  value.preparationChecklist[0] = { ...value.preparationChecklist[0]!, group: "paperwork" as "documents", requirementId: "missing-requirement" };
+  const issues = tripBlueprintIntegrityIssues(value);
+  assert.ok(issues.some((issue) => issue.includes("travel tip tip-etiquette has invalid theme")));
+  assert.ok(issues.some((issue) => issue.includes("travel tip tip-etiquette references unknown place missing")));
+  assert.ok(issues.some((issue) => issue.includes("travel tip tip-etiquette references unknown day missing-day")));
+  assert.ok(issues.some((issue) => issue.includes("preparation item prep-passport has invalid group")));
+  assert.ok(issues.some((issue) => issue.includes("preparation item prep-passport references unknown action requirement missing-requirement")));
+});
+
+test("Trip Blueprint validates Guide Catalog themes against concrete places", () => {
+  const value = blueprint();
+  value.localFoods = [{
+    id: "food-soba",
+    title: "Soba",
+    description: "A local noodle choice useful for a quick lunch.",
+    context: "Tokyo lunch stops",
+    diningPlaceIds: ["a"],
+    evidence: []
+  }];
+  value.localProducts = [{
+    id: "product-paper",
+    title: "Washi paper",
+    description: "Traditional paper goods that fit small-shop browsing.",
+    context: "Craft streets",
+    purchasePlaceIds: ["b"],
+    evidence: []
+  }];
+  value.experienceThemes = [{
+    id: "experience-tea",
+    title: "Tea practice",
+    description: "A structured local experience that needs a concrete session provider.",
+    context: "Quiet afternoon options",
+    offeringPlaceIds: ["c"],
+    evidence: []
+  }];
+  assert.deepEqual(tripBlueprintIntegrityIssues(value), []);
+
+  value.localFoods[0] = { ...value.localFoods[0]!, diningPlaceIds: ["missing", "missing"] };
+  value.localProducts[0] = { ...value.localProducts[0]!, purchasePlaceIds: [] };
+  value.experienceThemes[0] = { ...value.experienceThemes[0]!, offeringPlaceIds: ["missing-offering"] };
+  const issues = tripBlueprintIntegrityIssues(value);
+  assert.ok(issues.some((issue) => issue.includes("local food food-soba references unknown dining place missing")));
+  assert.ok(issues.some((issue) => issue.includes("local food food-soba contains duplicate dining places")));
+  assert.ok(issues.some((issue) => issue.includes("local product product-paper needs at least one purchase place")));
+  assert.ok(issues.some((issue) => issue.includes("experience theme experience-tea references unknown offering place missing-offering")));
+});
+
 test("Trip Blueprint validates V2 guide relationships, scheduling, blocks, and field evidence", () => {
   const value = blueprint();
   value.moduleIdentity = {

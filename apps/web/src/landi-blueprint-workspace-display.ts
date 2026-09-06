@@ -1,4 +1,4 @@
-import type { BlueprintItineraryBlock, BlueprintPlaceRelationship, BlueprintSchedulingEligibility, ItineraryDay, Plan, PlanPlace, PlanPresentation, PlanPresentationEvent, PlanRouteSegment, SourceReference, Task } from "@c-assistant/core";
+import type { BlueprintEvidenceRef, BlueprintItineraryBlock, BlueprintPlaceRelationship, BlueprintPreparationGroup, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelTipTheme, ItineraryDay, Plan, PlanPlace, PlanPresentation, PlanPresentationEvent, PlanRouteSegment, SourceReference, Task } from "@c-assistant/core";
 import { groupPreparationItems } from "./plan-preparation-display.js";
 import { displayTripTitle } from "./trip-title.js";
 
@@ -62,6 +62,7 @@ type TimelineBlock = {
   type: GuideFilter;
   title?: string;
   meta?: string;
+  routeAnchor?: boolean;
   reorderable?: boolean;
   status?: string;
   routeAfter?: PlanRouteSegment;
@@ -75,6 +76,8 @@ export type ItineraryCardDisplay = {
   timeLabel: string;
   meta?: string;
   statusLabel?: string;
+  routeStatusLabel?: string;
+  routeAnchor?: boolean;
   reorderable?: boolean;
   editState?: "moved";
 };
@@ -89,6 +92,7 @@ export type BlueprintRouteSegmentDisplay = {
   destinationPlaceId: string;
   label: string;
   verification: PlanRouteSegment["verification"];
+  needsRefresh: boolean;
   durationLabel?: string;
   detail?: string;
   sources: SourceMarkerDisplay[];
@@ -109,7 +113,17 @@ export type ItineraryDayDisplay = {
   placementOptions: ItineraryPlacementOption[];
   routePlaces: BlueprintMapPointDisplay[];
   routeSegments: BlueprintRouteSegmentDisplay[];
+  routeRefresh?: ItineraryRouteRefreshDisplay;
   markers: BlueprintMapMarkerDisplay[];
+};
+
+export type ItineraryRouteRefreshDisplay = {
+  segmentCount: number;
+  segmentIds: string[];
+  dayLabel: string;
+  summary: string;
+  request: string;
+  actionable?: boolean;
 };
 
 export type GuideCardDisplay = {
@@ -186,6 +200,7 @@ export type TipDisplay = {
   title: string;
   body: string;
   context: string;
+  theme?: BlueprintTravelTipTheme;
 };
 
 export type TipGroupDisplay = {
@@ -234,6 +249,29 @@ export type PendingItineraryEditDisplay = {
   advisories: PlacementAdvisory[];
 };
 
+export type PendingItineraryDraftSummary = {
+  changeLabel: string;
+  affectedDayLabel: string;
+};
+
+export function mergePendingItineraryEdit(current: PendingItineraryEditDisplay[], edit: PendingItineraryEditDisplay): PendingItineraryEditDisplay[] {
+  const existingIndex = current.findIndex((candidate) => samePendingItineraryEditTarget(candidate, edit));
+  if (existingIndex === -1) return [...current, edit];
+  return current.map((candidate, index) => index === existingIndex ? edit : candidate);
+}
+
+export function compactPendingItineraryEdits(edits: PendingItineraryEditDisplay[]): PendingItineraryEditDisplay[] {
+  return edits.reduce<PendingItineraryEditDisplay[]>((next, edit) => mergePendingItineraryEdit(next, edit), []);
+}
+
+export function pendingItineraryDraftSummary(edits: PendingItineraryEditDisplay[]): PendingItineraryDraftSummary {
+  const compactEdits = compactPendingItineraryEdits(edits);
+  const affectedDays = [...new Map(compactEdits.map((edit) => [edit.dayId, edit.dayLabel])).values()];
+  const changeLabel = `${compactEdits.length} unsaved change${compactEdits.length === 1 ? "" : "s"}`;
+  const affectedDayLabel = affectedDays.length ? affectedDays.join(", ") : "No affected days";
+  return { changeLabel, affectedDayLabel };
+}
+
 export function pendingItineraryEditRequest(edit: PendingItineraryEditDisplay): string {
   if (edit.kind === "move_place_within_day") return [
     "Apply this confirmed itinerary edit directly to the plan.",
@@ -251,17 +289,18 @@ export function pendingItineraryEditRequest(edit: PendingItineraryEditDisplay): 
 }
 
 export function pendingItineraryEditBatchRequest(edits: PendingItineraryEditDisplay[]): string {
-  if (edits.length === 1) return pendingItineraryEditRequest(edits[0]!);
+  const compactEdits = compactPendingItineraryEdits(edits);
+  if (compactEdits.length === 1) return pendingItineraryEditRequest(compactEdits[0]!);
   return [
-    `Apply these ${edits.length} confirmed itinerary edits directly to the plan in one update.`,
-    ...edits.map((edit, index) => `${index + 1}. ${edit.kind === "move_place_within_day" ? "Move" : "Add"} ${edit.placeName} ${edit.kind === "move_place_within_day" ? `within ${edit.dayLabel}` : `to ${edit.dayLabel}`}. Placement: ${edit.positionLabel}.`),
+    `Apply these ${compactEdits.length} confirmed itinerary edits directly to the plan in one update.`,
+    ...compactEdits.map((edit, index) => `${index + 1}. ${edit.kind === "move_place_within_day" ? "Move" : "Add"} ${edit.placeName} ${edit.kind === "move_place_within_day" ? `within ${edit.dayLabel}` : `to ${edit.dayLabel}`}. Placement: ${edit.positionLabel}.`),
     "Keep existing day order unless route validation shows a placement should become flexible or move elsewhere.",
     "Check travel time, opening or booking constraints, city compatibility, and source recheck notes before returning the updated complete plan."
   ].join(" ");
 }
 
 export function buildBlueprintWorkspaceDisplay(plan: Plan, presentation: PlanPresentation): BlueprintWorkspaceDisplay {
-  const tips = localTipsForPlan(plan);
+  const tips = tipsForPresentation(plan, presentation);
   const itineraries = presentation.days.map((day) => itineraryDisplayForDay(presentation, day, plan.sources));
   return {
     title: displayTripTitle(presentation, plan.title),
@@ -275,9 +314,9 @@ export function buildBlueprintWorkspaceDisplay(plan: Plan, presentation: PlanPre
     guideFilters: blueprintGuideFilters,
     guideCards: guideCardsForPresentation(presentation, plan.sources),
     details: presentation.places.map((place) => detailDisplayForPlace(presentation, plan.sources, place)),
-    preparationGroups: preparationGroupsForPlan(plan),
+    preparationGroups: preparationGroupsForPresentation(plan, presentation),
     tipGroups: groupTipsByTheme(tips),
-    sources: sourceMarkersForPlan(plan)
+    sources: sourceMarkersForPlan(plan, presentation)
   };
 }
 
@@ -309,17 +348,24 @@ function mapPointForPlace(place: PlanPlace | BlueprintPlaceDisplay): BlueprintMa
   };
 }
 
-function routeSegmentDisplayForSegment(segment: PlanRouteSegment, planSources: SourceReference[]): BlueprintRouteSegmentDisplay {
+function routeSegmentDisplayForSegment(segment: PlanRouteSegment, planSources: SourceReference[], sourceCatalog: BlueprintSource[] = []): BlueprintRouteSegmentDisplay {
   return {
     id: segment.id,
     originPlaceId: segment.originPlaceId,
     destinationPlaceId: segment.destinationPlaceId,
     label: segment.label ?? "Movement",
     verification: segment.verification,
+    needsRefresh: directEditRouteNeedsRefresh(segment),
     ...(segment.durationMinutes ? { durationLabel: `${segment.durationMinutes} min` } : {}),
     ...(segment.detail ? { detail: segment.detail } : {}),
-    sources: sourceSummariesForRefs(segment.sourceRefs, planSources)
+    sources: sourceSummariesForRefs(segment.sourceRefs, planSources, sourceCatalog)
   };
+}
+
+function directEditRouteNeedsRefresh(segment: PlanRouteSegment): boolean {
+  if (segment.verification !== "needs_verification") return false;
+  const text = `${segment.label ?? ""} ${segment.detail ?? ""}`.toLocaleLowerCase();
+  return text.includes("route needs refresh") || text.includes("edited directly");
 }
 
 function dayTabForDay(day: ItineraryDay): BlueprintDayTabDisplay {
@@ -348,12 +394,16 @@ function markerTypeForPlace(place: Pick<PlanPlace, "category" | "visitRole" | "n
 }
 
 function isGuidePlace(place: PlanPlace): boolean {
+  if (place.guideDisplay?.showInGuide !== undefined) return place.guideDisplay.showInGuide;
+  if (place.display) return true;
   const text = `${place.category} ${place.visitRole ?? ""} ${place.name}`.toLocaleLowerCase();
   return !/hotel|accommodation|lodg|\bairport\b|\bstation\b|\bflight\b|\brail\b|\btransfer\b|\btransport\b/.test(text);
 }
 
 function guideStateForPlace(place: PlanPlace, scheduledPlaceIds: Set<string>): GuideState {
   if (scheduledPlaceIds.has(place.id)) return "scheduled";
+  if (place.guideDisplay?.state === "informational") return "informational";
+  if (place.guideDisplay?.state === "unscheduled") return "unscheduled";
   if (place.schedulingEligibility?.decision === "informational") return "informational";
   const text = `${place.category} ${place.visitRole ?? ""}`.toLocaleLowerCase();
   if (/informational|theme|local food|local product|background|context/.test(text)) return "informational";
@@ -364,10 +414,12 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
   const placeById = new Map(presentation.places.map((place) => [place.id, place] as const));
   const displayDay = dayTabForDay(day);
   if (day.blocks?.length) {
+    const scheduledPlaceIds = new Set(day.placeIds);
     return [...day.blocks].sort((left, right) => left.order - right.order).flatMap((block, index) => {
       const place = block.placeId ? placeById.get(block.placeId) : undefined;
       if (block.placeId && !place) return [];
-      const routeAfter = place ? presentation.routeSegments.find((segment) => segment.dayId === day.id && segment.originPlaceId === place.id) : undefined;
+      const routeAnchor = Boolean(place && scheduledPlaceIds.has(place.id) && block.kind !== "event");
+      const routeAfter = routeAnchor && place ? presentation.routeSegments.find((segment) => segment.dayId === day.id && segment.originPlaceId === place.id) : undefined;
       const status = place ? itineraryBlockStatus(place) : undefined;
       return [{
         day: displayDay,
@@ -378,7 +430,8 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
         type: place ? guideTypeForPlace(place) : blockGuideType(block),
         ...(blockTitle(block, place) ? { title: blockTitle(block, place)! } : {}),
         ...(blockMeta(block) ? { meta: blockMeta(block)! } : {}),
-        ...(place && directMoveAllowed(place) ? { reorderable: true } : {}),
+        ...(routeAnchor ? { routeAnchor: true } : {}),
+        ...(routeAnchor && place && directMoveAllowed(place) ? { reorderable: true } : {}),
         ...(status ? { status } : {}),
         ...(routeAfter ? { routeAfter } : {})
       }];
@@ -398,6 +451,7 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
       order: stop.order,
       timeLabel: roughTimeLabel(stop.time, stop.role, place, index),
       type: guideTypeForPlace(place),
+      routeAnchor: true,
       ...(directMoveAllowed(place) ? { reorderable: true } : {}),
       ...(status ? { status } : {}),
       ...(routeAfter ? { routeAfter } : {})
@@ -407,7 +461,7 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
 
 function itineraryDisplayForDay(presentation: PlanPresentation, day: ItineraryDay, planSources: SourceReference[] = [], pendingEdit?: PendingItineraryEditDisplay | null): ItineraryDayDisplay {
   const blocks = timelineBlocksForDay(presentation, day);
-  return itineraryDisplayFromBlocks(dayTabForDay(day), blocks, presentation.places, planSources, pendingEdit);
+  return itineraryDisplayFromBlocks(dayTabForDay(day), blocks, presentation.places, planSources, presentation.sourceCatalog, pendingEdit);
 }
 
 export function itineraryDisplayForWorkspace(workspace: BlueprintWorkspaceDisplay, dayId: string, pendingEdit?: PendingItineraryEditDisplay | PendingItineraryEditDisplay[] | null): ItineraryDayDisplay {
@@ -416,17 +470,20 @@ export function itineraryDisplayForWorkspace(workspace: BlueprintWorkspaceDispla
   return itineraryDisplayWithPending(base, workspace.places, pendingEdit);
 }
 
-function itineraryDisplayFromBlocks(day: BlueprintDayTabDisplay, blocks: TimelineBlock[], places: PlanPlace[], planSources: SourceReference[], pendingEdit?: PendingItineraryEditDisplay | null): ItineraryDayDisplay {
+function itineraryDisplayFromBlocks(day: BlueprintDayTabDisplay, blocks: TimelineBlock[], places: PlanPlace[], planSources: SourceReference[], sourceCatalog: BlueprintSource[] = [], pendingEdit?: PendingItineraryEditDisplay | null): ItineraryDayDisplay {
+  const routeSegments = blocks.slice(0, -1).flatMap((block) => block.routeAfter ? [routeSegmentDisplayForSegment(block.routeAfter, planSources, sourceCatalog)] : []);
+  const routeRefresh = routeRefreshDisplayForDay(day, routeSegments);
   const base = {
     dayId: day.id,
     day,
     items: blocks.map((block) => itineraryCardForBlock(block)),
     placementOptions: itineraryPlacementOptions(blocks),
-    routePlaces: blocks.flatMap((block) => block.place ? [mapPointForPlace(block.place)] : []),
-    routeSegments: blocks.slice(0, -1).flatMap((block) => block.routeAfter ? [routeSegmentDisplayForSegment(block.routeAfter, planSources)] : []),
+    routePlaces: blocks.flatMap((block) => block.place && block.routeAnchor ? [mapPointForPlace(block.place)] : []),
+    routeSegments,
+    ...(routeRefresh ? { routeRefresh } : {}),
     markers: blocks.flatMap((block) => {
       const place = block.place;
-      if (!place) return [];
+      if (!place || !block.routeAnchor) return [];
       return {
         placeId: place.id,
         title: displayPlaceName(place),
@@ -440,7 +497,7 @@ function itineraryDisplayFromBlocks(day: BlueprintDayTabDisplay, blocks: Timelin
 }
 
 function itineraryDisplayWithPending(base: ItineraryDayDisplay, places: BlueprintPlaceDisplay[], pendingEdit?: PendingItineraryEditDisplay | PendingItineraryEditDisplay[] | null): ItineraryDayDisplay {
-  const edits = (Array.isArray(pendingEdit) ? pendingEdit : pendingEdit ? [pendingEdit] : []).filter((edit) => edit.dayId === base.dayId);
+  const edits = compactPendingItineraryEdits(Array.isArray(pendingEdit) ? pendingEdit : pendingEdit ? [pendingEdit] : []).filter((edit) => edit.dayId === base.dayId);
   if (!edits.length) return base;
   let items = base.items;
   const markers = [...base.markers];
@@ -462,7 +519,17 @@ function itineraryDisplayWithPending(base: ItineraryDayDisplay, places: Blueprin
       });
     }
   }
-  return { ...base, items, markers };
+  return {
+    ...base,
+    items,
+    markers,
+    routeRefresh: draftRouteRefreshDisplayForPendingEdits(base, edits)
+  };
+}
+
+function samePendingItineraryEditTarget(left: PendingItineraryEditDisplay, right: PendingItineraryEditDisplay): boolean {
+  if (left.kind !== right.kind || left.placeId !== right.placeId) return false;
+  return left.kind === "add_place_to_day" || left.dayId === right.dayId;
 }
 
 export function detailDisplayForWorkspacePlace(workspace: BlueprintWorkspaceDisplay, placeId: string): DetailPlaceDisplay | undefined {
@@ -470,7 +537,7 @@ export function detailDisplayForWorkspacePlace(workspace: BlueprintWorkspaceDisp
 }
 
 export function scheduledDayIdForPlace(workspace: BlueprintWorkspaceDisplay, placeId: string): string | undefined {
-  return workspace.itineraries.find((itinerary) => itinerary.items.some((item) => item.kind === "block" && item.placeId === placeId))?.dayId;
+  return workspace.itineraries.find((itinerary) => itinerary.items.some((item) => item.kind === "block" && item.placeId === placeId && item.routeAnchor))?.dayId;
 }
 
 function guideCardsForPresentation(presentation: PlanPresentation, planSources: SourceReference[] = []): GuideCardDisplay[] {
@@ -493,7 +560,7 @@ function guideCardsForPresentation(presentation: PlanPresentation, planSources: 
         type: guideTypeForPlace(place),
         state,
         summary: shortGuideSummary(place),
-        tags: guideTags(place),
+        tags: guideTags(presentation, place),
         ...guideCardAction(place, state, firstTimelineByPlace.get(place.id)),
         ...(firstTimelineByPlace.get(place.id) ? { timeline: firstTimelineByPlace.get(place.id)! } : {})
       };
@@ -504,14 +571,14 @@ function detailDisplayForPlace(presentation: PlanPresentation, planSources: Sour
   const type = guideTypeForPlace(place);
   const scheduledDay = presentation.days.find((day) => day.placeIds.includes(place.id));
   const comparisonRows = comparisonRowsForPlace(presentation, place);
-  const comparisonHeading = comparisonRows.length && type !== "attraction" ? comparisonTitle(type) : undefined;
+  const comparisonHeading = comparisonRows.length ? place.guideDisplay?.comparisonTitle ?? comparisonTitle(type) : undefined;
   const canAdd = !scheduledDay && directAddAllowed(place);
   return {
     placeId: place.id,
     title: displayPlaceName(place),
-    leadTitle: detailLeadTitle(type),
+    leadTitle: place.guideDisplay?.detailLeadTitle ?? detailLeadTitle(type),
     leadBody: place.whyWorthIt || place.plan,
-    ...(place.plan ? { planTitle: detailPlanTitle(type), planBody: place.plan } : {}),
+    ...(place.plan ? { planTitle: place.guideDisplay?.detailPlanTitle ?? detailPlanTitle(type), planBody: place.plan } : {}),
     ...(place.reservation?.note ? { reservationNote: place.reservation.note } : {}),
     detailSections: place.detailSections,
     relatedEvents: relatedEventsForPlace(presentation, planSources, place.id),
@@ -526,6 +593,8 @@ function detailDisplayForPlace(presentation: PlanPresentation, planSources: Sour
 }
 
 function comparisonRowsForPlace(presentation: PlanPresentation, selectedPlace: PlanPlace): ComparisonRow[] {
+  const displayRows = comparisonRowsFromGuideDisplay(presentation, selectedPlace);
+  if (displayRows.length) return displayRows;
   const graphRows = comparisonRowsFromRelationshipGraph(presentation, selectedPlace);
   if (graphRows.length) return graphRows;
   const selectedType = guideTypeForPlace(selectedPlace);
@@ -541,6 +610,24 @@ function comparisonRowsForPlace(presentation: PlanPresentation, selectedPlace: P
       effort: effortLabel(place),
       sourceState: sourceStateLabel(place)
     }));
+}
+
+function comparisonRowsFromGuideDisplay(presentation: PlanPresentation, selectedPlace: PlanPlace): ComparisonRow[] {
+  const rows = selectedPlace.guideDisplay?.comparisonRows ?? [];
+  if (!rows.length) return [];
+  const placeById = new Map(presentation.places.map((place) => [place.id, place] as const));
+  return rows.map((row) => {
+    const related = row.relatedPlaceId ? placeById.get(row.relatedPlaceId) : undefined;
+    return {
+      id: row.relatedPlaceId ?? row.id,
+      name: row.name?.trim() || (related ? displayPlaceName(related) : row.id),
+      area: row.area,
+      routeFit: row.routeFit,
+      timing: row.timing,
+      effort: row.effort,
+      sourceState: row.sourceState
+    };
+  }).slice(0, 5);
 }
 
 function comparisonRowsFromRelationshipGraph(presentation: PlanPresentation, selectedPlace: PlanPlace): ComparisonRow[] {
@@ -580,7 +667,7 @@ export function filterGuideCards(cards: GuideCardDisplay[], options: { type: Gui
 }
 
 function itineraryPlacementOptions(blocks: TimelineBlock[]): ItineraryPlacementOption[] {
-  const placeBlocks = blocks.filter((block): block is TimelineBlock & { place: PlanPlace } => Boolean(block.place));
+  const placeBlocks = blocks.filter((block): block is TimelineBlock & { place: PlanPlace } => Boolean(block.place && block.routeAnchor));
   return [
     { id: "start", label: "At the start of the day", kind: "start" },
     ...placeBlocks.map((block) => ({ id: `after-${block.place.id}`, label: `After ${displayPlaceName(block.place)}`, kind: "after" as const, afterPlaceId: block.place.id })),
@@ -615,7 +702,7 @@ export function buildPendingItineraryMoveForWorkspace(workspace: BlueprintWorksp
   const place = workspace.places.find((candidate) => candidate.id === input.placeId);
   if (!itinerary || !place || !itinerary.items.some((item) => item.placeId === input.placeId && item.reorderable)) return undefined;
   if (input.position.kind === "after" && input.position.afterPlaceId === input.placeId) return undefined;
-  const currentOrder = itinerary.items.map((item) => item.placeId).filter(Boolean);
+  const currentOrder = itinerary.items.filter((item) => item.routeAnchor).map((item) => item.placeId).filter(Boolean);
   const nextOrder = movePlaceOrder(currentOrder, input.placeId, input.position);
   if (nextOrder.join("\0") === currentOrder.join("\0")) return undefined;
   const dayLabel = itinerary.day.shortLabel ?? itinerary.day.date ?? itinerary.day.label;
@@ -654,6 +741,33 @@ function emptyItineraryDayDisplay(): ItineraryDayDisplay {
   return { dayId: "", day: { id: "", label: "" }, items: [], placementOptions: [], routePlaces: [], routeSegments: [], markers: [] };
 }
 
+function routeRefreshDisplayForDay(day: BlueprintDayTabDisplay, routeSegments: BlueprintRouteSegmentDisplay[]): ItineraryRouteRefreshDisplay | undefined {
+  const refreshSegments = routeSegments.filter((segment) => segment.needsRefresh);
+  if (!refreshSegments.length) return undefined;
+  const dayLabel = day.shortLabel ?? day.date ?? day.label;
+  const segmentCount = refreshSegments.length;
+  return {
+    segmentCount,
+    segmentIds: refreshSegments.map((segment) => segment.id),
+    dayLabel,
+    summary: segmentCount === 1 ? "1 route leg needs refresh." : `${segmentCount} route legs need refresh.`,
+    request: `Refresh routes for ${dayLabel}. Recheck the affected route leg${segmentCount === 1 ? "" : "s"}, timing, meal spacing, and opening constraints before marking this itinerary ready.`
+  };
+}
+
+function draftRouteRefreshDisplayForPendingEdits(base: ItineraryDayDisplay, edits: PendingItineraryEditDisplay[]): ItineraryRouteRefreshDisplay {
+  const dayLabel = base.day.shortLabel ?? base.day.date ?? base.day.label;
+  const changeCount = edits.length;
+  return {
+    segmentCount: Math.max(1, base.routeSegments.length, changeCount),
+    segmentIds: base.routeSegments.map((segment) => segment.id),
+    dayLabel,
+    summary: `${changeCount} unsaved itinerary change${changeCount === 1 ? "" : "s"} will need route refresh after Apply.`,
+    request: `After applying the itinerary draft for ${dayLabel}, refresh routing, timing, meal spacing, and opening constraints before marking this day ready.`,
+    actionable: false
+  };
+}
+
 function itineraryCardForPendingPlace(place: BlueprintPlaceDisplay, edit: PendingItineraryEditDisplay): ItineraryCardDisplay {
   return {
     kind: "pending",
@@ -667,6 +781,7 @@ function itineraryCardForPendingPlace(place: BlueprintPlaceDisplay, edit: Pendin
 }
 
 function itineraryCardForBlock(block: TimelineBlock): ItineraryCardDisplay {
+  const routeStatusLabel = block.routeAfter && directEditRouteNeedsRefresh(block.routeAfter) ? "Route after needs refresh" : undefined;
   return {
     kind: "block",
     key: `${block.day.id}-${block.place?.id ?? block.block?.id ?? block.order}-${block.order}`,
@@ -675,6 +790,8 @@ function itineraryCardForBlock(block: TimelineBlock): ItineraryCardDisplay {
     timeLabel: block.timeLabel,
     ...(block.meta ? { meta: block.meta } : {}),
     ...(block.status ? { statusLabel: block.status } : {}),
+    ...(routeStatusLabel ? { routeStatusLabel } : {}),
+    ...(block.routeAnchor ? { routeAnchor: true } : {}),
     ...(block.place && block.reorderable ? { reorderable: true } : {})
   };
 }
@@ -696,7 +813,7 @@ function insertPendingCard(items: ItineraryCardDisplay[], pending: ItineraryCard
 }
 
 function movePendingCard(items: ItineraryCardDisplay[], edit: PendingItineraryEditDisplay): ItineraryCardDisplay[] {
-  const currentIndex = items.findIndex((item) => item.placeId === edit.placeId && item.kind === "block");
+  const currentIndex = items.findIndex((item) => item.placeId === edit.placeId && item.kind === "block" && item.routeAnchor);
   if (currentIndex === -1) return items;
   const slotTimeLabels = items.map((item) => item.timeLabel);
   const moving = { ...items[currentIndex]!, statusLabel: "Not saved", editState: "moved" as const };
@@ -705,7 +822,7 @@ function movePendingCard(items: ItineraryCardDisplay[], edit: PendingItineraryEd
   let insertionIndex = 0;
   if (position.kind === "end") insertionIndex = next.length;
   if (position.kind === "after") {
-    const afterIndex = next.findIndex((item) => item.placeId === position.afterPlaceId);
+    const afterIndex = next.findIndex((item) => item.placeId === position.afterPlaceId && item.routeAnchor);
     insertionIndex = afterIndex === -1 ? next.length : afterIndex + 1;
   }
   return [...next.slice(0, insertionIndex), moving, ...next.slice(insertionIndex)]
@@ -739,10 +856,21 @@ function positionLabelForPendingPosition(workspace: BlueprintWorkspaceDisplay, p
 function groupTipsByTheme(tips: TipDisplay[]): TipGroupDisplay[] {
   const groups = new Map<string, TipDisplay[]>();
   for (const tip of tips) {
-    const theme = tipTheme(tip);
+    const theme = tip.theme ? travelTipThemeLabel(tip.theme) : tipTheme(tip);
     groups.set(theme, [...(groups.get(theme) ?? []), tip]);
   }
   return [...groups].map(([theme, values]) => ({ theme, tips: values }));
+}
+
+function tipsForPresentation(plan: Plan, presentation: PlanPresentation): TipDisplay[] {
+  const canonical = presentation.travelTips?.map((tip) => ({
+    id: tip.id,
+    title: tip.title,
+    body: tip.body,
+    context: tip.context,
+    theme: tip.theme
+  })) ?? [];
+  return canonical.length ? canonical : localTipsForPlan(plan);
 }
 
 function localTipsForPlan(plan: Pick<Plan, "stages" | "presentation" | "location">): TipDisplay[] {
@@ -762,6 +890,26 @@ function localTipsForPlan(plan: Pick<Plan, "stages" | "presentation" | "location
     return [{ id: `task-${task.id}`, title: task.title, body: task.description ?? task.title, context: stage.title }];
   }));
   return uniqueTips([...placeTips, ...taskTips]).slice(0, 12);
+}
+
+function preparationGroupsForPresentation(plan: Plan, presentation: PlanPresentation): PreparationGroupDisplay[] {
+  const canonical = presentation.preparationChecklist ?? [];
+  if (!canonical.length) return preparationGroupsForPlan(plan);
+  const completedTaskIds = new Set(plan.stages.flatMap((stage) => stage.tasks.filter((task) => task.status === "completed").map((task) => task.id)));
+  const completedRequirementIds = new Set(plan.stages.flatMap((stage) => stage.tasks.flatMap((task) => task.status === "completed" && task.requirementId ? [task.requirementId] : [])));
+  const groups = new Map<BlueprintPreparationGroup, PreparationChecklistItemDisplay[]>();
+  for (const item of canonical) {
+    groups.set(item.group, [...(groups.get(item.group) ?? []), {
+      id: item.id,
+      title: item.title,
+      ...(item.description ? { description: item.description } : item.completionCondition ? { description: item.completionCondition } : {}),
+      checked: completedTaskIds.has(item.id) || Boolean(item.requirementId && completedRequirementIds.has(item.requirementId))
+    }]);
+  }
+  return preparationGroupOrder.flatMap((group) => {
+    const items = groups.get(group) ?? [];
+    return items.length ? [{ title: preparationGroupLabel(group), items }] : [];
+  });
 }
 
 function preparationItemsForPlan(plan: Plan): Array<{ task: Task; stageTitle: string }> {
@@ -815,8 +963,8 @@ function blockGuideType(block: BlueprintItineraryBlock): GuideFilter {
 }
 
 function blockTitle(block: BlueprintItineraryBlock, place: PlanPlace | undefined): string | undefined {
-  if (place) return displayPlaceName(place);
   if (block.title?.trim()) return block.title;
+  if (place) return displayPlaceName(place);
   if (block.kind === "meal") return "Meal window";
   if (block.kind === "rest") return "Rest";
   if (block.kind === "transfer") return "Transfer";
@@ -853,19 +1001,49 @@ function sourceSummariesForPlace(place: Pick<PlanPlace, "evidenceSources" | "sou
   });
 }
 
-function sourceSummariesForRefs(sourceRefs: string[] | undefined, planSources: SourceReference[]): SourceMarkerDisplay[] {
-  return (sourceRefs ?? []).flatMap((sourceUrl) => {
-    const source = planSources.find((candidate) => candidate.url === sourceUrl);
-    return [{ label: "Source", summary: source ? sourceReferenceSummary(source) : sourceUrl, url: sourceUrl }];
+function sourceSummariesForRefs(sourceRefs: string[] | undefined, planSources: SourceReference[], sourceCatalog: BlueprintSource[] = []): SourceMarkerDisplay[] {
+  return (sourceRefs ?? []).flatMap((sourceRef) => {
+    const source = planSources.find((candidate) => candidate.url === sourceRef) ?? sourceCatalog.find((candidate) => candidate.url === sourceRef || candidate.id === sourceRef);
+    const url = source?.url ?? (sourceRef.startsWith("http") ? sourceRef : undefined);
+    return [{ label: "Source", summary: source ? sourceReferenceSummary(source) : sourceRef, ...(url ? { url } : {}) }];
   });
 }
 
-function sourceMarkersForPlan(plan: Plan): SourceMarkerDisplay[] {
+function sourceSummariesForEvidenceRefs(evidence: BlueprintEvidenceRef[] | undefined, sourceCatalog: BlueprintSource[]): SourceMarkerDisplay[] {
+  return (evidence ?? []).flatMap((ref) => {
+    const source = sourceCatalog.find((candidate) => candidate.id === ref.sourceId);
+    if (!source) return [];
+    const refSummary = [sourceReferenceSummary(source), ref.supports?.slice(0, 2).join("; "), ref.status !== "verified" ? "needs recheck" : undefined, ref.checkedAt ? `checked ${ref.checkedAt}` : undefined].filter(Boolean).join(" · ");
+    return [{ label: "Source", summary: refSummary, url: source.url }];
+  });
+}
+
+function sourceMarkersForPlan(plan: Plan, presentation: PlanPresentation): SourceMarkerDisplay[] {
+  const sourceCatalog = presentation.sourceCatalog ?? [];
   const fromPlan = plan.sources.map((source) => ({ label: "Source", summary: sourceReferenceSummary(source), url: source.url }));
-  const fromPlaces = (plan.presentation?.places ?? []).flatMap((place) => place.evidenceSources?.map((source) => ({ label: "Source", summary: [source.title, source.role, source.status && source.status !== "verified" ? "needs recheck" : undefined, source.checkedAt ? `checked ${source.checkedAt}` : undefined].filter(Boolean).join(" · "), url: source.url })) ?? []);
-  const fromEvents = (plan.presentation?.events ?? []).flatMap((event) => sourceSummariesForRefs(event.sourceRefs, plan.sources));
+  const fromPlaces = presentation.places.flatMap((place) => place.evidenceSources?.map((source) => ({ label: "Source", summary: [source.title, source.role, source.status && source.status !== "verified" ? "needs recheck" : undefined, source.checkedAt ? `checked ${source.checkedAt}` : undefined].filter(Boolean).join(" · "), url: source.url })) ?? []);
+  const fromEvents = (presentation.events ?? []).flatMap((event) => sourceSummariesForRefs(event.sourceRefs, plan.sources, sourceCatalog));
+  const fromPresentation = [
+    ...sourceCatalog.map((source) => ({ label: "Source", summary: sourceReferenceSummary(source), url: source.url })),
+    ...sourceSummariesForFieldEvidence(presentation.fieldEvidence, sourceCatalog),
+    ...(presentation.places ?? []).flatMap((place) => sourceSummariesForFieldEvidence(place.fieldEvidence, sourceCatalog)),
+    ...(presentation.travelTips ?? []).flatMap((tip) => sourceSummariesForEvidenceRefs(tip.evidence, sourceCatalog)),
+    ...(presentation.preparationChecklist ?? []).flatMap((item) => sourceSummariesForEvidenceRefs(item.evidence, sourceCatalog)),
+    ...(presentation.localFoods ?? []).flatMap((item) => sourceSummariesForEvidenceRefs(item.evidence, sourceCatalog)),
+    ...(presentation.localProducts ?? []).flatMap((item) => sourceSummariesForEvidenceRefs(item.evidence, sourceCatalog)),
+    ...(presentation.experienceThemes ?? []).flatMap((item) => sourceSummariesForEvidenceRefs(item.evidence, sourceCatalog)),
+    ...(presentation.guideRelationshipGraph?.relationships ?? []).flatMap((relationship) => sourceSummariesForEvidenceRefs(relationship.evidence, sourceCatalog))
+  ];
+  return uniqueSourceMarkers([...fromPlan, ...fromPresentation, ...fromPlaces, ...fromEvents]);
+}
+
+function sourceSummariesForFieldEvidence(fieldEvidence: Array<{ evidence: BlueprintEvidenceRef[] }> | undefined, sourceCatalog: BlueprintSource[]): SourceMarkerDisplay[] {
+  return (fieldEvidence ?? []).flatMap((field) => sourceSummariesForEvidenceRefs(field.evidence, sourceCatalog));
+}
+
+function uniqueSourceMarkers(sources: SourceMarkerDisplay[]): SourceMarkerDisplay[] {
   const seen = new Set<string>();
-  return [...fromPlan, ...fromPlaces, ...fromEvents].filter((source) => {
+  return sources.filter((source) => {
     const key = source.url ?? source.summary;
     if (seen.has(key)) return false;
     seen.add(key);
@@ -891,6 +1069,7 @@ function workspaceAreasForPresentation(presentation: PlanPresentation): readonly
 }
 
 function shortGuideSummary(place: PlanPlace): string {
+  if (place.guideDisplay?.cardSummary?.trim()) return place.guideDisplay.cardSummary.trim();
   return shorten(firstUsefulSentence(place.plan) || firstUsefulSentence(place.whyWorthIt) || `${place.area ?? place.locationLabel}.`, 125);
 }
 
@@ -903,15 +1082,22 @@ function shorten(value: string, max: number): string {
   return `${value.slice(0, max - 1).replace(/\s+\S*$/, "")}…`;
 }
 
-function guideTags(place: PlanPlace): string[] {
-  return [place.durationMinutes ? `${place.durationMinutes} min` : undefined, place.reservation?.requirement === "required" ? "Reservation" : undefined].filter(Boolean) as string[];
+function guideTags(presentation: PlanPresentation, place: PlanPlace): string[] {
+  const catalogTags = catalogTagsForPlace(presentation, place.id);
+  const baseTags = place.guideDisplay?.tags?.length
+    ? place.guideDisplay.tags
+    : [place.durationMinutes ? `${place.durationMinutes} min` : undefined, place.reservation?.requirement === "required" ? "Reservation" : undefined].filter(Boolean) as string[];
+  return uniqueStrings([...baseTags, ...catalogTags]).slice(0, 4);
 }
 
 function guideCardAction(place: PlanPlace, state: GuideState, timeline: GuideCardDisplay["timeline"]): Pick<GuideCardDisplay, "canAdd" | "actionLabel" | "footerNote" | "addBlockedReason"> {
-  if (state === "unscheduled" && directAddAllowed(place)) return { canAdd: true, actionLabel: "Add" };
-  if (state === "unscheduled") return { canAdd: false, footerNote: addBlockedLabel(place), addBlockedReason: addBlockedLabel(place) };
+  if (state === "unscheduled" && directAddAllowed(place)) return { canAdd: true, actionLabel: place.guideDisplay?.addActionLabel ?? "Add", ...(place.guideDisplay?.footerNote ? { footerNote: place.guideDisplay.footerNote } : {}) };
+  if (state === "unscheduled") {
+    const label = place.guideDisplay?.addBlockedLabel ?? addBlockedLabel(place);
+    return { canAdd: false, footerNote: label, addBlockedReason: label };
+  }
   if (state === "scheduled") return { canAdd: false, ...(timeline ? { footerNote: `${timeline.label} ${timeline.timeLabel}` } : {}) };
-  return { canAdd: false };
+  return { canAdd: false, ...(place.guideDisplay?.footerNote ? { footerNote: place.guideDisplay.footerNote } : {}) };
 }
 
 function directAddAllowed(place: Pick<PlanPlace, "schedulingEligibility">): boolean {
@@ -993,6 +1179,24 @@ function sourceStateLabel(place: PlanPlace): string {
   return "No source listed";
 }
 
+function catalogTagsForPlace(presentation: PlanPresentation, placeId: string): string[] {
+  return [
+    ...(presentation.localFoods ?? []).flatMap((item) => item.diningPlaceIds.includes(placeId) ? [item.title] : []),
+    ...(presentation.localProducts ?? []).flatMap((item) => item.purchasePlaceIds.includes(placeId) ? [item.title] : []),
+    ...(presentation.experienceThemes ?? []).flatMap((item) => item.offeringPlaceIds.includes(placeId) ? [item.title] : [])
+  ];
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const key = value.trim().toLocaleLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function relationshipKindLabel(kind: BlueprintPlaceRelationship["kind"]): string {
   switch (kind) {
     case "same_area": return "Same area";
@@ -1028,6 +1232,31 @@ function tipTheme(tip: Pick<TipDisplay, "title" | "body">): string {
   return "Local norms";
 }
 
+const preparationGroupOrder: BlueprintPreparationGroup[] = ["documents", "phone_payments", "bookings_departure", "packing", "other"];
+
+function preparationGroupLabel(group: BlueprintPreparationGroup): string {
+  switch (group) {
+    case "documents": return "Documents";
+    case "phone_payments": return "Phone & payments";
+    case "bookings_departure": return "Bookings & departure";
+    case "packing": return "Packing";
+    case "other": return "Other prep";
+  }
+}
+
+function travelTipThemeLabel(theme: BlueprintTravelTipTheme): string {
+  switch (theme) {
+    case "payment": return "Payment";
+    case "transport": return "Transport";
+    case "etiquette": return "Etiquette";
+    case "safety": return "Safety";
+    case "weather": return "Weather";
+    case "timing": return "Timing";
+    case "language": return "Language";
+    case "local_norms": return "Local norms";
+  }
+}
+
 function isDestinationRelevantTip(value: string): boolean {
   const text = value.toLocaleLowerCase();
   if (/rest early|stay positive|enjoy the journey|take photos|have fun|relax and enjoy/.test(text)) return false;
@@ -1048,7 +1277,7 @@ function detailPlanTitle(type: GuideFilter): string {
 }
 
 function comparisonTitle(type: GuideFilter): string {
-  return type === "dining" ? "Compare dining nearby" : type === "shopping" ? "Compare shopping options" : "Compare experience options";
+  return type === "dining" ? "Compare dining nearby" : type === "shopping" ? "Compare shopping options" : type === "experience" ? "Compare experience options" : "Compare nearby options";
 }
 
 function relatedEventsForPlace(presentation: PlanPresentation, planSources: SourceReference[], placeId: string): DetailEventDisplay[] {
@@ -1060,7 +1289,7 @@ function relatedEventsForPlace(presentation: PlanPresentation, planSources: Sour
       description: event.description,
       ...(eventDateLabel(event) ? { dateLabel: eventDateLabel(event)! } : {}),
       ...(event.locationLabel ? { locationLabel: event.locationLabel } : {}),
-      sources: sourceSummariesForRefs(event.sourceRefs, planSources)
+      sources: sourceSummariesForRefs(event.sourceRefs, planSources, presentation.sourceCatalog)
     }));
 }
 

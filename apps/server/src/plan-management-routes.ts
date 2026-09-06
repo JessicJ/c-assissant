@@ -6,6 +6,8 @@ import { connectorResponseStatus } from "./connector-bundle.js";
 import { previewPlanChange } from "./plan-change-impact.js";
 import type { PlanRouteMaps } from "./plan-route-refresh.js";
 
+const MAX_DIRECT_BLUEPRINT_REVISIONS = 36;
+
 export function registerPlanManagementRoutes(server: FastifyInstance, dependencies: {
   store: SqliteWorkspaceStore;
   getMaps: () => PlanRouteMaps;
@@ -80,21 +82,23 @@ export function registerPlanManagementRoutes(server: FastifyInstance, dependenci
 
   server.post<{ Params: { planId: string }; Body: unknown }>("/api/plans/:planId/blueprint-revisions/direct", async (request, reply) => {
     if (getGeneratingPlan()) return reply.code(409).send({ error: "Another Plan generation is already running." });
-    let revision: DirectBlueprintRevision;
+    let revisions: DirectBlueprintRevision[];
     let expectedVersion: number;
     try {
+      const createdAt = new Date().toISOString();
       expectedVersion = expectedVersionFromBody(request.body);
-      revision = parseDirectBlueprintRevision(request.body, new Date().toISOString());
+      revisions = parseDirectBlueprintRevisions(request.body, createdAt);
     } catch (error) {
       return reply.code(400).send({ error: error instanceof Error ? error.message : "This Blueprint Revision is invalid." });
     }
     try {
-      return store.applyDirectBlueprintRevision({
+      const result = store.applyDirectBlueprintRevisionBatch({
         expectedPlanId: request.params.planId,
         expectedVersion,
-        revision,
+        revisions,
         runtime: store.getWorkspace().runtime.selectedKind
       });
+      return { ...result.workspace, workspace: result.workspace, revision: result.revision };
     } catch (error) {
       const message = error instanceof Error ? error.message : "This Blueprint Revision could not be applied.";
       return reply.code(/changed before|already working|already scheduled/i.test(message) ? 409 : 400).send({ error: message });
@@ -240,6 +244,17 @@ export function registerPlanManagementRoutes(server: FastifyInstance, dependenci
   });
 }
 
+function parseDirectBlueprintRevisions(value: unknown, createdAt: string): DirectBlueprintRevision[] {
+  if (!isRecord(value)) throw new Error("Direct itinerary edits need a structured request.");
+  if ("revisions" in value) {
+    if (!Array.isArray(value.revisions)) throw new Error("Direct itinerary edits need revisions as a list.");
+    if (!value.revisions.length) throw new Error("Direct itinerary edits need at least one edit.");
+    if (value.revisions.length > MAX_DIRECT_BLUEPRINT_REVISIONS) throw new Error(`Apply ${MAX_DIRECT_BLUEPRINT_REVISIONS} itinerary edits or fewer at once.`);
+    return value.revisions.map((revision) => parseDirectBlueprintRevision(revision, createdAt));
+  }
+  return [parseDirectBlueprintRevision(value, createdAt)];
+}
+
 function parseDirectBlueprintRevision(value: unknown, createdAt: string): DirectBlueprintRevision {
   if (!isRecord(value)) throw new Error("Direct itinerary edits need a structured request.");
   if (value.kind !== "add_place_to_day" && value.kind !== "move_place_within_day") throw new Error("Direct itinerary edits currently support adding or moving a place within a day.");
@@ -268,7 +283,7 @@ function directRevisionPosition(value: unknown): DirectBlueprintRevision["positi
 function stringField(value: Record<string, unknown>, key: string): string {
   const field = value[key];
   if (typeof field !== "string" || !field.trim()) throw new Error(`Direct itinerary edits need ${key}.`);
-  return field;
+  return field.trim();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

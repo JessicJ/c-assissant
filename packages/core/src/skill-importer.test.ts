@@ -98,6 +98,25 @@ test("Skill Importer preserves Landi-native place presentation fields into the T
       priority: "must",
       coordinates: [35.003, 135.778],
       display: { type: "experience", markerKind: "experience" },
+      guideDisplay: {
+        showInGuide: true,
+        state: "unscheduled",
+        cardSummary: "Bookable tea practice with clear etiquette.",
+        tags: ["90 min", "Small group"],
+        detailLeadTitle: "Why this tea stop fits",
+        detailPlanTitle: "How to use it",
+        comparisonTitle: "Compare cultural options",
+        comparisonRows: [{
+          id: "row-pottery",
+          name: "Nearby pottery workshop",
+          area: "Gion",
+          routeFit: "Same neighborhood",
+          timing: "Afternoon",
+          effort: "Requires a separate booking check",
+          sourceState: "Needs recheck",
+          sourceUrls: ["https://example.com/place#hours"]
+        }]
+      },
       contentTier: "deep",
       visitRole: "afternoon flexible",
       durationMinutes: 90,
@@ -111,7 +130,50 @@ test("Skill Importer preserves Landi-native place presentation fields into the T
       experienceUrl: "https://example.com/experience#details",
       sourceUrls: ["https://example.com/place#hours"]
     }],
-    events: []
+    events: [],
+    localFoods: [{
+      id: "wagashi",
+      title: "Seasonal wagashi",
+      description: "Small seasonal sweets that explain part of the tea-room rhythm.",
+      context: "Gion tea stops",
+      diningPlaceIds: ["tea"],
+      sourceUrls: ["https://example.com/place#hours"]
+    }],
+    localProducts: [{
+      id: "tea-tools",
+      title: "Tea utensils",
+      description: "Small utensils or sweets work better as light purchases than bulky souvenirs.",
+      context: "Gion shops",
+      purchasePlaceIds: ["tea"],
+      sourceUrls: ["https://example.com/place#hours"]
+    }],
+    experienceThemes: [{
+      id: "tea-practice",
+      title: "Tea practice",
+      description: "A guided tea session should be represented by a concrete provider, not only the theme.",
+      context: "Kyoto culture afternoon",
+      offeringPlaceIds: ["tea"],
+      sourceUrls: ["https://example.com/place#hours"]
+    }],
+    travelTips: [{
+      id: "quiet",
+      title: "Tea-room etiquette",
+      body: "Tea-room etiquette is quiet and shoes may need to be removed before entry.",
+      theme: "etiquette",
+      context: "Gion tea rooms",
+      placeId: "tea",
+      sourceUrls: ["https://example.com/place#hours"]
+    }],
+    actionRequirements: [{
+      id: "pay-tea",
+      kind: "preparation",
+      title: "Set up a payment method for the tea session",
+      description: "Confirm that the card or cash method accepted by the tea studio is ready.",
+      accountableParty: "traveler",
+      completionCondition: "Payment method is ready before the booked session.",
+      placeId: "tea",
+      sourceUrls: ["https://example.com/place#hours"]
+    }]
   };
   const research = importSkillResearchBatches([value], {
     researchSetId: "research-kyoto",
@@ -129,6 +191,25 @@ test("Skill Importer preserves Landi-native place presentation fields into the T
   assert.equal(place.priority, "must");
   assert.deepEqual(place.coordinates, [35.003, 135.778]);
   assert.deepEqual(place.display, { type: "experience", markerKind: "experience" });
+  assert.deepEqual(place.guideDisplay, {
+    showInGuide: true,
+    state: "unscheduled",
+    cardSummary: "Bookable tea practice with clear etiquette.",
+    tags: ["90 min", "Small group"],
+    detailLeadTitle: "Why this tea stop fits",
+    detailPlanTitle: "How to use it",
+    comparisonTitle: "Compare cultural options",
+    comparisonRows: [{
+      id: "row-pottery",
+      name: "Nearby pottery workshop",
+      area: "Gion",
+      routeFit: "Same neighborhood",
+      timing: "Afternoon",
+      effort: "Requires a separate booking check",
+      sourceState: "Needs recheck",
+      evidence: [{ sourceId: research.sources[0]!.id, status: "recheck" }]
+    }]
+  });
   assert.equal(place.contentTier, "deep");
   assert.equal(place.visitRole, "afternoon flexible");
   assert.equal(place.durationMinutes, 90);
@@ -139,6 +220,14 @@ test("Skill Importer preserves Landi-native place presentation fields into the T
   assert.equal(place.mapUrl, "https://example.com/map");
   assert.equal(place.experienceUrl, "https://example.com/experience");
   assert.equal(place.evidence[0]?.sourceId, research.sources[0]?.id);
+  assert.equal(research.localFoods?.[0]?.diningPlaceIds[0], place.id);
+  assert.equal(research.localProducts?.[0]?.purchasePlaceIds[0], place.id);
+  assert.equal(research.experienceThemes?.[0]?.offeringPlaceIds[0], place.id);
+  assert.equal(research.travelTips?.[0]?.title, "Tea-room etiquette");
+  assert.equal(research.travelTips?.[0]?.placeId, place.id);
+  assert.equal(research.preparationChecklist?.[0]?.title, "Set up a payment method for the tea session");
+  assert.equal(research.preparationChecklist?.[0]?.group, "phone_payments");
+  assert.equal(research.preparationChecklist?.[0]?.requirementId, research.actionRequirements[0]?.id);
 
   const blueprint = importSkillItinerary(research, {
     title: "Kyoto",
@@ -151,10 +240,123 @@ test("Skill Importer preserves Landi-native place presentation fields into the T
     movements: []
   }, { blueprintId: "blueprint-kyoto", blueprintVersion: 1, createdAt: "2026-08-26T01:00:00.000Z" });
   assert.deepEqual(blueprint.places[0]?.display, place.display);
+  assert.deepEqual(blueprint.places[0]?.guideDisplay, place.guideDisplay);
   assert.deepEqual(blueprint.places[0]?.evidence, place.evidence);
   assert.equal(blueprint.places[0]?.schedulingEligibility?.decision, "schedulable");
   assert.deepEqual(blueprint.places[0]?.schedulingEligibility?.suitableDayIds, ["d1"]);
   assert.deepEqual(blueprint.moduleIdentity?.enabledModules.map((module) => module.id), ["itinerary", "preparation", "tips", "sources"]);
   assert.equal(blueprint.guideTheme?.visitorMode, "balanced-visitor");
   assert.deepEqual(blueprint.days[0]?.blocks?.map((block) => ({ kind: block.kind, placeId: block.placeId })), [{ kind: "flexible", placeId: place.id }]);
+  assert.equal(blueprint.localFoods?.[0]?.title, "Seasonal wagashi");
+  assert.equal(blueprint.localProducts?.[0]?.title, "Tea utensils");
+  assert.equal(blueprint.experienceThemes?.[0]?.title, "Tea practice");
+  assert.equal(blueprint.travelTips?.[0]?.body, "Tea-room etiquette is quiet and shoes may need to be removed before entry.");
+  assert.equal(blueprint.preparationChecklist?.[0]?.group, "phone_payments");
+});
+
+test("Skill Importer remaps guide display references before Web display inference", () => {
+  const value: SkillResearchBatchArtifact = {
+    ...batch(),
+    relationships: [],
+    places: [
+      {
+        id: "tea",
+        name: "Tea Studio",
+        locationLabel: "Kyoto",
+        city: "Kyoto",
+        category: "tea ceremony experience",
+        whyWorthIt: "A quiet tea session.",
+        plan: "Use as an afternoon cultural stop.",
+        guideDisplay: {
+          showInGuide: true,
+          comparisonRows: [
+            { id: "row-later", relatedPlaceId: "lunch", area: "Gion", routeFit: "Same neighborhood", timing: "Afternoon", effort: "Easy pairing", sourceState: "Needs recheck", sourceUrls: ["https://example.com/place"] },
+            { id: "row-self", relatedPlaceId: "tea", name: "General tea context", area: "Gion", routeFit: "Background", timing: "Anytime", effort: "No route change", sourceState: "Needs recheck" },
+            { id: "row-missing", relatedPlaceId: "missing", area: "Gion", routeFit: "Unknown", timing: "Unknown", effort: "Unknown", sourceState: "Needs recheck" }
+          ]
+        }
+      },
+      {
+        id: "lunch",
+        name: "Lunch Stop",
+        locationLabel: "Kyoto",
+        city: "Kyoto",
+        category: "restaurant",
+        whyWorthIt: "A practical lunch break.",
+        plan: "Eat after the tea studio."
+      }
+    ]
+  };
+  const research = importSkillResearchBatches([value], {
+    researchSetId: "research-guide-refs",
+    generationKey: "generation-guide-refs",
+    proposalRef: { sessionId: "session-guide-refs", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+    createdAt: "2026-08-26T00:00:00.000Z",
+    updatedAt: "2026-08-26T00:00:00.000Z"
+  });
+  const [tea, lunch] = research.places;
+  const source = research.sources[0];
+  const firstRow = tea?.guideDisplay?.comparisonRows?.[0];
+  const firstEvidence = firstRow?.evidence?.[0];
+  assert.ok(source);
+  assert.ok(firstRow);
+  assert.ok(firstEvidence);
+  assert.equal(firstRow.relatedPlaceId, lunch?.id);
+  assert.equal(firstEvidence.sourceId, source.id);
+  assert.deepEqual(tea?.guideDisplay?.comparisonRows?.map((row) => [row.id, row.relatedPlaceId, row.name]), [
+    ["row-later", lunch?.id, undefined],
+    ["row-self", undefined, "General tea context"]
+  ]);
+});
+
+test("Skill Importer filters itinerary-scoped scheduling refs without changing evidence status", () => {
+  const value: SkillResearchBatchArtifact = {
+    ...batch(),
+    sources: [{ id: "official", title: "Official", authority: "Kyoto", url: "https://example.com/place", retrievedAt: "2026-08-26", status: "verified", official: true }],
+    places: [
+      {
+        id: "a",
+        name: "A",
+        locationLabel: "Kyoto",
+        city: "Kyoto",
+        category: "museum",
+        coordinates: [35.0, 135.0],
+        whyWorthIt: "A matters.",
+        plan: "Visit A.",
+        schedulingEligibility: {
+          decision: "schedulable",
+          reason: "Fits one Kyoto day.",
+          suitableDayIds: ["d1", "missing-day", "d1"],
+          blockedDayIds: ["old-day"],
+          evidence: [{ sourceId: "official", status: "stale", supports: ["opening window"] }]
+        }
+      },
+      { id: "b", name: "B", locationLabel: "Kyoto", city: "Kyoto", category: "garden", coordinates: [35.001, 135.001], whyWorthIt: "B matters.", plan: "Visit B." }
+    ]
+  };
+  const research = importSkillResearchBatches([value], {
+    researchSetId: "research-scheduling",
+    generationKey: "generation-scheduling",
+    proposalRef: { sessionId: "session-scheduling", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+    createdAt: "2026-08-26T00:00:00.000Z",
+    updatedAt: "2026-08-26T00:00:00.000Z"
+  });
+  assert.equal(research.places[0]?.schedulingEligibility?.evidence?.[0]?.sourceId, research.sources[0]?.id);
+  assert.equal(research.places[0]?.schedulingEligibility?.evidence?.[0]?.status, "stale");
+  const [a, b] = research.places.map((place) => place.id);
+  const blueprint = importSkillItinerary(research, {
+    title: "Kyoto",
+    summary: "Kyoto route.",
+    language: "en",
+    destinations: ["Kyoto"],
+    startDate: "2026-10-01",
+    endDate: "2026-10-01",
+    days: [{ id: "d1", date: "2026-10-01", kind: "scheduled", city: "Kyoto", title: "Day", summary: "Flow", stops: [{ placeId: a!, order: 1 }], candidatePlaceIds: [b!] }],
+    movements: []
+  }, { blueprintId: "blueprint-scheduling", blueprintVersion: 1, createdAt: "2026-08-26T01:00:00.000Z" });
+  assert.deepEqual(blueprint.places[0]?.schedulingEligibility?.suitableDayIds, ["d1"]);
+  assert.equal(blueprint.places[0]?.schedulingEligibility?.blockedDayIds, undefined);
+  assert.deepEqual(blueprint.places[0]?.schedulingEligibility?.evidence, [{ sourceId: research.sources[0]!.id, status: "stale", supports: ["opening window"] }]);
 });
