@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
 
+import { importSkillItinerary, importSkillResearchBatches } from "@c-assistant/core";
 import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError, areLocationsCompatible, buildPlanDraftPrompt, buildPlanRepairPrompt, buildPlanResearchPrompt, buildSkillItineraryPrompt, buildSkillResearchBatchPrompt, codexStrictOutputSchema, parseClaudePrintResult, parsePlanDraft, parsePlanResearchBrief, parsePlanningConversationTurn, parseSkillItineraryArtifact, parseSkillResearchBatchArtifact, planDraftSchema, planResearchBriefToSkillBatch, planResearchSchema, skillItinerarySchema, skillResearchBatchSchema, type RuntimeProcess } from "./index.js";
 
 const validDraft = JSON.stringify({
@@ -253,10 +254,20 @@ test("Skill research batch prompt scopes work without quotas or Xiaohongshu impo
   assert.match(prompt, /Do not flatten rich place content/i);
   assert.match(prompt, /include display\.type as one of attraction, dining, shopping, or experience/i);
   assert.match(prompt, /display\.markerKind/i);
+  assert.match(prompt, /Use guideDisplay for Web workspace-specific display intent/i);
+  assert.match(prompt, /Use localFoods, localProducts, and experienceThemes/i);
+  assert.match(prompt, /Include destination-relevant travelTips/i);
   assert.match(prompt, /schedulingEligibility\.decision/i);
+  assert.match(prompt, /schedulingEligibility\.evidence/i);
   assert.match(prompt, /Add relationships/i);
   assert.ok(skillResearchBatchSchema.properties.places.items.required.includes("display"));
   assert.ok(skillResearchBatchSchema.properties.places.items.required.includes("schedulingEligibility"));
+  assert.ok("guideDisplay" in skillResearchBatchSchema.properties.places.items.properties);
+  assert.ok("evidence" in skillResearchBatchSchema.properties.places.items.properties.schedulingEligibility.properties);
+  assert.ok(skillResearchBatchSchema.required.includes("localFoods"));
+  assert.ok(skillResearchBatchSchema.required.includes("localProducts"));
+  assert.ok(skillResearchBatchSchema.required.includes("experienceThemes"));
+  assert.ok(skillResearchBatchSchema.required.includes("travelTips"));
   assert.ok(skillResearchBatchSchema.required.includes("relationships"));
 });
 
@@ -264,20 +275,145 @@ test("Skill research batch keeps rich place content and namespaces local identit
   const parsed = parseSkillResearchBatchArtifact(JSON.stringify({
     id: "ignored", scopeLabel: "ignored", completedAt: "ignored",
     sources: [{ id: "source-1", title: "Official place", authority: "City", url: "https://example.com/place", retrievedAt: "2026-08-26", status: "verified", official: true }],
-    places: [{ id: "place-1", name: "Place", localizedName: "地点", locationLabel: "Center", city: "Lisbon", area: "Baixa", category: "architecture", priority: "must", coordinates: null, display: { type: "attraction", markerKind: "attraction" }, schedulingEligibility: { decision: "schedulable", reason: "Fits central Lisbon days." }, fieldEvidence: [{ path: "whyWorthIt", status: "verified", evidence: [{ sourceId: "source-1", status: "verified" }] }], contentTier: "deep", visitRole: "anchor", durationMinutes: 120, whyWorthIt: "Specific architectural value.", plan: "Inspect the facade and interior sequence.", tip: "Reserve energy.", detailSections: [{ title: "Look for", body: "Stone and light.", items: ["Facade", "Courtyard"] }], sourceUrls: ["https://example.com/place"] }],
+    places: [
+      { id: "place-1", name: "Place", localizedName: "地点", locationLabel: "Center", city: "Lisbon", area: "Baixa", category: "architecture", priority: "must", coordinates: null, display: { type: "attraction", markerKind: "attraction" }, guideDisplay: { showInGuide: true, cardSummary: "Blueprint card copy.", tags: ["120 min"], detailLeadTitle: "Why this fits", comparisonRows: [{ id: "row-alt", relatedPlaceId: "place-2", area: "Baixa", routeFit: "Same area", timing: "Morning", effort: "Easy swap", sourceState: "Verified source", sourceUrls: ["https://example.com/place"] }] }, schedulingEligibility: { decision: "schedulable", reason: "Fits central Lisbon days.", evidence: [{ sourceId: "source-1", status: "stale", supports: ["opening window"] }] }, fieldEvidence: [{ path: "whyWorthIt", status: "verified", evidence: [{ sourceId: "source-1", status: "verified" }] }], contentTier: "deep", visitRole: "anchor", durationMinutes: 120, whyWorthIt: "Specific architectural value.", plan: "Inspect the facade and interior sequence.", tip: "Reserve energy.", detailSections: [{ title: "Look for", body: "Stone and light.", items: ["Facade", "Courtyard"] }], sourceUrls: ["https://example.com/place"] },
+      { id: "place-2", name: "Alternative Place", locationLabel: "Center", city: "Lisbon", area: "Baixa", category: "architecture", priority: "nearby", coordinates: null, display: { type: "attraction" }, schedulingEligibility: { decision: "schedulable", reason: "Fits central Lisbon days." }, whyWorthIt: "Nearby alternative.", plan: "Use if the anchor is crowded.", detailSections: [{ title: "Look for", body: "Quiet street.", items: ["Facade"] }], sourceUrls: ["https://example.com/place"] }
+    ],
     events: [{ id: "event-1", title: "Event", placeId: "place-1", description: "Program", sourceUrls: ["https://example.com/place"] }],
-    relationships: [{ id: "rel-1", kind: "supports_anchor", fromPlaceId: "place-1", toPlaceId: "place-1-alt", rationale: "Alternative if the anchor is crowded." }],
+    relationships: [{ id: "rel-1", kind: "supports_anchor", fromPlaceId: "place-1", toPlaceId: "place-2", rationale: "Alternative if the anchor is crowded." }],
+    localFoods: [{ id: "food-1", title: "Custard tart", description: "A local pastry break.", context: "Cafe stops", diningPlaceIds: ["place-1"], sourceUrls: ["https://example.com/place"] }],
+    localProducts: [{ id: "product-1", title: "Tile shops", description: "Small tile browsing.", context: "Baixa shops", purchasePlaceIds: ["place-2"], sourceUrls: ["https://example.com/place"] }],
+    experienceThemes: [{ id: "experience-1", title: "Fado night", description: "Use a concrete venue.", context: "Evening options", offeringPlaceIds: ["place-1"], sourceUrls: ["https://example.com/place"] }],
+    travelTips: [{ id: "tip-1", title: "Queue etiquette", body: "Queue quietly at busy viewpoints and follow posted local signs.", theme: "etiquette", context: "Baixa", placeId: "place-1", sourceUrls: ["https://example.com/place"] }],
     actionRequirements: [{ id: "requirement-1", kind: "reservation", title: "Reserve", description: "Choose a slot.", accountableParty: "traveler", completionCondition: "A slot is confirmed.", placeId: "place-1", sourceUrls: ["https://example.com/place"] }]
   }), { id: "lisbon", scopeLabel: "Lisbon" }, "2026-08-26T00:00:00.000Z");
   assert.equal(parsed.places[0]?.id, "lisbon-place-1");
   assert.equal(parsed.events[0]?.placeId, "lisbon-place-1");
   assert.equal(parsed.actionRequirements?.[0]?.placeId, "lisbon-place-1");
   assert.deepEqual(parsed.places[0]?.display, { type: "attraction", markerKind: "attraction" });
-  assert.deepEqual(parsed.places[0]?.schedulingEligibility, { decision: "schedulable", reason: "Fits central Lisbon days." });
+  assert.equal(parsed.places[0]?.guideDisplay?.cardSummary, "Blueprint card copy.");
+  assert.equal(parsed.places[0]?.guideDisplay?.comparisonRows?.[0]?.relatedPlaceId, "lisbon-place-2");
+  assert.deepEqual(parsed.places[0]?.guideDisplay?.comparisonRows?.[0]?.sourceUrls, ["https://example.com/place"]);
+  assert.deepEqual(parsed.places[0]?.schedulingEligibility, { decision: "schedulable", reason: "Fits central Lisbon days.", evidence: [{ sourceId: "lisbon-source-1", status: "stale", supports: ["opening window"] }] });
   assert.equal(parsed.places[0]?.fieldEvidence?.[0]?.evidence[0]?.sourceId, "lisbon-source-1");
   assert.equal(parsed.relationships?.[0]?.fromPlaceId, "lisbon-place-1");
+  assert.equal(parsed.localFoods?.[0]?.id, "lisbon-food-1");
+  assert.deepEqual(parsed.localFoods?.[0]?.diningPlaceIds, ["lisbon-place-1"]);
+  assert.deepEqual(parsed.localProducts?.[0]?.purchasePlaceIds, ["lisbon-place-2"]);
+  assert.deepEqual(parsed.experienceThemes?.[0]?.offeringPlaceIds, ["lisbon-place-1"]);
+  assert.equal(parsed.travelTips?.[0]?.id, "lisbon-tip-1");
+  assert.equal(parsed.travelTips?.[0]?.placeId, "lisbon-place-1");
   assert.equal(parsed.places[0]?.detailSections?.[0]?.items?.length, 2);
   assert.equal(skillResearchBatchSchema.properties.places.maxItems, 240);
+});
+
+test("Skill research batch output imports into a complete Trip Blueprint slice", () => {
+  const parsed = parseSkillResearchBatchArtifact(JSON.stringify({
+    id: "ignored",
+    scopeLabel: "ignored",
+    completedAt: "ignored",
+    sources: [{ id: "official", title: "Kyoto official guide", authority: "Kyoto tourism", url: "https://example.com/kyoto", retrievedAt: "2026-08-26", status: "verified", official: true }],
+    places: [
+      {
+        id: "garden",
+        name: "Kiyosumi Gardens",
+        locationLabel: "Kiyosumi, Tokyo",
+        city: "Tokyo",
+        area: "Kiyosumi",
+        category: "garden",
+        priority: "must",
+        coordinates: [35.681, 139.799],
+        display: { type: "attraction", markerKind: "attraction" },
+        guideDisplay: { showInGuide: true, state: "unscheduled", cardSummary: "Quiet garden anchor for a low-intensity morning.", tags: ["Garden", "Morning"], comparisonRows: [{ id: "row-cafe", relatedPlaceId: "cafe", area: "Kiyosumi", routeFit: "Same neighborhood", timing: "After the garden", effort: "Low effort", sourceState: "Needs route refresh", sourceUrls: ["https://example.com/kyoto"] }] },
+        schedulingEligibility: { decision: "schedulable", reason: "Fits the Tokyo neighborhood day.", suitableDayIds: ["tokyo-day", "stale-day"], evidence: [{ sourceId: "official", status: "stale", supports: ["opening pattern"] }] },
+        fieldEvidence: [{ path: "whyWorthIt", status: "verified", evidence: [{ sourceId: "official", status: "verified", supports: ["official overview"] }] }],
+        contentTier: "deep",
+        visitRole: "morning anchor",
+        durationMinutes: 90,
+        whyWorthIt: "A calm landscape anchor that sets up the nearby coffee stop without crossing the city.",
+        plan: "Visit in the morning, then keep the next stop in the same neighborhood.",
+        tip: "Check garden notices close to the travel date.",
+        detailSections: [{ title: "At the garden", body: "Keep this as the quiet anchor.", items: ["Walk the pond loop", "Leave enough time for the cafe"] }],
+        sourceUrls: ["https://example.com/kyoto"]
+      },
+      {
+        id: "cafe",
+        name: "ARiSE Coffee Roasters",
+        locationLabel: "Kiyosumi, Tokyo",
+        city: "Tokyo",
+        area: "Kiyosumi",
+        category: "coffee",
+        priority: "preferred",
+        coordinates: [35.68, 139.8],
+        display: { type: "dining", markerKind: "dining" },
+        schedulingEligibility: { decision: "schedulable", reason: "Works as a short same-area break." },
+        contentTier: "standard",
+        visitRole: "coffee rest",
+        durationMinutes: 45,
+        whyWorthIt: "A compact coffee break that supports the garden route.",
+        plan: "Use after the garden if the day needs a pause.",
+        sourceUrls: ["https://example.com/kyoto"]
+      }
+    ],
+    events: [],
+    relationships: [{ id: "rel-cafe", kind: "meal_support", fromPlaceId: "cafe", toPlaceId: "garden", rationale: "The cafe supports the garden morning without a large route change.", sourceUrls: ["https://example.com/kyoto"] }],
+    localFoods: [{ id: "coffee", title: "Kiyosumi coffee break", description: "Use coffee as a real rest stop rather than an extra attraction.", context: "Kiyosumi morning", diningPlaceIds: ["cafe"], sourceUrls: ["https://example.com/kyoto"] }],
+    localProducts: [{ id: "garden-goods", title: "Small garden goods", description: "Keep purchases light because this day is walking based.", context: "Garden shops", purchasePlaceIds: ["garden"], sourceUrls: ["https://example.com/kyoto"] }],
+    experienceThemes: [{ id: "slow-morning", title: "Slow Tokyo morning", description: "The theme is represented by concrete garden and cafe stops.", context: "Kiyosumi", offeringPlaceIds: ["garden"], sourceUrls: ["https://example.com/kyoto"] }],
+    travelTips: [{ id: "cash", title: "Carry a little cash", body: "Small cafes and garden kiosks may move faster with cash during busy periods.", theme: "payment", context: "Tokyo neighborhood stops", placeId: "cafe", sourceUrls: ["https://example.com/kyoto"] }],
+    actionRequirements: [{ id: "check-garden", kind: "time_sensitive_recheck", title: "Recheck garden notices", description: "Check official notices close to the visit date.", accountableParty: "assistant", completionCondition: "Garden notices are fresh before the route is finalized.", placeId: "garden", sourceUrls: ["https://example.com/kyoto"] }]
+  }), { id: "tokyo", scopeLabel: "Tokyo" }, "2026-08-26T00:00:00.000Z");
+  const research = importSkillResearchBatches([parsed], {
+    researchSetId: "research-tokyo",
+    generationKey: "generation-tokyo",
+    proposalRef: { sessionId: "session-tokyo", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+    createdAt: "2026-08-26T00:00:00.000Z",
+    updatedAt: "2026-08-26T00:00:00.000Z"
+  });
+  const garden = research.places.find((place) => place.name === "Kiyosumi Gardens");
+  const cafe = research.places.find((place) => place.name === "ARiSE Coffee Roasters");
+  assert.ok(garden);
+  assert.ok(cafe);
+  assert.equal(garden.guideDisplay?.comparisonRows?.[0]?.relatedPlaceId, cafe.id);
+  assert.equal(garden.schedulingEligibility?.evidence?.[0]?.status, "stale");
+  assert.equal(garden.fieldEvidence?.[0]?.evidence[0]?.status, "verified");
+  const blueprint = importSkillItinerary(research, {
+    title: "Tokyo",
+    summary: "A slow Kiyosumi morning.",
+    language: "en",
+    destinations: ["Tokyo"],
+    startDate: "2026-10-04",
+    endDate: "2026-10-04",
+    guideTheme: { title: "Slow Tokyo morning", narrative: "Keep the first day calm and neighborhood based.", visitorMode: "balanced-visitor" },
+    days: [{
+      id: "tokyo-day",
+      date: "2026-10-04",
+      kind: "scheduled",
+      city: "Tokyo",
+      title: "Kiyosumi morning",
+      summary: "Garden first, cafe after.",
+      stops: [{ placeId: garden.id, order: 1, time: "09:00" }],
+      blocks: [
+        { id: "block-garden", kind: "stop", order: 1, placeId: garden.id, startTime: "09:00", title: "Start with Kiyosumi Gardens", summary: "Use the garden as the quiet anchor.", evidence: [] },
+        { id: "block-cafe", kind: "meal", order: 2, placeId: cafe.id, startTime: "10:45", title: "Coffee break nearby", summary: "Keep the break in the same neighborhood.", evidence: [] },
+        { id: "block-flex", kind: "flexible", order: 3, title: "Leave the late morning flexible", summary: "Use this window for pace, weather, or a short nearby extension.", durationMinutes: 45, evidence: [] }
+      ],
+      candidatePlaceIds: [cafe.id]
+    }],
+    movements: []
+  }, { blueprintId: "blueprint-tokyo", blueprintVersion: 1, createdAt: "2026-08-26T01:00:00.000Z" });
+  assert.deepEqual(blueprint.days[0]?.blocks?.map((block) => [block.kind, block.placeId, block.title]), [
+    ["stop", garden.id, "Start with Kiyosumi Gardens"],
+    ["meal", cafe.id, "Coffee break nearby"],
+    ["flexible", undefined, "Leave the late morning flexible"]
+  ]);
+  assert.deepEqual(blueprint.places.find((place) => place.id === garden.id)?.schedulingEligibility?.suitableDayIds, ["tokyo-day"]);
+  assert.equal(blueprint.localFoods?.[0]?.diningPlaceIds[0], cafe.id);
+  assert.equal(blueprint.localProducts?.[0]?.purchasePlaceIds[0], garden.id);
+  assert.equal(blueprint.experienceThemes?.[0]?.offeringPlaceIds[0], garden.id);
+  assert.equal(blueprint.travelTips?.[0]?.placeId, cafe.id);
+  assert.equal(blueprint.guideRelationshipGraph?.relationships[0]?.kind, "meal_support");
 });
 
 test("Skill research batch rejects invalid place display intent", () => {
@@ -315,6 +451,56 @@ test("Skill itinerary artifact contains only known place identities and allows r
   assert.deepEqual(Object.keys(skillItinerarySchema.properties).sort(), ["days", "destinations", "endDate", "guideTheme", "language", "movements", "startDate", "summary", "title"]);
   assert.ok(skillItinerarySchema.required.includes("guideTheme"));
   assert.ok(skillItinerarySchema.properties.days.items.properties.blocks);
+});
+
+test("Skill itinerary parser keeps typed day blocks and filters invalid references", () => {
+  const value = {
+    title: "Tokyo",
+    summary: "A balanced trip",
+    language: "en",
+    destinations: ["Tokyo"],
+    startDate: "2026-09-01",
+    endDate: "2026-09-01",
+    guideTheme: { title: "Balanced Tokyo", narrative: "Keep the day readable." },
+    days: [{
+      id: "d1",
+      date: "2026-09-01",
+      kind: "scheduled",
+      city: "Tokyo",
+      title: "Garden and coffee",
+      summary: "A compact day with explicit rest and flexible time.",
+      stops: [{ placeId: "a", order: 1 }, { placeId: "b", order: 2 }],
+      blocks: [
+        { id: "block-stop", kind: "stop", order: 2, placeId: "a", startTime: "09:00", title: "Garden anchor", summary: "Start with the main visit.", durationMinutes: 90, role: "anchor", evidence: [{ sourceId: "source-1", status: "verified", supports: ["opening window"] }, { sourceId: "missing-source", status: "verified" }] },
+        { id: "block-meal", kind: "meal", order: 3, placeId: "b", startTime: "10:45", title: "Coffee break", summary: "Use a real pause, not a hidden note.", durationMinutes: 45, evidence: [] },
+        { id: "block-rest", kind: "rest", order: 4, title: "Hotel pause", summary: "Keep time open before the afternoon.", durationMinutes: 30, evidence: [] },
+        { id: "block-lodging", kind: "lodging", order: 5, placeId: "hotel", title: "Return to the hotel area", summary: "Regroup before dinner.", evidence: [] },
+        { id: "block-flex", kind: "flexible", order: 6, placeId: "c", title: "Same-direction backup", summary: "Use only if pace allows.", evidence: [] },
+        { id: "block-transfer", kind: "transfer", order: 7, title: "Move across the neighborhood", summary: "Refresh live routing before leaving.", evidence: [] },
+        { id: "block-event", kind: "event", order: 8, eventId: "event-1", title: "Evening program", summary: "Only if the event remains confirmed.", evidence: [] },
+        { id: "block-unscheduled-stop", kind: "stop", order: 9, placeId: "c", title: "Should drop", evidence: [] },
+        { id: "block-missing-place", kind: "meal", order: 10, placeId: "missing", title: "Should drop", evidence: [] },
+        { id: "block-missing-event", kind: "event", order: 11, eventId: "missing-event", title: "Should drop", evidence: [] },
+        { id: "block-event-no-id", kind: "event", order: 12, title: "Should drop", evidence: [] }
+      ],
+      candidatePlaceIds: ["c"]
+    }],
+    movements: []
+  };
+  const parsed = parseSkillItineraryArtifact(JSON.stringify(value), new Set(["a", "b", "c", "hotel"]), new Set(["source-1"]), new Set(["event-1"]));
+  assert.deepEqual(parsed.days[0]?.blocks?.map((block) => [block.kind, block.placeId, block.eventId, block.order]), [
+    ["stop", "a", undefined, 1],
+    ["meal", "b", undefined, 2],
+    ["rest", undefined, undefined, 3],
+    ["lodging", "hotel", undefined, 4],
+    ["flexible", "c", undefined, 5],
+    ["transfer", undefined, undefined, 6],
+    ["event", undefined, "event-1", 7]
+  ]);
+  assert.equal(parsed.days[0]?.blocks?.[0]?.title, "Garden anchor");
+  assert.equal(parsed.days[0]?.blocks?.[0]?.summary, "Start with the main visit.");
+  assert.equal(parsed.days[0]?.blocks?.[0]?.durationMinutes, 90);
+  assert.deepEqual(parsed.days[0]?.blocks?.[0]?.evidence, [{ sourceId: "source-1", status: "verified", supports: ["opening window"] }]);
 });
 
 test("Skill itinerary parser degrades invalid place candidates and movements instead of rejecting the whole itinerary", () => {
@@ -387,9 +573,12 @@ test("Skill itinerary prompt uses a compact Research Set and forbids Plan execut
   });
   assert.match(prompt, /Use only the supplied stable place IDs/i);
   assert.match(prompt, /Include guideTheme/i);
-  assert.match(prompt, /typed day\.blocks/i);
+  assert.match(prompt, /Every day must include typed day\.blocks/i);
+  assert.match(prompt, /Do not hide meals, rest, hotel returns, luggage handling, or flexible windows/i);
+  assert.match(prompt, /stop block with placeId must correspond to a same-day stop/i);
   assert.match(prompt, /"display":\{"type":"attraction","markerKind":"attraction"\}/i);
   assert.match(prompt, /Do not return place records, sources, Plan Stages, Tasks, Reminders/i);
+  assert.ok(skillItinerarySchema.properties.days.items.required.includes("blocks"));
 });
 
 test("Plan drafting preserves the researched map pool instead of collapsing it into the formal route", () => {

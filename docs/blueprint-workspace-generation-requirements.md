@@ -1,7 +1,7 @@
 # Blueprint Workspace Generation Requirements
 
 Status: Working requirements draft
-Last updated: 2026-09-03
+Last updated: 2026-09-04
 Scope: Landi-native travel planning generation, Trip Blueprint content shape, Skill Importer expectations, and Web Plan Workspace presentation. This draft does not authorize code implementation by itself.
 
 ## Purpose
@@ -479,9 +479,14 @@ Current Trip Blueprint Contract V2 slice:
 - `moduleIdentity` declares that the Trip Blueprint primarily powers the Itinerary workspace while Preparation, Tips, and Sources are supporting Blueprint-backed modules.
 - `guideTheme` records the trip narrative, visitor mode, taste model labels when used, and city or route segments tied to itinerary days.
 - `guideRelationshipGraph` records place-to-place relationships such as alternatives, same-direction additions, meal support, rainy-day swaps, and anchor support.
+- `localFoods`, `localProducts`, and `experienceThemes` record non-schedulable guide catalog themes. They link only to concrete `places` through dining, purchase, or offering place ids; itinerary days and blocks still reference concrete places, not themes.
 - `schedulingEligibility` on places records whether an item is directly schedulable, informational only, blocked, or high-impact.
+- `guideDisplay` on places records Web workspace guide-display intent such as guide inclusion, short card summary, compact tags, detail headings, traveler-facing add labels, and factual comparison rows. Web may fall back to legacy inference only when this field is absent.
 - `blocks` on itinerary days records typed sequence units such as stops, flexible time, meals, rest, transfers, lodging anchors, and events.
+- `travelTips` records destination-relevant, traveler-facing practical cautions with theme, context, optional day/place linkage, and evidence. Web falls back to older place/task tip inference only when this Blueprint field is absent.
+- `preparationChecklist` records traveler-owned checklist items grouped for Web display, linked back to structured Action Requirements when applicable. Web falls back to compiled Plan task grouping only when this Blueprint field is absent.
 - `fieldEvidence` records evidence for specific Blueprint fields or claims so importer validation does not treat whole-place evidence as proof for every displayed assertion.
+- Direct Blueprint Revisions currently support same-day direct add and same-day direct move for schedulable, non-fixed places. The revision result includes base/applied Blueprint versions, affected days and places, route-refresh movement ids, and an undo-ready snapshot of the previous day and its movements. Web still applies the saved revision through the current confirmation bar; visible undo controls remain a later workspace task.
 
 Images are optional enhancements for itinerary guide material. If no suitable image is available for a guide item, itinerary block, or product, Web should render a polished text-only card and should not reserve an empty image area or show a decorative placeholder. Pre-departure preparation and Travel Tips do not require images and should render as text checklist or text card content.
 

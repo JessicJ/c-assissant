@@ -1,6 +1,6 @@
 import type { PlanPresentation, TripBlueprint } from "@c-assistant/core";
 
-/** Read adapter only. Trip Blueprint remains the source of truth. */
+/** Browser-safe read adapter only. Trip Blueprint remains the source of truth. */
 export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentation {
   const sources = new Map(blueprint.sources.map((source) => [source.id, source]));
   const placeIds = new Set(blueprint.places.map((place) => place.id));
@@ -66,6 +66,10 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
     ...(blueprint.guideTheme ? { guideTheme: structuredClone(blueprint.guideTheme) } : {}),
     ...(blueprint.guideRelationshipGraph ? { guideRelationshipGraph: structuredClone(blueprint.guideRelationshipGraph) } : {}),
     ...(blueprint.fieldEvidence ? { fieldEvidence: structuredClone(blueprint.fieldEvidence) } : {}),
+    ...(blueprint.sources.length ? { sourceCatalog: structuredClone(blueprint.sources) } : {}),
+    ...(blueprint.localFoods?.length ? { localFoods: structuredClone(blueprint.localFoods) } : {}),
+    ...(blueprint.localProducts?.length ? { localProducts: structuredClone(blueprint.localProducts) } : {}),
+    ...(blueprint.experienceThemes?.length ? { experienceThemes: structuredClone(blueprint.experienceThemes) } : {}),
     places: blueprint.places.map((place) => {
       const evidenceSources = place.evidence.flatMap((ref) => {
         const source = sources.get(ref.sourceId);
@@ -90,6 +94,7 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
         category: place.category,
         priority: place.priority,
         ...(place.display ? { display: structuredClone(place.display) } : {}),
+        ...(place.guideDisplay ? { guideDisplay: structuredClone(place.guideDisplay) } : {}),
         ...(place.schedulingEligibility ? { schedulingEligibility: structuredClone(place.schedulingEligibility) } : {}),
         ...(place.fieldEvidence ? { fieldEvidence: structuredClone(place.fieldEvidence) } : {}),
         ...(place.contentTier ? { contentTier: place.contentTier } : {}),
@@ -118,6 +123,8 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
       ...(event.placeId ? { placeId: event.placeId } : {}),
       sourceRefs: event.evidence.flatMap((ref) => sources.get(ref.sourceId)?.url ?? [])
     })),
+    ...(blueprint.travelTips?.length ? { travelTips: structuredClone(blueprint.travelTips) } : {}),
+    ...(blueprint.preparationChecklist?.length ? { preparationChecklist: structuredClone(blueprint.preparationChecklist) } : {}),
     days,
     routeSegments
   };

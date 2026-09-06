@@ -761,7 +761,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .blueprint-itinerary-edit-bar strong { color: #214f43; font-size: 11px; line-height: 1.15; white-space: nowrap; }
 .blueprint-itinerary-edit-bar small { color: #667873; font-size: 9px; line-height: 1.15; }
 .blueprint-itinerary-edit-bar button { height: 30px; padding: 0 9px; border: 1px solid #9dbdb2; border-radius: 6px; background: #fff; color: #276758; font-size: 10px; font-weight: 850; cursor: pointer; }
-.blueprint-itinerary-edit-bar button:first-of-type { border-color: #276758; background: #276758; color: #fff; }
+.blueprint-itinerary-edit-bar button.primary { border-color: #276758; background: #276758; color: #fff; }
 .blueprint-itinerary-edit-bar button:disabled { opacity: .55; cursor: not-allowed; }
 .blueprint-itinerary-grid { height: 760px; display: grid; grid-template-columns: 380px minmax(420px,1fr) 430px; min-height: 0; background: #fff; }
 .blueprint-timeline,.blueprint-map,.blueprint-side-panel { min-height: 0; overflow: hidden; }
@@ -797,13 +797,19 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .blueprint-itinerary-block strong { color: #263c36; font-size: 13px; line-height: 1.3; overflow-wrap: anywhere; }
 .blueprint-itinerary-block small { color: #61706b; font-size: 10px; line-height: 1.35; overflow-wrap: anywhere; }
 .blueprint-itinerary-block em { width: fit-content; max-width: 100%; overflow: hidden; padding: 4px 7px; border-radius: 999px; background: #eef3f0; color: #50655e; font-size: 9px; font-style: normal; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.blueprint-itinerary-block em.route-refresh { background: #eaf6ff; color: #2f6f94; }
 .blueprint-itinerary-drop-zone { height: 8px; border-radius: 999px; transition: background .12s ease, box-shadow .12s ease; }
 .blueprint-itinerary-drop-zone.active { background: #bfe6ff; box-shadow: 0 0 0 3px rgba(139, 203, 245, .32); }
-.blueprint-map { display: grid; background: #eef3f0; }
+.blueprint-map { display: grid; grid-template-rows: minmax(0,1fr); background: #eef3f0; }
+.blueprint-map.needs-refresh { grid-template-rows: auto minmax(0,1fr); }
 .blueprint-map header { min-height: 70px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 18px; border-bottom: 1px solid #d3ddd8; background: rgba(255,255,255,.82); }
 .blueprint-map h3,.blueprint-explore-panel h3,.blueprint-detail-panel h3,.blueprint-placement-panel h3,.blueprint-pending-panel h3,.blueprint-page h3 { margin: 0; color: #17211d; font-size: 17px; }
 .blueprint-map p,.blueprint-explore-panel p,.blueprint-page > header p { margin: 5px 0 0; color: #61706b; font-size: 12px; line-height: 1.45; }
 .blueprint-map header span { padding: 5px 8px; border-radius: 999px; background: #fff; color: #426a8f; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.blueprint-map-status { position: relative; z-index: 2; }
+.blueprint-map-status-actions { display: flex; align-items: center; gap: 8px; }
+.blueprint-map-status-actions button { height: 30px; padding: 0 10px; border: 1px solid #8dbfe8; border-radius: 6px; background: #eaf6ff; color: #2f6f94; font-size: 10px; font-weight: 850; cursor: pointer; white-space: nowrap; }
+.blueprint-map-status-actions button:hover { border-color: #5aa4d8; background: #dff2ff; }
 .blueprint-map-stage { position: relative; min-height: 0; overflow: hidden; background: #dce9df; }
 .blueprint-map-stage.leaflet-container { width: 100%; height: 100%; background: #dce9df; font-family: inherit; }
 .blueprint-google-map { width: 100%; height: 100%; }

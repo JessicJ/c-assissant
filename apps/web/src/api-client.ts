@@ -4,6 +4,7 @@ import type {
   AgentRuntimeKind,
   BookingImportPreview,
   DirectBlueprintRevision,
+  DirectBlueprintRevisionBatchMetadata,
   Plan,
   PlanChangeImpactPreview,
   PlanChangeSet,
@@ -75,11 +76,43 @@ export type PlanPresentationResponse = WorkspaceSnapshot & {
   error?: string;
 };
 
+export type PlanRouteRefreshRequest = {
+  expectedVersion: number;
+  segmentIds: string[];
+};
+
+export type PlanRouteRefreshResponse = {
+  workspace: WorkspaceSnapshot;
+  routeRefresh: {
+    segmentIds: string[];
+    refreshedSegmentIds: string[];
+    scheduleConflictDayIds: string[];
+  };
+  error?: string;
+};
+
 export type DirectBlueprintRevisionRequest = DirectBlueprintRevision extends infer Revision
   ? Revision extends DirectBlueprintRevision
     ? Omit<Revision, "createdAt"> & { expectedVersion: number }
     : never
   : never;
+
+export type DirectBlueprintRevisionInput = DirectBlueprintRevision extends infer Revision
+  ? Revision extends DirectBlueprintRevision
+    ? Omit<Revision, "createdAt">
+    : never
+  : never;
+
+export type DirectBlueprintRevisionBatchRequest = {
+  expectedVersion: number;
+  revisions: DirectBlueprintRevisionInput[];
+};
+
+export type DirectBlueprintRevisionResponse = WorkspaceSnapshot & {
+  workspace: WorkspaceSnapshot;
+  revision: DirectBlueprintRevisionBatchMetadata;
+  error?: string;
+};
 
 export type ConnectorTestKind = "google" | "uber" | "telegram";
 
@@ -177,10 +210,27 @@ export async function undoPlanChange(planId: string, changeId: string, expectedV
 }
 
 export async function applyDirectBlueprintRevision(planId: string, body: DirectBlueprintRevisionRequest): Promise<WorkspaceSnapshot> {
-  return await requestJson<WorkspaceSnapshot>(
+  const payload = await requestJson<DirectBlueprintRevisionResponse>(
     `/api/plans/${encodeURIComponent(planId)}/blueprint-revisions/direct`,
     jsonRequest("POST", body),
     "Unable to update this itinerary directly."
+  );
+  return payload.workspace;
+}
+
+export async function applyDirectBlueprintRevisionBatch(planId: string, body: DirectBlueprintRevisionBatchRequest): Promise<DirectBlueprintRevisionResponse> {
+  return await requestJson<DirectBlueprintRevisionResponse>(
+    `/api/plans/${encodeURIComponent(planId)}/blueprint-revisions/direct`,
+    jsonRequest("POST", body),
+    "Unable to update this itinerary directly."
+  );
+}
+
+export async function refreshPlanRoutes(planId: string, body: PlanRouteRefreshRequest): Promise<PlanRouteRefreshResponse> {
+  return await requestJson<PlanRouteRefreshResponse>(
+    `/api/plans/${encodeURIComponent(planId)}/presentation/routes/refresh`,
+    jsonRequest("POST", body),
+    "Unable to refresh the itinerary routes."
   );
 }
 

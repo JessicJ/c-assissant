@@ -27,12 +27,17 @@ test("Web derives a complete read model from the linked Trip Blueprint", () => {
     places: [
       { id: "a", name: "A", locationLabel: "Lisbon", city: "Lisbon", category: "architecture", priority: "must", coordinates: [38.7, -9.1], whyWorthIt: "A", plan: "Visit A", detailSections: [{ title: "Look", items: ["Facade"] }], evidence: [{ sourceId: "source-1", status: "verified" }], fieldEvidence: [{ path: "places.a.whyWorthIt", status: "verified", evidence: [{ sourceId: "source-1", status: "verified" }] }] },
       { id: "b", name: "B", locationLabel: "Lisbon", city: "Lisbon", category: "local-life", priority: "preferred", coordinates: [38.71, -9.11], whyWorthIt: "B", plan: "Visit B", evidence: [] },
-      { id: "c", name: "C", locationLabel: "Lisbon", city: "Lisbon", category: "cafe", priority: "nearby", display: { type: "dining", markerKind: "dining" }, schedulingEligibility: { decision: "schedulable", reason: "Works as a coffee alternative.", suitableDayIds: ["day-1"] }, whyWorthIt: "C", plan: "Keep C as an alternative", evidence: [] }
+      { id: "c", name: "C", locationLabel: "Lisbon", city: "Lisbon", category: "cafe", priority: "nearby", display: { type: "dining", markerKind: "dining" }, guideDisplay: { cardSummary: "Coffee break selected by the Blueprint.", tags: ["45 min"], detailLeadTitle: "Coffee role", comparisonRows: [{ id: "row-a", relatedPlaceId: "a", area: "Lisbon", routeFit: "After the anchor", timing: "Afternoon", effort: "Low effort", sourceState: "Verified source" }] }, schedulingEligibility: { decision: "schedulable", reason: "Works as a coffee alternative.", suitableDayIds: ["day-1"] }, whyWorthIt: "C", plan: "Keep C as an alternative", evidence: [] }
     ],
     events: [{ id: "event-a", title: "Festival A", startDate: "2026-10-12", locationLabel: "Lisbon", placeId: "a", description: "Evening event near A.", evidence: [{ sourceId: "source-1", status: "verified" }] }],
     days: [{ id: "day-1", date: "2026-10-12", kind: "scheduled", city: "Lisbon", title: "Day", summary: "Flow", stops: [{ placeId: "a", order: 1 }, { placeId: "b", order: 2 }], blocks: [{ id: "block-a", kind: "stop", order: 1, placeId: "a", evidence: [] }, { id: "block-b", kind: "stop", order: 2, placeId: "b", evidence: [] }], candidatePlaceIds: ["c"] }],
     movements: [{ id: "move-1", dayId: "day-1", originPlaceId: "a", destinationPlaceId: "b", mode: "walking", status: "recheck", detail: "Use shaded side streets.", evidence: [{ sourceId: "source-1", status: "verified" }] }],
     actionRequirements: [{ id: "reserve-a", kind: "reservation", title: "Reserve A", description: "Choose an admission slot.", accountableParty: "traveler", completionCondition: "A slot is confirmed.", placeId: "a", evidence: [] }],
+    localFoods: [{ id: "food-pastry", title: "Pastel stop", description: "A short pastry break near the route.", context: "Cafe breaks", diningPlaceIds: ["c"], evidence: [{ sourceId: "source-1", status: "verified" }] }],
+    localProducts: [{ id: "product-tile", title: "Tile shops", description: "Small azulejo purchases fit compact browsing.", context: "Baixa shopping", purchasePlaceIds: ["b"], evidence: [] }],
+    experienceThemes: [{ id: "experience-fado", title: "Fado night", description: "Use a concrete venue before adding it to the route.", context: "Evening options", offeringPlaceIds: ["a"], evidence: [] }],
+    travelTips: [{ id: "tip-cash", title: "Carry some cash", body: "Small neighborhood cafes may prefer cash during busy service.", theme: "payment", context: "Lisbon cafes", placeId: "c", evidence: [{ sourceId: "source-1", status: "verified" }] }],
+    preparationChecklist: [{ id: "prep-reserve-a", title: "Reserve A", description: "Choose an admission slot.", group: "bookings_departure", completionCondition: "A slot is confirmed.", requirementId: "reserve-a", placeId: "a", evidence: [] }],
     createdAt: "2026-08-26T00:00:00.000Z"
   };
   const presentation = blueprintPresentation(blueprint);
@@ -44,15 +49,24 @@ test("Web derives a complete read model from the linked Trip Blueprint", () => {
   assert.equal(presentation.routeSegments[0]?.detail, "Use shaded side streets.");
   assert.deepEqual(presentation.routeSegments[0]?.sourceRefs, ["https://example.com/place"]);
   assert.deepEqual(presentation.places[2]?.display, { type: "dining", markerKind: "dining" });
+  assert.equal(presentation.places[2]?.guideDisplay?.cardSummary, "Coffee break selected by the Blueprint.");
+  assert.equal(presentation.places[2]?.guideDisplay?.comparisonRows?.[0]?.relatedPlaceId, "a");
   assert.deepEqual(presentation.places[2]?.schedulingEligibility?.suitableDayIds, ["day-1"]);
   assert.deepEqual(presentation.moduleIdentity?.enabledModules.map((module) => module.id), ["itinerary", "tips"]);
   assert.equal(presentation.guideTheme?.visitorMode, "balanced-visitor");
   assert.equal(presentation.guideRelationshipGraph?.relationships[0]?.kind, "meal_support");
   assert.equal(presentation.fieldEvidence?.[0]?.path, "guideTheme.title");
+  assert.deepEqual(presentation.sourceCatalog?.map((source) => [source.id, source.title, source.url]), [["source-1", "Official", "https://example.com/place"]]);
+  assert.equal(presentation.localFoods?.[0]?.diningPlaceIds[0], "c");
+  assert.equal(presentation.localProducts?.[0]?.purchasePlaceIds[0], "b");
+  assert.equal(presentation.experienceThemes?.[0]?.offeringPlaceIds[0], "a");
   assert.equal(presentation.places[0]?.fieldEvidence?.[0]?.path, "places.a.whyWorthIt");
   assert.deepEqual(presentation.events, [{ id: "event-a", title: "Festival A", description: "Evening event near A.", startDate: "2026-10-12", locationLabel: "Lisbon", placeId: "a", sourceRefs: ["https://example.com/place"] }]);
   assert.equal(presentation.places[0]?.reservation?.requirement, "required");
   assert.equal(presentation.places[0]?.reservation?.verification, "needs_recheck");
+  assert.equal(presentation.travelTips?.[0]?.title, "Carry some cash");
+  assert.equal(presentation.preparationChecklist?.[0]?.requirementId, "reserve-a");
+  assert.equal(buildBlueprintWorkspaceDisplay({ id: "plan-1", version: 1, title: "Lisbon", location: "Lisbon", dates: "2026-10-12", status: "draft", knownInformation: [], assumptions: [], nextAction: "Review.", configuration: { accommodation: { status: "not_set" }, arrival: {}, transport: { preference: "plan_recommended" }, travelContext: { luggage: "unknown" } }, stages: [], sources: [], createdAt: "2026-08-26T00:00:00.000Z", presentation }, presentation).sources.some((source) => source.summary === "Official · City · 2026-08-26"), true);
 });
 
 test("Web Blueprint read model filters invalid itinerary references and preserves a displayable route", () => {

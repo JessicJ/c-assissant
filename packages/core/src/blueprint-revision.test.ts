@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyDirectBlueprintRevision } from "./blueprint-revision.js";
+import { applyDirectBlueprintRevision, applyDirectBlueprintRevisionBatchWithMetadata, applyDirectBlueprintRevisionWithMetadata } from "./blueprint-revision.js";
 import { TRIP_BLUEPRINT_SCHEMA_VERSION, type BlueprintPlace, type TripBlueprint } from "./trip-blueprint.js";
 
 const place = (id: string): BlueprintPlace => ({
@@ -68,7 +68,30 @@ test("Direct Blueprint Revision adds a place to one day without losing catalog c
   assert.deepEqual(revised.days[0]?.candidatePlaceIds, []);
   assert.deepEqual(revised.days[0]?.blocks?.map((block) => [block.kind, block.placeId, block.order]), [["stop", "a", 1], ["stop", "c", 2], ["stop", "b", 3]]);
   assert.deepEqual(revised.movements.map((movement) => [movement.originPlaceId, movement.destinationPlaceId, movement.status]), [["a", "c", "recheck"], ["c", "b", "recheck"]]);
+  assert.deepEqual(revised.movements.map((movement) => movement.mode), ["walking", "walking"]);
   assert.deepEqual(revised.places.map((candidate) => candidate.id), ["a", "b", "c"]);
+});
+
+test("Direct Blueprint Revision returns versioned metadata and an undo-ready day snapshot", () => {
+  const original = blueprint();
+  const result = applyDirectBlueprintRevisionWithMetadata(original, {
+    kind: "add_place_to_day",
+    placeId: "c",
+    dayId: "d1",
+    position: { kind: "after", afterPlaceId: "a" },
+    createdAt: "2026-08-27T00:00:00.000Z"
+  });
+  assert.equal(result.blueprint.version, 2);
+  assert.equal(result.metadata.kind, "add_place_to_day");
+  assert.equal(result.metadata.baseBlueprintVersion, 1);
+  assert.equal(result.metadata.appliedBlueprintVersion, 2);
+  assert.deepEqual(result.metadata.affectedDayIds, ["d1"]);
+  assert.deepEqual(result.metadata.routeRefresh.movementIds, ["movement-d1-1", "movement-d1-2"]);
+  assert.deepEqual(result.metadata.undo.previousDay.stops.map((stop) => stop.placeId), ["a", "b"]);
+  assert.deepEqual(result.metadata.undo.previousMovements.map((movement) => movement.id), ["m1"]);
+
+  result.blueprint.days[0]!.stops[0]!.placeId = "mutated";
+  assert.deepEqual(result.metadata.undo.previousDay.stops.map((stop) => stop.placeId), ["a", "b"]);
 });
 
 test("Direct Blueprint Revision rejects edits that need assisted replanning", () => {
@@ -121,6 +144,26 @@ test("Direct Blueprint Revision moves a scheduled place within one day", () => {
   assert.deepEqual(revised.places.map((candidate) => candidate.id), ["a", "b", "c"]);
   assert.deepEqual(revised.days[0]?.candidatePlaceIds, ["c"]);
   assert.deepEqual(revised.movements.map((movement) => [movement.originPlaceId, movement.destinationPlaceId, movement.status]), [["b", "a", "recheck"]]);
+  assert.deepEqual(revised.movements.map((movement) => movement.mode), ["walking"]);
+});
+
+test("Direct Blueprint Revision uses transit when edited adjacent places are far apart or transport nodes", () => {
+  const distant = blueprint();
+  distant.places[0] = { ...distant.places[0]!, coordinates: [35.6812, 139.7671] };
+  distant.places[1] = { ...distant.places[1]!, coordinates: [35.7101, 139.8107] };
+  distant.places[2] = { ...distant.places[2]!, name: "Haneda Airport", category: "airport", locationLabel: "Haneda Airport, Tokyo", coordinates: [35.5494, 139.7798] };
+  const revised = applyDirectBlueprintRevision(distant, {
+    kind: "add_place_to_day",
+    placeId: "c",
+    dayId: "d1",
+    position: { kind: "after", afterPlaceId: "a" },
+    createdAt: "2026-08-27T00:00:00.000Z"
+  });
+
+  assert.deepEqual(revised.movements.map((movement) => [movement.originPlaceId, movement.destinationPlaceId, movement.mode, movement.status]), [
+    ["a", "c", "transit", "recheck"],
+    ["c", "b", "transit", "recheck"]
+  ]);
 });
 
 test("Direct Blueprint Revision moves timed labels and rejects reserved stop moves", () => {
@@ -144,4 +187,128 @@ test("Direct Blueprint Revision moves timed labels and rejects reserved stop mov
     position: { kind: "start" },
     createdAt: "2026-08-27T00:00:00.000Z"
   }), /booking/i);
+});
+
+test("Direct Blueprint Revision inserts route blocks without flattening contextual blocks", () => {
+  const original = blueprint();
+  original.days[0] = {
+    ...original.days[0]!,
+    stops: [{ placeId: "a", order: 1, time: "09:00" }, { placeId: "b", order: 2, time: "10:30" }],
+    blocks: [
+      { id: "block-a", kind: "stop", order: 1, placeId: "a", startTime: "09:00", title: "A anchor", summary: "Use A as the morning anchor.", evidence: [] },
+      { id: "block-rest", kind: "rest", order: 2, title: "Short reset", summary: "Keep a real pause between stops.", evidence: [] },
+      { id: "block-b", kind: "meal", order: 3, placeId: "b", startTime: "10:30", title: "B meal", summary: "Use B as the food stop.", evidence: [] },
+      { id: "block-c-flex", kind: "flexible", order: 4, placeId: "c", title: "C if time allows", summary: "Keep C as a backup before it is added.", evidence: [] }
+    ]
+  };
+
+  const revised = applyDirectBlueprintRevision(original, {
+    kind: "add_place_to_day",
+    placeId: "c",
+    dayId: "d1",
+    position: { kind: "after", afterPlaceId: "a" },
+    createdAt: "2026-08-27T00:00:00.000Z"
+  });
+
+  assert.deepEqual(revised.days[0]?.stops.map((stop) => [stop.placeId, stop.order, stop.time ?? "", stop.role ?? ""]), [
+    ["a", 1, "09:00", ""],
+    ["c", 2, "", "direct_addition"],
+    ["b", 3, "10:30", ""]
+  ]);
+  assert.deepEqual(revised.days[0]?.blocks?.map((block) => [block.id, block.kind, block.placeId ?? "", block.order, block.startTime ?? "", block.title ?? ""]), [
+    ["block-a", "stop", "a", 1, "09:00", "A anchor"],
+    ["block-d1-c-direct", "stop", "c", 2, "", ""],
+    ["block-rest", "rest", "", 3, "", "Short reset"],
+    ["block-b", "meal", "b", 4, "10:30", "B meal"]
+  ]);
+});
+
+test("Direct Blueprint Revision reorders route blocks while keeping time slots in place", () => {
+  const original = blueprint();
+  original.days[0] = {
+    ...original.days[0]!,
+    stops: [{ placeId: "a", order: 1, time: "09:00", role: "morning" }, { placeId: "b", order: 2, time: "10:30", role: "lunch" }],
+    blocks: [
+      { id: "block-a", kind: "stop", order: 1, placeId: "a", startTime: "09:00", title: "A anchor", summary: "Use A as the morning anchor.", evidence: [] },
+      { id: "block-rest", kind: "rest", order: 2, title: "Short reset", summary: "Keep a real pause between stops.", evidence: [] },
+      { id: "block-b", kind: "meal", order: 3, placeId: "b", startTime: "10:30", endTime: "11:15", title: "B meal", summary: "Use B as the food stop.", evidence: [] }
+    ]
+  };
+
+  const revised = applyDirectBlueprintRevision(original, {
+    kind: "move_place_within_day",
+    placeId: "b",
+    dayId: "d1",
+    position: { kind: "start" },
+    createdAt: "2026-08-27T00:00:00.000Z"
+  });
+
+  assert.deepEqual(revised.days[0]?.stops.map((stop) => [stop.placeId, stop.order, stop.time ?? "", stop.role ?? ""]), [
+    ["b", 1, "09:00", "morning"],
+    ["a", 2, "10:30", "lunch"]
+  ]);
+  assert.deepEqual(revised.days[0]?.blocks?.map((block) => [block.id, block.kind, block.placeId ?? "", block.order, block.startTime ?? "", block.endTime ?? "", block.role ?? "", block.title ?? ""]), [
+    ["block-b", "meal", "b", 1, "09:00", "", "morning", "B meal"],
+    ["block-rest", "rest", "", 2, "", "", "", "Short reset"],
+    ["block-a", "stop", "a", 3, "10:30", "11:15", "lunch", "A anchor"]
+  ]);
+});
+
+test("Direct Blueprint Revision batch applies multiple itinerary edits with one metadata envelope", () => {
+  const original = blueprint();
+  const result = applyDirectBlueprintRevisionBatchWithMetadata(original, [
+    {
+      kind: "add_place_to_day",
+      placeId: "c",
+      dayId: "d1",
+      position: { kind: "after", afterPlaceId: "a" },
+      createdAt: "2026-08-27T00:00:00.000Z"
+    },
+    {
+      kind: "move_place_within_day",
+      placeId: "b",
+      dayId: "d1",
+      position: { kind: "start" },
+      createdAt: "2026-08-27T00:01:00.000Z"
+    }
+  ]);
+
+  assert.equal(result.blueprint.version, 3);
+  assert.deepEqual(result.blueprint.days[0]?.stops.map((stop) => [stop.placeId, stop.order]), [["b", 1], ["a", 2], ["c", 3]]);
+  assert.equal(result.metadata.baseBlueprintVersion, 1);
+  assert.equal(result.metadata.appliedBlueprintVersion, 3);
+  assert.equal(result.metadata.revisionCount, 2);
+  assert.deepEqual(result.metadata.kinds, ["add_place_to_day", "move_place_within_day"]);
+  assert.deepEqual(result.metadata.affectedDayIds, ["d1"]);
+  assert.deepEqual(result.metadata.affectedPlaceIds, ["c", "a", "b"]);
+  assert.deepEqual(result.metadata.routeRefresh.movementIds, ["movement-d1-1", "movement-d1-2"]);
+  assert.equal(result.metadata.undo.previousBlueprintVersion, 1);
+  assert.deepEqual(result.metadata.undo.previousDays[0]?.stops.map((stop) => stop.placeId), ["a", "b"]);
+  assert.deepEqual(result.metadata.undo.previousMovements.map((movement) => movement.id), ["m1"]);
+});
+
+test("Direct Blueprint Revision batch rejects invalid edits without mutating the original Blueprint", () => {
+  const original = blueprint();
+
+  assert.throws(() => applyDirectBlueprintRevisionBatchWithMetadata(original, [
+    {
+      kind: "add_place_to_day",
+      placeId: "c",
+      dayId: "d1",
+      position: { kind: "after", afterPlaceId: "a" },
+      createdAt: "2026-08-27T00:00:00.000Z"
+    },
+    {
+      kind: "move_place_within_day",
+      placeId: "c",
+      dayId: "d1",
+      position: { kind: "after", afterPlaceId: "missing-place" },
+      createdAt: "2026-08-27T00:01:00.000Z"
+    }
+  ]), /unknown place missing-place/i);
+
+  assert.equal(original.version, 1);
+  assert.deepEqual(original.days[0]?.stops.map((stop) => stop.placeId), ["a", "b"]);
+  assert.deepEqual(original.days[0]?.candidatePlaceIds, ["c"]);
+  assert.deepEqual(original.movements.map((movement) => movement.id), ["m1"]);
 });

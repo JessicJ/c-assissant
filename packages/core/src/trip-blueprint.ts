@@ -10,12 +10,71 @@ export type BlueprintVisitorMode = "first-visit" | "return-visit" | "landmark-li
 export type BlueprintItineraryBlockKind = "stop" | "flexible" | "meal" | "rest" | "transfer" | "lodging" | "event";
 export type BlueprintSchedulingDecision = "schedulable" | "informational" | "blocked" | "high_impact";
 export type BlueprintPlaceRelationshipKind = "same_area" | "same_direction" | "alternative" | "supports_anchor" | "meal_support" | "rainy_day_alternative" | "low_energy_alternative" | "event_link" | "similar";
+export type BlueprintTravelTipTheme = "payment" | "transport" | "etiquette" | "safety" | "weather" | "timing" | "language" | "local_norms";
+export type BlueprintPreparationGroup = "packing" | "documents" | "phone_payments" | "bookings_departure" | "other";
+
+export interface BlueprintLocalFood {
+  id: string;
+  title: string;
+  description: string;
+  context: string;
+  diningPlaceIds: string[];
+  evidence: BlueprintEvidenceRef[];
+}
+
+export interface BlueprintLocalProduct {
+  id: string;
+  title: string;
+  description: string;
+  context: string;
+  purchasePlaceIds: string[];
+  evidence: BlueprintEvidenceRef[];
+}
+
+export interface BlueprintExperienceTheme {
+  id: string;
+  title: string;
+  description: string;
+  context: string;
+  offeringPlaceIds: string[];
+  evidence: BlueprintEvidenceRef[];
+}
 
 export interface BlueprintPlaceDisplayIntent {
   /** Primary Web workspace branch for this place. */
   type: BlueprintPlaceDisplayType;
   /** Optional map marker override when the marker should differ from the branch. */
   markerKind?: BlueprintPlaceDisplayType;
+}
+
+export type BlueprintGuideDisplayState = "scheduled" | "unscheduled" | "informational";
+
+export interface BlueprintGuideComparisonDisplay {
+  id: string;
+  relatedPlaceId?: string;
+  name?: string;
+  area: string;
+  routeFit: string;
+  timing: string;
+  effort: string;
+  sourceState: string;
+  evidence?: BlueprintEvidenceRef[];
+}
+
+export interface BlueprintPlaceGuideDisplay {
+  /** Explicitly includes or excludes this place from traveler guide browsing. */
+  showInGuide?: boolean;
+  /** Optional guide browse state. The itinerary still decides whether a place is currently scheduled. */
+  state?: BlueprintGuideDisplayState;
+  cardSummary?: string;
+  tags?: string[];
+  footerNote?: string;
+  addActionLabel?: string;
+  addBlockedLabel?: string;
+  detailLeadTitle?: string;
+  detailPlanTitle?: string;
+  comparisonTitle?: string;
+  comparisonRows?: BlueprintGuideComparisonDisplay[];
 }
 
 export interface BlueprintFieldEvidence {
@@ -71,6 +130,29 @@ export interface BlueprintGuideRelationshipGraph {
   relationships: BlueprintPlaceRelationship[];
 }
 
+export interface BlueprintTravelTip {
+  id: string;
+  title: string;
+  body: string;
+  theme: BlueprintTravelTipTheme;
+  context: string;
+  dayId?: string;
+  blockId?: string;
+  placeId?: string;
+  evidence: BlueprintEvidenceRef[];
+}
+
+export interface BlueprintPreparationChecklistItem {
+  id: string;
+  title: string;
+  description?: string;
+  group: BlueprintPreparationGroup;
+  completionCondition: string;
+  requirementId?: string;
+  placeId?: string;
+  evidence: BlueprintEvidenceRef[];
+}
+
 export interface SkillLineage {
   skillId: "interactive-trip-planner" | string;
   skillVersion: string;
@@ -109,6 +191,7 @@ export interface BlueprintPlace {
   priority: BlueprintPlacePriority;
   coordinates?: [number, number];
   display?: BlueprintPlaceDisplayIntent;
+  guideDisplay?: BlueprintPlaceGuideDisplay;
   contentTier?: "deep" | "standard" | "compact";
   visitRole?: string;
   durationMinutes?: number;
@@ -201,6 +284,11 @@ export interface ResearchSet {
   places: BlueprintPlace[];
   events: BlueprintEvent[];
   sources: BlueprintSource[];
+  localFoods?: BlueprintLocalFood[];
+  localProducts?: BlueprintLocalProduct[];
+  experienceThemes?: BlueprintExperienceTheme[];
+  travelTips?: BlueprintTravelTip[];
+  preparationChecklist?: BlueprintPreparationChecklistItem[];
   guideRelationships?: BlueprintPlaceRelationship[];
   actionRequirements: BlueprintActionRequirement[];
   createdAt: string;
@@ -327,6 +415,11 @@ export interface TripBlueprint {
   movements: BlueprintMovement[];
   bookingConstraints?: BlueprintBookingConstraint[];
   actionRequirements: BlueprintActionRequirement[];
+  localFoods?: BlueprintLocalFood[];
+  localProducts?: BlueprintLocalProduct[];
+  experienceThemes?: BlueprintExperienceTheme[];
+  travelTips?: BlueprintTravelTip[];
+  preparationChecklist?: BlueprintPreparationChecklistItem[];
   fieldEvidence?: BlueprintFieldEvidence[];
   createdAt: string;
 }
@@ -347,16 +440,26 @@ export function researchSetIntegrityIssues(research: ResearchSet): string[] {
   const eventIds = uniqueIdentityIssues("research.events", research.events.map((event) => event.id), issues);
   const sourceIds = uniqueIdentityIssues("research.sources", research.sources.map((source) => source.id), issues);
   uniqueIdentityIssues("research.guideRelationships", (research.guideRelationships ?? []).map((relationship) => relationship.id), issues);
+  uniqueIdentityIssues("research.localFoods", (research.localFoods ?? []).map((item) => item.id), issues);
+  uniqueIdentityIssues("research.localProducts", (research.localProducts ?? []).map((item) => item.id), issues);
+  uniqueIdentityIssues("research.experienceThemes", (research.experienceThemes ?? []).map((item) => item.id), issues);
+  uniqueIdentityIssues("research.travelTips", (research.travelTips ?? []).map((tip) => tip.id), issues);
+  uniqueIdentityIssues("research.preparationChecklist", (research.preparationChecklist ?? []).map((item) => item.id), issues);
   uniqueIdentityIssues("research.actionRequirements", research.actionRequirements.map((requirement) => requirement.id), issues);
   uniqueIdentityIssues("research.batches", research.batches.map((batch) => batch.id), issues);
 
   for (const place of research.places) validatePlace(place, sourceIds, placeIds, issues, `place ${place.id || "<missing>"}`);
   for (const relationship of research.guideRelationships ?? []) validatePlaceRelationship(relationship, placeIds, new Set<string>(), sourceIds, issues, `research guide relationship ${relationship.id || "<missing>"}`);
+  for (const item of research.localFoods ?? []) validateLocalFood(item, placeIds, sourceIds, issues, `research local food ${item.id || "<missing>"}`);
+  for (const item of research.localProducts ?? []) validateLocalProduct(item, placeIds, sourceIds, issues, `research local product ${item.id || "<missing>"}`);
+  for (const item of research.experienceThemes ?? []) validateExperienceTheme(item, placeIds, sourceIds, issues, `research experience theme ${item.id || "<missing>"}`);
   for (const event of research.events) {
     if (event.placeId && !placeIds.has(event.placeId)) issues.push(`event ${event.id} references unknown place ${event.placeId}`);
     validateEvidence(event.evidence, sourceIds, issues, `event ${event.id}`);
   }
   for (const requirement of research.actionRequirements) validateRequirement(requirement, placeIds, sourceIds, issues);
+  for (const tip of research.travelTips ?? []) validateTravelTip(tip, placeIds, new Set<string>(), new Set<string>(), sourceIds, issues, `research travel tip ${tip.id || "<missing>"}`);
+  for (const item of research.preparationChecklist ?? []) validatePreparationItem(item, placeIds, new Set(research.actionRequirements.map((requirement) => requirement.id)), sourceIds, issues, `research preparation item ${item.id || "<missing>"}`);
   for (const batch of research.batches) {
     for (const id of batch.placeIds) if (!placeIds.has(id)) issues.push(`research batch ${batch.id} references unknown place ${id}`);
     for (const id of batch.eventIds) if (!eventIds.has(id)) issues.push(`research batch ${batch.id} references unknown event ${id}`);
@@ -383,6 +486,11 @@ export function tripBlueprintIntegrityIssues(blueprint: TripBlueprint, options: 
   uniqueIdentityIssues("blueprint.movements", blueprint.movements.map((movement) => movement.id), issues);
   uniqueIdentityIssues("blueprint.bookingConstraints", (blueprint.bookingConstraints ?? []).map((constraint) => constraint.id), issues);
   uniqueIdentityIssues("blueprint.actionRequirements", blueprint.actionRequirements.map((requirement) => requirement.id), issues);
+  uniqueIdentityIssues("blueprint.localFoods", (blueprint.localFoods ?? []).map((item) => item.id), issues);
+  uniqueIdentityIssues("blueprint.localProducts", (blueprint.localProducts ?? []).map((item) => item.id), issues);
+  uniqueIdentityIssues("blueprint.experienceThemes", (blueprint.experienceThemes ?? []).map((item) => item.id), issues);
+  uniqueIdentityIssues("blueprint.travelTips", (blueprint.travelTips ?? []).map((tip) => tip.id), issues);
+  uniqueIdentityIssues("blueprint.preparationChecklist", (blueprint.preparationChecklist ?? []).map((item) => item.id), issues);
   uniqueIdentityIssues("blueprint.guideRelationshipGraph.relationships", (blueprint.guideRelationshipGraph?.relationships ?? []).map((relationship) => relationship.id), issues);
 
   for (const place of blueprint.places) validatePlace(place, sourceIds, placeIds, issues, `place ${place.id || "<missing>"}`);
@@ -392,6 +500,9 @@ export function tripBlueprintIntegrityIssues(blueprint: TripBlueprint, options: 
   }
   for (const requirement of blueprint.actionRequirements) validateRequirement(requirement, placeIds, sourceIds, issues);
   for (const constraint of blueprint.bookingConstraints ?? []) validateBookingConstraint(constraint, issues);
+  for (const item of blueprint.localFoods ?? []) validateLocalFood(item, placeIds, sourceIds, issues, `local food ${item.id || "<missing>"}`);
+  for (const item of blueprint.localProducts ?? []) validateLocalProduct(item, placeIds, sourceIds, issues, `local product ${item.id || "<missing>"}`);
+  for (const item of blueprint.experienceThemes ?? []) validateExperienceTheme(item, placeIds, sourceIds, issues, `experience theme ${item.id || "<missing>"}`);
   if (blueprint.moduleIdentity) validateModuleIdentity(blueprint.moduleIdentity, issues);
 
   const daysById = new Map(blueprint.days.map((day) => [day.id, day] as const));
@@ -411,9 +522,13 @@ export function tripBlueprintIntegrityIssues(blueprint: TripBlueprint, options: 
     if (day.blocks) validateItineraryBlocks(day, placeIds, eventIds, sourceIds, issues);
   }
   const knownDayIds = new Set(blueprint.days.map((day) => day.id));
+  const blockIds = new Set(blueprint.days.flatMap((day) => (day.blocks ?? []).map((block) => block.id)));
   if (blueprint.guideTheme) validateGuideTheme(blueprint.guideTheme, knownDayIds, issues);
   for (const relationship of blueprint.guideRelationshipGraph?.relationships ?? []) validatePlaceRelationship(relationship, placeIds, knownDayIds, sourceIds, issues, `guide relationship ${relationship.id || "<missing>"}`);
   for (const place of blueprint.places) validateSchedulingEligibilityDayRefs(place.schedulingEligibility, knownDayIds, sourceIds, issues, `place ${place.id || "<missing>"}`);
+  const requirementIds = new Set(blueprint.actionRequirements.map((requirement) => requirement.id));
+  for (const tip of blueprint.travelTips ?? []) validateTravelTip(tip, placeIds, knownDayIds, blockIds, sourceIds, issues, `travel tip ${tip.id || "<missing>"}`);
+  for (const item of blueprint.preparationChecklist ?? []) validatePreparationItem(item, placeIds, requirementIds, sourceIds, issues, `preparation item ${item.id || "<missing>"}`);
   validateFieldEvidence(blueprint.fieldEvidence ?? [], sourceIds, issues, "blueprint");
   if (validDate(blueprint.startDate) && validDate(blueprint.endDate) && blueprint.startDate <= blueprint.endDate) {
     for (const date of datesBetween(blueprint.startDate, blueprint.endDate)) if (!seenDates.has(date)) issues.push(`blueprint is missing itinerary date ${date}`);
@@ -464,6 +579,7 @@ function validatePlace(place: BlueprintPlace, sourceIds: Set<string>, placeIds: 
   if (!place.whyWorthIt.trim() || !place.plan.trim()) issues.push(`${path} requires travel rationale and plan`);
   if (place.coordinates && !validCoordinates(place.coordinates)) issues.push(`${path} has invalid coordinates`);
   if (place.display) validatePlaceDisplay(place.display, issues, path);
+  if (place.guideDisplay) validatePlaceGuideDisplay(place.guideDisplay, sourceIds, placeIds, issues, path, place.id);
   validateFieldEvidence(place.fieldEvidence ?? [], sourceIds, issues, path);
   validateSchedulingEligibilityShape(place.schedulingEligibility, issues, path);
   if (place.possibleDuplicateOf?.some((id) => !placeIds.has(id) || id === place.id)) issues.push(`${path} has invalid possible duplicate reference`);
@@ -473,6 +589,19 @@ function validatePlace(place: BlueprintPlace, sourceIds: Set<string>, placeIds: 
 function validatePlaceDisplay(display: BlueprintPlaceDisplayIntent, issues: string[], path: string): void {
   if (!validPlaceDisplayType(display.type)) issues.push(`${path} has invalid display type`);
   if (display.markerKind && !validPlaceDisplayType(display.markerKind)) issues.push(`${path} has invalid display marker kind`);
+}
+
+function validatePlaceGuideDisplay(display: BlueprintPlaceGuideDisplay, sourceIds: Set<string>, placeIds: Set<string>, issues: string[], path: string, selfPlaceId: string): void {
+  if (display.state && !validGuideDisplayState(display.state)) issues.push(`${path} has invalid guide display state`);
+  for (const tag of display.tags ?? []) if (!tag.trim()) issues.push(`${path} guide display contains an empty tag`);
+  const rows = display.comparisonRows ?? [];
+  uniqueIdentityIssues(`${path}.guideDisplay.comparisonRows`, rows.map((row) => row.id), issues);
+  for (const row of rows) {
+    if (!row.area.trim() || !row.routeFit.trim() || !row.timing.trim() || !row.effort.trim() || !row.sourceState.trim()) issues.push(`${path} guide display row ${row.id || "<missing>"} is incomplete`);
+    if (!row.name?.trim() && !row.relatedPlaceId) issues.push(`${path} guide display row ${row.id || "<missing>"} needs a name or related place`);
+    if (row.relatedPlaceId && (!placeIds.has(row.relatedPlaceId) || row.relatedPlaceId === selfPlaceId)) issues.push(`${path} guide display row ${row.id || "<missing>"} has invalid related place ${row.relatedPlaceId}`);
+    validateEvidence(row.evidence ?? [], sourceIds, issues, `${path} guide display row ${row.id || "<missing>"}`);
+  }
 }
 
 function validateRequirement(requirement: BlueprintActionRequirement, placeIds: Set<string>, sourceIds: Set<string>, issues: string[]): void {
@@ -527,6 +656,47 @@ function validatePlaceRelationship(relationship: BlueprintPlaceRelationship, pla
   if (relationship.fromPlaceId === relationship.toPlaceId) issues.push(`${path} cannot relate a place to itself`);
   for (const dayId of relationship.dayIds ?? []) if (!dayIds.has(dayId)) issues.push(`${path} references unknown day ${dayId}`);
   validateEvidence(relationship.evidence, sourceIds, issues, path);
+}
+
+function validateLocalFood(item: BlueprintLocalFood, placeIds: Set<string>, sourceIds: Set<string>, issues: string[], path: string): void {
+  if (!item.id.trim() || !item.title.trim() || !item.description.trim() || !item.context.trim()) issues.push(`${path} is incomplete`);
+  if (!item.diningPlaceIds.length) issues.push(`${path} needs at least one dining place`);
+  for (const placeId of item.diningPlaceIds) if (!placeIds.has(placeId)) issues.push(`${path} references unknown dining place ${placeId}`);
+  if (new Set(item.diningPlaceIds).size !== item.diningPlaceIds.length) issues.push(`${path} contains duplicate dining places`);
+  validateEvidence(item.evidence, sourceIds, issues, path);
+}
+
+function validateLocalProduct(item: BlueprintLocalProduct, placeIds: Set<string>, sourceIds: Set<string>, issues: string[], path: string): void {
+  if (!item.id.trim() || !item.title.trim() || !item.description.trim() || !item.context.trim()) issues.push(`${path} is incomplete`);
+  if (!item.purchasePlaceIds.length) issues.push(`${path} needs at least one purchase place`);
+  for (const placeId of item.purchasePlaceIds) if (!placeIds.has(placeId)) issues.push(`${path} references unknown purchase place ${placeId}`);
+  if (new Set(item.purchasePlaceIds).size !== item.purchasePlaceIds.length) issues.push(`${path} contains duplicate purchase places`);
+  validateEvidence(item.evidence, sourceIds, issues, path);
+}
+
+function validateExperienceTheme(item: BlueprintExperienceTheme, placeIds: Set<string>, sourceIds: Set<string>, issues: string[], path: string): void {
+  if (!item.id.trim() || !item.title.trim() || !item.description.trim() || !item.context.trim()) issues.push(`${path} is incomplete`);
+  if (!item.offeringPlaceIds.length) issues.push(`${path} needs at least one concrete offering place`);
+  for (const placeId of item.offeringPlaceIds) if (!placeIds.has(placeId)) issues.push(`${path} references unknown offering place ${placeId}`);
+  if (new Set(item.offeringPlaceIds).size !== item.offeringPlaceIds.length) issues.push(`${path} contains duplicate offering places`);
+  validateEvidence(item.evidence, sourceIds, issues, path);
+}
+
+function validateTravelTip(tip: BlueprintTravelTip, placeIds: Set<string>, dayIds: Set<string>, blockIds: Set<string>, sourceIds: Set<string>, issues: string[], path: string): void {
+  if (!tip.id.trim() || !tip.title.trim() || !tip.body.trim() || !tip.context.trim()) issues.push(`${path} is incomplete`);
+  if (!validTravelTipTheme(tip.theme)) issues.push(`${path} has invalid theme`);
+  if (tip.placeId && !placeIds.has(tip.placeId)) issues.push(`${path} references unknown place ${tip.placeId}`);
+  if (tip.dayId && dayIds.size && !dayIds.has(tip.dayId)) issues.push(`${path} references unknown day ${tip.dayId}`);
+  if (tip.blockId && blockIds.size && !blockIds.has(tip.blockId)) issues.push(`${path} references unknown block ${tip.blockId}`);
+  validateEvidence(tip.evidence, sourceIds, issues, path);
+}
+
+function validatePreparationItem(item: BlueprintPreparationChecklistItem, placeIds: Set<string>, requirementIds: Set<string>, sourceIds: Set<string>, issues: string[], path: string): void {
+  if (!item.id.trim() || !item.title.trim() || !item.completionCondition.trim()) issues.push(`${path} is incomplete`);
+  if (!validPreparationGroup(item.group)) issues.push(`${path} has invalid group`);
+  if (item.placeId && !placeIds.has(item.placeId)) issues.push(`${path} references unknown place ${item.placeId}`);
+  if (item.requirementId && !requirementIds.has(item.requirementId)) issues.push(`${path} references unknown action requirement ${item.requirementId}`);
+  validateEvidence(item.evidence, sourceIds, issues, path);
 }
 
 function validateSchedulingEligibilityShape(eligibility: BlueprintSchedulingEligibility | undefined, issues: string[], path: string): void {
@@ -595,6 +765,10 @@ function validPlaceDisplayType(value: unknown): value is BlueprintPlaceDisplayTy
   return value === "attraction" || value === "dining" || value === "shopping" || value === "experience";
 }
 
+function validGuideDisplayState(value: unknown): value is BlueprintGuideDisplayState {
+  return value === "scheduled" || value === "unscheduled" || value === "informational";
+}
+
 function validWorkspaceModule(value: unknown): value is BlueprintWorkspaceModuleId {
   return value === "itinerary" || value === "preparation" || value === "tips" || value === "sources";
 }
@@ -613,6 +787,14 @@ function validSchedulingDecision(value: unknown): value is BlueprintSchedulingDe
 
 function validPlaceRelationshipKind(value: unknown): value is BlueprintPlaceRelationshipKind {
   return value === "same_area" || value === "same_direction" || value === "alternative" || value === "supports_anchor" || value === "meal_support" || value === "rainy_day_alternative" || value === "low_energy_alternative" || value === "event_link" || value === "similar";
+}
+
+function validTravelTipTheme(value: unknown): value is BlueprintTravelTipTheme {
+  return value === "payment" || value === "transport" || value === "etiquette" || value === "safety" || value === "weather" || value === "timing" || value === "language" || value === "local_norms";
+}
+
+function validPreparationGroup(value: unknown): value is BlueprintPreparationGroup {
+  return value === "packing" || value === "documents" || value === "phone_payments" || value === "bookings_departure" || value === "other";
 }
 
 function validDate(value: string): boolean {

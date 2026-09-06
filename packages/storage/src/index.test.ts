@@ -1704,7 +1704,21 @@ test("SQLite persists recoverable Blueprint checkpoints, events, lineage, and ex
     title: "Tokyo", summary: "Tokyo plan", language: "en", destinations: ["Tokyo"], startDate: "2026-09-01", endDate: "2026-09-02",
     places: research.places, events: [], sources: [],
     days: [
-      { id: "d1", date: "2026-09-01", kind: "scheduled", city: "Tokyo", title: "Day one", summary: "Two stops", stops: [{ placeId: "a", order: 1 }, { placeId: "b", order: 2 }], candidatePlaceIds: ["c"] },
+      {
+        id: "d1",
+        date: "2026-09-01",
+        kind: "scheduled",
+        city: "Tokyo",
+        title: "Day one",
+        summary: "Two stops",
+        stops: [{ placeId: "a", order: 1, time: "09:00" }, { placeId: "b", order: 2, time: "10:30" }],
+        blocks: [
+          { id: "block-a", kind: "stop", order: 1, placeId: "a", startTime: "09:00", title: "A anchor", evidence: [] },
+          { id: "block-rest", kind: "rest", order: 2, title: "Short reset", summary: "Keep this rest block visible.", evidence: [] },
+          { id: "block-b", kind: "stop", order: 3, placeId: "b", startTime: "10:30", title: "B anchor", evidence: [] }
+        ],
+        candidatePlaceIds: ["c"]
+      },
       { id: "d2", date: "2026-09-02", kind: "rest", city: "Tokyo", title: "Rest", summary: "Unstructured day", stops: [], candidatePlaceIds: [] }
     ],
     movements: [{ id: "m1", dayId: "d1", originPlaceId: "a", destinationPlaceId: "b", mode: "unknown", status: "recheck", evidence: [] }],
@@ -1716,7 +1730,8 @@ test("SQLite persists recoverable Blueprint checkpoints, events, lineage, and ex
   const compilation = compileTripBlueprint(blueprint, { createdAt: "2026-08-26T00:02:01.000Z" });
   const compiled = store.createCompiledBlueprintPlan(compilation).activePlan;
   assert.equal(compiled.id, compilation.plan.id);
-  assert.equal(compiled.presentation, undefined);
+  assert.equal(compiled.presentation?.kind, "itinerary");
+  assert.equal(compiled.presentation?.routeSegments[0]?.mode, "unknown");
   assert.deepEqual(store.getPlanBlueprintLineage(compiled.id), compilation.lineage);
   assert.equal(store.createCompiledBlueprintPlan(compilation).activePlan.id, compiled.id);
 
@@ -1728,7 +1743,68 @@ test("SQLite persists recoverable Blueprint checkpoints, events, lineage, and ex
   assert.equal(revisedWorkspace.activeBlueprint?.version, 2);
   assert.deepEqual(revisedWorkspace.activeBlueprint?.days[0]?.stops.map((stop) => stop.placeId), ["a", "c", "b"]);
   assert.deepEqual(revisedWorkspace.activeBlueprint?.movements.map((movement) => movement.status), ["recheck", "recheck"]);
+  assert.deepEqual(revisedWorkspace.activeBlueprint?.movements.map((movement) => movement.mode), ["walking", "walking"]);
+  assert.deepEqual(revisedWorkspace.activePlan.presentation?.routeSegments.map((segment) => [segment.id, segment.mode, segment.verification]), [["movement-d1-1", "walking", "needs_verification"], ["movement-d1-2", "walking", "needs_verification"]]);
   assert.equal(store.getPlanBlueprintLineage(revisedWorkspace.activePlan.id)?.blueprintVersion, 2);
+
+  const batchResult = store.applyDirectBlueprintRevisionBatch({
+    expectedPlanId: revisedWorkspace.activePlan.id,
+    expectedVersion: revisedWorkspace.activePlan.version,
+    revisions: [
+      { kind: "move_place_within_day", placeId: "b", dayId: "d1", position: { kind: "start" }, createdAt: "2026-08-26T00:04:00.000Z" },
+      { kind: "move_place_within_day", placeId: "c", dayId: "d1", position: { kind: "after", afterPlaceId: "b" }, createdAt: "2026-08-26T00:04:00.000Z" }
+    ]
+  });
+  const batchWorkspace = batchResult.workspace;
+  assert.equal(batchWorkspace.activeBlueprint?.version, 4);
+  assert.equal(batchResult.revision.revisionCount, 2);
+  assert.deepEqual(batchResult.revision.affectedDayIds, ["d1"]);
+  assert.deepEqual(batchWorkspace.activeBlueprint?.days[0]?.stops.map((stop) => stop.placeId), ["b", "c", "a"]);
+  assert.equal(store.getPlanBlueprintLineage(batchWorkspace.activePlan.id)?.blueprintVersion, 4);
+
+  assert.throws(() => store.applyDirectBlueprintRevisionBatch({
+    expectedPlanId: batchWorkspace.activePlan.id,
+    expectedVersion: batchWorkspace.activePlan.version,
+    revisions: [
+      { kind: "move_place_within_day", placeId: "a", dayId: "d1", position: { kind: "start" }, createdAt: "2026-08-26T00:05:00.000Z" },
+      { kind: "move_place_within_day", placeId: "b", dayId: "d1", position: { kind: "after", afterPlaceId: "missing-place" }, createdAt: "2026-08-26T00:05:00.000Z" }
+    ]
+  }), /unknown place missing-place/i);
+  const afterFailedBatch = store.getWorkspace();
+  assert.equal(afterFailedBatch.activeBlueprint?.version, 4);
+  assert.deepEqual(afterFailedBatch.activeBlueprint?.days[0]?.stops.map((stop) => stop.placeId), ["b", "c", "a"]);
+  assert.equal(afterFailedBatch.activePlan.id, batchWorkspace.activePlan.id);
+
+  const routeRefresh = store.saveGeneratedPlanRouteRefresh({
+    planId: batchWorkspace.activePlan.id,
+    expectedVersion: batchWorkspace.activePlan.version,
+    provider: "google_maps",
+    routes: [{
+      segmentId: "movement-d1-1",
+      observedAt: "2026-08-26T00:06:00.000Z",
+      distanceMeters: 850,
+      durationSeconds: 540,
+      originCoordinates: [139.76, 35.68],
+      destinationCoordinates: [139.761, 35.681],
+      geometry: [[139.76, 35.68], [139.761, 35.681]]
+    }]
+  });
+  assert.deepEqual(routeRefresh.scheduleConflictDayIds, []);
+  assert.equal(routeRefresh.workspace.activePlan.id, batchWorkspace.activePlan.id);
+  assert.equal(routeRefresh.workspace.activePlan.status, batchWorkspace.activePlan.status);
+  assert.equal(routeRefresh.workspace.activePlan.version, batchWorkspace.activePlan.version + 1);
+  assert.equal(routeRefresh.workspace.activeBlueprint?.version, 5);
+  assert.deepEqual(routeRefresh.workspace.activeBlueprint?.movements.map((movement) => [movement.id, movement.status, movement.durationMinutes, movement.distanceMeters]), [["movement-d1-1", "verified", 9, 850], ["movement-d1-2", "recheck", undefined, undefined]]);
+  assert.deepEqual(routeRefresh.workspace.activeBlueprint?.movements[0]?.evidence, [{ sourceId: "google_maps", status: "verified", checkedAt: "2026-08-26T00:06:00.000Z", supports: ["route duration", "route distance"] }]);
+  assert.deepEqual(routeRefresh.workspace.activeBlueprint?.days[0]?.blocks?.map((block) => [block.id, block.kind, block.placeId ?? "", block.startTime ?? ""]), [
+    ["block-b", "stop", "b", "09:00"],
+    ["block-d1-c-direct", "stop", "c", ""],
+    ["block-rest", "rest", "", ""],
+    ["block-a", "stop", "a", "10:30"]
+  ]);
+  assert.equal(routeRefresh.workspace.activePlan.presentation?.routeSegments[0]?.verification, "verified");
+  assert.equal(store.getPlanBlueprintLineage(routeRefresh.workspace.activePlan.id)?.blueprintVersion, 5);
+  assert.equal(store.getPlanBlueprintLineage(routeRefresh.workspace.activePlan.id)?.planVersion, routeRefresh.workspace.activePlan.version);
 
   const first = store.appendBlueprintGenerationEvent({ generationKey, stage: "research", status: "running", scopeLabel: "Tokyo", savedPlaceCount: 2, detail: "Tokyo research saved", createdAt: "2026-08-26T00:01:00.000Z" });
   const second = store.appendBlueprintGenerationEvent({ generationKey, stage: "compile", status: "running", detail: "Compiling Draft Plan", createdAt: "2026-08-26T00:02:01.000Z" });
@@ -1739,4 +1815,89 @@ test("SQLite persists recoverable Blueprint checkpoints, events, lineage, and ex
   assert.equal(store.deleteExpiredDiagnosticArtifacts(new Date("2026-09-01T23:59:59.000Z")), 0);
   assert.equal(store.deleteExpiredDiagnosticArtifacts(new Date("2026-09-02T00:00:00.000Z")), 1);
   store.close();
+});
+
+test("SQLite hydrates Blueprint presentation over stale stored Plan presentation", () => {
+  const directory = mkdtempSync(join(tmpdir(), "c-assistant-blueprint-presentation-"));
+  try {
+    const databasePath = join(directory, "workspace.sqlite");
+    const store = new SqliteWorkspaceStore(databasePath);
+    const generationKey = "generation-stale-presentation";
+    const session = store.createPlanningSession("travel", new Date("2026-08-26T00:00:00.000Z"));
+    const proposal = { version: 1, title: "Tokyo", objective: "Plan Tokyo.", theme: "Source of truth", segments: ["Tokyo"], skeleton: ["2026-09-01"], tradeoffs: [], assumptions: [], decisionPoints: [] };
+    store.savePlanningSession({ ...session, status: "proposal_ready", proposal, updatedAt: "2026-08-26T00:00:01.000Z" });
+    store.confirmPlanningSession(session.id, 1);
+    store.saveBlueprintGeneration({
+      generationKey,
+      proposalRef: { sessionId: session.id, proposalVersion: 1 },
+      skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+      status: "running",
+      stage: "research",
+      createdAt: "2026-08-26T00:00:02.000Z",
+      updatedAt: "2026-08-26T00:00:02.000Z"
+    });
+    const research: ResearchSet = {
+      schemaVersion: TRIP_BLUEPRINT_SCHEMA_VERSION,
+      id: "research-stale-presentation",
+      generationKey,
+      proposalRef: { sessionId: session.id, proposalVersion: 1 },
+      skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+      status: "completed",
+      batches: [{ id: "tokyo", scopeLabel: "Tokyo", status: "completed", placeIds: ["a", "b"], eventIds: [], sourceIds: [], completedAt: "2026-08-26T00:01:00.000Z" }],
+      places: ["a", "b"].map((id) => ({ id, name: id, locationLabel: "Tokyo", city: "Tokyo", category: "sight", priority: "preferred" as const, coordinates: [35.68, 139.76] as [number, number], whyWorthIt: `Why ${id}`, plan: `Visit ${id}`, evidence: [] })),
+      events: [],
+      sources: [],
+      actionRequirements: [],
+      createdAt: "2026-08-26T00:00:02.000Z",
+      updatedAt: "2026-08-26T00:01:00.000Z",
+      completedAt: "2026-08-26T00:01:00.000Z"
+    };
+    store.saveResearchSet(research);
+    const blueprint: TripBlueprint = {
+      schemaVersion: TRIP_BLUEPRINT_SCHEMA_VERSION,
+      id: "blueprint-stale-presentation",
+      version: 1,
+      generationKey,
+      proposalRef: research.proposalRef,
+      skillLineage: research.skillLineage,
+      researchSetId: research.id,
+      title: "Tokyo",
+      summary: "Blueprint source presentation",
+      language: "en",
+      destinations: ["Tokyo"],
+      startDate: "2026-09-01",
+      endDate: "2026-09-01",
+      places: research.places,
+      events: [],
+      sources: [],
+      days: [{ id: "d1", date: "2026-09-01", kind: "scheduled", city: "Tokyo", title: "Day one", summary: "Two stops", stops: [{ placeId: "a", order: 1 }], candidatePlaceIds: ["b"] }],
+      movements: [],
+      actionRequirements: [],
+      createdAt: "2026-08-26T00:02:00.000Z"
+    };
+    store.saveTripBlueprint(blueprint);
+    const compiled = store.createCompiledBlueprintPlan(compileTripBlueprint(blueprint, { createdAt: "2026-08-26T00:02:01.000Z" })).activePlan;
+    const revised = store.applyDirectBlueprintRevision({
+      expectedPlanId: compiled.id,
+      expectedVersion: compiled.version,
+      revision: { kind: "add_place_to_day", placeId: "b", dayId: "d1", position: { kind: "end" }, createdAt: "2026-08-26T00:03:00.000Z" }
+    });
+    const planId = revised.activePlan.id;
+    const stalePresentation = { ...revised.activePlan.presentation!, summary: "stale stored presentation", days: [{ ...revised.activePlan.presentation!.days[0]!, placeIds: ["a"], stops: [{ placeId: "a", order: 1 }] }], routeSegments: [] };
+    store.close();
+
+    const raw = new DatabaseSync(databasePath);
+    raw.prepare("UPDATE plans SET presentation_json = ? WHERE id = ?").run(JSON.stringify(stalePresentation), planId);
+    raw.close();
+
+    const reopened = new SqliteWorkspaceStore(databasePath);
+    const workspace = reopened.getWorkspace();
+    assert.equal(workspace.activeBlueprint?.version, 2);
+    assert.equal(workspace.activePlan.presentation?.summary, "Blueprint source presentation");
+    assert.deepEqual(workspace.activePlan.presentation?.days[0]?.placeIds, ["a", "b"]);
+    assert.deepEqual(workspace.activePlan.presentation?.routeSegments.map((segment) => segment.id), ["movement-d1-1"]);
+    reopened.close();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
