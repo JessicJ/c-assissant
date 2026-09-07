@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyDirectBlueprintRevision, applyDirectBlueprintRevisionBatchWithMetadata, applyDirectBlueprintRevisionWithMetadata } from "./blueprint-revision.js";
+import { applyDirectBlueprintRevision, applyDirectBlueprintRevisionBatchWithMetadata, applyDirectBlueprintRevisionWithMetadata, DirectBlueprintReplanRequirementError, prepareDirectBlueprintAssistedReplanningHandoff } from "./blueprint-revision.js";
 import { TRIP_BLUEPRINT_SCHEMA_VERSION, type BlueprintPlace, type TripBlueprint } from "./trip-blueprint.js";
 
 const place = (id: string): BlueprintPlace => ({
@@ -91,6 +91,30 @@ test("Direct Blueprint Revision returns versioned metadata and an undo-ready day
   assert.equal(result.metadata.appliedBlueprintVersion, 2);
   assert.deepEqual(result.metadata.affectedDayIds, ["d1"]);
   assert.deepEqual(result.metadata.routeRefresh.movementIds, ["movement-d1-1", "movement-d1-2"]);
+  assert.deepEqual(result.metadata.routeImpact?.days, [{
+    dayId: "d1",
+    addedPlaceIds: ["c"],
+    removedPlaceIds: [],
+    movedPlaceIds: [],
+    movementIds: ["movement-d1-1", "movement-d1-2"],
+    requiresRouteRefresh: true,
+    requiresTimingReview: true,
+    requiresMealRestSpacingReview: true,
+    capacityRisk: false,
+    backtrackingRisk: false,
+    fixedTimeRisk: false,
+    readiness: "ready_for_route_refresh",
+    reasons: [
+      "add_place_to_day changed the saved itinerary order for this day.",
+      "Adjacent movement timing should be reviewed before execution.",
+      "Meal and rest spacing should be checked after this edit."
+    ]
+  }]);
+  assert.deepEqual(result.metadata.replanReadiness, {
+    status: "ready_for_route_refresh",
+    dayIds: ["d1"],
+    reason: "These direct itinerary edits are saved, but affected routes and timing still need refresh before execution."
+  });
   assert.deepEqual(result.metadata.undo.previousDay?.stops.map((stop) => stop.placeId), ["a", "b"]);
   assert.deepEqual(result.metadata.undo.previousMovements.map((movement) => movement.id), ["m1"]);
 
@@ -115,6 +139,12 @@ test("Direct Blueprint Revision updates a place priority without route refresh",
   assert.deepEqual(result.metadata.affectedDayIds, []);
   assert.deepEqual(result.metadata.affectedPlaceIds, ["c"]);
   assert.deepEqual(result.metadata.routeRefresh.movementIds, []);
+  assert.deepEqual(result.metadata.routeImpact?.days, []);
+  assert.deepEqual(result.metadata.replanReadiness, {
+    status: "no_replan_needed",
+    dayIds: [],
+    reason: "This place status update does not change route order or timing."
+  });
   assert.equal(result.metadata.undo.previousPlace?.priority, "preferred");
 });
 
@@ -125,19 +155,124 @@ test("Direct Blueprint Revision keeps scheduled archive changes assisted", () =>
     placeId: "a",
     priority: "archive",
     createdAt: "2026-08-27T00:00:00.000Z"
-  }), /removed from the day/i);
+  }), DirectBlueprintReplanRequirementError);
 });
 
 test("Direct Blueprint Revision rejects edits that need assisted replanning", () => {
   const value = blueprint();
   value.places[2] = { ...value.places[2]!, schedulingEligibility: { decision: "high_impact", reason: "Requires another city day.", highImpactReasons: ["Different city"] } };
-  assert.throws(() => applyDirectBlueprintRevision(value, {
+  const revision = {
     kind: "add_place_to_day",
     placeId: "c",
     dayId: "d1",
     position: { kind: "end" },
     createdAt: "2026-08-27T00:00:00.000Z"
-  }), /assisted replanning/i);
+  } as const;
+  assert.throws(() => applyDirectBlueprintRevision(value, revision), DirectBlueprintReplanRequirementError);
+  try {
+    applyDirectBlueprintRevision(value, revision);
+    assert.fail("Expected a structured assisted replanning requirement.");
+  } catch (caught) {
+    assert.ok(caught instanceof DirectBlueprintReplanRequirementError);
+    assert.equal(caught.replanRequirement.reasonCode, "high_impact_place");
+    assert.equal(caught.replanRequirement.editKind, "add_place_to_day");
+    assert.deepEqual(caught.replanRequirement.affectedDayIds, ["d1"]);
+    assert.deepEqual(caught.replanRequirement.affectedPlaceIds, ["c", "a", "b"]);
+    assert.match(caught.replanRequirement.explanation, /changes the shape of 2026-09-01/i);
+    assert.match(caught.replanRequirement.suggestedRequest, /Replan the affected itinerary day/i);
+  }
+});
+
+test("Direct Blueprint Revision reports fixed bookings as assisted replanning requirements", () => {
+  const value = blueprint();
+  value.places[1] = { ...value.places[1]!, priority: "booked" };
+  const revision = {
+    kind: "remove_place_from_day",
+    placeId: "b",
+    dayId: "d1",
+    createdAt: "2026-08-27T00:00:00.000Z"
+  } as const;
+  try {
+    applyDirectBlueprintRevision(value, revision);
+    assert.fail("Expected a structured assisted replanning requirement.");
+  } catch (caught) {
+    assert.ok(caught instanceof DirectBlueprintReplanRequirementError);
+    assert.equal(caught.code, "assisted_replanning_required");
+    assert.equal(caught.replanRequirement.reasonCode, "fixed_booking");
+    assert.deepEqual(caught.replanRequirement.affectedDayIds, ["d1"]);
+    assert.deepEqual(caught.replanRequirement.affectedPlaceIds, ["b", "a"]);
+    assert.match(caught.replanRequirement.explanation, /booking or reservation/i);
+    assert.match(caught.replanRequirement.suggestedRequest, /Preserve fixed bookings and reservations/i);
+  }
+});
+
+test("Direct Blueprint assisted replanning handoff prepares a bounded request", () => {
+  const value = blueprint();
+  value.places[2] = { ...value.places[2]!, name: "Faraway dinner", category: "restaurant", schedulingEligibility: { decision: "high_impact", reason: "Requires another city day.", highImpactReasons: ["Different city"] } };
+  const revision = {
+    kind: "add_place_to_day",
+    placeId: "c",
+    dayId: "d1",
+    position: { kind: "end" },
+    createdAt: "2026-08-27T00:00:00.000Z"
+  } as const;
+  let requirement;
+  try {
+    applyDirectBlueprintRevision(value, revision);
+    assert.fail("Expected a structured assisted replanning requirement.");
+  } catch (caught) {
+    assert.ok(caught instanceof DirectBlueprintReplanRequirementError);
+    requirement = caught.replanRequirement;
+  }
+
+  const handoff = prepareDirectBlueprintAssistedReplanningHandoff(value, { replanRequirement: requirement, revisions: [revision] });
+
+  assert.equal(handoff.status, "ready_for_assisted_replanning");
+  assert.equal(handoff.baseBlueprintId, "blueprint-1");
+  assert.equal(handoff.baseBlueprintVersion, 1);
+  assert.deepEqual(handoff.affectedDayIds, ["d1"]);
+  assert.deepEqual(handoff.affectedPlaceIds, ["c", "a", "b"]);
+  assert.deepEqual(handoff.revisions.map((item) => item.kind), ["add_place_to_day"]);
+  assert.match(handoff.request, /Replan the affected itinerary day for Tokyo/);
+  assert.match(handoff.request, /Add Faraway dinner at the end of the day on 2026-09-01/);
+  assert.match(handoff.request, /Keep every unlisted day and unaffected place unchanged/);
+  assert.match(handoff.request, /publishing a new Trip Blueprint version/);
+  assert.equal(value.version, 1);
+  assert.deepEqual(value.days[0]?.stops.map((stop) => stop.placeId), ["a", "b"]);
+});
+
+test("Direct Blueprint assisted replanning handoff rejects stale or mismatched requirements", () => {
+  const value = blueprint();
+  const revision = {
+    kind: "remove_place_from_day",
+    placeId: "b",
+    dayId: "d1",
+    createdAt: "2026-08-27T00:00:00.000Z"
+  } as const;
+  const requirement = {
+    status: "assisted_replanning_required",
+    editKind: "remove_place_from_day",
+    placeId: "b",
+    dayId: "d1",
+    reasonCode: "fixed_booking",
+    affectedDayIds: ["d1"],
+    affectedPlaceIds: ["b", "a"],
+    explanation: "b is fixed by a booking.",
+    suggestedRequest: "Replan day one."
+  } satisfies Parameters<typeof prepareDirectBlueprintAssistedReplanningHandoff>[1]["replanRequirement"];
+
+  assert.throws(() => prepareDirectBlueprintAssistedReplanningHandoff(value, {
+    replanRequirement: { ...requirement, affectedDayIds: ["missing-day"] },
+    revisions: [revision]
+  }), /unknown affected day/i);
+  assert.throws(() => prepareDirectBlueprintAssistedReplanningHandoff(value, {
+    replanRequirement: { ...requirement, affectedPlaceIds: ["missing-place"] },
+    revisions: [revision]
+  }), /unknown affected place/i);
+  assert.throws(() => prepareDirectBlueprintAssistedReplanningHandoff(value, {
+    replanRequirement: { ...requirement, placeId: "a" },
+    revisions: [revision]
+  }), /matches the replanning requirement/i);
 });
 
 test("Direct Blueprint Revision rejects invalid day eligibility and insertion anchors", () => {
@@ -230,6 +365,26 @@ test("Direct Blueprint Revision removes a place from one day without deleting it
   assert.equal(result.metadata.kind, "remove_place_from_day");
   assert.deepEqual(result.metadata.affectedDayIds, ["d1"]);
   assert.deepEqual(result.metadata.routeRefresh.movementIds, ["movement-d1-1"]);
+  assert.deepEqual(result.metadata.routeImpact?.days, [{
+    dayId: "d1",
+    addedPlaceIds: [],
+    removedPlaceIds: ["b"],
+    movedPlaceIds: [],
+    movementIds: ["movement-d1-1"],
+    requiresRouteRefresh: true,
+    requiresTimingReview: true,
+    requiresMealRestSpacingReview: true,
+    capacityRisk: false,
+    backtrackingRisk: false,
+    fixedTimeRisk: true,
+    readiness: "ready_for_route_refresh",
+    reasons: [
+      "remove_place_from_day changed the saved itinerary order for this day.",
+      "Adjacent movement timing should be reviewed before execution.",
+      "Meal and rest spacing should be checked after this edit.",
+      "The edited day includes multiple fixed time labels."
+    ]
+  }]);
   assert.deepEqual(result.metadata.undo.previousDay?.stops.map((stop) => stop.placeId), ["a", "b", "d"]);
   assert.deepEqual(result.metadata.undo.previousMovements.map((movement) => movement.id), ["m1", "m2"]);
 });
@@ -424,9 +579,103 @@ test("Direct Blueprint Revision batch applies multiple itinerary edits with one 
   assert.deepEqual(result.metadata.affectedDayIds, ["d1"]);
   assert.deepEqual(result.metadata.affectedPlaceIds, ["c", "a", "b"]);
   assert.deepEqual(result.metadata.routeRefresh.movementIds, ["movement-d1-1", "movement-d1-2"]);
+  assert.deepEqual(result.metadata.routeImpact?.days, [{
+    dayId: "d1",
+    addedPlaceIds: ["c"],
+    removedPlaceIds: [],
+    movedPlaceIds: ["b"],
+    movementIds: ["movement-d1-1", "movement-d1-2"],
+    requiresRouteRefresh: true,
+    requiresTimingReview: true,
+    requiresMealRestSpacingReview: true,
+    capacityRisk: false,
+    backtrackingRisk: false,
+    fixedTimeRisk: false,
+    readiness: "ready_for_route_refresh",
+    reasons: [
+      "add_place_to_day changed the saved itinerary order for this day.",
+      "Adjacent movement timing should be reviewed before execution.",
+      "Meal and rest spacing should be checked after this edit.",
+      "move_place_within_day changed the saved itinerary order for this day."
+    ]
+  }]);
+  assert.deepEqual(result.metadata.replanReadiness, {
+    status: "ready_for_route_refresh",
+    dayIds: ["d1"],
+    reason: "These direct itinerary edits are saved, but affected routes and timing still need refresh before execution."
+  });
   assert.equal(result.metadata.undo.previousBlueprintVersion, 1);
   assert.deepEqual(result.metadata.undo.previousDays[0]?.stops.map((stop) => stop.placeId), ["a", "b"]);
   assert.deepEqual(result.metadata.undo.previousMovements.map((movement) => movement.id), ["m1"]);
+});
+
+test("Direct Blueprint Revision batch groups route impact by affected day", () => {
+  const original = blueprint();
+  original.endDate = "2026-09-02";
+  original.places.push(place("d"), place("e"));
+  original.days.push({
+    id: "d2",
+    date: "2026-09-02",
+    kind: "scheduled",
+    city: "Tokyo",
+    title: "West Tokyo",
+    summary: "Another compact sequence.",
+    stops: [{ placeId: "d", order: 1 }, { placeId: "e", order: 2 }],
+    candidatePlaceIds: []
+  });
+  original.movements.push({ id: "m2", dayId: "d2", originPlaceId: "d", destinationPlaceId: "e", mode: "walking", status: "verified", durationMinutes: 12, label: "Walk", detail: "Verified walk.", evidence: [] });
+
+  const result = applyDirectBlueprintRevisionBatchWithMetadata(original, [
+    {
+      kind: "add_place_to_day",
+      placeId: "c",
+      dayId: "d1",
+      position: { kind: "after", afterPlaceId: "a" },
+      createdAt: "2026-08-27T00:00:00.000Z"
+    },
+    {
+      kind: "move_place_within_day",
+      placeId: "e",
+      dayId: "d2",
+      position: { kind: "start" },
+      createdAt: "2026-08-27T00:01:00.000Z"
+    }
+  ]);
+
+  assert.deepEqual(result.metadata.affectedDayIds, ["d1", "d2"]);
+  assert.deepEqual(result.metadata.routeImpact?.days.map((day) => ({
+    dayId: day.dayId,
+    addedPlaceIds: day.addedPlaceIds,
+    movedPlaceIds: day.movedPlaceIds,
+    movementIds: day.movementIds,
+    requiresTimingReview: day.requiresTimingReview,
+    requiresMealRestSpacingReview: day.requiresMealRestSpacingReview,
+    readiness: day.readiness
+  })), [
+    {
+      dayId: "d1",
+      addedPlaceIds: ["c"],
+      movedPlaceIds: [],
+      movementIds: ["movement-d1-1", "movement-d1-2"],
+      requiresTimingReview: true,
+      requiresMealRestSpacingReview: true,
+      readiness: "ready_for_route_refresh"
+    },
+    {
+      dayId: "d2",
+      addedPlaceIds: [],
+      movedPlaceIds: ["e"],
+      movementIds: ["movement-d2-1"],
+      requiresTimingReview: true,
+      requiresMealRestSpacingReview: false,
+      readiness: "ready_for_route_refresh"
+    }
+  ]);
+  assert.deepEqual(result.metadata.replanReadiness, {
+    status: "ready_for_route_refresh",
+    dayIds: ["d1", "d2"],
+    reason: "These direct itinerary edits are saved, but affected routes and timing still need refresh before execution."
+  });
 });
 
 test("Direct Blueprint Revision batch rejects invalid edits without mutating the original Blueprint", () => {

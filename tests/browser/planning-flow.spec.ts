@@ -467,12 +467,78 @@ test("failed direct itinerary Apply keeps the local draft available", async ({ p
   const directRevisionRequests: unknown[] = [];
   await page.route("**/api/plans/conflict-trip/blueprint-revisions/direct", async (route) => {
     directRevisionRequests.push(route.request().postDataJSON());
-    await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "The plan changed before this edit could be saved." }) });
+    await route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: "Neighborhood Market changes the shape of 2026-10-12, so Landi needs to replan that day before saving it.",
+        code: "assisted_replanning_required",
+        replanRequirement: {
+          status: "assisted_replanning_required",
+          editKind: "add_place_to_day",
+          placeId: "market",
+          dayId: "d1",
+          reasonCode: "high_impact_place",
+          affectedDayIds: ["d1"],
+          affectedPlaceIds: ["market", "anchor"],
+          explanation: "Neighborhood Market changes the shape of 2026-10-12, so Landi needs to replan that day before saving it.",
+          suggestedRequest: "Replan the affected itinerary day so it can add Neighborhood Market on 2026-10-12. Keep unaffected days and places unchanged. Recheck route order, timing, meal and rest spacing, opening constraints, and publish a new Trip Blueprint version only when the affected day is coherent."
+        }
+      })
+    });
+  });
+  const assistedReplanningRequests: unknown[] = [];
+  await page.route("**/api/plans/conflict-trip/blueprint-revisions/assisted-replanning", async (route) => {
+    assistedReplanningRequests.push(route.request().postDataJSON());
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        workspace,
+        handoff: {
+          status: "ready_for_assisted_replanning",
+          baseBlueprintId: "blueprint-conflict-trip",
+          baseBlueprintVersion: 7,
+          replanRequirement: {
+            status: "assisted_replanning_required",
+            editKind: "add_place_to_day",
+            placeId: "market",
+            dayId: "d1",
+            reasonCode: "high_impact_place",
+            affectedDayIds: ["d1"],
+            affectedPlaceIds: ["market", "anchor"],
+            explanation: "Neighborhood Market changes the shape of 2026-10-12, so Landi needs to replan that day before saving it.",
+            suggestedRequest: "Replan the affected itinerary day so it can add Neighborhood Market on 2026-10-12."
+          },
+          revisions: [{ kind: "add_place_to_day", placeId: "market", dayId: "d1", position: { kind: "end" }, createdAt: "2026-09-04T00:00:00.000Z" }],
+          affectedDayIds: ["d1"],
+          affectedPlaceIds: ["market", "anchor"],
+          request: "Replan the affected itinerary day for Lisbon market day."
+        }
+      })
+    });
   });
   const agentRequests: unknown[] = [];
   await page.route("**/api/agent/chat", (route) => {
     agentRequests.push(route.request().postDataJSON());
-    return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Agent route should not be used for direct itinerary edits." }) });
+    if (agentRequests.length === 1) return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Landi could not replan the affected itinerary day." }) });
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        reply: "Landi updated the affected itinerary day.",
+        workspace: {
+          ...workspace,
+          activePlan: {
+            ...workspace.activePlan,
+            version: 5,
+            title: "Lisbon market day replanned",
+            presentation: {
+              ...workspace.activePlan.presentation,
+              summary: "Lisbon market day replanned"
+            }
+          }
+        }
+      })
+    });
   });
 
   await page.goto("/");
@@ -494,10 +560,24 @@ test("failed direct itinerary Apply keeps the local draft available", async ({ p
     expectedVersion: 4,
     revisions: [{ kind: "add_place_to_day", placeId: "market", dayId: "d1", position: { kind: "end" } }]
   });
-  expect(agentRequests).toEqual([]);
+  await expect.poll(() => assistedReplanningRequests.length).toBe(1);
+  expect(assistedReplanningRequests[0]).toMatchObject({
+    expectedVersion: 4,
+    replanRequirement: { reasonCode: "high_impact_place", placeId: "market", dayId: "d1" },
+    revisions: [{ kind: "add_place_to_day", placeId: "market", dayId: "d1", position: { kind: "end" } }]
+  });
+  await expect.poll(() => agentRequests.length).toBe(1);
+  expect(agentRequests[0]).toMatchObject({
+    mode: "revise_plan",
+    expectedPlanId: "conflict-trip",
+    expectedVersion: 4,
+    impactConfirmed: true,
+    assistedReplanning: { status: "ready_for_assisted_replanning", affectedDayIds: ["d1"], affectedPlaceIds: ["market", "anchor"] }
+  });
   await expect(page.getByRole("region", { name: "Adjust your plan with Landi" })).toHaveCount(0);
-  await expect(page.locator(".inline-alert")).toContainText("The plan changed before this edit could be saved.");
-  await expect(page.locator(".agent-status-float.error")).toContainText("The plan changed before this edit could be saved.");
+  await expect(page.locator(".inline-alert")).toContainText("Landi could not replan the affected itinerary day.");
+  await expect(page.locator(".inline-alert")).toContainText("Your draft is still here.");
+  await expect(page.locator(".agent-status-float.error")).toContainText("Your draft is still here.");
   await expect(editBar.getByText("1 unsaved change")).toBeVisible();
   await expect(editBar.getByRole("button", { name: "Apply", exact: true })).toBeEnabled();
   await expect(page.locator(".blueprint-map-status")).toContainText("Routes will be checked");
@@ -505,10 +585,18 @@ test("failed direct itinerary Apply keeps the local draft available", async ({ p
   await expect(page.locator(".blueprint-map-impact-notes")).toContainText("Route and timing will be rechecked after confirmation.");
   await expect(page.getByRole("button", { name: "Refresh routes" })).toHaveCount(0);
   await expect(page.locator(".blueprint-timeline-list").getByRole("button", { name: /Pending itinerary edit for Neighborhood Market/ })).toBeVisible();
-  await editBar.getByRole("button", { name: "Cancel", exact: true }).click();
+  await editBar.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect.poll(() => directRevisionRequests.length).toBe(2);
+  await expect.poll(() => assistedReplanningRequests.length).toBe(2);
+  await expect.poll(() => agentRequests.length).toBe(2);
+  expect(agentRequests[1]).toMatchObject({
+    message: "Replan the affected itinerary day for Lisbon market day.",
+    assistedReplanning: { request: "Replan the affected itinerary day for Lisbon market day." }
+  });
+  await expect(page.locator(".agent-status-float.success")).toContainText("Landi updated the affected day.");
+  await expect(page.locator(".inline-alert")).toHaveCount(0);
   await expect(page.getByText("unsaved change")).toHaveCount(0);
   await expect(page.locator(".blueprint-map-impact-notes")).toHaveCount(0);
-  await expect(page.locator(".blueprint-map-bubble").filter({ hasText: "Neighborhood Market" })).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });
 
@@ -562,7 +650,29 @@ test("one pending itinerary edit can be undone without clearing the other drafts
         affectedDayIds: ["d1"],
         affectedPlaceIds: ["market"],
         revisionCount: 1,
-        routeRefresh: { dayIds: ["d1"], movementIds: ["r1"], reason: "This itinerary day was edited directly." }
+        routeRefresh: { dayIds: ["d1"], movementIds: ["r1"], reason: "This itinerary day was edited directly." },
+        routeImpact: {
+          days: [{
+            dayId: "d1",
+            addedPlaceIds: ["market"],
+            removedPlaceIds: [],
+            movedPlaceIds: [],
+            movementIds: ["r1"],
+            requiresRouteRefresh: true,
+            requiresTimingReview: true,
+            requiresMealRestSpacingReview: true,
+            capacityRisk: false,
+            backtrackingRisk: false,
+            fixedTimeRisk: false,
+            readiness: "ready_for_route_refresh",
+            reasons: []
+          }]
+        },
+        replanReadiness: {
+          status: "ready_for_route_refresh",
+          dayIds: ["d1"],
+          reason: "These direct itinerary edits are saved, but affected routes and timing still need refresh before execution."
+        }
       }
     }) });
   });
@@ -603,7 +713,7 @@ test("one pending itinerary edit can be undone without clearing the other drafts
   });
   expect(agentRequests).toEqual([]);
   await expect(page.getByText("unsaved change")).toHaveCount(0);
-  await expect(page.getByText("Applied 1 itinerary update for 10/12. 1 route leg needs refresh.")).toBeVisible();
+  await expect(page.getByText("Applied 1 itinerary update for 10/12. 1 route leg needs refresh; review timing, meal/rest spacing before execution.")).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 

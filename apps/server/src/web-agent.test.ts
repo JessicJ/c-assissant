@@ -7,12 +7,24 @@ test("Web Agent accepts only bounded Plan-turn requests", () => {
   assert.deepEqual(parseWebAgentTurn({ message: "Change the hotel", mode: "revise_plan" }), { message: "Change the hotel", mode: "revise_plan" });
   assert.deepEqual(parseWebAgentTurn({ message: "Change the hotel", mode: "revise_plan", impactConfirmed: true }), { message: "Change the hotel", mode: "revise_plan", impactConfirmed: true });
   assert.deepEqual(parseWebAgentTurn({ message: "Change the hotel", mode: "revise_plan", expectedPlanId: "plan-1", expectedVersion: 3 }), { message: "Change the hotel", mode: "revise_plan", expectedPlanId: "plan-1", expectedVersion: 3 });
+  const assistedReplanning = {
+    status: "ready_for_assisted_replanning",
+    baseBlueprintId: "blueprint-1",
+    baseBlueprintVersion: 2,
+    replanRequirement: {},
+    revisions: [],
+    affectedDayIds: ["day-1"],
+    affectedPlaceIds: ["place-1"],
+    request: "Replan the affected itinerary day."
+  };
+  assert.deepEqual(parseWebAgentTurn({ message: "Replan the affected itinerary day.", mode: "revise_plan", assistedReplanning }), { message: "Replan the affected itinerary day.", mode: "revise_plan", assistedReplanning });
   assert.deepEqual(parseWebAgentTurn({ message: "Attend an exhibition in Shanghai in September", mode: "new_plan" }), { message: "Attend an exhibition in Shanghai in September", mode: "new_plan" });
   assert.throws(() => parseWebAgentTurn({ mode: "new_plan", intake: { destination: "Shanghai" } }), /Tell the Agent/);
   assert.throws(() => parseWebAgentTurn({ message: "Hello", mode: "general_chat" }), /Choose whether/);
   assert.throws(() => parseWebAgentTurn({ message: "x".repeat(1_501), mode: "revise_plan" }), /under 1,500/);
   assert.throws(() => parseWebAgentTurn({ message: "Change the hotel", mode: "revise_plan", impactConfirmed: "yes" }), /boolean/);
   assert.throws(() => parseWebAgentTurn({ message: "Change the hotel", mode: "revise_plan", expectedPlanId: "", expectedVersion: 0 }), /Plan id/);
+  assert.throws(() => parseWebAgentTurn({ message: "Replan", mode: "revise_plan", assistedReplanning: { status: "draft" } }), /prepared handoff/);
 });
 
 test("Web Agent refuses to overwrite Plan changes made during a Runtime turn", () => {
