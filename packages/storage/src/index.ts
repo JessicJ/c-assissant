@@ -3711,6 +3711,12 @@ function refreshedBlueprintMovementDisplay(movement: BlueprintMovement, segment:
     return {
       routeLabel,
       refreshReason: "This refreshed route conflicts with a fixed itinerary time and still needs replanning.",
+      refreshScope: {
+        dayId: movement.dayId,
+        originPlaceId: movement.originPlaceId,
+        destinationPlaceId: movement.destinationPlaceId,
+        reason: "route_conflict"
+      },
       showAsFormalRoute: movement.display?.showAsFormalRoute ?? true,
       mapLineState: "needs_refresh"
     };

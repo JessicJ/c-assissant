@@ -18,6 +18,12 @@ export type DirectBlueprintRevision =
     createdAt: string;
   }
   | {
+    kind: "remove_place_from_day";
+    placeId: string;
+    dayId: string;
+    createdAt: string;
+  }
+  | {
     kind: "update_place_priority";
     placeId: string;
     priority: BlueprintPlacePriority;
@@ -25,6 +31,7 @@ export type DirectBlueprintRevision =
   };
 
 type DirectBlueprintItineraryRevision = Extract<DirectBlueprintRevision, { kind: "add_place_to_day" | "move_place_within_day" }>;
+type DirectBlueprintDayRevision = Extract<DirectBlueprintRevision, { kind: "add_place_to_day" | "move_place_within_day" | "remove_place_from_day" }>;
 
 export interface DirectBlueprintRevisionMetadata {
   id: string;
@@ -89,6 +96,7 @@ export function applyDirectBlueprintRevisionWithMetadata(blueprint: TripBlueprin
   if (!Number.isFinite(Date.parse(revision.createdAt))) throw new Error("Blueprint Revision needs a valid creation time.");
   if (revision.kind === "add_place_to_day") return addPlaceToDay(blueprint, revision);
   if (revision.kind === "move_place_within_day") return movePlaceWithinDay(blueprint, revision);
+  if (revision.kind === "remove_place_from_day") return removePlaceFromDay(blueprint, revision);
   if (revision.kind === "update_place_priority") return updatePlacePriority(blueprint, revision);
   throw new Error("Unsupported Blueprint Revision.");
 }
@@ -119,7 +127,8 @@ export function applyDirectBlueprintRevisionBatchWithMetadata(blueprint: TripBlu
   });
   const routeRefreshDayIds = uniqueStrings(revisionMetadataItems.flatMap((item) => item.routeRefresh.dayIds));
   const routeRefreshMovementIds = uniqueStrings(revisionMetadataItems.flatMap((item) => item.routeRefresh.movementIds));
-  const routeRefreshReason = routeRefreshMovementIds.length
+  const hasItineraryEdit = revisionMetadataItems.some((item) => item.kind !== "update_place_priority");
+  const routeRefreshReason = hasItineraryEdit
     ? "These itinerary days were edited directly, so affected route, timing, meal, and opening constraints need refresh before execution."
     : "These place status updates do not change route order.";
   const createdAt = revisions[revisions.length - 1]!.createdAt;
@@ -234,6 +243,46 @@ function movePlaceWithinDay(blueprint: TripBlueprint, revision: Extract<DirectBl
   };
 }
 
+function removePlaceFromDay(blueprint: TripBlueprint, revision: Extract<DirectBlueprintRevision, { kind: "remove_place_from_day" }>): DirectBlueprintRevisionResult {
+  const place = blueprint.places.find((candidate) => candidate.id === revision.placeId);
+  if (!place) throw new Error(`Blueprint Revision references unknown place ${revision.placeId}.`);
+  const day = blueprint.days.find((candidate) => candidate.id === revision.dayId);
+  if (!day) throw new Error(`Blueprint Revision references unknown day ${revision.dayId}.`);
+  if (!day.stops.some((stop) => stop.placeId === revision.placeId)) throw new Error(`Place ${revision.placeId} is not scheduled on day ${revision.dayId}.`);
+  if (place.priority === "booked" || hasReservationRequirement(blueprint, revision.placeId)) throw new Error(`Place ${revision.placeId} is fixed by a booking and cannot be removed directly.`);
+  const eligibility = place.schedulingEligibility;
+  if (eligibility?.decision === "informational" || eligibility?.decision === "blocked" || eligibility?.decision === "high_impact") throw new Error(`Place ${revision.placeId} needs assisted replanning before removing.`);
+
+  const previousDay = structuredClone(day);
+  const previousMovements = movementsForDay(blueprint, day.id);
+  const nextStops = removeStop(day.stops, revision);
+  const nextBlocks = blocksForRemovedStop(day.id, day.blocks, day.stops, nextStops, revision.placeId);
+  const nextDays = blueprint.days.map((candidate) => candidate.id === day.id
+    ? {
+      ...candidate,
+      stops: nextStops,
+      blocks: nextBlocks,
+      candidatePlaceIds: uniqueStrings([...candidate.candidatePlaceIds, revision.placeId])
+    }
+    : candidate);
+  const nextMovements = [
+    ...blueprint.movements.filter((movement) => movement.dayId !== day.id),
+    ...movementsForStops(day.id, nextStops, blueprint.places)
+  ];
+  const next: TripBlueprint = {
+    ...structuredClone(blueprint),
+    version: blueprint.version + 1,
+    days: nextDays,
+    movements: nextMovements,
+    createdAt: revision.createdAt
+  };
+  assertTripBlueprintIntegrity(next, { expectedResearchPlaceIds: blueprint.places.map((candidate) => candidate.id) });
+  return {
+    blueprint: next,
+    metadata: revisionMetadata(blueprint, next, revision, previousDay, previousMovements)
+  };
+}
+
 function updatePlacePriority(blueprint: TripBlueprint, revision: Extract<DirectBlueprintRevision, { kind: "update_place_priority" }>): DirectBlueprintRevisionResult {
   const place = blueprint.places.find((candidate) => candidate.id === revision.placeId);
   if (!place) throw new Error(`Blueprint Revision references unknown place ${revision.placeId}.`);
@@ -295,6 +344,11 @@ function moveStop(stops: BlueprintStop[], revision: Extract<DirectBlueprintRevis
       ...(slot?.role ? { role: slot.role } : {})
     };
   });
+}
+
+function removeStop(stops: BlueprintStop[], revision: Extract<DirectBlueprintRevision, { kind: "remove_place_from_day" }>): BlueprintStop[] {
+  const next = [...stops].sort((left, right) => left.order - right.order).filter((stop) => stop.placeId !== revision.placeId);
+  return next.map((stop, index) => ({ ...stop, order: index + 1 }));
 }
 
 function hasReservationRequirement(blueprint: TripBlueprint, placeId: string): boolean {
@@ -362,12 +416,60 @@ function blocksForDirectRevision(
   return result.map((block, index) => ({ ...block, order: index + 1 }));
 }
 
+function blocksForRemovedStop(
+  dayId: string,
+  previousBlocks: BlueprintItineraryBlock[] | undefined,
+  previousStops: BlueprintStop[],
+  nextStops: BlueprintStop[],
+  removedPlaceId: string
+): BlueprintItineraryBlock[] {
+  if (!previousBlocks?.length) return blocksForStops(dayId, nextStops);
+
+  const previousStopIds = new Set(previousStops.map((stop) => stop.placeId));
+  const nextStopIds = new Set(nextStops.map((stop) => stop.placeId));
+  const sortedBlocks = [...previousBlocks].sort((left, right) => left.order - right.order).map((block) => ({ ...block, evidence: [...block.evidence] }));
+  const routeSourceByPlaceId = new Map<string, BlueprintItineraryBlock>();
+  for (const block of sortedBlocks) {
+    if (!isRouteBlockForStops(block, previousStopIds) || routeSourceByPlaceId.has(block.placeId!)) continue;
+    routeSourceByPlaceId.set(block.placeId!, block);
+  }
+
+  const template = sortedBlocks.filter((block) => !shouldDropRemovedPlaceBlock(block, previousStopIds, nextStopIds, removedPlaceId));
+  const usedIds = new Set<string>();
+  const result: BlueprintItineraryBlock[] = [];
+  let routeSlotIndex = 0;
+  for (const block of template) {
+    if (isDirectRouteSlotTemplate(block, previousStopIds)) {
+      const stop = nextStops[routeSlotIndex];
+      routeSlotIndex += 1;
+      if (!stop) continue;
+      result.push(blockForStopInSlot(dayId, stop, routeSourceByPlaceId.get(stop.placeId), undefined, usedIds));
+      continue;
+    }
+    const cloned = { ...block, evidence: [...block.evidence] };
+    cloned.id = uniqueBlockId(cloned.id, usedIds);
+    result.push(cloned);
+  }
+
+  while (routeSlotIndex < nextStops.length) {
+    const stop = nextStops[routeSlotIndex]!;
+    routeSlotIndex += 1;
+    result.push(blockForStopInSlot(dayId, stop, routeSourceByPlaceId.get(stop.placeId), undefined, usedIds));
+  }
+
+  return result.map((block, index) => ({ ...block, order: index + 1 }));
+}
+
 function isRouteBlockForStops(block: BlueprintItineraryBlock, stopIds: Set<string>): boolean {
   return Boolean(block.placeId && stopIds.has(block.placeId) && block.kind !== "event");
 }
 
 function shouldDropNewlyScheduledNonRouteBlock(block: BlueprintItineraryBlock, previousStopIds: Set<string>, nextStopIds: Set<string>, revisedPlaceId: string): boolean {
   return Boolean(block.placeId && block.placeId === revisedPlaceId && !previousStopIds.has(block.placeId) && nextStopIds.has(block.placeId));
+}
+
+function shouldDropRemovedPlaceBlock(block: BlueprintItineraryBlock, previousStopIds: Set<string>, nextStopIds: Set<string>, removedPlaceId: string): boolean {
+  return Boolean(block.placeId === removedPlaceId && previousStopIds.has(removedPlaceId) && !nextStopIds.has(removedPlaceId) && !isRouteBlockForStops(block, previousStopIds));
 }
 
 function isDirectRouteSlotTemplate(block: BlueprintItineraryBlock, previousStopIds: Set<string>): boolean {
@@ -455,6 +557,12 @@ function movementsForStops(dayId: string, stops: BlueprintStop[], places: Bluepr
     display: {
       routeLabel: "Route needs refresh",
       refreshReason: DIRECT_EDIT_ROUTE_REFRESH_REASON,
+      refreshScope: {
+        dayId,
+        originPlaceId: stop.placeId,
+        destinationPlaceId: stops[index + 1]!.placeId,
+        reason: "direct_itinerary_edit"
+      },
       showAsFormalRoute: true,
       mapLineState: "needs_refresh"
     },
@@ -497,7 +605,7 @@ function normalizedText(value: string): string {
 function revisionMetadata(
   before: TripBlueprint,
   after: TripBlueprint,
-  revision: DirectBlueprintItineraryRevision,
+  revision: DirectBlueprintDayRevision,
   previousDay: BlueprintItineraryDay,
   previousMovements: BlueprintMovement[]
 ): DirectBlueprintRevisionMetadata {
@@ -505,7 +613,7 @@ function revisionMetadata(
   const nextMovements = after.movements.filter((movement) => movement.dayId === revision.dayId);
   const affectedPlaceIds = uniqueStrings([
     revision.placeId,
-    ...(revision.position.kind === "after" ? [revision.position.afterPlaceId] : []),
+    ...(revision.kind !== "remove_place_from_day" && revision.position.kind === "after" ? [revision.position.afterPlaceId] : []),
     ...(nextDay?.stops.map((stop) => stop.placeId) ?? []),
     ...previousDay.stops.map((stop) => stop.placeId)
   ]);

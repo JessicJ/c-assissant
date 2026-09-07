@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { DirectBlueprintRevisionBatchMetadata, Plan, PlanPlace, PlanPresentation } from "@c-assistant/core";
-import { appliedItineraryRevisionSummary, buildBlueprintWorkspaceDisplay, buildPendingItineraryEditForWorkspace, buildPendingItineraryMoveForWorkspace, compactPendingItineraryEdits, detailDisplayForWorkspacePlace, filterGuideCards, itineraryDisplayForWorkspace, mergePendingItineraryEdit, pendingItineraryDraftSummary, pendingItineraryEditBatchRequest, pendingItineraryEditRequest, scheduledDayIdForPlace } from "./landi-blueprint-workspace-display.js";
+import { appliedItineraryRevisionSummary, buildBlueprintWorkspaceDisplay, buildPendingItineraryEditForWorkspace, buildPendingItineraryMoveForWorkspace, buildPendingItineraryRemoveForWorkspace, compactPendingItineraryEdits, detailDisplayForWorkspacePlace, filterGuideCards, guideCardsForWorkspace, itineraryDisplayForWorkspace, mergePendingItineraryEdit, pendingItineraryDraftSummary, pendingItineraryEditBatchRequest, pendingItineraryEditRequest, scheduledDayIdForPlace } from "./landi-blueprint-workspace-display.js";
 
 function place(id: string, patch: Partial<PlanPlace> = {}): PlanPlace {
   return {
@@ -302,6 +302,42 @@ describe("Landi Blueprint workspace display helpers", () => {
     }]);
   });
 
+  it("adds one contextual tip to itinerary cards from Blueprint and place signals", () => {
+    const presentation = presentationFixture({
+      places: [
+        place("temple", { category: "temple", tip: "Fallback temple etiquette should not win." }),
+        place("lunch", { category: "restaurant", tip: "Ask what is seasonal before ordering." }),
+        place("craft", { category: "shopping craft store", reservation: { requirement: "recommended", verification: "verified", note: "Reserve a short workshop slot if this becomes a priority." } }),
+        place("tea", { category: "tea ceremony experience", tip: "Book a quiet tea slot before adding it to the day." })
+      ],
+      days: [{
+        ...presentationFixture().days[0]!,
+        placeIds: ["temple", "lunch", "craft"],
+        stops: [{ placeId: "temple", order: 1 }, { placeId: "lunch", order: 2 }, { placeId: "craft", order: 3 }],
+        candidates: ["tea"]
+      }],
+      travelTips: [{
+        id: "tip-temple",
+        title: "Temple timing",
+        body: "Arrive before the late-morning crowd.",
+        theme: "timing",
+        context: "Temple morning",
+        placeId: "temple",
+        dayId: "day-1",
+        evidence: []
+      }]
+    });
+    const workspace = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation);
+    const tipsByPlace = new Map(workspace.itineraries[0]?.items.map((item) => [item.placeId, item.contextualTip]));
+    assert.equal(tipsByPlace.get("temple"), "Arrive before the late-morning crowd.");
+    assert.equal(tipsByPlace.get("lunch"), "Ask what is seasonal before ordering.");
+    assert.equal(tipsByPlace.get("craft"), "Reserve a short workshop slot if this becomes a priority.");
+
+    const edit = buildPendingItineraryEditForWorkspace(workspace, "tea", { dayId: "day-1", positionId: "end" });
+    const preview = itineraryDisplayForWorkspace(workspace, "day-1", edit);
+    assert.equal(preview.items.find((item) => item.placeId === "tea")?.contextualTip, "Book a quiet tea slot before adding it to the day.");
+  });
+
   it("treats explicit empty Blueprint tips and preparation checklist as authoritative", () => {
     const presentation = presentationFixture({
       places: [
@@ -564,6 +600,72 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.equal(unscheduled.priorityActions.find((action) => action.priority === "nearby")?.active, true);
   });
 
+  it("previews removing a scheduled place without deleting the guide item", () => {
+    const workspace = buildBlueprintWorkspaceDisplay(planFixture(), presentationFixture());
+    const detail = detailDisplayForWorkspacePlace(workspace, "lunch")!;
+    assert.equal(detail.scheduled, true);
+    assert.equal(detail.canRemoveFromDay, true);
+    assert.equal(detail.removeActionLabel, "Remove from day");
+    const edit = buildPendingItineraryRemoveForWorkspace(workspace, { dayId: "day-1", placeId: "lunch" });
+    assert.ok(edit);
+    assert.equal(edit.kind, "remove_place_from_day");
+    assert.equal(edit.dayLabel, "2026-10-01");
+    assert.match(pendingItineraryEditRequest(edit), /Remove lunch from 2026-10-01/);
+    assert.doesNotMatch(pendingItineraryEditRequest(edit), /conversation|review changes/i);
+    const preview = itineraryDisplayForWorkspace(workspace, "day-1", edit);
+    assert.deepEqual(preview.items.map((item) => item.placeId), ["temple", "craft"]);
+    assert.deepEqual(preview.markers.map((marker) => marker.placeId), ["temple", "craft"]);
+    assert.deepEqual(workspace.itineraries[0]?.items.map((item) => item.placeId), ["temple", "lunch", "craft"]);
+    assert.equal(workspace.guideCards.some((card) => card.placeId === "lunch"), true);
+    assert.equal(preview.routeRefresh?.actionable, false);
+    assert.match(preview.routeRefresh?.summary ?? "", /unsaved itinerary change/);
+  });
+
+  it("keeps guide cards and details aligned with pending remove drafts", () => {
+    const workspace = buildBlueprintWorkspaceDisplay(planFixture(), presentationFixture());
+    const edit = buildPendingItineraryRemoveForWorkspace(workspace, { dayId: "day-1", placeId: "lunch" })!;
+    const pendingCard = guideCardsForWorkspace(workspace, [edit]).find((card) => card.placeId === "lunch")!;
+    assert.equal(pendingCard.state, "unscheduled");
+    assert.equal(pendingCard.canAdd, true);
+    assert.equal(pendingCard.actionLabel, "Add");
+    assert.equal(pendingCard.draftActionLabel, "Undo draft");
+    assert.match(pendingCard.footerNote ?? "", /Removed from 2026-10-01 \(not saved\)/);
+    assert.equal(pendingCard.timeline, undefined);
+
+    const pendingDetail = detailDisplayForWorkspacePlace(workspace, "lunch", [edit])!;
+    assert.equal(pendingDetail.scheduled, false);
+    assert.equal(pendingDetail.canAdd, true);
+    assert.equal(pendingDetail.canRemoveFromDay, false);
+    assert.equal(pendingDetail.removeActionLabel, undefined);
+    assert.equal(pendingDetail.draftActionLabel, "Undo draft");
+    assert.match(pendingDetail.itineraryDraftNote ?? "", /Removed from 2026-10-01 \(not saved\)/);
+    assert.equal(pendingDetail.priorityActions.find((action) => action.priority === "archive")?.disabled, undefined);
+
+    const savedCard = guideCardsForWorkspace(workspace, []).find((card) => card.placeId === "lunch")!;
+    const savedDetail = detailDisplayForWorkspacePlace(workspace, "lunch")!;
+    assert.equal(savedCard.state, "scheduled");
+    assert.equal(savedCard.canAdd, false);
+    assert.equal(savedCard.draftActionLabel, undefined);
+    assert.equal(savedDetail.scheduled, true);
+    assert.equal(savedDetail.canRemoveFromDay, true);
+    assert.equal(savedDetail.draftActionLabel, undefined);
+  });
+
+  it("does not stage direct removal for fixed booking places", () => {
+    const presentation = presentationFixture({
+      places: [
+        place("temple", { category: "temple" }),
+        place("lunch", { category: "restaurant", priority: "booked" }),
+        place("craft", { category: "shopping craft store" })
+      ]
+    });
+    const workspace = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation);
+    const detail = detailDisplayForWorkspacePlace(workspace, "lunch")!;
+    assert.equal(detail.canRemoveFromDay, false);
+    assert.equal(detail.removeBlockedReason, "Fixed booking");
+    assert.equal(buildPendingItineraryRemoveForWorkspace(workspace, { dayId: "day-1", placeId: "lunch" }), undefined);
+  });
+
   it("filters guide cards by sub-branch and state", () => {
     const presentation = presentationFixture({
       places: [
@@ -602,6 +704,7 @@ describe("Landi Blueprint workspace display helpers", () => {
     const edit = buildPendingItineraryEditForWorkspace(workspace, "tea", { dayId: "day-1", positionId: "after-lunch" });
     const preview = itineraryDisplayForWorkspace(workspace, "day-1", edit);
     assert.deepEqual(preview.items.map((item) => item.kind === "pending" ? `pending:${item.placeId}` : item.placeId), ["temple", "lunch", "pending:tea", "craft"]);
+    assert.equal(preview.items.find((item) => item.placeId === "tea")?.draftActionLabel, "Undo draft");
     assert.deepEqual(workspace.itineraries[0]?.items.map((item) => item.placeId), ["temple", "lunch", "craft"]);
   });
 
@@ -616,6 +719,7 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.deepEqual(preview.items.map((item) => item.timeLabel), ["09:30", "Around lunch", "Flexible afternoon"]);
     assert.equal(preview.items.find((item) => item.placeId === "craft")?.statusLabel, "Not saved");
     assert.equal(preview.items.find((item) => item.placeId === "craft")?.editState, "moved");
+    assert.equal(preview.items.find((item) => item.placeId === "craft")?.draftActionLabel, "Undo draft");
     assert.deepEqual(workspace.itineraries[0]?.items.map((item) => item.placeId), ["temple", "lunch", "craft"]);
   });
 
@@ -787,9 +891,87 @@ describe("Landi Blueprint workspace display helpers", () => {
       segmentIds: [],
       dayLabel: "2026-10-01",
       summary: "1 unsaved itinerary change will need route refresh after you confirm.",
+      impactNotes: [
+        "Route and timing will be rechecked after confirmation.",
+        "Added places may affect meal spacing, opening windows, and route order.",
+        "Landi will check route fit and timing before saving this edit."
+      ],
       request: "After you confirm the itinerary draft for 2026-10-01, refresh routing, timing, meal spacing, and opening constraints before marking this day ready.",
       actionable: false
     });
+  });
+
+  it("calls out capacity when an added place makes a day dense", () => {
+    const presentation = presentationFixture({
+      places: [
+        place("temple", { category: "temple" }),
+        place("lunch", { category: "restaurant" }),
+        place("craft", { category: "shopping craft store" }),
+        place("garden", { category: "garden" }),
+        place("dinner", { category: "restaurant", area: "Gion" })
+      ],
+      days: [{
+        ...presentationFixture().days[0]!,
+        placeIds: ["temple", "lunch", "craft", "garden"],
+        stops: [{ placeId: "temple", order: 1 }, { placeId: "lunch", order: 2 }, { placeId: "craft", order: 3 }, { placeId: "garden", order: 4 }]
+      }]
+    });
+    const workspace = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation);
+    const edit = buildPendingItineraryEditForWorkspace(workspace, "dinner", { dayId: "day-1", positionId: "end" });
+    const display = itineraryDisplayForWorkspace(workspace, "day-1", edit);
+    assert.ok(display.routeRefresh?.impactNotes?.includes("This preview has 5 planned stops, so pacing may be tight."));
+    assert.equal(display.routeRefresh?.impactNotes?.includes("Added places may affect meal spacing, opening windows, and route order."), false);
+  });
+
+  it("calls out removed meal anchors when no dining stop remains", () => {
+    const workspace = buildBlueprintWorkspaceDisplay(planFixture(), presentationFixture());
+    const edit = buildPendingItineraryRemoveForWorkspace(workspace, { dayId: "day-1", placeId: "lunch" })!;
+    const display = itineraryDisplayForWorkspace(workspace, "day-1", edit);
+    assert.ok(display.routeRefresh?.impactNotes?.includes("Removing this stop leaves the day without a clear meal or rest anchor."));
+    assert.equal(display.routeRefresh?.impactNotes?.includes("Removed stops stay in Explore and may leave a gap in the day."), false);
+  });
+
+  it("calls out area backtracking in pending itinerary previews", () => {
+    const presentation = presentationFixture({
+      places: [
+        place("east-temple", { area: "East", category: "temple" }),
+        place("central-lunch", { area: "Central", category: "restaurant" }),
+        place("west-craft", { area: "West", category: "shopping craft store" }),
+        place("east-tea", { area: "East", category: "tea ceremony experience" })
+      ],
+      days: [{
+        ...presentationFixture().days[0]!,
+        placeIds: ["east-temple", "central-lunch", "west-craft"],
+        stops: [{ placeId: "east-temple", order: 1 }, { placeId: "central-lunch", order: 2 }, { placeId: "west-craft", order: 3 }]
+      }]
+    });
+    const workspace = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation);
+    const edit = buildPendingItineraryEditForWorkspace(workspace, "east-tea", { dayId: "day-1", positionId: "after-central-lunch" });
+    const display = itineraryDisplayForWorkspace(workspace, "day-1", edit);
+    assert.ok(display.routeRefresh?.impactNotes?.includes("The previewed order revisits an area, so it may create backtracking."));
+  });
+
+  it("merges day-level impact notes for multiple pending edits", () => {
+    const presentation = presentationFixture({
+      places: [
+        ...presentationFixture().places,
+        place("osaka-dinner", { city: "Osaka", area: "Namba", category: "restaurant", reservation: { requirement: "required", verification: "needs_recheck", note: "Book ahead." }, durationMinutes: 150 }),
+        place("tea", { name: "Tea Studio", category: "tea ceremony experience" })
+      ]
+    });
+    const workspace = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation);
+    const add = buildPendingItineraryEditForWorkspace(workspace, "osaka-dinner", { dayId: "day-1", positionId: "after-lunch" });
+    const remove = buildPendingItineraryRemoveForWorkspace(workspace, { dayId: "day-1", placeId: "lunch" })!;
+    const move = buildPendingItineraryMoveForWorkspace(workspace, { dayId: "day-1", placeId: "craft", position: { kind: "after", afterPlaceId: "temple" } })!;
+    const display = itineraryDisplayForWorkspace(workspace, "day-1", [add, remove, move]);
+    assert.equal(display.routeRefresh?.summary, "3 unsaved itinerary changes will need route refresh after you confirm.");
+    assert.deepEqual(display.routeRefresh?.impactNotes, [
+      "Route and timing will be rechecked after confirmation.",
+      "Added places may affect meal spacing, opening windows, and route order.",
+      "This edit reaches Osaka, while Kyoto is the day base.",
+      "Removed stops stay in Explore and may leave a gap in the day.",
+      "Moved stops keep their current time labels until timing is refreshed."
+    ]);
   });
 
   it("does not expose saved route refresh actions while a day has unsaved drafts", () => {
@@ -966,7 +1148,7 @@ describe("Landi Blueprint workspace display helpers", () => {
   it("uses Blueprint route display intent before route prose inference", () => {
     const presentation = presentationFixture({
       routeSegments: [
-        { id: "route-1", dayId: "day-1", originPlaceId: "temple", destinationPlaceId: "lunch", mode: "walking", verification: "verified", label: "Old route label", detail: "Verified route detail.", display: { routeLabel: "Blueprint route label", refreshReason: "Refresh this leg after direct itinerary edits.", showAsFormalRoute: true, mapLineState: "needs_refresh" }, sourceRefs: [] },
+        { id: "route-1", dayId: "day-1", originPlaceId: "temple", destinationPlaceId: "lunch", mode: "walking", verification: "needs_verification", label: "Old route label", detail: "Keep this adjacent leg in the itinerary order.", display: { routeLabel: "Blueprint route label", refreshReason: "Refresh this leg after direct itinerary edits.", refreshScope: { dayId: "day-1", originPlaceId: "temple", destinationPlaceId: "lunch", reason: "direct_itinerary_edit" }, showAsFormalRoute: true, mapLineState: "needs_refresh" }, sourceRefs: [] },
         { id: "route-2", dayId: "day-1", originPlaceId: "lunch", destinationPlaceId: "craft", mode: "walking", verification: "needs_verification", label: "Route needs refresh", detail: "This hidden context route was edited directly.", display: { showAsFormalRoute: false, mapLineState: "reference", refreshReason: "Hidden route context only." }, sourceRefs: [] }
       ]
     });
@@ -976,6 +1158,19 @@ describe("Landi Blueprint workspace display helpers", () => {
     ]);
     assert.equal(itinerary.items[0]?.routeStatusLabel, "Refresh this leg after direct itinerary edits.");
     assert.equal(itinerary.items[1]?.routeStatusLabel, undefined);
+  });
+
+  it("does not expose a route refresh action for verified route legs", () => {
+    const presentation = presentationFixture({
+      routeSegments: [
+        { id: "route-1", dayId: "day-1", originPlaceId: "temple", destinationPlaceId: "lunch", mode: "walking", verification: "verified", label: "Old route label", detail: "Verified route detail.", display: { routeLabel: "Blueprint route label", refreshReason: "Should not show.", refreshScope: { dayId: "day-1", originPlaceId: "temple", destinationPlaceId: "lunch", reason: "direct_itinerary_edit" }, showAsFormalRoute: true, mapLineState: "needs_refresh" }, sourceRefs: [] }
+      ]
+    });
+    const itinerary = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).itineraries[0]!;
+    assert.equal(itinerary.routeRefresh, undefined);
+    assert.equal(itinerary.routeSegments[0]?.needsRefresh, false);
+    assert.equal(itinerary.routeSegments[0]?.mapLineState, "formal");
+    assert.equal(itinerary.items[0]?.routeStatusLabel, undefined);
   });
 
   it("surfaces direct edit route refresh without marking unrelated routes", () => {
@@ -994,8 +1189,43 @@ describe("Landi Blueprint workspace display helpers", () => {
       segmentCount: 1,
       segmentIds: ["route-1"],
       dayLabel: "2026-10-01",
-      summary: "1 route leg needs refresh.",
+      summary: "1 route leg on 2026-10-01 needs refresh.",
       request: "Refresh routes for 2026-10-01. Recheck the affected route leg, timing, meal spacing, and opening constraints before marking this itinerary ready."
+    });
+  });
+
+  it("scopes direct edit route refresh controls to the visible itinerary day", () => {
+    const presentation = presentationFixture({
+      places: [
+        ...presentationFixture().places,
+        place("station", { name: "Station", category: "transport" }),
+        place("market", { name: "Market", category: "market" })
+      ],
+      days: [
+        presentationFixture().days[0]!,
+        { id: "day-2", label: "October 2", date: "2026-10-02", city: "Kyoto", placeIds: ["station", "market"], stops: [{ placeId: "station", order: 1, time: "10:00" }, { placeId: "market", order: 2, time: "12:00" }], candidates: [] }
+      ],
+      routeSegments: [
+        { id: "route-1", dayId: "day-1", originPlaceId: "temple", destinationPlaceId: "lunch", mode: "walking", verification: "needs_verification", label: "Route needs refresh", detail: "This day was edited directly. Refresh routing, timing, meals, and opening constraints before execution.", sourceRefs: [] },
+        { id: "route-2", dayId: "day-1", originPlaceId: "lunch", destinationPlaceId: "craft", mode: "walking", verification: "verified", label: "Short walk", sourceRefs: [] },
+        { id: "route-3", dayId: "day-2", originPlaceId: "station", destinationPlaceId: "market", mode: "transit", verification: "needs_verification", label: "Route needs refresh", detail: "This day was edited directly. Refresh routing, timing, meals, and opening constraints before execution.", sourceRefs: [] }
+      ]
+    });
+    const workspace = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation);
+
+    assert.deepEqual(workspace.itineraries[0]?.routeRefresh, {
+      segmentCount: 1,
+      segmentIds: ["route-1"],
+      dayLabel: "2026-10-01",
+      summary: "1 route leg on 2026-10-01 needs refresh.",
+      request: "Refresh routes for 2026-10-01. Recheck the affected route leg, timing, meal spacing, and opening constraints before marking this itinerary ready."
+    });
+    assert.deepEqual(workspace.itineraries[1]?.routeRefresh, {
+      segmentCount: 1,
+      segmentIds: ["route-3"],
+      dayLabel: "2026-10-02",
+      summary: "1 route leg on 2026-10-02 needs refresh.",
+      request: "Refresh routes for 2026-10-02. Recheck the affected route leg, timing, meal spacing, and opening constraints before marking this itinerary ready."
     });
   });
 

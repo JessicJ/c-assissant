@@ -318,6 +318,7 @@ test("Trip Blueprint validates movement display intent", () => {
     display: {
       routeLabel: "Reviewed garden walk",
       refreshReason: "Route changed after direct itinerary edits.",
+      refreshScope: { dayId: "d1", originPlaceId: "a", destinationPlaceId: "b", reason: "direct_itinerary_edit" },
       showAsFormalRoute: true,
       mapLineState: "needs_refresh"
     }
@@ -329,6 +330,7 @@ test("Trip Blueprint validates movement display intent", () => {
     display: {
       routeLabel: "",
       refreshReason: "",
+      refreshScope: { dayId: "", originPlaceId: "", destinationPlaceId: "", reason: "manual" as "direct_itinerary_edit" },
       showAsFormalRoute: "yes" as unknown as boolean,
       mapLineState: "draft" as "formal"
     }
@@ -336,6 +338,10 @@ test("Trip Blueprint validates movement display intent", () => {
   const issues = tripBlueprintIntegrityIssues(value);
   assert.ok(issues.includes("movement m1 has an empty display route label"));
   assert.ok(issues.includes("movement m1 has an empty display refresh reason"));
+  assert.ok(issues.includes("movement m1 has an empty refresh day"));
+  assert.ok(issues.includes("movement m1 has an empty refresh origin"));
+  assert.ok(issues.includes("movement m1 has an empty refresh destination"));
+  assert.ok(issues.includes("movement m1 has invalid refresh reason"));
   assert.ok(issues.includes("movement m1 has invalid formal route display flag"));
   assert.ok(issues.includes("movement m1 has invalid map line state"));
 });

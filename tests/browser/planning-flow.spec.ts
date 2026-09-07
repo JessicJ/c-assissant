@@ -200,6 +200,10 @@ test("an itinerary Plan renders the Skill-native interactive result inside Landi
           { id: "lx", name: "LX Factory", city: "里斯本", area: "Alcântara", locationLabel: "Alcântara", coordinates: [38.703,-9.179], category: "art", priority: "preferred", durationMinutes: 180, whyWorthIt: "旧工业空间中的书店、工作室和餐饮适合观察城市更新的现实使用。", plan: "第二日上午慢走并在同区午餐。", detailSections: [], sourceRefs: [] },
           { id: "bookshop", name: "Livraria Bertrand", localizedName: "伯特兰书店", city: "里斯本", area: "Chiado", locationLabel: "Chiado", coordinates: [38.7102,-9.1421], category: "bookstore shopping", priority: "nearby", durationMinutes: 45, whyWorthIt: "作为轻量购物点，适合在市中心路线中补进一段书店与街区浏览。", plan: "如果当天还有余力，把它作为短购物停留加入。", detailSections: [], sourceRefs: [] }
         ],
+        travelTips: [
+          { id: "tip-alfama", title: "Alfama pacing", body: "Keep the climb relaxed and pause at small squares.", theme: "timing", context: "Alfama afternoon", placeId: "alfama", dayId: "d1", evidence: [] },
+          { id: "tip-market", title: "Market pacing", body: "Use this as a flexible food and rest stop.", theme: "timing", context: "Market add-on", placeId: "market", dayId: "d2", evidence: [] }
+        ],
         routeSegments: [{ id: "r1", dayId: "d1", originPlaceId: "belem", destinationPlaceId: "alfama", mode: "transit", verification: "verified", durationMinutes: 45, checkedAt: "2026-08-17T00:00:00Z", label: "沿河公共交通进入旧城", detail: "具体线路与耗时出发前复核。", sourceRefs: ["google_maps"] }]
       }
     }
@@ -227,10 +231,10 @@ test("an itinerary Plan renders the Skill-native interactive result inside Landi
           ],
           places: [
             { id: "belem", name: "Mosteiro dos Jerónimos", localizedName: "热罗尼莫斯修道院", city: "里斯本", area: "贝伦", locationLabel: "Belém", coordinates: [38.6979,-9.2065], category: "sight", priority: "must", durationMinutes: 180, whyWorthIt: "从曼努埃尔式石雕理解里斯本如何把航海财富写进宗教建筑。", plan: "上午入场，之后沿河向东移动。", detailSections: [], sourceRefs: [] },
-            { id: "alfama", name: "Alfama", localizedName: "阿尔法玛", city: "里斯本", area: "Alfama", locationLabel: "Alfama", coordinates: [38.711,-9.13], category: "local-life", priority: "preferred", durationMinutes: 120, whyWorthIt: "用坡道、晾衣阳台和小广场理解旧城仍在运转的生活结构。", plan: "下午从低处向上步行，控制爬坡强度。", detailSections: [], sourceRefs: [] },
+            { id: "alfama", name: "Alfama", localizedName: "阿尔法玛", city: "里斯本", area: "Alfama", locationLabel: "Alfama", coordinates: [38.711,-9.13], category: "local-life", priority: "preferred", durationMinutes: 120, whyWorthIt: "用坡道、晾衣阳台和小广场理解旧城仍在运转的生活结构。", plan: "下午从低处向上步行，控制爬坡强度。", tip: "Keep the climb relaxed and pause at small squares.", detailSections: [], sourceRefs: [] },
             { id: "bookshop", name: "Livraria Bertrand", localizedName: "伯特兰书店", city: "里斯本", area: "Chiado", locationLabel: "Chiado", coordinates: [38.7102,-9.1421], category: "bookstore shopping", priority: "nearby", durationMinutes: 45, whyWorthIt: "作为轻量购物点，适合在市中心路线中补进一段书店与街区浏览。", plan: "如果当天还有余力，把它作为短购物停留加入。", detailSections: [], sourceRefs: [] },
             { id: "lx", name: "LX Factory", city: "里斯本", area: "Alcântara", locationLabel: "Alcântara", coordinates: [38.703,-9.179], category: "art", priority: "preferred", durationMinutes: 180, whyWorthIt: "旧工业空间中的书店、工作室和餐饮适合观察城市更新的现实使用。", plan: "第二日上午慢走并在同区午餐。", detailSections: [], sourceRefs: [] },
-            { id: "market", name: "Mercado de Campo de Ourique", localizedName: "坎波德欧里克市场", city: "里斯本", area: "Campo de Ourique", locationLabel: "Campo de Ourique", coordinates: [38.716,-9.166], category: "market", priority: "nearby", durationMinutes: 60, whyWorthIt: "市场兼顾居民采购与短暂停留，适合作为体力下降时的同方向替代。", plan: "有余力时加入第一天下午。", detailSections: [], sourceRefs: [] }
+            { id: "market", name: "Mercado de Campo de Ourique", localizedName: "坎波德欧里克市场", city: "里斯本", area: "Campo de Ourique", locationLabel: "Campo de Ourique", coordinates: [38.716,-9.166], category: "market", priority: "nearby", durationMinutes: 60, whyWorthIt: "市场兼顾居民采购与短暂停留，适合作为体力下降时的同方向替代。", plan: "有余力时加入第一天下午。", tip: "Use this as a flexible food and rest stop.", detailSections: [], sourceRefs: [] }
           ],
           routeSegments: [
             { id: "r1", dayId: "d1", originPlaceId: "belem", destinationPlaceId: "alfama", mode: "transit", verification: "verified", durationMinutes: 45, checkedAt: "2026-08-17T00:00:00Z", label: "沿河公共交通进入旧城", detail: "具体线路与耗时出发前复核。", sourceRefs: [] },
@@ -307,6 +311,7 @@ test("an itinerary Plan renders the Skill-native interactive result inside Landi
     /09:30.*Mosteiro dos Jerónimos/s,
     /15:30.*Alfama/s
   ]);
+  await expect(page.locator(".blueprint-timeline-list .blueprint-itinerary-card-main").filter({ hasText: "Alfama" })).toContainText("Keep the climb relaxed and pause at small squares.");
   await page.locator(".blueprint-timeline-list .blueprint-itinerary-card-main").filter({ hasText: "Alfama" }).click();
   await expect(page.locator(".blueprint-map-bubble.selected").filter({ hasText: "Alfama" })).toBeVisible();
   await expect(page.locator(".blueprint-map-bubble.selected").filter({ hasText: "Mosteiro dos Jerónimos" })).toHaveCount(0);
@@ -361,17 +366,21 @@ test("an itinerary Plan renders the Skill-native interactive result inside Landi
   await expect(editBar.getByText("1 unsaved change")).toBeVisible();
   await expect(editBar.getByText("10/13", { exact: true })).toBeVisible();
   await expect(page.locator(".blueprint-map-status")).toContainText("Routes will be checked");
+  await expect(page.locator(".blueprint-map-impact-notes")).toContainText("Route and timing will be rechecked after confirmation.");
+  await expect(page.locator(".blueprint-map-impact-notes")).toContainText("Added places may affect meal spacing, opening windows, and route order.");
   await expect(page.getByText("After confirm", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh routes" })).toHaveCount(0);
   expect(routeRefreshRequests).toEqual([]);
   await expect(sidePanel.getByRole("heading", { name: "Explore" })).toBeVisible();
   await expect(page.locator(".blueprint-timeline-list").getByRole("button", { name: /Pending itinerary edit for Mercado de Campo de Ourique/ })).toContainText("Draft");
+  await expect(page.locator(".blueprint-timeline-list").getByRole("button", { name: /Pending itinerary edit for Mercado de Campo de Ourique/ })).toContainText("Use this as a flexible food and rest stop.");
   await expect(page.locator(".blueprint-map-bubble.pending").filter({ hasText: "Mercado de Campo de Ourique" })).toBeVisible();
   await expect(page.locator(".blueprint-map-bubble.selected").filter({ hasText: "Mercado de Campo de Ourique" })).toBeVisible();
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByText("unsaved change")).toHaveCount(0);
   await expect(page.getByText("After confirm", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Routes will be checked", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".blueprint-map-impact-notes")).toHaveCount(0);
   await expect(page.locator(".blueprint-timeline-list").getByRole("button", { name: /Pending itinerary edit for Mercado de Campo de Ourique/ })).toHaveCount(0);
   await expect(page.locator(".blueprint-map-bubble").filter({ hasText: "Mercado de Campo de Ourique" })).toHaveCount(0);
   await expect(page.locator(".blueprint-map-bubble.selected").filter({ hasText: "LX Factory" })).toBeVisible();
@@ -405,6 +414,10 @@ test("an itinerary Plan renders the Skill-native interactive result inside Landi
   await expect(page.getByText(/Applied 2 itinerary updates for 10\/13, 10\/12/)).toBeVisible();
   await expect(page.getByText("After confirm", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Routes will be checked", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Route and timing will be rechecked after confirmation.")).toHaveCount(0);
+  await expect(page.locator(".blueprint-map-status")).toContainText("Routes need refresh for 10/12");
+  await expect(page.locator(".blueprint-map-status")).toContainText("1 route leg on 10/12 needs refresh.");
+  await expect(page.getByText("10/12 routes", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh routes" })).toBeVisible();
   await page.getByRole("button", { name: "Refresh routes" }).click();
   await expect.poll(() => routeRefreshRequests.length).toBe(1);
@@ -416,6 +429,9 @@ test("an itinerary Plan renders the Skill-native interactive result inside Landi
   await expect(page.getByRole("button", { name: "Refresh routes" })).toHaveCount(0);
   await page.locator(".blueprint-day-strip button").filter({ hasText: "10/13" }).click();
   await expect(page.locator(".blueprint-timeline-list .blueprint-itinerary-card-main").filter({ hasText: "Mercado de Campo de Ourique" })).toBeVisible();
+  await expect(page.locator(".blueprint-map-status")).toContainText("Routes need refresh for 10/13");
+  await expect(page.locator(".blueprint-map-status")).toContainText("1 route leg on 10/13 needs refresh.");
+  await expect(page.getByText("10/13 routes", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh routes" })).toBeVisible();
   await expect(sidePanel.getByRole("heading", { name: "Explore" })).toBeVisible();
   expect(pageErrors).toEqual([]);
@@ -469,6 +485,7 @@ test("failed direct itinerary Apply keeps the local draft available", async ({ p
   await expect(page.locator(".blueprint-timeline-list").getByRole("button", { name: /Pending itinerary edit for Neighborhood Market/ })).toContainText("Draft");
   await expect(page.locator(".blueprint-map-stage")).toBeVisible();
   await expect(page.locator(".blueprint-map-status")).toContainText("Routes will be checked");
+  await expect(page.locator(".blueprint-map-impact-notes")).toContainText("Added places may affect meal spacing, opening windows, and route order.");
   await expect(page.getByRole("button", { name: "Refresh routes" })).toHaveCount(0);
 
   await editBar.getByRole("button", { name: "Apply", exact: true }).click();
@@ -485,11 +502,108 @@ test("failed direct itinerary Apply keeps the local draft available", async ({ p
   await expect(editBar.getByRole("button", { name: "Apply", exact: true })).toBeEnabled();
   await expect(page.locator(".blueprint-map-status")).toContainText("Routes will be checked");
   await expect(page.getByText("After confirm", { exact: true })).toBeVisible();
+  await expect(page.locator(".blueprint-map-impact-notes")).toContainText("Route and timing will be rechecked after confirmation.");
   await expect(page.getByRole("button", { name: "Refresh routes" })).toHaveCount(0);
   await expect(page.locator(".blueprint-timeline-list").getByRole("button", { name: /Pending itinerary edit for Neighborhood Market/ })).toBeVisible();
   await editBar.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByText("unsaved change")).toHaveCount(0);
+  await expect(page.locator(".blueprint-map-impact-notes")).toHaveCount(0);
   await expect(page.locator(".blueprint-map-bubble").filter({ hasText: "Neighborhood Market" })).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
+test("one pending itinerary edit can be undone without clearing the other drafts", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  const workspace = {
+    profile: { status: "ready", displayName: "Trip tester", preferredLanguage: "English", nationality: "Singapore", gender: "prefer_not_to_say", immigrationStatus: "short_term_visitor" },
+    runtime: { selectedKind: "codex" },
+    inbox: [],
+    activePlan: {
+      id: "undo-trip", version: 1, title: "Lisbon undo drafts", location: "Lisbon", dates: "2026-10-12", status: "draft", knownInformation: [], assumptions: [], nextAction: "Review.", createdAt: "2026-08-17T00:00:00.000Z",
+      configuration: { accommodation: { status: "not_set" }, arrival: {}, transport: { preference: "plan_recommended" }, travelContext: { partySize: 2 } },
+      stages: [],
+      sources: [],
+      presentation: {
+        kind: "itinerary", summary: "Lisbon undo drafts", language: "en", startDate: "2026-10-12", endDate: "2026-10-12", cities: ["Lisbon"],
+        days: [{ id: "d1", label: "October 12", shortLabel: "10/12", city: "Lisbon", title: "Neighborhood day", summary: "A compact day.", placeIds: ["anchor"], stops: [{ placeId: "anchor", order: 1, time: "09:00" }], candidates: ["market", "bookshop"] }],
+        places: [
+          { id: "anchor", name: "Morning Museum", city: "Lisbon", area: "Baixa", locationLabel: "Baixa", coordinates: [38.711, -9.14], category: "museum", priority: "preferred", durationMinutes: 90, whyWorthIt: "A compact morning anchor.", plan: "Visit first.", detailSections: [], sourceRefs: [] },
+          { id: "market", name: "Neighborhood Market", city: "Lisbon", area: "Campo de Ourique", locationLabel: "Campo de Ourique", coordinates: [38.716, -9.166], category: "food market", priority: "nearby", durationMinutes: 60, whyWorthIt: "A flexible food stop.", plan: "Add if the day has room.", detailSections: [], sourceRefs: [] },
+          { id: "bookshop", name: "Neighborhood Bookshop", city: "Lisbon", area: "Chiado", locationLabel: "Chiado", coordinates: [38.7102, -9.1421], category: "bookstore shopping", priority: "nearby", durationMinutes: 45, whyWorthIt: "A compact shopping pause.", plan: "Use between the museum and market.", detailSections: [], sourceRefs: [] }
+        ],
+        routeSegments: []
+      }
+    }
+  };
+  await page.route("**/api/workspace", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(workspace) }));
+  await page.route("**/api/plans/history", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/api/configuration", (route) => route.fulfill({ contentType: "application/json", body: "{}" }));
+  await page.route("**/api/runtimes", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  const directRevisionRequests: unknown[] = [];
+  await page.route("**/api/plans/undo-trip/blueprint-revisions/direct", async (route) => {
+    directRevisionRequests.push(route.request().postDataJSON());
+    const updatedWorkspace = {
+      ...workspace,
+      activePlan: {
+        ...workspace.activePlan,
+        version: 2,
+        presentation: {
+          ...workspace.activePlan.presentation,
+          days: [{ ...workspace.activePlan.presentation.days[0], placeIds: ["anchor", "market"], stops: [{ placeId: "anchor", order: 1, time: "09:00" }, { placeId: "market", order: 2, time: "13:00" }], candidates: ["bookshop"] }],
+          routeSegments: [{ id: "r1", dayId: "d1", originPlaceId: "anchor", destinationPlaceId: "market", mode: "transit", verification: "needs_verification", label: "Route needs refresh", detail: "This day was edited directly. Refresh routing, timing, meals, and opening constraints before execution.", sourceRefs: [] }]
+        }
+      }
+    };
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({
+      ...updatedWorkspace,
+      workspace: updatedWorkspace,
+      revision: {
+        affectedDayIds: ["d1"],
+        affectedPlaceIds: ["market"],
+        revisionCount: 1,
+        routeRefresh: { dayIds: ["d1"], movementIds: ["r1"], reason: "This itinerary day was edited directly." }
+      }
+    }) });
+  });
+  const agentRequests: unknown[] = [];
+  await page.route("**/api/agent/chat", (route) => {
+    agentRequests.push(route.request().postDataJSON());
+    return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Agent route should not be used for direct itinerary edits." }) });
+  });
+
+  await page.goto("/");
+  const sidePanel = page.getByLabel("Itinerary side panel");
+  await sidePanel.getByRole("button", { name: /Neighborhood Market/ }).click();
+  await sidePanel.getByRole("button", { name: "Add to itinerary" }).click();
+  await sidePanel.getByRole("button", { name: "Add to draft" }).click();
+  await sidePanel.getByRole("button", { name: /Neighborhood Bookshop/ }).click();
+  await sidePanel.getByRole("button", { name: "Add to itinerary" }).click();
+  await sidePanel.getByRole("button", { name: "Add to draft" }).click();
+  const editBar = page.getByRole("toolbar", { name: "Unsaved itinerary edits" });
+  await expect(editBar.getByText("2 unsaved changes")).toBeVisible();
+  const timeline = page.locator(".blueprint-timeline-list");
+  await expect(timeline.getByRole("button", { name: /Pending itinerary edit for Neighborhood Market/ })).toBeVisible();
+  await expect(timeline.getByRole("button", { name: /Pending itinerary edit for Neighborhood Bookshop/ })).toBeVisible();
+
+  const bookshopCard = sidePanel.locator(".blueprint-guide-card").filter({ hasText: "Neighborhood Bookshop" });
+  await expect(bookshopCard).toContainText("Added to 10/12 (not saved)");
+  await timeline.locator(".blueprint-itinerary-block-pending").filter({ hasText: "Neighborhood Bookshop" }).getByRole("button", { name: "Undo draft" }).click();
+  await expect(editBar.getByText("1 unsaved change")).toBeVisible();
+  await expect(timeline.getByRole("button", { name: /Pending itinerary edit for Neighborhood Market/ })).toBeVisible();
+  await expect(timeline.getByRole("button", { name: /Pending itinerary edit for Neighborhood Bookshop/ })).toHaveCount(0);
+  await expect(bookshopCard).not.toContainText("not saved");
+  await expect(bookshopCard.getByRole("button", { name: "Add", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect.poll(() => directRevisionRequests.length).toBe(1);
+  expect(directRevisionRequests[0]).toMatchObject({
+    expectedVersion: 1,
+    revisions: [{ kind: "add_place_to_day", placeId: "market", dayId: "d1", position: { kind: "end" } }]
+  });
+  expect(agentRequests).toEqual([]);
+  await expect(page.getByText("unsaved change")).toHaveCount(0);
+  await expect(page.getByText("Applied 1 itinerary update for 10/12. 1 route leg needs refresh.")).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 
@@ -633,6 +747,138 @@ test("place status updates save directly to the Trip Blueprint workspace", async
   expect(pageErrors).toEqual([]);
 });
 
+test("scheduled places can be removed through the direct Blueprint edit bar", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  const workspace = {
+    profile: { status: "ready", displayName: "Trip tester", preferredLanguage: "English", nationality: "Singapore", gender: "prefer_not_to_say", immigrationStatus: "short_term_visitor" },
+    runtime: { selectedKind: "codex" },
+    inbox: [],
+    activePlan: {
+      id: "remove-trip", version: 1, title: "Lisbon remove day", location: "Lisbon", dates: "2026-10-12", status: "draft", knownInformation: [], assumptions: [], nextAction: "Review.", createdAt: "2026-08-17T00:00:00.000Z",
+      configuration: { accommodation: { status: "not_set" }, arrival: {}, transport: { preference: "plan_recommended" }, travelContext: { partySize: 2 } },
+      stages: [],
+      sources: [],
+      presentation: {
+        kind: "itinerary", summary: "Lisbon remove day", language: "en", startDate: "2026-10-12", endDate: "2026-10-12", cities: ["Lisbon"],
+        days: [{ id: "d1", label: "October 12", shortLabel: "10/12", city: "Lisbon", title: "Neighborhood day", summary: "A compact day.", placeIds: ["anchor", "bookshop", "market"], stops: [{ placeId: "anchor", order: 1, time: "09:00" }, { placeId: "bookshop", order: 2, time: "11:00" }, { placeId: "market", order: 3, time: "13:00" }], candidates: [] }],
+        places: [
+          { id: "anchor", name: "Morning Museum", city: "Lisbon", area: "Baixa", locationLabel: "Baixa", coordinates: [38.711, -9.14], category: "museum", priority: "preferred", durationMinutes: 90, whyWorthIt: "A compact morning anchor.", plan: "Visit first.", detailSections: [], sourceRefs: [] },
+          { id: "bookshop", name: "Neighborhood Bookshop", city: "Lisbon", area: "Chiado", locationLabel: "Chiado", coordinates: [38.7102, -9.1421], category: "bookstore shopping", priority: "preferred", durationMinutes: 45, whyWorthIt: "A compact shopping pause.", plan: "Use between the museum and market.", detailSections: [], sourceRefs: [] },
+          { id: "market", name: "Neighborhood Market", city: "Lisbon", area: "Campo de Ourique", locationLabel: "Campo de Ourique", coordinates: [38.716, -9.166], category: "food market", display: { type: "dining", markerKind: "dining" }, priority: "nearby", durationMinutes: 60, whyWorthIt: "A flexible food stop.", plan: "Use after the bookshop.", detailSections: [], sourceRefs: [] }
+        ],
+        routeSegments: [
+          { id: "route-1", dayId: "d1", originPlaceId: "anchor", destinationPlaceId: "bookshop", mode: "walking", verification: "verified", label: "Short walk", detail: "Verified walk.", sourceRefs: [] },
+          { id: "route-2", dayId: "d1", originPlaceId: "bookshop", destinationPlaceId: "market", mode: "transit", verification: "verified", label: "Transit", detail: "Verified transit.", sourceRefs: [] }
+        ]
+      }
+    }
+  };
+  await page.route("**/api/workspace", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(workspace) }));
+  await page.route("**/api/plans/history", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/api/configuration", (route) => route.fulfill({ contentType: "application/json", body: "{}" }));
+  await page.route("**/api/runtimes", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  const directRevisionRequests: unknown[] = [];
+  await page.route("**/api/plans/remove-trip/blueprint-revisions/direct", async (route) => {
+    directRevisionRequests.push(route.request().postDataJSON());
+    const updatedWorkspace = {
+      ...workspace,
+      activePlan: {
+        ...workspace.activePlan,
+        version: 2,
+        presentation: {
+          ...workspace.activePlan.presentation,
+          days: [{ ...workspace.activePlan.presentation.days[0], placeIds: ["anchor", "market"], stops: [{ placeId: "anchor", order: 1, time: "09:00" }, { placeId: "market", order: 2, time: "13:00" }], candidates: ["bookshop"] }],
+          routeSegments: [{ id: "route-1", dayId: "d1", originPlaceId: "anchor", destinationPlaceId: "market", mode: "transit", verification: "needs_verification", label: "Route needs refresh", detail: "This day was edited directly. Refresh routing, timing, meals, and opening constraints before execution.", sourceRefs: [] }]
+        }
+      }
+    };
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({
+      ...updatedWorkspace,
+      workspace: updatedWorkspace,
+      revision: {
+        id: "direct-revision-batch-blueprint-remove-v1-to-v2",
+        baseBlueprintVersion: 1,
+        appliedBlueprintVersion: 2,
+        createdAt: "2026-08-17T00:00:01.000Z",
+        revisionCount: 1,
+        kinds: ["remove_place_from_day"],
+        affectedDayIds: ["d1"],
+        affectedPlaceIds: ["bookshop", "anchor", "market"],
+        routeRefresh: { dayIds: ["d1"], movementIds: ["route-1"], reason: "These itinerary days were edited directly." },
+        undo: { previousBlueprintVersion: 1, previousDays: [], previousMovements: [], previousPlaces: [] },
+        revisions: []
+      }
+    }) });
+  });
+  const agentRequests: unknown[] = [];
+  await page.route("**/api/agent/chat", (route) => {
+    agentRequests.push(route.request().postDataJSON());
+    return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Agent route should not be used for direct place removal." }) });
+  });
+
+  await page.goto("/");
+  const timeline = page.locator(".blueprint-timeline-list");
+  await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Morning Museum", "Neighborhood Bookshop", "Neighborhood Market"]);
+  await timeline.locator(".blueprint-itinerary-card-main").filter({ hasText: "Neighborhood Market" }).click();
+  const sidePanel = page.getByLabel("Itinerary side panel");
+  await sidePanel.getByRole("button", { name: "Remove from day" }).click();
+  await expect(page.getByText("1 unsaved change")).toBeVisible();
+  await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Morning Museum", "Neighborhood Bookshop"]);
+  await expect(page.locator(".blueprint-map-impact-notes")).toContainText("Removing this stop leaves the day without a clear meal or rest anchor.");
+  await sidePanel.getByRole("button", { name: "Undo draft" }).click();
+  await expect(page.getByText("unsaved change")).toHaveCount(0);
+  await expect(page.locator(".blueprint-map-impact-notes")).toHaveCount(0);
+  await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Morning Museum", "Neighborhood Bookshop", "Neighborhood Market"]);
+
+  await timeline.locator(".blueprint-itinerary-card-main").filter({ hasText: "Neighborhood Bookshop" }).click();
+  await sidePanel.getByRole("button", { name: "Remove from day" }).click();
+  await expect(page.getByText("1 unsaved change")).toBeVisible();
+  await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Morning Museum", "Neighborhood Market"]);
+  await expect(page.locator(".blueprint-map-impact-notes")).toContainText("Removed stops stay in Explore and may leave a gap in the day.");
+  const bookshopCard = sidePanel.locator(".blueprint-guide-card").filter({ hasText: "Neighborhood Bookshop" });
+  await expect(bookshopCard).toContainText("Removed from 10/12 (not saved)");
+  await expect(bookshopCard.getByRole("button", { name: "Add", exact: true })).toBeVisible();
+  await bookshopCard.getByRole("button", { name: /Neighborhood Bookshop/ }).click();
+  await expect(sidePanel.getByRole("heading", { name: "Neighborhood Bookshop" })).toBeVisible();
+  await expect(sidePanel.getByText("Removed from 10/12 (not saved).")).toBeVisible();
+  await expect(sidePanel.getByRole("button", { name: "Add to itinerary" })).toBeVisible();
+  await expect(sidePanel.getByRole("button", { name: "Remove from day" })).toHaveCount(0);
+  await sidePanel.getByRole("button", { name: "Undo draft" }).click();
+  await expect(page.getByText("unsaved change")).toHaveCount(0);
+  await expect(page.locator(".blueprint-map-impact-notes")).toHaveCount(0);
+  await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Morning Museum", "Neighborhood Bookshop", "Neighborhood Market"]);
+  await expect(bookshopCard).not.toContainText("not saved");
+  await expect(bookshopCard.getByRole("button", { name: "Add", exact: true })).toHaveCount(0);
+
+  await timeline.locator(".blueprint-itinerary-card-main").filter({ hasText: "Neighborhood Bookshop" }).click();
+  await sidePanel.getByRole("button", { name: "Remove from day" }).click();
+  await expect(page.getByText("1 unsaved change")).toBeVisible();
+  await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Morning Museum", "Neighborhood Market"]);
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect.poll(() => directRevisionRequests.length).toBe(1);
+  expect(directRevisionRequests[0]).toMatchObject({
+    expectedVersion: 1,
+    revisions: [{ kind: "remove_place_from_day", placeId: "bookshop", dayId: "d1" }]
+  });
+  expect(agentRequests).toEqual([]);
+  await expect(page.getByText("Applied 1 itinerary update for 10/12. 1 route leg needs refresh.")).toBeVisible();
+  await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Morning Museum", "Neighborhood Market"]);
+  await expect(timeline.locator(".blueprint-itinerary-card-main > span")).toHaveText(["09:00", "13:00"]);
+  await expect(page.getByRole("button", { name: "Refresh routes" })).toBeVisible();
+  await expect(page.getByText("Route and timing will be rechecked after confirmation.")).toHaveCount(0);
+  await expect(bookshopCard).not.toContainText("not saved");
+  await expect(bookshopCard.getByRole("button", { name: "Add", exact: true })).toBeVisible();
+  await bookshopCard.getByRole("button", { name: /Neighborhood Bookshop/ }).click();
+  await sidePanel.getByRole("button", { name: "Add to itinerary" }).click();
+  await sidePanel.getByRole("button", { name: "Add to draft" }).click();
+  await expect(page.getByText("1 unsaved change")).toBeVisible();
+  await expect(timeline.getByRole("button", { name: /Pending itinerary edit for Neighborhood Bookshop/ })).toContainText("Draft");
+  await expect(page.locator(".blueprint-map-impact-notes")).toContainText("Added places may affect meal spacing, opening windows, and route order.");
+  await expect(directRevisionRequests).toHaveLength(1);
+  expect(pageErrors).toEqual([]);
+});
+
 test("same-day itinerary drag reorder stages and confirms a direct Blueprint move", async ({ page }) => {
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -706,6 +952,7 @@ test("same-day itinerary drag reorder stages and confirms a direct Blueprint mov
   await expect(timeline.locator(".blueprint-itinerary-card-main").filter({ hasText: "Coffee Stop" })).toContainText("Not saved");
   await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Fixed Museum", "Coffee Stop", "Book Street"]);
   await expect(timeline.locator(".blueprint-itinerary-card-main > span")).toHaveText(["09:00", "Late morning option", "Afternoon"]);
+  await expect(page.locator(".blueprint-map-impact-notes")).toContainText("Moved stops keep their current time labels until timing is refreshed.");
 
   const movedCoffeeHandleBox = await timeline.getByRole("button", { name: /Move Coffee Stop/ }).boundingBox();
   const restoreDropBox = await timeline.locator(".blueprint-itinerary-drop-zone").last().boundingBox();
@@ -715,6 +962,7 @@ test("same-day itinerary drag reorder stages and confirms a direct Blueprint mov
   await page.mouse.move(restoreDropBox.x + restoreDropBox.width / 2, restoreDropBox.y + restoreDropBox.height / 2, { steps: 10 });
   await page.mouse.up();
   await expect(page.getByText("unsaved change")).toHaveCount(0);
+  await expect(page.locator(".blueprint-map-impact-notes")).toHaveCount(0);
   await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Fixed Museum", "Book Street", "Coffee Stop"]);
   await expect(timeline.locator(".blueprint-itinerary-card-main > span")).toHaveText(["09:00", "Late morning option", "Afternoon"]);
 
@@ -729,6 +977,7 @@ test("same-day itinerary drag reorder stages and confirms a direct Blueprint mov
   await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Fixed Museum", "Coffee Stop", "Book Street"]);
   await expect(timeline.locator(".blueprint-itinerary-card-main > span")).toHaveText(["09:00", "Late morning option", "Afternoon"]);
   await expect(page.locator(".blueprint-map-status")).toContainText("Routes will be checked");
+  await expect(page.locator(".blueprint-map-impact-notes")).toContainText("Moved stops keep their current time labels until timing is refreshed.");
   await expect(page.getByText("After confirm", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh routes" })).toHaveCount(0);
 

@@ -70,8 +70,8 @@ test("Direct Blueprint Revision adds a place to one day without losing catalog c
   assert.deepEqual(revised.movements.map((movement) => [movement.originPlaceId, movement.destinationPlaceId, movement.status]), [["a", "c", "recheck"], ["c", "b", "recheck"]]);
   assert.deepEqual(revised.movements.map((movement) => movement.mode), ["walking", "walking"]);
   assert.deepEqual(revised.movements.map((movement) => movement.display), [
-    { routeLabel: "Route needs refresh", refreshReason: "Refresh this route leg after direct itinerary edits.", showAsFormalRoute: true, mapLineState: "needs_refresh" },
-    { routeLabel: "Route needs refresh", refreshReason: "Refresh this route leg after direct itinerary edits.", showAsFormalRoute: true, mapLineState: "needs_refresh" }
+    { routeLabel: "Route needs refresh", refreshReason: "Refresh this route leg after direct itinerary edits.", refreshScope: { dayId: "d1", originPlaceId: "a", destinationPlaceId: "c", reason: "direct_itinerary_edit" }, showAsFormalRoute: true, mapLineState: "needs_refresh" },
+    { routeLabel: "Route needs refresh", refreshReason: "Refresh this route leg after direct itinerary edits.", refreshScope: { dayId: "d1", originPlaceId: "c", destinationPlaceId: "b", reason: "direct_itinerary_edit" }, showAsFormalRoute: true, mapLineState: "needs_refresh" }
   ]);
   assert.deepEqual(revised.places.map((candidate) => candidate.id), ["a", "b", "c"]);
 });
@@ -180,6 +180,69 @@ test("Direct Blueprint Revision moves a scheduled place within one day", () => {
   assert.deepEqual(revised.movements.map((movement) => [movement.originPlaceId, movement.destinationPlaceId, movement.status]), [["b", "a", "recheck"]]);
   assert.deepEqual(revised.movements.map((movement) => movement.mode), ["walking"]);
   assert.deepEqual(revised.movements.map((movement) => movement.display?.mapLineState), ["needs_refresh"]);
+});
+
+test("Direct Blueprint Revision removes a place from one day without deleting it", () => {
+  const original = blueprint();
+  original.places.push(place("d"));
+  original.days[0] = {
+    ...original.days[0]!,
+    stops: [
+      { placeId: "a", order: 1, time: "09:00", role: "morning" },
+      { placeId: "b", order: 2, time: "10:30", role: "late_morning" },
+      { placeId: "d", order: 3, time: "14:00", role: "afternoon" }
+    ],
+    candidatePlaceIds: ["c"],
+    blocks: [
+      { id: "block-a", kind: "stop", order: 1, placeId: "a", startTime: "09:00", title: "A anchor", summary: "Use A first.", evidence: [] },
+      { id: "block-break", kind: "rest", order: 2, title: "Short break", summary: "Keep a pause.", evidence: [] },
+      { id: "block-b", kind: "meal", order: 3, placeId: "b", startTime: "10:30", title: "B meal", summary: "Use B second.", evidence: [] },
+      { id: "block-d", kind: "stop", order: 4, placeId: "d", startTime: "14:00", title: "D stop", summary: "Use D third.", evidence: [] }
+    ]
+  };
+  original.movements = [
+    { id: "m1", dayId: "d1", originPlaceId: "a", destinationPlaceId: "b", mode: "walking", status: "verified", durationMinutes: 20, label: "Walk A to B", detail: "Verified walk.", evidence: [] },
+    { id: "m2", dayId: "d1", originPlaceId: "b", destinationPlaceId: "d", mode: "walking", status: "verified", durationMinutes: 15, label: "Walk B to D", detail: "Verified walk.", evidence: [] }
+  ];
+
+  const result = applyDirectBlueprintRevisionWithMetadata(original, {
+    kind: "remove_place_from_day",
+    placeId: "b",
+    dayId: "d1",
+    createdAt: "2026-08-27T00:00:00.000Z"
+  });
+
+  assert.equal(result.blueprint.version, 2);
+  assert.deepEqual(result.blueprint.places.map((candidate) => candidate.id), ["a", "b", "c", "d"]);
+  assert.deepEqual(result.blueprint.days[0]?.stops.map((stop) => [stop.placeId, stop.order, stop.time ?? "", stop.role ?? ""]), [
+    ["a", 1, "09:00", "morning"],
+    ["d", 2, "14:00", "afternoon"]
+  ]);
+  assert.deepEqual(result.blueprint.days[0]?.candidatePlaceIds, ["c", "b"]);
+  assert.deepEqual(result.blueprint.days[0]?.blocks?.map((block) => [block.id, block.kind, block.placeId ?? "", block.order, block.startTime ?? "", block.title ?? ""]), [
+    ["block-a", "stop", "a", 1, "09:00", "A anchor"],
+    ["block-break", "rest", "", 2, "", "Short break"],
+    ["block-d", "stop", "d", 3, "14:00", "D stop"]
+  ]);
+  assert.deepEqual(result.blueprint.movements.map((movement) => [movement.originPlaceId, movement.destinationPlaceId, movement.status, movement.display?.mapLineState]), [
+    ["a", "d", "recheck", "needs_refresh"]
+  ]);
+  assert.equal(result.metadata.kind, "remove_place_from_day");
+  assert.deepEqual(result.metadata.affectedDayIds, ["d1"]);
+  assert.deepEqual(result.metadata.routeRefresh.movementIds, ["movement-d1-1"]);
+  assert.deepEqual(result.metadata.undo.previousDay?.stops.map((stop) => stop.placeId), ["a", "b", "d"]);
+  assert.deepEqual(result.metadata.undo.previousMovements.map((movement) => movement.id), ["m1", "m2"]);
+});
+
+test("Direct Blueprint Revision rejects direct removal of booked places", () => {
+  const reserved = blueprint();
+  reserved.places[1] = { ...reserved.places[1]!, priority: "booked" };
+  assert.throws(() => applyDirectBlueprintRevision(reserved, {
+    kind: "remove_place_from_day",
+    placeId: "b",
+    dayId: "d1",
+    createdAt: "2026-08-27T00:00:00.000Z"
+  }), /booking/i);
 });
 
 test("Direct Blueprint Revision only marks edited-day movements as needing route refresh", () => {

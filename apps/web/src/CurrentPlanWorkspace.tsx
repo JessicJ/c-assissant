@@ -92,12 +92,14 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
       if (!compactEdits.length) throw new Error("There were no itinerary edits to apply.");
       const payload = await applyDirectBlueprintRevisionBatch(plan.id, {
         ...planReadModel.mutationVersion,
-        revisions: compactEdits.map((edit) => ({
-          kind: edit.kind,
-          placeId: edit.placeId,
-          dayId: edit.dayId,
-          position: edit.position
-        }))
+        revisions: compactEdits.map((edit) => edit.kind === "remove_place_from_day"
+          ? { kind: edit.kind, placeId: edit.placeId, dayId: edit.dayId }
+          : {
+            kind: edit.kind,
+            placeId: edit.placeId,
+            dayId: edit.dayId,
+            position: edit.position!
+          })
       });
       await onWorkspace(payload.workspace);
       onStatus({ tone: "success", text: itineraryRevisionImpactStatus(payload.revision, presentation) });
