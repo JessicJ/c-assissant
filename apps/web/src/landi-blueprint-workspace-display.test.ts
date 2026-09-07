@@ -262,6 +262,22 @@ describe("Landi Blueprint workspace display helpers", () => {
           category: "food market",
           whyWorthIt: "A neighborhood market that adds a concrete local food stop.",
           plan: "Do not schedule it after a tiring cross-city day. Use it only after Landi replans the route.",
+          detailSections: [{
+            title: "How to experience it",
+            body: "Route refresh required before execution. Notice the seasonal counters before choosing lunch.",
+            items: ["Candidate backup for the route order.", "Ask vendors what arrived today."]
+          }],
+          guideDisplay: {
+            comparisonRows: [{
+              id: "tea-row",
+              relatedPlaceId: "tea",
+              area: "Central",
+              routeFit: "Do not schedule this after a tiring cross-city day.",
+              timing: "Needs replanning before this route order is safe.",
+              effort: "A quiet nearby option.",
+              sourceState: "Referenced"
+            }]
+          },
           schedulingEligibility: {
             decision: "high_impact",
             reason: "Do not schedule it after a tiring cross-city day.",
@@ -282,6 +298,74 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.equal(cardById.get("market")?.summary, "A neighborhood market that adds a concrete local food stop.");
     assert.equal(cardById.get("tea")?.summary, "A quiet tea counter with hands-on preparation.");
     assert.equal(cards.some((card) => /do not schedule|tiring cross-city|replan/i.test(card.summary)), false);
+    const detail = detailDisplayForWorkspacePlace(buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation), "market")!;
+    assert.equal(detail.leadBody, "A neighborhood market that adds a concrete local food stop.");
+    assert.equal(detail.planBody, undefined);
+    assert.deepEqual(detail.comparisonRows.map((row) => ({ routeFit: row.routeFit, timing: row.timing, effort: row.effort })), [{
+      routeFit: "Same area",
+      timing: "Flexible timing",
+      effort: "A quiet nearby option."
+    }]);
+    assert.deepEqual(detail.detailSections, [{
+      title: "How to experience it",
+      body: "Notice the seasonal counters before choosing lunch.",
+      items: ["Ask vendors what arrived today."]
+    }]);
+    assert.equal(/do not schedule|tiring cross-city|replan/i.test(JSON.stringify(detail)), false);
+  });
+
+  it("keeps internal workflow language out of tips and preparation", () => {
+    const presentation = presentationFixture({
+      travelTips: [
+        {
+          id: "tip-good",
+          title: "Route refresh note",
+          body: "Route refresh is required before execution. Carry small cash for neighborhood food counters.",
+          theme: "payment",
+          context: "Workspace candidate notes",
+          evidence: []
+        },
+        {
+          id: "tip-internal",
+          title: "Schema note",
+          body: "JSON schema candidate state needs replanning.",
+          theme: "local_norms",
+          context: "Workspace",
+          evidence: []
+        }
+      ],
+      preparationChecklist: [
+        {
+          id: "prep-phone",
+          title: "Workspace token setup",
+          description: "Check eSIM coverage before departure. Route refresh before execution.",
+          completionCondition: "Schema state reviewed.",
+          group: "phone_payments",
+          evidence: []
+        }
+      ]
+    });
+    const workspace = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation);
+    assert.deepEqual(workspace.tipGroups.flatMap((group) => group.tips).map((tip) => ({
+      title: tip.title,
+      body: tip.body,
+      context: tip.context
+    })), [{
+      title: "Carry small cash for neighborhood food counters.",
+      body: "Carry small cash for neighborhood food counters.",
+      context: "Trip tip"
+    }]);
+    assert.deepEqual(workspace.preparationGroups.flatMap((group) => group.items).map((item) => ({
+      title: item.title,
+      description: item.description
+    })), [{
+      title: "Travel preparation",
+      description: "Check eSIM coverage before departure."
+    }]);
+    assert.equal(/workspace|schema|json|candidate|route refresh|execution|replan/i.test(JSON.stringify({
+      tips: workspace.tipGroups,
+      preparation: workspace.preparationGroups
+    })), false);
   });
 
   it("uses Blueprint travel tips and preparation checklist before plan inference", () => {

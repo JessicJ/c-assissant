@@ -453,7 +453,8 @@ function contextualTipForPlace(place: PlanPlace, travelTips: PlanPresentation["t
     ?? placeTips.find((tip) => !tip.dayId && !tip.blockId)
     ?? placeTips[0];
   const tipText = matchingTip?.body || place.tip || place.reservation?.note || workspaceSignalTip(workspaceSignalsForPlace(place));
-  const sentence = tipText ? firstUsefulSentence(tipText) || tipText.trim() : "";
+  const cleanTip = travelerFacingDefaultText(tipText);
+  const sentence = cleanTip ? firstUsefulSentence(cleanTip) || cleanTip : "";
   return sentence ? shorten(sentence, 118) : undefined;
 }
 
@@ -798,6 +799,8 @@ function detailDisplayForPlace(presentation: PlanPresentation, planSources: Sour
   const canAdd = !scheduledDay && directAddAllowed(place);
   const canRemoveFromDay = Boolean(scheduledDay && directRemoveAllowed(place));
   const removeBlockedReason = scheduledDay && !canRemoveFromDay ? directRemoveBlockedLabel(place) : undefined;
+  const leadBody = travelerFacingDefaultText(place.whyWorthIt) || travelerFacingDefaultText(place.plan);
+  const planBody = travelerFacingDefaultText(place.plan);
   return {
     placeId: place.id,
     title: displayPlaceName(place),
@@ -806,10 +809,10 @@ function detailDisplayForPlace(presentation: PlanPresentation, planSources: Sour
     priorityActions: placePriorityActions(place, Boolean(scheduledDay)),
     ...(placePriorityBlockedNote(place, Boolean(scheduledDay)) ? { priorityBlockedNote: placePriorityBlockedNote(place, Boolean(scheduledDay))! } : {}),
     leadTitle: place.guideDisplay?.detailLeadTitle ?? detailLeadTitle(type),
-    leadBody: place.whyWorthIt || place.plan,
-    ...(place.plan ? { planTitle: place.guideDisplay?.detailPlanTitle ?? detailPlanTitle(type), planBody: place.plan } : {}),
+    leadBody,
+    ...(planBody ? { planTitle: place.guideDisplay?.detailPlanTitle ?? detailPlanTitle(type), planBody } : {}),
     ...(place.reservation?.note ? { reservationNote: place.reservation.note } : {}),
-    detailSections: place.detailSections,
+    detailSections: travelerFacingDetailSections(place.detailSections),
     relatedEvents: relatedEventsForPlace(presentation, planSources, place.id),
     sources: sourceSummariesForPlace(place, planSources),
     ...(place.guideDisplay?.detailSourceTitle?.trim() ? { sourceTitle: place.guideDisplay.detailSourceTitle.trim() } : {}),
@@ -855,10 +858,10 @@ function comparisonRowsFromGuideDisplay(presentation: PlanPresentation, selected
       id: row.relatedPlaceId ?? row.id,
       name: row.name?.trim() || (related ? displayPlaceName(related) : row.id),
       area: row.area,
-      routeFit: row.routeFit,
-      timing: row.timing,
-      effort: row.effort,
-      sourceState: row.sourceState
+      routeFit: travelerFacingComparisonText(row.routeFit, related ? routeFitLabel(related, selectedPlace) : "Related option"),
+      timing: travelerFacingComparisonText(row.timing, related ? timingLabel(related) : "Flexible timing"),
+      effort: travelerFacingComparisonText(row.effort, related ? effortLabel(related) : "Review details"),
+      sourceState: travelerFacingComparisonText(row.sourceState, related ? sourceStateLabel(related) : "Referenced")
     };
   }).slice(0, 5);
 }
@@ -878,7 +881,7 @@ function comparisonRowsFromRelationshipGraph(presentation: PlanPresentation, sel
         area: place.area ?? place.locationLabel,
         routeFit: relationshipKindLabel(relationship.kind),
         timing: relationship.dayIds?.length ? relationship.dayIds.map((dayId) => dayLabelForId(presentation, dayId)).join(", ") : timingLabel(place),
-        effort: relationship.rationale,
+        effort: travelerFacingComparisonText(relationship.rationale, relationshipKindLabel(relationship.kind)),
         sourceState: relationship.evidence.some((ref) => ref.status === "verified") ? "Verified relationship" : sourceStateLabel(place)
       }];
     })
@@ -1212,18 +1215,22 @@ function groupTipsByTheme(tips: TipDisplay[]): TipGroupDisplay[] {
 
 function tipsForPresentation(plan: Plan, presentation: PlanPresentation): TipDisplay[] {
   if (presentation.travelTips === undefined) return localTipsForPlan(plan);
-  return presentation.travelTips.map((tip) => ({
-    id: tip.id,
-    title: tip.title,
-    body: tip.body,
-    context: tip.context,
-    theme: tip.theme
-  }));
+  return presentation.travelTips.flatMap((tip) => {
+    const body = travelerFacingDefaultText(tip.body);
+    if (!body) return [];
+    return [{
+      id: tip.id,
+      title: travelerFacingLabel(tip.title, tipTitle(body)),
+      body,
+      context: travelerFacingLabel(tip.context, "Trip tip"),
+      theme: tip.theme
+    }];
+  });
 }
 
 function localTipsForPlan(plan: Pick<Plan, "stages" | "presentation" | "location">): TipDisplay[] {
   const placeTips = (plan.presentation?.places ?? []).flatMap((place) => {
-    const body = place.tip?.trim();
+    const body = travelerFacingDefaultText(place.tip ?? "");
     if (!body || !isDestinationRelevantTip(body)) return [];
     return [{
       id: `place-${place.id}`,
@@ -1233,9 +1240,9 @@ function localTipsForPlan(plan: Pick<Plan, "stages" | "presentation" | "location
     }];
   });
   const taskTips = plan.stages.flatMap((stage) => stage.tasks.flatMap((task) => {
-    const text = `${task.title}. ${task.description ?? ""}`.trim();
+    const text = travelerFacingDefaultText(`${task.title}. ${task.description ?? ""}`);
     if (task.owner !== "assistant" || !/tip|custom|safety|payment|transport|etiquette|local|礼仪|安全|支付|交通|风俗/.test(`${stage.title} ${task.title}`.toLocaleLowerCase()) || !isDestinationRelevantTip(text)) return [];
-    return [{ id: `task-${task.id}`, title: task.title, body: task.description ?? task.title, context: stage.title }];
+    return [{ id: `task-${task.id}`, title: travelerFacingLabel(task.title, tipTitle(text)), body: travelerFacingDefaultText(task.description ?? task.title) || text, context: travelerFacingLabel(stage.title, "Trip tip") }];
   }));
   return uniqueTips([...placeTips, ...taskTips]).slice(0, 12);
 }
@@ -1247,10 +1254,12 @@ function preparationGroupsForPresentation(plan: Plan, presentation: PlanPresenta
   const completedRequirementIds = new Set(plan.stages.flatMap((stage) => stage.tasks.flatMap((task) => task.status === "completed" && task.requirementId ? [task.requirementId] : [])));
   const groups = new Map<BlueprintPreparationGroup, PreparationChecklistItemDisplay[]>();
   for (const item of canonical) {
+    const title = travelerFacingLabel(item.title, "Travel preparation");
+    const description = travelerFacingDefaultText(item.description ?? item.completionCondition ?? "");
     groups.set(item.group, [...(groups.get(item.group) ?? []), {
       id: item.id,
-      title: item.title,
-      ...(item.description ? { description: item.description } : item.completionCondition ? { description: item.completionCondition } : {}),
+      title,
+      ...(description ? { description } : {}),
       checked: completedTaskIds.has(item.id) || Boolean(item.requirementId && completedRequirementIds.has(item.requirementId))
     }]);
   }
@@ -1271,8 +1280,8 @@ function preparationGroupsForPlan(plan: Plan): PreparationGroupDisplay[] {
     title: group.title,
     items: group.items.map(({ task }) => ({
       id: task.id,
-      title: task.title,
-      ...(task.description ? { description: task.description } : {}),
+      title: travelerFacingLabel(task.title, "Travel preparation"),
+      ...(travelerFacingDefaultText(task.description ?? "") ? { description: travelerFacingDefaultText(task.description ?? "") } : {}),
       checked: task.status === "completed"
     }))
   }));
@@ -1455,19 +1464,44 @@ function workspaceAreasForPresentation(presentation: PlanPresentation): readonly
 }
 
 function shortGuideSummary(place: PlanPlace): string {
-  if (place.guideDisplay?.cardSummary?.trim()) return place.guideDisplay.cardSummary.trim();
-  return shorten(firstUsefulSentence(place.whyWorthIt) || firstTravelerFacingPlanSentence(place.plan) || `${place.area ?? place.locationLabel}.`, 125);
+  const explicitSummary = travelerFacingDefaultText(place.guideDisplay?.cardSummary ?? "");
+  if (explicitSummary) return shorten(firstUsefulSentence(explicitSummary), 125);
+  return shorten(firstUsefulSentence(travelerFacingDefaultText(place.whyWorthIt)) || firstUsefulSentence(travelerFacingDefaultText(place.plan)) || `${place.area ?? place.locationLabel}.`, 125);
 }
 
 function firstUsefulSentence(value: string): string {
   return value.split(/(?<=[.!?。！？])\s+/)[0]?.trim() ?? "";
 }
 
-function firstTravelerFacingPlanSentence(value: string): string {
-  return value.split(/(?<=[.!?。！？])\s+/).map((sentence) => sentence.trim()).find((sentence) => sentence && !looksLikeSchedulingConstraint(sentence)) ?? "";
+function travelerFacingDefaultText(value: string | undefined): string {
+  return (value ?? "").split(/(?<=[.!?。！？])\s+/).map((sentence) => sentence.trim()).filter((sentence) => sentence && !looksLikeInternalWorkspaceText(sentence)).join(" ");
 }
 
-function looksLikeSchedulingConstraint(value: string): boolean {
+function travelerFacingLabel(value: string | undefined, fallback: string): string {
+  const text = travelerFacingDefaultText(value);
+  return text || fallback;
+}
+
+function travelerFacingComparisonText(value: string, fallback: string): string {
+  const text = travelerFacingDefaultText(value);
+  return text || fallback;
+}
+
+function travelerFacingDetailSections(sections: DetailSectionDisplay[]): DetailSectionDisplay[] {
+  return sections.flatMap((section) => {
+    const title = travelerFacingLabel(section.title, "");
+    const body = travelerFacingDefaultText(section.body);
+    const items = section.items?.map((item) => travelerFacingDefaultText(item)).filter(Boolean);
+    if (!title || (!body && !items?.length)) return [];
+    return [{
+      title,
+      ...(body ? { body } : {}),
+      ...(items?.length ? { items } : {})
+    }];
+  });
+}
+
+function looksLikeInternalWorkspaceText(value: string): boolean {
   const normalized = value.toLowerCase();
   return [
     /\bdo not schedule\b/,
@@ -1477,8 +1511,23 @@ function looksLikeSchedulingConstraint(value: string): boolean {
     /\bcross-city day\b/,
     /\btiring\b/,
     /\broute order\b/,
+    /\broute refresh\b/,
+    /\brefresh affected route\b/,
+    /\bneeds? route\b/,
+    /\bworkspace\b/,
+    /\bschema\b/,
+    /\brenderer\b/,
+    /\bthemeprofile\b/,
+    /\btoken\b/,
+    /\bhash\b/,
+    /\bjson\b/,
+    /\bcandidate\b/,
+    /\bhigh-impact\b/,
+    /\bexecution-ready\b/,
+    /\bbefore execution\b/,
     /\bneeds? replanning\b/,
-    /\breplan(?:ning)?\b/
+    /\breplans?\b/,
+    /\breplanning\b/
   ].some((pattern) => pattern.test(normalized));
 }
 
@@ -1496,21 +1545,29 @@ function guideTags(presentation: PlanPresentation, place: PlanPlace): string[] {
 }
 
 function guideCardAction(place: PlanPlace, state: GuideState, timeline: GuideCardDisplay["timeline"]): Pick<GuideCardDisplay, "canAdd" | "actionLabel" | "footerNote" | "addBlockedReason"> {
-  if (state === "unscheduled" && directAddAllowed(place)) return { canAdd: true, actionLabel: place.guideDisplay?.addActionLabel ?? place.guideDisplay?.primaryActionLabel ?? "Add", ...(place.guideDisplay?.footerNote ? { footerNote: place.guideDisplay.footerNote } : {}) };
+  if (state === "unscheduled" && directAddAllowed(place)) {
+    const footerNote = travelerFacingDefaultText(place.guideDisplay?.footerNote);
+    return {
+      canAdd: true,
+      actionLabel: travelerFacingLabel(place.guideDisplay?.addActionLabel ?? place.guideDisplay?.primaryActionLabel, "Add"),
+      ...(footerNote ? { footerNote } : {})
+    };
+  }
   if (state === "unscheduled") {
-    const label = place.guideDisplay?.addBlockedLabel ?? place.guideDisplay?.blockedActionLabel ?? addBlockedLabel(place);
+    const label = travelerFacingLabel(place.guideDisplay?.addBlockedLabel ?? place.guideDisplay?.blockedActionLabel, addBlockedLabel(place));
     return { canAdd: false, footerNote: label, addBlockedReason: label };
   }
   if (state === "scheduled") return { canAdd: false, ...(timeline ? { footerNote: `${timeline.label} ${timeline.timeLabel}` } : {}) };
-  return { canAdd: false, ...(place.guideDisplay?.footerNote ? { footerNote: place.guideDisplay.footerNote } : {}) };
+  const footerNote = travelerFacingDefaultText(place.guideDisplay?.footerNote);
+  return { canAdd: false, ...(footerNote ? { footerNote } : {}) };
 }
 
 function detailPrimaryActionLabel(place: PlanPlace, scheduled: boolean, canAdd: boolean): string {
-  if (scheduled) return place.guideDisplay?.scheduledActionLabel ?? "Show in itinerary";
-  if (canAdd) return place.guideDisplay?.primaryActionLabel ?? "Add to itinerary";
+  if (scheduled) return travelerFacingLabel(place.guideDisplay?.scheduledActionLabel, "Show in itinerary");
+  if (canAdd) return travelerFacingLabel(place.guideDisplay?.primaryActionLabel, "Add to itinerary");
   const decision = place.schedulingEligibility?.decision;
-  if (decision === "informational") return place.guideDisplay?.informationalActionLabel ?? place.guideDisplay?.addBlockedLabel ?? "Background note";
-  return place.guideDisplay?.blockedActionLabel ?? place.guideDisplay?.addBlockedLabel ?? addBlockedLabel(place);
+  if (decision === "informational") return travelerFacingLabel(place.guideDisplay?.informationalActionLabel ?? place.guideDisplay?.addBlockedLabel, "Background note");
+  return travelerFacingLabel(place.guideDisplay?.blockedActionLabel ?? place.guideDisplay?.addBlockedLabel, addBlockedLabel(place));
 }
 
 function directAddAllowed(place: Pick<PlanPlace, "schedulingEligibility">): boolean {
@@ -1537,7 +1594,7 @@ function directRemoveBlockedLabel(place: Pick<PlanPlace, "priority" | "schedulin
 
 function addBlockedLabel(place: Pick<PlanPlace, "schedulingEligibility">): string {
   const decision = place.schedulingEligibility?.decision;
-  if (decision === "high_impact") return "Needs replanning";
+  if (decision === "high_impact") return "Ask Landi to adjust";
   if (decision === "blocked") return "Not for this plan";
   if (decision === "informational") return "Background note";
   return "Needs review";
