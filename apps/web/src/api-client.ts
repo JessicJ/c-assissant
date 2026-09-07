@@ -76,8 +76,12 @@ export type PlanPresentationResponse = WorkspaceSnapshot & {
   error?: string;
 };
 
-export type PlanRouteRefreshRequest = {
+export type VersionedPlanMutationRequest = {
   expectedVersion: number;
+  expectedBlueprintVersion?: number;
+};
+
+export type PlanRouteRefreshRequest = VersionedPlanMutationRequest & {
   segmentIds: string[];
 };
 
@@ -93,7 +97,7 @@ export type PlanRouteRefreshResponse = {
 
 export type DirectBlueprintRevisionRequest = DirectBlueprintRevision extends infer Revision
   ? Revision extends DirectBlueprintRevision
-    ? Omit<Revision, "createdAt"> & { expectedVersion: number }
+    ? Omit<Revision, "createdAt"> & VersionedPlanMutationRequest
     : never
   : never;
 
@@ -103,8 +107,7 @@ export type DirectBlueprintRevisionInput = DirectBlueprintRevision extends infer
     : never
   : never;
 
-export type DirectBlueprintRevisionBatchRequest = {
-  expectedVersion: number;
+export type DirectBlueprintRevisionBatchRequest = VersionedPlanMutationRequest & {
   revisions: DirectBlueprintRevisionInput[];
 };
 

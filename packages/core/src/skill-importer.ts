@@ -692,7 +692,7 @@ function normalizeMovementsForReasonableness(movements: BlueprintMovement[], day
 function enrichMovement(movement: BlueprintMovement, origin?: BlueprintPlace, destination?: BlueprintPlace): BlueprintMovement {
   const inferredMode = movement.mode === "unknown" ? inferMovementMode(origin, destination) : movement.mode;
   const durationMinutes = movement.durationMinutes ?? estimateMovementMinutes(origin, destination, inferredMode);
-  const status = movement.status === "verified" && movement.evidence.length > 0 ? "verified" : "recheck";
+  const status = movement.status === "verified" && evidenceIsFullyVerified(movement.evidence) ? "verified" : "recheck";
   return {
     ...movement,
     mode: inferredMode,
@@ -910,6 +910,7 @@ function evidenceForUrls(urls: string[] | undefined, sourceIdByUrl: Map<string, 
 function remapFieldEvidence(items: BlueprintFieldEvidence[], sourceIdByArtifactId: Map<string, string>): BlueprintFieldEvidence[] {
   return items.map((item) => ({
     ...structuredClone(item),
+    status: item.status === "verified" && !evidenceIsFullyVerified(item.evidence) ? "recheck" : item.status,
     evidence: item.evidence.map((ref) => ({
       ...ref,
       sourceId: sourceIdByArtifactId.get(ref.sourceId) ?? ref.sourceId
@@ -947,6 +948,10 @@ function remapEvidenceRefs(evidence: BlueprintEvidenceRef[], sourceIdByArtifactI
     ...structuredClone(ref),
     sourceId: sourceIdByArtifactId.get(ref.sourceId) ?? ref.sourceId
   })).filter((ref, index, all) => all.findIndex((candidate) => candidate.sourceId === ref.sourceId && candidate.status === ref.status) === index);
+}
+
+function evidenceIsFullyVerified(evidence: BlueprintEvidenceRef[]): boolean {
+  return evidence.length > 0 && evidence.every((ref) => ref.status === "verified");
 }
 
 function normalizeGuideDisplay(display: NonNullable<SkillResearchPlaceArtifact["guideDisplay"]>, sourceIdByUrl: Map<string, string>, inputPlaceIdMap: Map<string, string>, placeIds: Set<string>, selfPlaceId: string): NonNullable<BlueprintPlace["guideDisplay"]> {

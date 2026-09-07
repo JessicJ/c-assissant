@@ -8,7 +8,7 @@ import { PlanChangeNotice, PlanCommandCenter, PlanDecisionBoard, PlanGrounding, 
 import { PlanRemindersView, PlanSourcesView, WorkspaceEmpty } from "./PlanSupportingViews.js";
 import { FeaturedChecklist, FeaturedTimeline, PlanContentSection } from "./PlanTaskSections.js";
 import { currentPlanReadModel } from "./current-plan-read-model.js";
-import { compactPendingItineraryEdits, pendingItineraryDraftSummary, type ItineraryRouteRefreshDisplay, type PendingItineraryEditDisplay } from "./landi-blueprint-workspace-display.js";
+import { appliedItineraryRevisionSummary, compactPendingItineraryEdits, type ItineraryRouteRefreshDisplay, type PendingItineraryEditDisplay } from "./landi-blueprint-workspace-display.js";
 import { planRefinementQuestion } from "./plan-display.js";
 import { visibleDocumentPolicySources } from "./plan-external-display.js";
 import { isExplicitPreparationTask } from "./plan-preparation-display.js";
@@ -17,14 +17,8 @@ import type { AgentStatus } from "./ui-types.js";
 
 type PlanWorkspaceView = "plan" | "preparation" | "bookings" | "decisions" | "reminders" | "sources";
 
-function itineraryRevisionImpactStatus(revision: DirectBlueprintRevisionBatchMetadata, edits: PendingItineraryEditDisplay[]): string {
-  const draftSummary = pendingItineraryDraftSummary(edits);
-  const placeCount = revision.affectedPlaceIds.length;
-  const dayCount = revision.affectedDayIds.length;
-  const savedLabel = draftSummary.changeLabel.replace("unsaved", "itinerary");
-  if (edits.length) return `Applied ${savedLabel} for ${draftSummary.affectedDayLabel}. Routes need refresh.`;
-  if (placeCount === 1 && dayCount === 1) return "Updated 1 place. Routes need refresh.";
-  return `Updated ${placeCount} places across ${dayCount} days. Routes need refresh.`;
+function itineraryRevisionImpactStatus(revision: DirectBlueprintRevisionBatchMetadata, presentation?: Plan["presentation"]): string {
+  return appliedItineraryRevisionSummary(revision, presentation).statusText;
 }
 
 export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanChange, latestPlanReplacement, onRevise, onTaskToggle, onTaskReorder, onUndoChange, onConfirm, onWorkspace, onStatus, onError, onOperationBusy, confirming }: { plan: Plan; blueprint?: TripBlueprint | undefined; destinationArrivals: DestinationArrivalEvent[]; latestPlanChange?: PlanChangeSet | undefined; latestPlanReplacement?: PlanReplacementAudit | undefined; onRevise: (message?: string) => void; onTaskToggle: (planId: string, taskId: string, checked: boolean) => Promise<void>; onTaskReorder: (planId: string, taskId: string, direction: "up" | "down") => Promise<void>; onUndoChange: (planId: string, changeId: string) => Promise<void>; onConfirm: (planId: string) => Promise<void>; onWorkspace: (workspace: WorkspaceSnapshot) => Promise<void>; onStatus: (status: AgentStatus) => void; onError: (message: string) => void; onOperationBusy: (busy: boolean) => void; confirming: boolean }) {
@@ -96,7 +90,7 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
       const compactEdits = compactPendingItineraryEdits(edits);
       if (!compactEdits.length) throw new Error("There were no itinerary edits to apply.");
       const payload = await applyDirectBlueprintRevisionBatch(plan.id, {
-        expectedVersion: plan.version,
+        ...planReadModel.mutationVersion,
         revisions: compactEdits.map((edit) => ({
           kind: edit.kind,
           placeId: edit.placeId,
@@ -105,7 +99,7 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
         }))
       });
       await onWorkspace(payload.workspace);
-      onStatus({ tone: "success", text: itineraryRevisionImpactStatus(payload.revision, compactEdits) });
+      onStatus({ tone: "success", text: itineraryRevisionImpactStatus(payload.revision, presentation) });
     } catch (caught) {
       const messageText = caught instanceof Error ? caught.message : "Landi could not update the itinerary.";
       onError(messageText);
@@ -125,7 +119,7 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
     try {
       if (!refresh.segmentIds.length) throw new Error("There were no route legs to refresh.");
       const payload = await refreshPlanRoutes(plan.id, {
-        expectedVersion: plan.version,
+        ...planReadModel.mutationVersion,
         segmentIds: refresh.segmentIds
       });
       await onWorkspace(payload.workspace);

@@ -149,7 +149,7 @@ test("direct Blueprint Revision route adds a place without using assisted replan
     const response = await server.inject({
       method: "POST",
       url: `/api/plans/${compiled.id}/blueprint-revisions/direct`,
-      payload: { kind: "add_place_to_day", expectedVersion: compiled.version, placeId: "b", dayId: "d1", position: { kind: "after", afterPlaceId: "a" } }
+      payload: { kind: "add_place_to_day", expectedVersion: compiled.version, expectedBlueprintVersion: 1, placeId: "b", dayId: "d1", position: { kind: "after", afterPlaceId: "a" } }
     });
 
     assert.equal(response.statusCode, 200, response.body);
@@ -239,6 +239,7 @@ test("direct Blueprint Revision route applies batched add and move edits once", 
       url: `/api/plans/${compiled.id}/blueprint-revisions/direct`,
       payload: {
         expectedVersion: compiled.version,
+        expectedBlueprintVersion: 1,
         revisions: [
           { kind: "add_place_to_day", placeId: "b", dayId: "d1", position: { kind: "after", afterPlaceId: "a" } },
           { kind: "add_place_to_day", placeId: "c", dayId: "d1", position: { kind: "end" } },
@@ -285,6 +286,18 @@ test("direct Blueprint Revision route applies batched add and move edits once", 
       }
     });
     assert.equal(stale.statusCode, 409, stale.body);
+
+    const staleBlueprint = await server.inject({
+      method: "POST",
+      url: `/api/plans/${workspace.activePlan.id}/blueprint-revisions/direct`,
+      payload: {
+        expectedVersion: workspace.activePlan.version,
+        expectedBlueprintVersion: 3,
+        revisions: [{ kind: "move_place_within_day", placeId: "a", dayId: "d1", position: { kind: "end" } }]
+      }
+    });
+    assert.equal(staleBlueprint.statusCode, 409, staleBlueprint.body);
+    assert.match(staleBlueprint.json().error, /Trip Blueprint changed/i);
 
     const empty = await server.inject({
       method: "POST",

@@ -1027,10 +1027,11 @@ export class SqliteWorkspaceStore {
   }
 
   /** Saves one Connector-observed route fact without regenerating unrelated Plan content. */
-  savePlanRouteRefresh(input: { planId: string; segmentId: string; expectedVersion: number; observedAt: string; distanceMeters: number; durationSeconds?: number; originCoordinates: [number, number]; destinationCoordinates: [number, number]; provider: "google_maps" }): WorkspaceSnapshot {
+  savePlanRouteRefresh(input: { planId: string; segmentId: string; expectedVersion: number; expectedBlueprintVersion?: number; observedAt: string; distanceMeters: number; durationSeconds?: number; originCoordinates: [number, number]; destinationCoordinates: [number, number]; provider: "google_maps" }): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
     const plan = workspace.activePlan;
     if (plan.id !== input.planId || plan.version !== input.expectedVersion) throw new Error("The Plan changed before this route refresh was saved.");
+    if (workspace.activeBlueprint && input.expectedBlueprintVersion !== undefined && workspace.activeBlueprint.version !== input.expectedBlueprintVersion) throw new Error("The Trip Blueprint changed before this route refresh was saved.");
     const sourcePresentation = routeRefreshPresentationForWorkspace(workspace);
     if (!Number.isFinite(Date.parse(input.observedAt)) || !Number.isInteger(input.distanceMeters) || input.distanceMeters <= 0 || (input.durationSeconds !== undefined && (!Number.isInteger(input.durationSeconds) || input.durationSeconds <= 0))) throw new Error("A refreshed route needs valid observed distance and duration facts.");
     if (![input.originCoordinates, input.destinationCoordinates].every(([longitude, latitude]) => Number.isFinite(longitude) && longitude >= -180 && longitude <= 180 && Number.isFinite(latitude) && latitude >= -90 && latitude <= 90)) throw new Error("A refreshed route needs valid place coordinates.");
@@ -1077,11 +1078,12 @@ export class SqliteWorkspaceStore {
   }
 
   /** Saves a best-effort batch of Connector-observed route facts after generation. */
-  saveGeneratedPlanRouteRefresh(input: { planId: string; expectedVersion: number; provider: "google_maps"; routes: Array<{ segmentId: string; observedAt: string; distanceMeters: number; durationSeconds?: number; originCoordinates: [number, number]; destinationCoordinates: [number, number]; geometry?: Array<[number, number]> }> }): { workspace: WorkspaceSnapshot; scheduleConflictDayIds: string[] } {
+  saveGeneratedPlanRouteRefresh(input: { planId: string; expectedVersion: number; expectedBlueprintVersion?: number; provider: "google_maps"; routes: Array<{ segmentId: string; observedAt: string; distanceMeters: number; durationSeconds?: number; originCoordinates: [number, number]; destinationCoordinates: [number, number]; geometry?: Array<[number, number]> }> }): { workspace: WorkspaceSnapshot; scheduleConflictDayIds: string[] } {
     if (!input.routes.length) return { workspace: this.getWorkspace(), scheduleConflictDayIds: [] };
     const workspace = this.getWorkspace();
     const plan = workspace.activePlan;
     if (plan.id !== input.planId || plan.version !== input.expectedVersion) throw new Error("The Plan changed before generated routes were saved.");
+    if (workspace.activeBlueprint && input.expectedBlueprintVersion !== undefined && workspace.activeBlueprint.version !== input.expectedBlueprintVersion) throw new Error("The Trip Blueprint changed before generated routes were saved.");
     const presentation = structuredClone(routeRefreshPresentationForWorkspace(workspace));
     const routeById = new Map(input.routes.map((route) => [route.segmentId, route]));
     const validCoordinate = ([longitude, latitude]: [number, number]) => Number.isFinite(longitude) && longitude >= -180 && longitude <= 180 && Number.isFinite(latitude) && latitude >= -90 && latitude <= 90;
@@ -2034,20 +2036,22 @@ export class SqliteWorkspaceStore {
     return this.getWorkspace();
   }
 
-  applyDirectBlueprintRevision(input: { expectedPlanId: string; expectedVersion: number; revision: DirectBlueprintRevision; runtime?: AgentRuntimeKind }): WorkspaceSnapshot {
-    const batchInput: { expectedPlanId: string; expectedVersion: number; revisions: DirectBlueprintRevision[]; runtime?: AgentRuntimeKind } = {
+  applyDirectBlueprintRevision(input: { expectedPlanId: string; expectedVersion: number; expectedBlueprintVersion?: number; revision: DirectBlueprintRevision; runtime?: AgentRuntimeKind }): WorkspaceSnapshot {
+    const batchInput: { expectedPlanId: string; expectedVersion: number; expectedBlueprintVersion?: number; revisions: DirectBlueprintRevision[]; runtime?: AgentRuntimeKind } = {
       expectedPlanId: input.expectedPlanId,
       expectedVersion: input.expectedVersion,
       revisions: [input.revision]
     };
+    if (input.expectedBlueprintVersion !== undefined) batchInput.expectedBlueprintVersion = input.expectedBlueprintVersion;
     if (input.runtime) batchInput.runtime = input.runtime;
     return this.applyDirectBlueprintRevisionBatch(batchInput).workspace;
   }
 
-  applyDirectBlueprintRevisionBatch(input: { expectedPlanId: string; expectedVersion: number; revisions: DirectBlueprintRevision[]; runtime?: AgentRuntimeKind }): DirectBlueprintRevisionSaveResult {
+  applyDirectBlueprintRevisionBatch(input: { expectedPlanId: string; expectedVersion: number; expectedBlueprintVersion?: number; revisions: DirectBlueprintRevision[]; runtime?: AgentRuntimeKind }): DirectBlueprintRevisionSaveResult {
     const workspace = this.getWorkspace();
     if (workspace.activePlan.id !== input.expectedPlanId || workspace.activePlan.version !== input.expectedVersion) throw new Error("The Plan changed before this Blueprint Revision was applied.");
     if (!workspace.activeBlueprint) throw new Error("Direct Blueprint Revision requires a current Trip Blueprint.");
+    if (input.expectedBlueprintVersion !== undefined && workspace.activeBlueprint.version !== input.expectedBlueprintVersion) throw new Error("The Trip Blueprint changed before this Blueprint Revision was applied.");
     const result = applyDirectBlueprintRevisionBatchWithMetadata(workspace.activeBlueprint, input.revisions);
     const saved = this.saveTripBlueprint(result.blueprint);
     const compilation = compileTripBlueprint(saved, { createdAt: result.metadata.createdAt, completedRequirementIds: completedRequirementIdsForWorkspace(workspace) });
