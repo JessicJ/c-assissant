@@ -832,6 +832,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .blueprint-map-bubble.marker-shopping .blueprint-map-dot { fill: #4f78a8; }
 .blueprint-map-bubble.marker-experience .blueprint-map-dot { fill: #8a6f40; }
 .blueprint-map-bubble.pending .blueprint-map-dot { fill: #8f9f99; }
+.blueprint-map-bubble.priority-must .blueprint-map-pin-shell { stroke: rgba(30,100,84,.66); stroke-width: 1.75; }
+.blueprint-map-bubble.priority-recheck .blueprint-map-dot { fill: #7f9298; }
+.blueprint-map-bubble.priority-archive { opacity: .72; }
 .blueprint-map-bubble.selected .blueprint-map-pin { filter: drop-shadow(0 0 7px rgba(155,213,255,.82)) drop-shadow(0 0 15px rgba(92,174,235,.5)) drop-shadow(0 4px 9px rgba(23,33,29,.34)); }
 .blueprint-map-bubble.selected .blueprint-map-pin::before { opacity: 1; transform: scale(1); animation: blueprint-marker-glow 1.9s ease-in-out infinite; }
 .blueprint-map-bubble.selected .blueprint-map-pin-shell { stroke: rgba(32,33,36,.32); }
@@ -850,6 +853,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .blueprint-guide-card header { display: flex; align-items: start; justify-content: space-between; gap: 10px; margin: 0; }
 .blueprint-guide-card header div { min-width: 0; display: grid; gap: 2px; }
 .blueprint-guide-card strong { color: #233a33; font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
+.blueprint-priority-pill { flex: none; max-width: 92px; overflow: hidden; padding: 4px 6px; border-radius: 999px; background: #eef6f9; color: #426a8f; font-size: 9px; font-weight: 850; line-height: 1.1; text-overflow: ellipsis; white-space: nowrap; }
 .blueprint-guide-card p { margin: 0; color: #53655f; font-size: 11px; line-height: 1.48; }
 .blueprint-guide-tags { display: flex; flex-wrap: wrap; gap: 5px; }
 .blueprint-guide-tags span { padding: 4px 6px; border-radius: 999px; background: #eef3f0; color: #61706b; font-size: 9px; }
@@ -880,6 +884,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .blueprint-detail-panel p,.blueprint-detail-panel li { color: #53655f; font-size: 11px; line-height: 1.6; }
 .blueprint-detail-panel p { margin: 0; }
 .blueprint-detail-panel ul { margin: 0; padding-left: 18px; }
+.blueprint-place-status { display: grid; gap: 9px; }
+.blueprint-place-status header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0; border: 0; }
+.blueprint-place-status header span { padding: 4px 7px; border-radius: 999px; background: #eef6f9; color: #426a8f; font-size: 9px; font-weight: 850; letter-spacing: 0; text-transform: none; white-space: nowrap; }
+.blueprint-place-status div { display: flex; flex-wrap: wrap; gap: 6px; }
+.blueprint-place-status button { min-height: 30px; padding: 0 9px; border: 1px solid #d9e0dd; border-radius: 7px; background: #fff; color: #43544e; font-size: 10px; font-weight: 850; cursor: pointer; }
+.blueprint-place-status button[aria-pressed="true"] { border-color: #276758; background: #e5f1eb; color: #276758; }
+.blueprint-place-status button:disabled { cursor: not-allowed; opacity: .58; }
+.blueprint-place-status p { color: #7a6130; font-size: 10px; line-height: 1.45; }
 .blueprint-detail-events > div { display: grid; gap: 8px; }
 .blueprint-detail-events article { display: grid; gap: 4px; padding: 9px 10px; border: 1px solid #dce4e0; border-radius: 8px; background: #fbfcfd; }
 .blueprint-detail-events strong { color: #263c36; font-size: 11px; }

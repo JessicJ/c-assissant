@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import L from "leaflet";
 import leafletCss from "leaflet/dist/leaflet.css?inline";
-import type { Plan, PlanPresentation } from "@c-assistant/core";
+import type { Plan, PlanPlacePriority, PlanPresentation } from "@c-assistant/core";
 import {
   buildPendingItineraryEditForWorkspace,
   buildPendingItineraryMoveForWorkspace,
@@ -64,14 +64,16 @@ let leafletStylesMounted = false;
 let googleMapsLoader: Promise<GoogleMapsNamespace> | null = null;
 const MAP_MARKER_ANCHOR = { x: 16, y: 38 } as const;
 
-export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onApplyItineraryEdits, onRequestRouteRefresh, itineraryEditBusy = false, routeRefreshBusy = false }: {
+export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onApplyItineraryEdits, onRequestRouteRefresh, onUpdatePlacePriority, itineraryEditBusy = false, routeRefreshBusy = false, priorityUpdateBusyPlaceId = "" }: {
   plan: Plan;
   presentation: PlanPresentation;
   onTaskToggle: (planId: string, taskId: string, checked: boolean) => Promise<void>;
   onApplyItineraryEdits?: (edits: PendingItineraryEditDisplay[]) => Promise<void>;
   onRequestRouteRefresh?: (refresh: ItineraryRouteRefreshDisplay) => void;
+  onUpdatePlacePriority?: (placeId: string, priority: PlanPlacePriority) => Promise<void>;
   itineraryEditBusy?: boolean;
   routeRefreshBusy?: boolean;
+  priorityUpdateBusyPlaceId?: string;
 }) {
   const workspace = useMemo(() => buildBlueprintWorkspaceDisplay(plan, presentation), [plan, presentation]);
   const [area, setArea] = useState<BlueprintWorkspaceArea>("itinerary");
@@ -308,7 +310,7 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
       <aside className="blueprint-side-panel" aria-label="Itinerary side panel">
         <div className="blueprint-panel-body">
           <ExplorePanel filters={workspace.guideFilters} cards={workspace.guideCards} filter={guideFilter} hidden={panelMode !== "explore"} onFilter={setGuideFilter} onSelect={selectPlace} onAdd={openPlacement} />
-          {selectedDetail ? <DetailPanel detail={selectedDetail} hidden={panelMode !== "detail"} onBack={() => setPanelMode("explore")} onSelect={selectPlace} onAdd={openPlacement} /> : <p className="blueprint-empty-note" hidden={panelMode !== "detail"}>Select an itinerary block or guide card to open details.</p>}
+          {selectedDetail ? <DetailPanel detail={selectedDetail} hidden={panelMode !== "detail"} onBack={() => setPanelMode("explore")} onSelect={selectPlace} onAdd={openPlacement} onPriorityChange={onUpdatePlacePriority} priorityBusy={priorityUpdateBusyPlaceId === selectedDetail.placeId} /> : <p className="blueprint-empty-note" hidden={panelMode !== "detail"}>Select an itinerary block or guide card to open details.</p>}
           {placementPlaceId ? <PlacementPanel key={placementPlaceId} workspace={workspace} place={workspace.places.find((place) => place.id === placementPlaceId)} hidden={panelMode !== "placement"} selectedDayId={selectedDay?.id} onBack={() => setPanelMode("explore")} onPreview={stagePendingEdit} /> : null}
         </div>
       </aside>
@@ -631,13 +633,14 @@ function MapRouteRefreshHeader({ routeRefresh, onRequestRouteRefresh, routeRefre
   if (!routeRefresh) return null;
   const requestRouteRefresh = onRequestRouteRefresh;
   const canRefresh = routeRefresh.actionable !== false && routeRefresh.segmentIds.length > 0 && Boolean(requestRouteRefresh);
+  const pendingConfirmation = routeRefresh.actionable === false;
   return <header className="blueprint-map-status">
     <div>
-      <h3>Routes need refresh</h3>
+      <h3>{pendingConfirmation ? "Routes will be checked" : "Routes need refresh"}</h3>
       <p>{routeRefresh.summary}</p>
     </div>
     <div className="blueprint-map-status-actions">
-      <span>{routeRefresh.actionable === false ? "After Apply" : "Routes need refresh"}</span>
+      <span>{pendingConfirmation ? "After confirm" : "Routes need refresh"}</span>
       {canRefresh && requestRouteRefresh ? <button type="button" disabled={routeRefreshBusy} onClick={() => requestRouteRefresh(routeRefresh)}>{routeRefreshBusy ? "Refreshing..." : "Refresh routes"}</button> : null}
     </div>
   </header>;
@@ -651,7 +654,7 @@ function ExplorePanel({ filters, cards, filter, hidden, onFilter, onSelect, onAd
     <div className="blueprint-guide-list">
       {visibleCards.map((card) => <article className="blueprint-guide-card" key={card.placeId}>
         <button type="button" className="blueprint-guide-card-main" onClick={() => onSelect(card.placeId)}>
-          <header><div><strong>{card.title}</strong></div></header>
+          <header><div><strong>{card.title}</strong></div><span className="blueprint-priority-pill">{card.priorityLabel}</span></header>
           <p>{card.summary}</p>
           {card.tags.length ? <div className="blueprint-guide-tags">{card.tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
         </button>
@@ -662,12 +665,20 @@ function ExplorePanel({ filters, cards, filter, hidden, onFilter, onSelect, onAd
   </div>;
 }
 
-function DetailPanel({ detail, hidden, onBack, onSelect, onAdd }: { detail: DetailPlaceDisplay; hidden: boolean; onBack: () => void; onSelect: (placeId: string) => void; onAdd: (placeId: string) => void }) {
+function DetailPanel({ detail, hidden, onBack, onSelect, onAdd, onPriorityChange, priorityBusy = false }: { detail: DetailPlaceDisplay; hidden: boolean; onBack: () => void; onSelect: (placeId: string) => void; onAdd: (placeId: string) => void; onPriorityChange?: ((placeId: string, priority: PlanPlacePriority) => Promise<void>) | undefined; priorityBusy?: boolean }) {
   return <div className="blueprint-detail-panel blueprint-panel-view" hidden={hidden}>
     <header>
       <button type="button" className="blueprint-detail-back" aria-label="Back to explore" onClick={onBack}><span aria-hidden="true" /></button>
       <div><h3>{detail.title}</h3></div>
     </header>
+    <section className="blueprint-place-status" aria-label="Place status">
+      <header><h4>Place status</h4><span>{priorityBusy ? "Saving..." : detail.priorityLabel}</span></header>
+      <div>{detail.priorityActions.map((action) => <button type="button" aria-pressed={action.active} disabled={priorityBusy || action.disabled || !onPriorityChange} title={action.disabledReason} onClick={() => {
+        if (action.active) return;
+        void onPriorityChange?.(detail.placeId, action.priority);
+      }} key={action.priority}>{action.label}</button>)}</div>
+      {detail.priorityBlockedNote ? <p>{detail.priorityBlockedNote}</p> : null}
+    </section>
     <section><h4>{detail.leadTitle}</h4><p>{detail.leadBody}</p></section>
     {detail.planTitle && detail.planBody ? <section><h4>{detail.planTitle}</h4><p>{detail.planBody}</p></section> : null}
     {detail.reservationNote ? <section><h4>Reservation</h4><p>{detail.reservationNote}</p></section> : null}
@@ -927,7 +938,7 @@ function leafletRouteLineStyle(state: MapRouteLineState): L.PolylineOptions {
 
 function mapMarkerHtml(marker: BlueprintMapMarkerDisplay, selected: boolean): string {
   const stateClass = marker.markerState === "pending" ? "pending" : marker.markerState === "on-day" ? "on-day" : "context";
-  return `<div class="blueprint-map-bubble marker-${marker.type} ${stateClass}${selected ? " selected" : ""}"><span class="blueprint-map-pin"><svg class="blueprint-map-pin-svg" viewBox="0 0 32 40" aria-hidden="true"><path class="blueprint-map-pin-shell" d="M16 1.8C8.9 1.8 3.2 7.5 3.2 14.6c0 9 10.5 19.8 12.1 21.5.4.4 1 .4 1.4 0 1.6-1.7 12.1-12.5 12.1-21.5C28.8 7.5 23.1 1.8 16 1.8Z"/><circle class="blueprint-map-dot" cx="16" cy="14.8" r="10.4"/><g class="blueprint-map-glyph" transform="translate(8 7) scale(.67)">${mapMarkerIcon(marker.type)}</g></svg></span><strong>${escapeHtml(marker.title)}</strong></div>`;
+  return `<div class="blueprint-map-bubble marker-${marker.type} priority-${marker.priority} ${stateClass}${selected ? " selected" : ""}"><span class="blueprint-map-pin"><svg class="blueprint-map-pin-svg" viewBox="0 0 32 40" aria-hidden="true"><path class="blueprint-map-pin-shell" d="M16 1.8C8.9 1.8 3.2 7.5 3.2 14.6c0 9 10.5 19.8 12.1 21.5.4.4 1 .4 1.4 0 1.6-1.7 12.1-12.5 12.1-21.5C28.8 7.5 23.1 1.8 16 1.8Z"/><circle class="blueprint-map-dot" cx="16" cy="14.8" r="10.4"/><g class="blueprint-map-glyph" transform="translate(8 7) scale(.67)">${mapMarkerIcon(marker.type)}</g></svg></span><strong>${escapeHtml(marker.title)}</strong></div>`;
 }
 
 function mapMarkerIcon(type: GuideFilter): string {

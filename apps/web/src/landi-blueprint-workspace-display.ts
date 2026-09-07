@@ -1,4 +1,4 @@
-import type { BlueprintEvidenceRef, BlueprintItineraryBlock, BlueprintPlaceRelationship, BlueprintPreparationGroup, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelTipTheme, DirectBlueprintRevisionBatchMetadata, ItineraryDay, Plan, PlanPlace, PlanPresentation, PlanPresentationEvent, PlanRouteSegment, SourceReference, Task } from "@c-assistant/core";
+import type { BlueprintEvidenceRef, BlueprintItineraryBlock, BlueprintPlaceRelationship, BlueprintPreparationGroup, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelTipTheme, DirectBlueprintRevisionBatchMetadata, ItineraryDay, Plan, PlanPlace, PlanPlacePriority, PlanPresentation, PlanPresentationEvent, PlanRouteSegment, SourceReference, Task } from "@c-assistant/core";
 import { groupPreparationItems } from "./plan-preparation-display.js";
 import { displayTripTitle } from "./trip-title.js";
 
@@ -45,6 +45,8 @@ export type BlueprintPlaceDisplay = {
   city?: string;
   area?: string;
   durationLabel?: string;
+  priority: PlanPlacePriority;
+  priorityLabel: string;
   schedulingEligibility?: BlueprintSchedulingEligibility;
   placementSignals: {
     reservation: "required" | "recommended" | "none";
@@ -106,6 +108,7 @@ export type BlueprintMapMarkerDisplay = {
   type: GuideFilter;
   coordinates?: [number, number];
   markerState: "context" | "on-day" | "pending";
+  priority: PlanPlacePriority;
 };
 
 export type ItineraryDayDisplay = {
@@ -139,6 +142,7 @@ export type GuideCardDisplay = {
   actionLabel?: string;
   canAdd: boolean;
   addBlockedReason?: string;
+  priorityLabel: string;
   timeline?: { dayId: string; label: string; timeLabel: string };
 };
 
@@ -181,6 +185,10 @@ export type DetailEventDisplay = {
 export type DetailPlaceDisplay = {
   placeId: string;
   title: string;
+  priority: PlanPlacePriority;
+  priorityLabel: string;
+  priorityActions: PlacePriorityActionDisplay[];
+  priorityBlockedNote?: string;
   leadTitle: string;
   leadBody: string;
   planTitle?: string;
@@ -196,6 +204,14 @@ export type DetailPlaceDisplay = {
   scheduled: boolean;
   canAdd: boolean;
   links: DetailLinkDisplay[];
+};
+
+export type PlacePriorityActionDisplay = {
+  priority: PlanPlacePriority;
+  label: string;
+  active: boolean;
+  disabled?: boolean;
+  disabledReason?: string;
 };
 
 export type TipDisplay = {
@@ -358,6 +374,8 @@ function placeDisplayForPlace(place: PlanPlace): BlueprintPlaceDisplay {
     ...(place.city ? { city: place.city } : {}),
     ...(place.area ? { area: place.area } : {}),
     ...(place.durationMinutes ? { durationLabel: `${place.durationMinutes} min` } : {}),
+    priority: place.priority,
+    priorityLabel: placePriorityLabel(place.priority),
     ...(place.schedulingEligibility ? { schedulingEligibility: place.schedulingEligibility } : {}),
     placementSignals: signals
   };
@@ -553,7 +571,8 @@ function itineraryDisplayFromBlocks(day: BlueprintDayTabDisplay, blocks: Timelin
         title: displayPlaceName(place),
         type: markerTypeForPlace(place),
         ...(place.coordinates ? { coordinates: place.coordinates } : {}),
-        markerState: "on-day" as const
+        markerState: "on-day" as const,
+        priority: place.priority
       };
     })
   };
@@ -579,7 +598,8 @@ function itineraryDisplayWithPending(base: ItineraryDayDisplay, places: Blueprin
         title: pendingPlace.title,
         type: pendingPlace.markerType,
         coordinates: pendingPlace.coordinates,
-        markerState: "pending"
+        markerState: "pending",
+        priority: pendingPlace.priority
       });
     }
   }
@@ -625,6 +645,7 @@ function guideCardsForPresentation(presentation: PlanPresentation, planSources: 
         state,
         summary: shortGuideSummary(place),
         tags: guideTags(presentation, place),
+        priorityLabel: placePriorityLabel(place.priority),
         ...guideCardAction(place, state, firstTimelineByPlace.get(place.id)),
         ...(firstTimelineByPlace.get(place.id) ? { timeline: firstTimelineByPlace.get(place.id)! } : {})
       };
@@ -640,6 +661,10 @@ function detailDisplayForPlace(presentation: PlanPresentation, planSources: Sour
   return {
     placeId: place.id,
     title: displayPlaceName(place),
+    priority: place.priority,
+    priorityLabel: placePriorityLabel(place.priority),
+    priorityActions: placePriorityActions(place, Boolean(scheduledDay)),
+    ...(placePriorityBlockedNote(place, Boolean(scheduledDay)) ? { priorityBlockedNote: placePriorityBlockedNote(place, Boolean(scheduledDay))! } : {}),
     leadTitle: place.guideDisplay?.detailLeadTitle ?? detailLeadTitle(type),
     leadBody: place.whyWorthIt || place.plan,
     ...(place.plan ? { planTitle: place.guideDisplay?.detailPlanTitle ?? detailPlanTitle(type), planBody: place.plan } : {}),
@@ -825,10 +850,10 @@ function draftRouteRefreshDisplayForPendingEdits(base: ItineraryDayDisplay, edit
   const changeCount = edits.length;
   return {
     segmentCount: Math.max(1, base.routeSegments.length, changeCount),
-    segmentIds: base.routeSegments.map((segment) => segment.id),
+    segmentIds: [],
     dayLabel,
-    summary: `${changeCount} unsaved itinerary change${changeCount === 1 ? "" : "s"} will need route refresh after Apply.`,
-    request: `After applying the itinerary draft for ${dayLabel}, refresh routing, timing, meal spacing, and opening constraints before marking this day ready.`,
+    summary: `${changeCount} unsaved itinerary change${changeCount === 1 ? "" : "s"} will need route refresh after you confirm.`,
+    request: `After you confirm the itinerary draft for ${dayLabel}, refresh routing, timing, meal spacing, and opening constraints before marking this day ready.`,
     actionable: false
   };
 }
@@ -1127,6 +1152,43 @@ function blueprintDateLabel(plan: Pick<Plan, "dates">, presentation: Pick<PlanPr
 
 export function guideFilterLabel(filter: GuideFilter): string {
   return filter === "all" ? "All" : filter === "attraction" ? "Attractions" : filter === "dining" ? "Dining" : filter === "shopping" ? "Shopping" : "Experiences";
+}
+
+export function placePriorityLabel(priority: PlanPlacePriority): string {
+  if (priority === "must") return "Must go";
+  if (priority === "preferred") return "Prefer";
+  if (priority === "nearby") return "Nearby";
+  if (priority === "archive") return "Keep for later";
+  if (priority === "recheck") return "Needs check";
+  if (priority === "booked") return "Booked";
+  return "Pending";
+}
+
+const directPlacePriorityOptions: Array<{ priority: PlanPlacePriority; label: string }> = [
+  { priority: "must", label: "Must go" },
+  { priority: "preferred", label: "Prefer" },
+  { priority: "nearby", label: "Nearby" },
+  { priority: "archive", label: "Keep for later" },
+  { priority: "recheck", label: "Needs check" }
+];
+
+function placePriorityActions(place: Pick<PlanPlace, "priority">, scheduled: boolean): PlacePriorityActionDisplay[] {
+  return directPlacePriorityOptions.map((option) => {
+    const active = place.priority === option.priority;
+    const scheduledArchive = scheduled && option.priority === "archive";
+    return {
+      priority: option.priority,
+      label: option.label,
+      active,
+      ...(active || scheduledArchive ? { disabled: true } : {}),
+      ...(scheduledArchive ? { disabledReason: "Remove this place from the day before keeping it for later." } : {})
+    };
+  });
+}
+
+function placePriorityBlockedNote(place: Pick<PlanPlace, "priority">, scheduled: boolean): string | undefined {
+  if (scheduled && place.priority !== "archive") return "Keep for later would change the day route, so it needs a remove action first.";
+  return undefined;
 }
 
 function workspaceAreasForPresentation(presentation: PlanPresentation): readonly BlueprintWorkspaceArea[] {
