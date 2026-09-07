@@ -93,6 +93,8 @@ export type BlueprintRouteSegmentDisplay = {
   label: string;
   verification: PlanRouteSegment["verification"];
   needsRefresh: boolean;
+  mapLineState: "formal" | "needs_refresh" | "reference";
+  refreshReason?: string;
   durationLabel?: string;
   detail?: string;
   sources: SourceMarkerDisplay[];
@@ -187,6 +189,7 @@ export type DetailPlaceDisplay = {
   detailSections: DetailSectionDisplay[];
   relatedEvents: DetailEventDisplay[];
   sources: SourceMarkerDisplay[];
+  sourceTitle?: string;
   comparisonTitle?: string;
   comparisonRows: ComparisonRow[];
   primaryActionLabel: string;
@@ -345,6 +348,7 @@ export function buildBlueprintWorkspaceDisplay(plan: Plan, presentation: PlanPre
 }
 
 function placeDisplayForPlace(place: PlanPlace): BlueprintPlaceDisplay {
+  const signals = workspaceSignalsForPlace(place);
   return {
     id: place.id,
     title: displayPlaceName(place),
@@ -355,11 +359,23 @@ function placeDisplayForPlace(place: PlanPlace): BlueprintPlaceDisplay {
     ...(place.area ? { area: place.area } : {}),
     ...(place.durationMinutes ? { durationLabel: `${place.durationMinutes} min` } : {}),
     ...(place.schedulingEligibility ? { schedulingEligibility: place.schedulingEligibility } : {}),
-    placementSignals: {
-      reservation: place.reservation?.requirement === "required" ? "required" : place.reservation?.requirement === "recommended" ? "recommended" : "none",
-      needsRecheck: place.priority === "recheck" || place.reservation?.verification === "needs_recheck" || Boolean(place.evidenceSources?.some((source) => source.status && source.status !== "verified")),
-      longStop: Boolean(place.durationMinutes && place.durationMinutes >= 180)
-    }
+    placementSignals: signals
+  };
+}
+
+function workspaceSignalsForPlace(place: PlanPlace): BlueprintPlaceDisplay["placementSignals"] {
+  const explicit = place.display?.workspaceSignals;
+  if (explicit) {
+    return {
+      reservation: explicit.reservation,
+      needsRecheck: explicit.needsRecheck,
+      longStop: explicit.longStop
+    };
+  }
+  return {
+    reservation: place.reservation?.requirement === "required" ? "required" : place.reservation?.requirement === "recommended" ? "recommended" : "none",
+    needsRecheck: place.priority === "recheck" || place.reservation?.verification === "needs_recheck" || Boolean(place.evidenceSources?.some((source) => source.status && source.status !== "verified")),
+    longStop: Boolean(place.durationMinutes && place.durationMinutes >= 180)
   };
 }
 
@@ -372,18 +388,38 @@ function mapPointForPlace(place: PlanPlace | BlueprintPlaceDisplay): BlueprintMa
   };
 }
 
-function routeSegmentDisplayForSegment(segment: PlanRouteSegment, planSources: SourceReference[], sourceCatalog: BlueprintSource[] = []): BlueprintRouteSegmentDisplay {
+function routeSegmentDisplayForSegment(segment: PlanRouteSegment, planSources: SourceReference[], sourceCatalog: BlueprintSource[] = []): BlueprintRouteSegmentDisplay | undefined {
+  if (!routeSegmentShowsAsFormalRoute(segment)) return undefined;
+  const needsRefresh = routeSegmentNeedsRefresh(segment);
+  const refreshReason = routeRefreshReason(segment);
   return {
     id: segment.id,
     originPlaceId: segment.originPlaceId,
     destinationPlaceId: segment.destinationPlaceId,
-    label: segment.label ?? "Movement",
+    label: segment.display?.routeLabel?.trim() || segment.label || "Movement",
     verification: segment.verification,
-    needsRefresh: directEditRouteNeedsRefresh(segment),
+    needsRefresh,
+    mapLineState: segment.display?.mapLineState ?? (needsRefresh ? "needs_refresh" : "formal"),
+    ...(refreshReason ? { refreshReason } : {}),
     ...(segment.durationMinutes ? { durationLabel: `${segment.durationMinutes} min` } : {}),
     ...(segment.detail ? { detail: segment.detail } : {}),
     sources: sourceSummariesForRefs(segment.sourceRefs, planSources, sourceCatalog)
   };
+}
+
+function routeSegmentNeedsRefresh(segment: PlanRouteSegment): boolean {
+  if (segment.display?.mapLineState === "needs_refresh") return true;
+  if (segment.display?.refreshReason?.trim()) return true;
+  return directEditRouteNeedsRefresh(segment);
+}
+
+function routeSegmentShowsAsFormalRoute(segment: PlanRouteSegment): boolean {
+  return segment.display?.showAsFormalRoute !== false;
+}
+
+function routeRefreshReason(segment: PlanRouteSegment): string | undefined {
+  if (segment.display?.refreshReason?.trim()) return segment.display.refreshReason.trim();
+  return directEditRouteNeedsRefresh(segment) ? "Route after needs refresh" : undefined;
 }
 
 function directEditRouteNeedsRefresh(segment: PlanRouteSegment): boolean {
@@ -442,7 +478,8 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
     return [...day.blocks].sort((left, right) => left.order - right.order).flatMap((block, index) => {
       const place = block.placeId ? placeById.get(block.placeId) : undefined;
       if (block.placeId && !place) return [];
-      const routeAnchor = Boolean(place && scheduledPlaceIds.has(place.id) && block.kind !== "event");
+      const routeAnchor = block.display?.routeAnchor ?? Boolean(place && scheduledPlaceIds.has(place.id) && block.kind !== "event");
+      const reorderable = Boolean(routeAnchor && place && (block.display?.reorderable ?? directMoveAllowed(place)));
       const routeAfter = routeAnchor && place ? presentation.routeSegments.find((segment) => segment.dayId === day.id && segment.originPlaceId === place.id) : undefined;
       const status = place ? itineraryBlockStatus(place) : undefined;
       return [{
@@ -450,12 +487,12 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
         ...(place ? { place } : {}),
         block,
         order: block.order,
-        timeLabel: roughBlockTimeLabel(block, place, index),
+        timeLabel: block.display?.timeLabel?.trim() || roughBlockTimeLabel(block, place, index),
         type: place ? guideTypeForPlace(place) : blockGuideType(block),
         ...(blockTitle(block, place) ? { title: blockTitle(block, place)! } : {}),
         ...(blockMeta(block) ? { meta: blockMeta(block)! } : {}),
         ...(routeAnchor ? { routeAnchor: true } : {}),
-        ...(routeAnchor && place && directMoveAllowed(place) ? { reorderable: true } : {}),
+        ...(reorderable ? { reorderable: true } : {}),
         ...(status ? { status } : {}),
         ...(routeAfter ? { routeAfter } : {})
       }];
@@ -495,7 +532,10 @@ export function itineraryDisplayForWorkspace(workspace: BlueprintWorkspaceDispla
 }
 
 function itineraryDisplayFromBlocks(day: BlueprintDayTabDisplay, blocks: TimelineBlock[], places: PlanPlace[], planSources: SourceReference[], sourceCatalog: BlueprintSource[] = [], pendingEdit?: PendingItineraryEditDisplay | null): ItineraryDayDisplay {
-  const routeSegments = blocks.slice(0, -1).flatMap((block) => block.routeAfter ? [routeSegmentDisplayForSegment(block.routeAfter, planSources, sourceCatalog)] : []);
+  const routeSegments = blocks.slice(0, -1).flatMap((block) => {
+    const routeSegment = block.routeAfter ? routeSegmentDisplayForSegment(block.routeAfter, planSources, sourceCatalog) : undefined;
+    return routeSegment ? [routeSegment] : [];
+  });
   const routeRefresh = routeRefreshDisplayForDay(day, routeSegments);
   const base = {
     dayId: day.id,
@@ -607,9 +647,10 @@ function detailDisplayForPlace(presentation: PlanPresentation, planSources: Sour
     detailSections: place.detailSections,
     relatedEvents: relatedEventsForPlace(presentation, planSources, place.id),
     sources: sourceSummariesForPlace(place, planSources),
+    ...(place.guideDisplay?.detailSourceTitle?.trim() ? { sourceTitle: place.guideDisplay.detailSourceTitle.trim() } : {}),
     ...(comparisonHeading ? { comparisonTitle: comparisonHeading } : {}),
     comparisonRows: comparisonHeading ? comparisonRows : [],
-    primaryActionLabel: scheduledDay ? "Show in itinerary" : canAdd ? "Add to itinerary" : addBlockedLabel(place),
+    primaryActionLabel: detailPrimaryActionLabel(place, Boolean(scheduledDay), canAdd),
     scheduled: Boolean(scheduledDay),
     canAdd,
     links: detailLinks(place)
@@ -805,7 +846,7 @@ function itineraryCardForPendingPlace(place: BlueprintPlaceDisplay, edit: Pendin
 }
 
 function itineraryCardForBlock(block: TimelineBlock): ItineraryCardDisplay {
-  const routeStatusLabel = block.routeAfter && directEditRouteNeedsRefresh(block.routeAfter) ? "Route after needs refresh" : undefined;
+  const routeStatusLabel = block.routeAfter && routeSegmentShowsAsFormalRoute(block.routeAfter) && routeSegmentNeedsRefresh(block.routeAfter) ? routeRefreshReason(block.routeAfter) ?? "Route after needs refresh" : undefined;
   return {
     kind: "block",
     key: `${block.day.id}-${block.place?.id ?? block.block?.id ?? block.order}-${block.order}`,
@@ -999,6 +1040,7 @@ function blockTitle(block: BlueprintItineraryBlock, place: PlanPlace | undefined
 }
 
 function blockMeta(block: BlueprintItineraryBlock): string | undefined {
+  if (block.display?.meta?.trim()) return block.display.meta.trim();
   return block.summary ?? block.role ?? (block.durationMinutes ? `${block.durationMinutes} min` : undefined);
 }
 
@@ -1115,13 +1157,21 @@ function guideTags(presentation: PlanPresentation, place: PlanPlace): string[] {
 }
 
 function guideCardAction(place: PlanPlace, state: GuideState, timeline: GuideCardDisplay["timeline"]): Pick<GuideCardDisplay, "canAdd" | "actionLabel" | "footerNote" | "addBlockedReason"> {
-  if (state === "unscheduled" && directAddAllowed(place)) return { canAdd: true, actionLabel: place.guideDisplay?.addActionLabel ?? "Add", ...(place.guideDisplay?.footerNote ? { footerNote: place.guideDisplay.footerNote } : {}) };
+  if (state === "unscheduled" && directAddAllowed(place)) return { canAdd: true, actionLabel: place.guideDisplay?.addActionLabel ?? place.guideDisplay?.primaryActionLabel ?? "Add", ...(place.guideDisplay?.footerNote ? { footerNote: place.guideDisplay.footerNote } : {}) };
   if (state === "unscheduled") {
-    const label = place.guideDisplay?.addBlockedLabel ?? addBlockedLabel(place);
+    const label = place.guideDisplay?.addBlockedLabel ?? place.guideDisplay?.blockedActionLabel ?? addBlockedLabel(place);
     return { canAdd: false, footerNote: label, addBlockedReason: label };
   }
   if (state === "scheduled") return { canAdd: false, ...(timeline ? { footerNote: `${timeline.label} ${timeline.timeLabel}` } : {}) };
   return { canAdd: false, ...(place.guideDisplay?.footerNote ? { footerNote: place.guideDisplay.footerNote } : {}) };
+}
+
+function detailPrimaryActionLabel(place: PlanPlace, scheduled: boolean, canAdd: boolean): string {
+  if (scheduled) return place.guideDisplay?.scheduledActionLabel ?? "Show in itinerary";
+  if (canAdd) return place.guideDisplay?.primaryActionLabel ?? "Add to itinerary";
+  const decision = place.schedulingEligibility?.decision;
+  if (decision === "informational") return place.guideDisplay?.informationalActionLabel ?? place.guideDisplay?.addBlockedLabel ?? "Background note";
+  return place.guideDisplay?.blockedActionLabel ?? place.guideDisplay?.addBlockedLabel ?? addBlockedLabel(place);
 }
 
 function directAddAllowed(place: Pick<PlanPlace, "schedulingEligibility">): boolean {
@@ -1129,8 +1179,9 @@ function directAddAllowed(place: Pick<PlanPlace, "schedulingEligibility">): bool
   return decision === undefined || decision === "schedulable";
 }
 
-function directMoveAllowed(place: Pick<PlanPlace, "priority" | "schedulingEligibility" | "reservation">): boolean {
-  if (place.priority === "booked" || place.reservation?.requirement === "required") return false;
+function directMoveAllowed(place: Pick<PlanPlace, "priority" | "schedulingEligibility" | "reservation" | "display">): boolean {
+  const reservationSignal = place.display?.workspaceSignals?.reservation;
+  if (place.priority === "booked" || reservationSignal === "required" || (!reservationSignal && place.reservation?.requirement === "required")) return false;
   const decision = place.schedulingEligibility?.decision;
   return decision === undefined || decision === "schedulable";
 }
@@ -1172,6 +1223,8 @@ function sameText(left: string, right: string): boolean {
 }
 
 function itineraryBlockStatus(place: PlanPlace): string | undefined {
+  const explicit = place.display?.workspaceSignals?.itineraryStatusLabel?.trim();
+  if (explicit) return explicit;
   if (place.reservation?.requirement === "required") return "Reservation required";
   if (place.priority === "recheck" || place.reservation?.verification === "needs_recheck") return "Needs recheck";
   if (place.priority === "booked") return "Booked";

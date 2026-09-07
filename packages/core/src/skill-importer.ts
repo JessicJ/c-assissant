@@ -285,7 +285,7 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
       category: artifact.category.trim(),
       priority: artifact.priority ?? "preferred",
       ...(artifact.coordinates ? { coordinates: artifact.coordinates } : {}),
-      ...(artifact.display ? { display: structuredClone(artifact.display) } : {}),
+      ...(artifact.display ? { display: normalizePlaceDisplay(artifact.display) } : {}),
       ...(artifact.guideDisplay ? { guideDisplay: normalizeGuideDisplay(artifact.guideDisplay, sourceIdByUrl, inputPlaceIdMap, importedPlaceIds, id) } : {}),
       ...(artifact.contentTier ? { contentTier: artifact.contentTier } : {}),
       ...(artifact.visitRole?.trim() ? { visitRole: artifact.visitRole.trim() } : {}),
@@ -491,7 +491,7 @@ function normalizeItineraryBlocks(day: BlueprintItineraryDay): BlueprintItinerar
     return inputBlocks
       .filter((block) => block.id.trim())
       .sort((left, right) => left.order - right.order)
-      .map((block, index) => ({ ...structuredClone(block), order: index + 1, evidence: structuredClone(block.evidence ?? []) }));
+      .map((block, index) => normalizeItineraryBlock(block, index));
   }
   return day.stops.map((stop, index) => ({
     id: `block-${day.id}-${index + 1}`,
@@ -502,6 +502,24 @@ function normalizeItineraryBlocks(day: BlueprintItineraryDay): BlueprintItinerar
     ...(stop.role ? { role: stop.role } : {}),
     evidence: []
   }));
+}
+
+function normalizeItineraryBlock(block: BlueprintItineraryBlock, index: number): BlueprintItineraryBlock {
+  return {
+    ...structuredClone(block),
+    order: index + 1,
+    ...(block.display ? { display: normalizeItineraryBlockDisplay(block.display) } : {}),
+    evidence: structuredClone(block.evidence ?? [])
+  };
+}
+
+function normalizeItineraryBlockDisplay(display: NonNullable<BlueprintItineraryBlock["display"]>): NonNullable<BlueprintItineraryBlock["display"]> {
+  return {
+    ...(display.timeLabel?.trim() ? { timeLabel: display.timeLabel.trim() } : {}),
+    ...(display.meta?.trim() ? { meta: display.meta.trim() } : {}),
+    ...(display.routeAnchor === undefined ? {} : { routeAnchor: display.routeAnchor }),
+    ...(display.reorderable === undefined ? {} : { reorderable: display.reorderable })
+  };
 }
 
 function inferItineraryBlockKind(role: string | undefined): BlueprintItineraryBlock["kind"] {
@@ -699,7 +717,17 @@ function enrichMovement(movement: BlueprintMovement, origin?: BlueprintPlace, de
     status,
     ...(durationMinutes ? { durationMinutes } : {}),
     label: movement.label?.trim() || movementLabel(inferredMode, destination),
-    detail: movement.detail?.trim() || movementDetail(inferredMode, durationMinutes)
+    detail: movement.detail?.trim() || movementDetail(inferredMode, durationMinutes),
+    ...(movement.display ? { display: normalizeMovementDisplay(movement.display) } : {})
+  };
+}
+
+function normalizeMovementDisplay(display: NonNullable<BlueprintMovement["display"]>): NonNullable<BlueprintMovement["display"]> {
+  return {
+    ...(display.routeLabel?.trim() ? { routeLabel: display.routeLabel.trim() } : {}),
+    ...(display.refreshReason?.trim() ? { refreshReason: display.refreshReason.trim() } : {}),
+    ...(display.showAsFormalRoute === undefined ? {} : { showAsFormalRoute: display.showAsFormalRoute }),
+    ...(display.mapLineState ? { mapLineState: display.mapLineState } : {})
   };
 }
 
@@ -977,12 +1005,32 @@ function normalizeGuideDisplay(display: NonNullable<SkillResearchPlaceArtifact["
     ...(display.cardSummary?.trim() ? { cardSummary: display.cardSummary.trim() } : {}),
     ...(display.tags?.length ? { tags: display.tags.map((tag) => tag.trim()).filter(Boolean) } : {}),
     ...(display.footerNote?.trim() ? { footerNote: display.footerNote.trim() } : {}),
+    ...(display.primaryActionLabel?.trim() ? { primaryActionLabel: display.primaryActionLabel.trim() } : {}),
     ...(display.addActionLabel?.trim() ? { addActionLabel: display.addActionLabel.trim() } : {}),
     ...(display.addBlockedLabel?.trim() ? { addBlockedLabel: display.addBlockedLabel.trim() } : {}),
+    ...(display.scheduledActionLabel?.trim() ? { scheduledActionLabel: display.scheduledActionLabel.trim() } : {}),
+    ...(display.informationalActionLabel?.trim() ? { informationalActionLabel: display.informationalActionLabel.trim() } : {}),
+    ...(display.blockedActionLabel?.trim() ? { blockedActionLabel: display.blockedActionLabel.trim() } : {}),
     ...(display.detailLeadTitle?.trim() ? { detailLeadTitle: display.detailLeadTitle.trim() } : {}),
     ...(display.detailPlanTitle?.trim() ? { detailPlanTitle: display.detailPlanTitle.trim() } : {}),
+    ...(display.detailSourceTitle?.trim() ? { detailSourceTitle: display.detailSourceTitle.trim() } : {}),
     ...(display.comparisonTitle?.trim() ? { comparisonTitle: display.comparisonTitle.trim() } : {}),
     ...(comparisonRows.length ? { comparisonRows } : {})
+  };
+}
+
+function normalizePlaceDisplay(display: NonNullable<SkillResearchPlaceArtifact["display"]>): NonNullable<BlueprintPlace["display"]> {
+  return {
+    type: display.type,
+    ...(display.markerKind ? { markerKind: display.markerKind } : {}),
+    ...(display.workspaceSignals ? {
+      workspaceSignals: {
+        reservation: display.workspaceSignals.reservation,
+        needsRecheck: display.workspaceSignals.needsRecheck,
+        longStop: display.workspaceSignals.longStop,
+        ...(display.workspaceSignals.itineraryStatusLabel?.trim() ? { itineraryStatusLabel: display.workspaceSignals.itineraryStatusLabel.trim() } : {})
+      }
+    } : {})
   };
 }
 

@@ -68,6 +68,41 @@ test("Skill Importer adds a reasonableness pass for candidates and unverified mo
   assert.match(blueprint.movements[0]?.detail ?? "", /conservative planning estimate/);
 });
 
+test("Skill Importer preserves movement display intent into the Trip Blueprint", () => {
+  const research = importSkillResearchBatches([{ ...batch(), places: batch().places.slice(0, 2) }], {
+    researchSetId: "research-1", generationKey: "generation-1", proposalRef: { sessionId: "session-1", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" }, createdAt: "2026-08-26T00:00:00.000Z", updatedAt: "2026-08-26T00:00:00.000Z"
+  });
+  const [a, b] = research.places.map((place) => place.id);
+  const blueprint = importSkillItinerary(research, {
+    title: "Tokyo", summary: "Tokyo", language: "en", destinations: ["Tokyo"], startDate: "2026-09-01", endDate: "2026-09-01",
+    days: [{ id: "d1", date: "2026-09-01", kind: "scheduled", city: "Tokyo", title: "Day", summary: "Flow", stops: [{ placeId: a!, order: 1 }, { placeId: b!, order: 2 }], candidatePlaceIds: [] }],
+    movements: [{
+      id: "a-b",
+      dayId: "d1",
+      originPlaceId: a!,
+      destinationPlaceId: b!,
+      mode: "walking",
+      status: "recheck",
+      label: "  Old label  ",
+      detail: "  Old detail  ",
+      display: {
+        routeLabel: "  Reviewed lane walk  ",
+        refreshReason: "  Refresh after direct edits.  ",
+        showAsFormalRoute: true,
+        mapLineState: "needs_refresh"
+      },
+      evidence: []
+    }]
+  }, { blueprintId: "blueprint-1", blueprintVersion: 1, createdAt: "2026-08-26T01:00:00.000Z" });
+  assert.deepEqual(blueprint.movements[0]?.display, {
+    routeLabel: "Reviewed lane walk",
+    refreshReason: "Refresh after direct edits.",
+    showAsFormalRoute: true,
+    mapLineState: "needs_refresh"
+  });
+});
+
 test("Skill Importer keeps an orphan HTTPS source reference as a local recheck gap", () => {
   const value = batch();
   value.places[0]!.sourceUrls = ["https://unknown.example/place"];
@@ -196,14 +231,21 @@ test("Skill Importer preserves Landi-native place presentation fields into the T
       category: "tea ceremony experience",
       priority: "must",
       coordinates: [35.003, 135.778],
-      display: { type: "experience", markerKind: "experience" },
+      display: { type: "experience", markerKind: "experience", workspaceSignals: { reservation: "recommended", needsRecheck: false, longStop: false, itineraryStatusLabel: "  Bookable tea slot  " } },
       guideDisplay: {
         showInGuide: true,
         state: "unscheduled",
         cardSummary: "Bookable tea practice with clear etiquette.",
         tags: ["90 min", "Small group"],
+        primaryActionLabel: "  Add this tea stop  ",
+        addActionLabel: "  Add tea  ",
+        addBlockedLabel: "  Needs route redesign  ",
+        scheduledActionLabel: "  Open scheduled tea stop  ",
+        informationalActionLabel: "  Read tea background  ",
+        blockedActionLabel: "  Ask Landi to rework tea  ",
         detailLeadTitle: "Why this tea stop fits",
         detailPlanTitle: "How to use it",
+        detailSourceTitle: "  Tea sources  ",
         comparisonTitle: "Compare cultural options",
         comparisonRows: [{
           id: "row-pottery",
@@ -289,14 +331,21 @@ test("Skill Importer preserves Landi-native place presentation fields into the T
   assert.equal(place.category, "tea ceremony experience");
   assert.equal(place.priority, "must");
   assert.deepEqual(place.coordinates, [35.003, 135.778]);
-  assert.deepEqual(place.display, { type: "experience", markerKind: "experience" });
+  assert.deepEqual(place.display, { type: "experience", markerKind: "experience", workspaceSignals: { reservation: "recommended", needsRecheck: false, longStop: false, itineraryStatusLabel: "Bookable tea slot" } });
   assert.deepEqual(place.guideDisplay, {
     showInGuide: true,
     state: "unscheduled",
     cardSummary: "Bookable tea practice with clear etiquette.",
     tags: ["90 min", "Small group"],
+    primaryActionLabel: "Add this tea stop",
+    addActionLabel: "Add tea",
+    addBlockedLabel: "Needs route redesign",
+    scheduledActionLabel: "Open scheduled tea stop",
+    informationalActionLabel: "Read tea background",
+    blockedActionLabel: "Ask Landi to rework tea",
     detailLeadTitle: "Why this tea stop fits",
     detailPlanTitle: "How to use it",
+    detailSourceTitle: "Tea sources",
     comparisonTitle: "Compare cultural options",
     comparisonRows: [{
       id: "row-pottery",
@@ -335,7 +384,24 @@ test("Skill Importer preserves Landi-native place presentation fields into the T
     destinations: ["Kyoto"],
     startDate: "2026-10-01",
     endDate: "2026-10-01",
-    days: [{ id: "d1", date: "2026-10-01", kind: "scheduled", city: "Kyoto", title: "Tea day", summary: "Keep this as a compact culture day.", stops: [{ placeId: place.id, order: 1, role: "afternoon flexible" }], candidatePlaceIds: [] }],
+    days: [{
+      id: "d1",
+      date: "2026-10-01",
+      kind: "scheduled",
+      city: "Kyoto",
+      title: "Tea day",
+      summary: "Keep this as a compact culture day.",
+      stops: [{ placeId: place.id, order: 1, role: "afternoon flexible" }],
+      blocks: [{
+        id: "block-tea",
+        kind: "flexible",
+        order: 3,
+        placeId: place.id,
+        display: { timeLabel: "  Tea-room window  ", meta: "  Only if the afternoon stays relaxed  ", routeAnchor: false, reorderable: false },
+        evidence: []
+      }],
+      candidatePlaceIds: []
+    }],
     movements: []
   }, { blueprintId: "blueprint-kyoto", blueprintVersion: 1, createdAt: "2026-08-26T01:00:00.000Z" });
   assert.deepEqual(blueprint.places[0]?.display, place.display);
@@ -345,7 +411,12 @@ test("Skill Importer preserves Landi-native place presentation fields into the T
   assert.deepEqual(blueprint.places[0]?.schedulingEligibility?.suitableDayIds, ["d1"]);
   assert.deepEqual(blueprint.moduleIdentity?.enabledModules.map((module) => module.id), ["itinerary", "preparation", "tips", "sources"]);
   assert.equal(blueprint.guideTheme?.visitorMode, "balanced-visitor");
-  assert.deepEqual(blueprint.days[0]?.blocks?.map((block) => ({ kind: block.kind, placeId: block.placeId })), [{ kind: "flexible", placeId: place.id }]);
+  assert.deepEqual(blueprint.days[0]?.blocks?.map((block) => ({ kind: block.kind, order: block.order, placeId: block.placeId, display: block.display })), [{
+    kind: "flexible",
+    order: 1,
+    placeId: place.id,
+    display: { timeLabel: "Tea-room window", meta: "Only if the afternoon stays relaxed", routeAnchor: false, reorderable: false }
+  }]);
   assert.equal(blueprint.localFoods?.[0]?.title, "Seasonal wagashi");
   assert.equal(blueprint.localProducts?.[0]?.title, "Tea utensils");
   assert.equal(blueprint.experienceThemes?.[0]?.title, "Tea practice");
