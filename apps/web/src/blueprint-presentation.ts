@@ -52,7 +52,8 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
       sourceRefs: movement?.evidence.flatMap((ref) => sources.get(ref.sourceId)?.url ?? []) ?? [],
       dayId: day.id,
       label: movement?.label ?? "Route needs verification",
-      detail: movement?.detail ?? "This adjacent movement is reconstructed from the itinerary order and needs route verification before execution."
+      detail: movement?.detail ?? "This adjacent movement is reconstructed from the itinerary order and needs route verification before execution.",
+      ...(movement?.display ? { display: structuredClone(movement.display) } : {})
     };
   }));
   return {

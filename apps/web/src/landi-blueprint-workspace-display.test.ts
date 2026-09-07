@@ -129,6 +129,53 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.equal(markerTypeById.get("tea"), "dining");
   });
 
+  it("uses Blueprint workspace signals before Web status inference", () => {
+    const presentation = presentationFixture({
+      places: [
+        place("temple", { category: "temple" }),
+        place("timed", {
+          category: "museum",
+          priority: "recheck",
+          durationMinutes: 240,
+          display: {
+            type: "attraction",
+            workspaceSignals: {
+              reservation: "none",
+              needsRecheck: false,
+              longStop: false,
+              itineraryStatusLabel: "Flexible confirmed slot"
+            }
+          },
+          reservation: { requirement: "required", verification: "needs_recheck", note: "Legacy reservation state should not drive the workspace." },
+          evidenceSources: [{ title: "Old source", url: "https://old.example", status: "stale" }],
+          sourceRefs: ["https://old.example"]
+        }),
+        place("strict", {
+          category: "gallery",
+          display: { type: "attraction", workspaceSignals: { reservation: "required", needsRecheck: true, longStop: true } }
+        })
+      ],
+      days: [{
+        id: "day-1",
+        label: "October 1",
+        date: "2026-10-01",
+        city: "Kyoto",
+        placeIds: ["temple", "timed", "strict"],
+        stops: [{ placeId: "temple", order: 1 }, { placeId: "timed", order: 2 }, { placeId: "strict", order: 3 }]
+      }]
+    });
+    const workspace = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation);
+    const timedPlace = workspace.places.find((item) => item.id === "timed");
+    const strictPlace = workspace.places.find((item) => item.id === "strict");
+    assert.deepEqual(timedPlace?.placementSignals, { reservation: "none", needsRecheck: false, longStop: false });
+    assert.deepEqual(strictPlace?.placementSignals, { reservation: "required", needsRecheck: true, longStop: true });
+    assert.deepEqual(workspace.itineraries[0]?.items.map((item) => ({ id: item.placeId, status: item.statusLabel, reorderable: Boolean(item.reorderable) })), [
+      { id: "temple", status: undefined, reorderable: true },
+      { id: "timed", status: "Flexible confirmed slot", reorderable: true },
+      { id: "strict", status: undefined, reorderable: false }
+    ]);
+  });
+
   it("adds Guide Catalog context to concrete place cards", () => {
     const presentation = presentationFixture({
       places: [
@@ -160,9 +207,11 @@ describe("Landi Blueprint workspace display helpers", () => {
             cardSummary: "Blueprint-authored short card copy.",
             tags: ["75 min", "Quiet"],
             footerNote: "Good after the garden.",
-            addActionLabel: "Add",
+            primaryActionLabel: "Add this tea stop",
+            addActionLabel: "Add tea",
             detailLeadTitle: "Why this belongs",
             detailPlanTitle: "How to place it",
+            detailSourceTitle: "Evidence",
             comparisonTitle: "Compare quiet options",
             comparisonRows: [{
               id: "row-anchor",
@@ -186,11 +235,14 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.equal(cardById.get("tea")?.summary, "Blueprint-authored short card copy.");
     assert.deepEqual(cardById.get("tea")?.tags, ["75 min", "Quiet"]);
     assert.equal(cardById.get("tea")?.footerNote, "Good after the garden.");
+    assert.equal(cardById.get("tea")?.actionLabel, "Add tea");
     assert.equal(cardById.get("context")?.state, "informational");
     assert.equal(cardById.get("context")?.footerNote, "Use as background only.");
     const detail = detailDisplayForWorkspacePlace(workspace, "tea")!;
     assert.equal(detail.leadTitle, "Why this belongs");
     assert.equal(detail.planTitle, "How to place it");
+    assert.equal(detail.sourceTitle, "Evidence");
+    assert.equal(detail.primaryActionLabel, "Add this tea stop");
     assert.equal(detail.comparisonTitle, "Compare quiet options");
     assert.deepEqual(detail.comparisonRows, [{
       id: "anchor",
@@ -297,12 +349,12 @@ describe("Landi Blueprint workspace display helpers", () => {
       moduleIdentity: { primaryModule: "itinerary", enabledModules: [{ id: "itinerary", title: "Itinerary", source: "blueprint" }, { id: "tips", title: "Tips", source: "blueprint" }] },
       guideRelationshipGraph: { relationships: [{ id: "rel-tea-lunch", kind: "meal_support", fromPlaceId: "tea", toPlaceId: "lunch", rationale: "Tea works as a softer break after lunch.", dayIds: ["day-1"], evidence: [{ sourceId: "guide", status: "verified" }] }] },
       places: [
-        place("temple", { category: "temple", display: { type: "attraction" } }),
+        place("temple", { category: "temple", display: { type: "attraction" }, guideDisplay: { scheduledActionLabel: "Open scheduled temple" } }),
         place("lunch", { category: "restaurant", display: { type: "dining" } }),
-        place("tea", { category: "ceremony", display: { type: "experience" }, schedulingEligibility: { decision: "schedulable", reason: "Fits the first day.", suitableDayIds: ["day-1"] } }),
-        place("context", { category: "food notes", display: { type: "dining" }, schedulingEligibility: { decision: "informational", reason: "Use this as background, not a stop." } }),
-        place("hotel-shift", { category: "neighborhood dinner", display: { type: "dining" }, schedulingEligibility: { decision: "high_impact", reason: "It changes the hotel-side evening plan.", highImpactReasons: ["Late cross-town route"] } }),
-        place("closed", { category: "museum", display: { type: "attraction" }, schedulingEligibility: { decision: "blocked", reason: "Closed during the trip." } })
+        place("tea", { category: "ceremony", display: { type: "experience" }, guideDisplay: { primaryActionLabel: "Add the tea practice", addActionLabel: "Add tea" }, schedulingEligibility: { decision: "schedulable", reason: "Fits the first day.", suitableDayIds: ["day-1"] } }),
+        place("context", { category: "food notes", display: { type: "dining" }, guideDisplay: { informationalActionLabel: "Read as local context" }, schedulingEligibility: { decision: "informational", reason: "Use this as background, not a stop." } }),
+        place("hotel-shift", { category: "neighborhood dinner", display: { type: "dining" }, guideDisplay: { blockedActionLabel: "Ask Landi to rework dinner", addBlockedLabel: "Needs hotel-side redesign" }, schedulingEligibility: { decision: "high_impact", reason: "It changes the hotel-side evening plan.", highImpactReasons: ["Late cross-town route"] } }),
+        place("closed", { category: "museum", display: { type: "attraction" }, guideDisplay: { blockedActionLabel: "Cannot fit this trip" }, schedulingEligibility: { decision: "blocked", reason: "Closed during the trip." } })
       ],
       days: [{
         id: "day-1",
@@ -336,10 +388,11 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.deepEqual(workspace.itineraries[0]?.placementOptions.map((option) => option.id), ["start", "after-temple", "after-lunch", "end"]);
     const cardById = new Map(workspace.guideCards.map((card) => [card.placeId, card]));
     assert.equal(cardById.get("tea")?.canAdd, true);
+    assert.equal(cardById.get("tea")?.actionLabel, "Add tea");
     assert.equal(cardById.get("context")?.state, "informational");
     assert.equal(cardById.get("hotel-shift")?.canAdd, false);
-    assert.equal(cardById.get("hotel-shift")?.footerNote, "Needs replanning");
-    assert.equal(cardById.get("closed")?.footerNote, "Not for this plan");
+    assert.equal(cardById.get("hotel-shift")?.footerNote, "Needs hotel-side redesign");
+    assert.equal(cardById.get("closed")?.footerNote, "Cannot fit this trip");
     const teaEdit = buildPendingItineraryEditForWorkspace(workspace, "tea", { dayId: "day-2", positionId: "end" });
     assert.equal(teaEdit.dayId, "day-1");
     assert.deepEqual(teaEdit.position, { kind: "end" });
@@ -349,7 +402,10 @@ describe("Landi Blueprint workspace display helpers", () => {
       { id: "lunch", route: "Meal support", timing: "2026-10-01", effort: "Tea works as a softer break after lunch.", source: "Verified relationship" }
     ]);
     assert.equal(detailDisplayForWorkspacePlace(workspace, "hotel-shift")?.canAdd, false);
-    assert.equal(detailDisplayForWorkspacePlace(workspace, "hotel-shift")?.primaryActionLabel, "Needs replanning");
+    assert.equal(detailDisplayForWorkspacePlace(workspace, "temple")?.primaryActionLabel, "Open scheduled temple");
+    assert.equal(detailDisplayForWorkspacePlace(workspace, "tea")?.primaryActionLabel, "Add the tea practice");
+    assert.equal(detailDisplayForWorkspacePlace(workspace, "context")?.primaryActionLabel, "Read as local context");
+    assert.equal(detailDisplayForWorkspacePlace(workspace, "hotel-shift")?.primaryActionLabel, "Ask Landi to rework dinner");
   });
 
   it("uses typed blocks as display copy without treating contextual places as route anchors", () => {
@@ -395,6 +451,39 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.deepEqual(itinerary.routeSegments.map((segment) => segment.id), ["route-formal"]);
     assert.equal(scheduledDayIdForPlace(workspace, "tea"), undefined);
     assert.equal(buildPendingItineraryMoveForWorkspace(workspace, { dayId: "day-1", placeId: "tea", position: { kind: "end" } }), undefined);
+  });
+
+  it("uses Blueprint itinerary block display intent before timeline inference", () => {
+    const presentation = presentationFixture({
+      places: [
+        place("temple", { category: "temple" }),
+        place("note", { category: "neighborhood context", display: { type: "attraction" } }),
+        place("lunch", { category: "restaurant", display: { type: "dining" } })
+      ],
+      days: [{
+        id: "day-1",
+        label: "October 1",
+        date: "2026-10-01",
+        city: "Kyoto",
+        placeIds: ["temple", "lunch"],
+        stops: [{ placeId: "temple", order: 1, time: "09:30" }, { placeId: "lunch", order: 2 }],
+        blocks: [
+          { id: "block-temple", kind: "stop", order: 1, placeId: "temple", startTime: "09:30", summary: "Legacy summary", display: { timeLabel: "Opening queue", meta: "Blueprint-authored route start", routeAnchor: true, reorderable: false }, evidence: [] },
+          { id: "block-note", kind: "stop", order: 2, placeId: "note", display: { timeLabel: "Background context", meta: "Read this without adding a map marker", routeAnchor: false, reorderable: false }, evidence: [] },
+          { id: "block-lunch", kind: "meal", order: 3, placeId: "lunch", role: "lunch", display: { timeLabel: "Lunch booking window", meta: "Keep after the morning anchor", routeAnchor: true, reorderable: true }, evidence: [] }
+        ]
+      }]
+    });
+    const itinerary = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).itineraries[0]!;
+    assert.deepEqual(itinerary.items.map((item) => ({ id: item.placeId, time: item.timeLabel, meta: item.meta, routeAnchor: Boolean(item.routeAnchor), reorderable: Boolean(item.reorderable) })), [
+      { id: "temple", time: "Opening queue", meta: "Blueprint-authored route start", routeAnchor: true, reorderable: false },
+      { id: "note", time: "Background context", meta: "Read this without adding a map marker", routeAnchor: false, reorderable: false },
+      { id: "lunch", time: "Lunch booking window", meta: "Keep after the morning anchor", routeAnchor: true, reorderable: true }
+    ]);
+    assert.deepEqual(itinerary.routePlaces.map((item) => item.placeId), ["temple", "lunch"]);
+    assert.deepEqual(itinerary.markers.map((item) => item.placeId), ["temple", "lunch"]);
+    assert.deepEqual(itinerary.placementOptions.map((option) => option.id), ["start", "after-temple", "after-lunch", "end"]);
+    assert.equal(buildPendingItineraryMoveForWorkspace(buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation), { dayId: "day-1", placeId: "temple", position: { kind: "end" } }), undefined);
   });
 
   it("keeps observation landmarks while filtering actual transport nodes", () => {
@@ -846,6 +935,22 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.equal(itinerary.routeRefresh, undefined);
     assert.equal(itinerary.routeSegments[0]?.verification, "needs_verification");
     assert.equal(itinerary.routeSegments[0]?.needsRefresh, false);
+    assert.equal(itinerary.routeSegments[0]?.mapLineState, "formal");
+  });
+
+  it("uses Blueprint route display intent before route prose inference", () => {
+    const presentation = presentationFixture({
+      routeSegments: [
+        { id: "route-1", dayId: "day-1", originPlaceId: "temple", destinationPlaceId: "lunch", mode: "walking", verification: "verified", label: "Old route label", detail: "Verified route detail.", display: { routeLabel: "Blueprint route label", refreshReason: "Refresh this leg after direct itinerary edits.", showAsFormalRoute: true, mapLineState: "needs_refresh" }, sourceRefs: [] },
+        { id: "route-2", dayId: "day-1", originPlaceId: "lunch", destinationPlaceId: "craft", mode: "walking", verification: "needs_verification", label: "Route needs refresh", detail: "This hidden context route was edited directly.", display: { showAsFormalRoute: false, mapLineState: "reference", refreshReason: "Hidden route context only." }, sourceRefs: [] }
+      ]
+    });
+    const itinerary = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).itineraries[0]!;
+    assert.deepEqual(itinerary.routeSegments.map((segment) => ({ id: segment.id, label: segment.label, needsRefresh: segment.needsRefresh, mapLineState: segment.mapLineState, refreshReason: segment.refreshReason })), [
+      { id: "route-1", label: "Blueprint route label", needsRefresh: true, mapLineState: "needs_refresh", refreshReason: "Refresh this leg after direct itinerary edits." }
+    ]);
+    assert.equal(itinerary.items[0]?.routeStatusLabel, "Refresh this leg after direct itinerary edits.");
+    assert.equal(itinerary.items[1]?.routeStatusLabel, undefined);
   });
 
   it("surfaces direct edit route refresh without marking unrelated routes", () => {

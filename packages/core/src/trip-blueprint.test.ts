@@ -76,12 +76,33 @@ test("Trip Blueprint accepts explicit rest days and unverified movement", () => 
 
 test("Trip Blueprint validates optional place display intent", () => {
   const value = blueprint();
-  value.places[0] = { ...value.places[0]!, display: { type: "shopping", markerKind: "shopping" } };
+  value.places[0] = { ...value.places[0]!, display: { type: "shopping", markerKind: "shopping", workspaceSignals: { reservation: "recommended", needsRecheck: false, longStop: true, itineraryStatusLabel: "Reserve if possible" } } };
   assert.deepEqual(tripBlueprintIntegrityIssues(value), []);
 
   value.places[0] = { ...value.places[0]!, display: { type: "activity" as "shopping", markerKind: "shopping" } };
   const issues = tripBlueprintIntegrityIssues(value);
   assert.ok(issues.includes("place a has invalid display type"));
+});
+
+test("Trip Blueprint validates optional place workspace signals", () => {
+  const value = blueprint();
+  value.places[0] = {
+    ...value.places[0]!,
+    display: {
+      type: "attraction",
+      workspaceSignals: {
+        reservation: "timed" as "required",
+        needsRecheck: "yes" as unknown as boolean,
+        longStop: "no" as unknown as boolean,
+        itineraryStatusLabel: ""
+      }
+    }
+  };
+  const issues = tripBlueprintIntegrityIssues(value);
+  assert.ok(issues.includes("place a has invalid workspace reservation signal"));
+  assert.ok(issues.includes("place a has invalid workspace recheck signal"));
+  assert.ok(issues.includes("place a has invalid workspace long-stop signal"));
+  assert.ok(issues.includes("place a has an empty workspace itinerary status label"));
 });
 
 test("Trip Blueprint validates optional guide display intent", () => {
@@ -93,8 +114,15 @@ test("Trip Blueprint validates optional guide display intent", () => {
       state: "unscheduled",
       cardSummary: "Short card copy written by the planning skill.",
       tags: ["60 min", "Rain option"],
+      primaryActionLabel: "Add this stop",
+      addActionLabel: "Add",
+      addBlockedLabel: "Needs route review",
+      scheduledActionLabel: "Open scheduled stop",
+      informationalActionLabel: "Read background",
+      blockedActionLabel: "Ask Landi to rework this",
       detailLeadTitle: "Why this fits",
       detailPlanTitle: "How to use it",
+      detailSourceTitle: "Evidence used",
       comparisonTitle: "Compare nearby stops",
       comparisonRows: [{
         id: "row-b",
@@ -111,6 +139,7 @@ test("Trip Blueprint validates optional guide display intent", () => {
 
   value.places[0]!.guideDisplay = {
     state: "hidden" as "informational",
+    primaryActionLabel: "",
     tags: [""],
     comparisonRows: [{
       id: "",
@@ -125,6 +154,7 @@ test("Trip Blueprint validates optional guide display intent", () => {
   };
   const issues = tripBlueprintIntegrityIssues(value);
   assert.ok(issues.includes("place a has invalid guide display state"));
+  assert.ok(issues.includes("place a guide display has an empty primaryActionLabel"));
   assert.ok(issues.includes("place a guide display contains an empty tag"));
   assert.ok(issues.includes("place a.guideDisplay.comparisonRows contains a missing identity"));
   assert.ok(issues.some((issue) => issue.includes("place a guide display row <missing> is incomplete")));
@@ -252,6 +282,62 @@ test("Trip Blueprint validates V2 guide relationships, scheduling, blocks, and f
   assert.ok(issues.some((issue) => issue.includes("place c high-impact scheduling eligibility requires reasons")));
   assert.ok(issues.some((issue) => issue.includes("place c scheduling eligibility references unknown suitable day missing-day")));
   assert.ok(issues.some((issue) => issue.includes("blueprint field evidence summary references unknown source missing-source")));
+});
+
+test("Trip Blueprint validates itinerary block display intent", () => {
+  const value = blueprint();
+  value.days[0] = {
+    ...value.days[0]!,
+    blocks: [
+      { id: "block-1", kind: "stop", order: 1, placeId: "a", display: { timeLabel: "Garden opening", meta: "Keep this as the formal start", routeAnchor: true, reorderable: true }, evidence: [] },
+      { id: "block-2", kind: "flexible", order: 2, placeId: "c", display: { timeLabel: "Optional pause", meta: "Only if the first stop runs short", routeAnchor: false, reorderable: false }, evidence: [] },
+      { id: "block-3", kind: "stop", order: 3, placeId: "b", display: { routeAnchor: true }, evidence: [] }
+    ]
+  };
+  assert.deepEqual(tripBlueprintIntegrityIssues(value), []);
+
+  value.days[0].blocks![1] = {
+    ...value.days[0].blocks![1]!,
+    display: { timeLabel: "", meta: "", routeAnchor: true, reorderable: true }
+  };
+  value.days[0].blocks![2] = {
+    ...value.days[0].blocks![2]!,
+    display: { routeAnchor: false, reorderable: true }
+  };
+  const issues = tripBlueprintIntegrityIssues(value);
+  assert.ok(issues.some((issue) => issue.includes("day d1 block block-2 has an empty display time label")));
+  assert.ok(issues.some((issue) => issue.includes("day d1 block block-2 has an empty display meta")));
+  assert.ok(issues.some((issue) => issue.includes("day d1 block block-2 display route anchor must use a scheduled stop")));
+  assert.ok(issues.some((issue) => issue.includes("day d1 block block-3 display reorderable requires a route place")));
+});
+
+test("Trip Blueprint validates movement display intent", () => {
+  const value = blueprint();
+  value.movements[0] = {
+    ...value.movements[0]!,
+    display: {
+      routeLabel: "Reviewed garden walk",
+      refreshReason: "Route changed after direct itinerary edits.",
+      showAsFormalRoute: true,
+      mapLineState: "needs_refresh"
+    }
+  };
+  assert.deepEqual(tripBlueprintIntegrityIssues(value), []);
+
+  value.movements[0] = {
+    ...value.movements[0]!,
+    display: {
+      routeLabel: "",
+      refreshReason: "",
+      showAsFormalRoute: "yes" as unknown as boolean,
+      mapLineState: "draft" as "formal"
+    }
+  };
+  const issues = tripBlueprintIntegrityIssues(value);
+  assert.ok(issues.includes("movement m1 has an empty display route label"));
+  assert.ok(issues.includes("movement m1 has an empty display refresh reason"));
+  assert.ok(issues.includes("movement m1 has invalid formal route display flag"));
+  assert.ok(issues.includes("movement m1 has invalid map line state"));
 });
 
 test("Trip Blueprint rejects missing dates, unresolved places, and missing movements", () => {

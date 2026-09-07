@@ -31,7 +31,7 @@ test("Web derives a complete read model from the linked Trip Blueprint", () => {
     ],
     events: [{ id: "event-a", title: "Festival A", startDate: "2026-10-12", locationLabel: "Lisbon", placeId: "a", description: "Evening event near A.", evidence: [{ sourceId: "source-1", status: "verified" }] }],
     days: [{ id: "day-1", date: "2026-10-12", kind: "scheduled", city: "Lisbon", title: "Day", summary: "Flow", stops: [{ placeId: "a", order: 1 }, { placeId: "b", order: 2 }], blocks: [{ id: "block-a", kind: "stop", order: 1, placeId: "a", evidence: [] }, { id: "block-b", kind: "stop", order: 2, placeId: "b", evidence: [] }], candidatePlaceIds: ["c"] }],
-    movements: [{ id: "move-1", dayId: "day-1", originPlaceId: "a", destinationPlaceId: "b", mode: "walking", status: "recheck", detail: "Use shaded side streets.", evidence: [{ sourceId: "source-1", status: "verified" }] }],
+    movements: [{ id: "move-1", dayId: "day-1", originPlaceId: "a", destinationPlaceId: "b", mode: "walking", status: "recheck", detail: "Use shaded side streets.", display: { routeLabel: "Shaded street walk", showAsFormalRoute: true, mapLineState: "reference" }, evidence: [{ sourceId: "source-1", status: "verified" }] }],
     actionRequirements: [{ id: "reserve-a", kind: "reservation", title: "Reserve A", description: "Choose an admission slot.", accountableParty: "traveler", completionCondition: "A slot is confirmed.", placeId: "a", evidence: [] }],
     localFoods: [{ id: "food-pastry", title: "Pastel stop", description: "A short pastry break near the route.", context: "Cafe breaks", diningPlaceIds: ["c"], evidence: [{ sourceId: "source-1", status: "verified" }] }],
     localProducts: [{ id: "product-tile", title: "Tile shops", description: "Small azulejo purchases fit compact browsing.", context: "Baixa shopping", purchasePlaceIds: ["b"], evidence: [] }],
@@ -47,6 +47,7 @@ test("Web derives a complete read model from the linked Trip Blueprint", () => {
   assert.deepEqual(presentation.days[0]?.blocks?.map((block) => block.id), ["block-a", "block-b"]);
   assert.equal(presentation.routeSegments[0]?.verification, "needs_verification");
   assert.equal(presentation.routeSegments[0]?.detail, "Use shaded side streets.");
+  assert.deepEqual(presentation.routeSegments[0]?.display, { routeLabel: "Shaded street walk", showAsFormalRoute: true, mapLineState: "reference" });
   assert.deepEqual(presentation.routeSegments[0]?.sourceRefs, ["https://example.com/place"]);
   assert.deepEqual(presentation.places[2]?.display, { type: "dining", markerKind: "dining" });
   assert.equal(presentation.places[2]?.guideDisplay?.cardSummary, "Coffee break selected by the Blueprint.");
@@ -229,7 +230,7 @@ test("Skill importer output reaches the Landi-native Web workspace read model", 
       { id: "shrine", name: "Nezu Shrine", localizedName: "根津神社", locationLabel: "Nezu, Tokyo", city: "Tokyo", area: "Nezu", category: "shrine", priority: "must", coordinates: [35.7202, 139.7609], contentTier: "deep", visitRole: "anchor", durationMinutes: 60, whyWorthIt: "A compact religious site for neighborhood context.", plan: "Visit quietly before the cafe stop.", tip: "At active shrines, keep voices low near the worship hall and avoid photographing people at prayer.", detailSections: [{ title: "Etiquette", items: ["Step aside before photos.", "Do not block the worship route."] }], officialUrl: "https://example.com/nezu#official", sourceUrls: ["https://example.com/tokyo#guide"] },
       { id: "coffee", name: "ARiSE Coffee Roasters", locationLabel: "Kiyosumi-Shirakawa, Tokyo", city: "Tokyo", area: "Kiyosumi-Shirakawa", category: "coffee cafe", priority: "preferred", coordinates: [35.6814, 139.8031], contentTier: "standard", visitRole: "lunch nearby", durationMinutes: 45, whyWorthIt: "A short cafe stop that keeps the day relaxed.", plan: "Use as the lunch-nearby pause.", sourceUrls: ["https://example.com/tokyo#guide"] },
       { id: "shop", name: "Yanaka Ginza Shopping Street", locationLabel: "Yanaka, Tokyo", city: "Tokyo", area: "Yanaka", category: "shopping street", priority: "nearby", coordinates: [35.7278, 139.7662], contentTier: "compact", durationMinutes: 60, whyWorthIt: "A small street for snacks and local browsing.", plan: "Use as a flexible afternoon stop.", sourceUrls: ["https://example.com/tokyo#guide"] },
-      { id: "bath", name: "Spa LaQua", locationLabel: "Bunkyo, Tokyo", city: "Tokyo", area: "Bunkyo", category: "spa bathing experience", priority: "nearby", coordinates: [35.7056, 139.7521], contentTier: "standard", durationMinutes: 120, whyWorthIt: "A bathing reset for the evening.", plan: "Use only if everyone is comfortable with public-bath rules.", tip: "Public-bath facilities may have tattoo, towel, locker, and health rules; check the current rules before going.", experienceUrl: "https://example.com/spa#experience", sourceUrls: ["https://example.com/tokyo#guide"] },
+      { id: "bath", name: "Spa LaQua", locationLabel: "Bunkyo, Tokyo", city: "Tokyo", area: "Bunkyo", category: "spa bathing experience", priority: "nearby", coordinates: [35.7056, 139.7521], display: { type: "experience", workspaceSignals: { reservation: "required", needsRecheck: true, longStop: false, itineraryStatusLabel: "Review entry rules" } }, contentTier: "standard", durationMinutes: 120, whyWorthIt: "A bathing reset for the evening.", plan: "Use only if everyone is comfortable with public-bath rules.", tip: "Public-bath facilities may have tattoo, towel, locker, and health rules; check the current rules before going.", experienceUrl: "https://example.com/spa#experience", sourceUrls: ["https://example.com/tokyo#guide"] },
       { id: "market", name: "Nishiki Market", locationLabel: "Central Kyoto", city: "Kyoto", area: "Central Kyoto", category: "food market", priority: "preferred", coordinates: [35.005, 135.7647], contentTier: "standard", visitRole: "lunch", durationMinutes: 75, whyWorthIt: "A compact lunch and food browsing stop.", plan: "Use as a lunch window.", sourceUrls: ["https://example.com/kyoto#guide"] }
     ],
     events: [],
@@ -256,10 +257,35 @@ test("Skill importer output reaches the Landi-native Web workspace read model", 
     startDate: "2026-10-03",
     endDate: "2026-10-04",
     days: [
-      { id: "day-tokyo", date: "2026-10-03", kind: "scheduled", city: "Tokyo", title: "Old Tokyo", summary: "Keep the route compact, with food, shopping, and bathing as flexible material.", stops: [{ placeId: idFor("shrine"), order: 1, time: "09:00" }, { placeId: idFor("coffee"), order: 2, role: "lunch nearby" }], candidatePlaceIds: [idFor("shop"), idFor("bath")] },
+      {
+        id: "day-tokyo",
+        date: "2026-10-03",
+        kind: "scheduled",
+        city: "Tokyo",
+        title: "Old Tokyo",
+        summary: "Keep the route compact, with food, shopping, and bathing as flexible material.",
+        stops: [{ placeId: idFor("shrine"), order: 1, time: "09:00" }, { placeId: idFor("coffee"), order: 2, role: "lunch nearby" }],
+        blocks: [
+          { id: "block-shrine", kind: "stop", order: 2, placeId: idFor("shrine"), startTime: "09:00", display: { timeLabel: "  Shrine opening  ", meta: "  Start with the quiet route anchor  ", routeAnchor: true, reorderable: false }, evidence: [] },
+          { id: "block-coffee", kind: "meal", order: 3, placeId: idFor("coffee"), role: "lunch nearby", display: { timeLabel: "  Coffee and lunch buffer  ", meta: "  Keep this as the flexible meal pause  ", routeAnchor: true, reorderable: true }, evidence: [] }
+        ],
+        candidatePlaceIds: [idFor("shop"), idFor("bath")]
+      },
       { id: "day-kyoto", date: "2026-10-04", kind: "scheduled", city: "Kyoto", title: "Central Kyoto food", summary: "Use the market as the day anchor.", stops: [{ placeId: idFor("market"), order: 1, role: "lunch" }], candidatePlaceIds: [] }
     ],
-    movements: [{ id: "walk-1", dayId: "day-tokyo", originPlaceId: idFor("shrine"), destinationPlaceId: idFor("coffee"), mode: "walking", status: "verified", label: "Neighborhood walk", detail: "Use the quieter lanes between the shrine and coffee stop.", durationMinutes: 20, evidence: [{ sourceId: research.sources[0]!.id, status: "verified" }] }]
+    movements: [{
+      id: "walk-1",
+      dayId: "day-tokyo",
+      originPlaceId: idFor("shrine"),
+      destinationPlaceId: idFor("coffee"),
+      mode: "walking",
+      status: "verified",
+      label: "Neighborhood walk",
+      detail: "Use the quieter lanes between the shrine and coffee stop.",
+      display: { routeLabel: "  Reviewed shrine-to-coffee walk  ", refreshReason: "  Recheck after local day edits.  ", showAsFormalRoute: true, mapLineState: "needs_refresh" },
+      durationMinutes: 20,
+      evidence: [{ sourceId: research.sources[0]!.id, status: "verified" }]
+    }]
   }, { blueprintId: "blueprint-imported", blueprintVersion: 1, createdAt: "2026-08-26T01:00:00.000Z" });
   const compiled = compileTripBlueprint(blueprint, { createdAt: "2026-08-26T01:30:00.000Z" });
   const presentation = blueprintPresentation(blueprint);
@@ -270,8 +296,16 @@ test("Skill importer output reaches the Landi-native Web workspace read model", 
   const bathDetail = workspace.details.find((detail) => detail.title === "Spa LaQua");
   assert.ok(bathDetail?.links.some((link) => link.label === "Experience link" && link.url === "https://example.com/spa"));
   assert.equal(bathDetail?.reservationNote, "Choose the current entry option before adding the bathing stop to the day.");
-  assert.deepEqual(workspace.places.find((place) => place.title === "Spa LaQua")?.placementSignals.reservation, "required");
+  assert.deepEqual(workspace.places.find((place) => place.title === "Spa LaQua")?.placementSignals, { reservation: "required", needsRecheck: true, longStop: false });
+  assert.deepEqual(workspace.itineraries[0]?.items.slice(0, 2).map((item) => ({ title: item.title, time: item.timeLabel, meta: item.meta, reorderable: Boolean(item.reorderable) })), [
+    { title: "Nezu Shrine · 根津神社", time: "Shrine opening", meta: "Start with the quiet route anchor", reorderable: false },
+    { title: "ARiSE Coffee Roasters", time: "Coffee and lunch buffer", meta: "Keep this as the flexible meal pause", reorderable: true }
+  ]);
   assert.equal(workspace.itineraries[0]?.routeSegments[0]?.detail, "Use the quieter lanes between the shrine and coffee stop.");
+  assert.equal(workspace.itineraries[0]?.routeSegments[0]?.label, "Reviewed shrine-to-coffee walk");
+  assert.equal(workspace.itineraries[0]?.routeSegments[0]?.needsRefresh, true);
+  assert.equal(workspace.itineraries[0]?.routeSegments[0]?.mapLineState, "needs_refresh");
+  assert.equal(workspace.itineraries[0]?.routeSegments[0]?.refreshReason, "Recheck after local day edits.");
   assert.equal(workspace.itineraries[0]?.routeSegments[0]?.sources[0]?.summary, "Tokyo official guide · Tokyo tourism · 2026-08-26");
   assert.ok(workspace.tipGroups.some((group) => group.tips.some((tip) => /voices low/.test(tip.body))));
   assert.ok(workspace.preparationGroups.some((group) => group.items.some((item) => item.title === "Prepare Japan arrival information")));

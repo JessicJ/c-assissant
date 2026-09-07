@@ -12,6 +12,7 @@ export type BlueprintSchedulingDecision = "schedulable" | "informational" | "blo
 export type BlueprintPlaceRelationshipKind = "same_area" | "same_direction" | "alternative" | "supports_anchor" | "meal_support" | "rainy_day_alternative" | "low_energy_alternative" | "event_link" | "similar";
 export type BlueprintTravelTipTheme = "payment" | "transport" | "etiquette" | "safety" | "weather" | "timing" | "language" | "local_norms";
 export type BlueprintPreparationGroup = "packing" | "documents" | "phone_payments" | "bookings_departure" | "other";
+export type BlueprintMovementMapLineState = "formal" | "needs_refresh" | "reference";
 
 export interface BlueprintLocalFood {
   id: string;
@@ -45,9 +46,18 @@ export interface BlueprintPlaceDisplayIntent {
   type: BlueprintPlaceDisplayType;
   /** Optional map marker override when the marker should differ from the branch. */
   markerKind?: BlueprintPlaceDisplayType;
+  /** Explicit Web workspace signals so read surfaces do not infer status from prose. */
+  workspaceSignals?: BlueprintPlaceWorkspaceSignals;
 }
 
 export type BlueprintGuideDisplayState = "scheduled" | "unscheduled" | "informational";
+
+export interface BlueprintPlaceWorkspaceSignals {
+  reservation: "required" | "recommended" | "none";
+  needsRecheck: boolean;
+  longStop: boolean;
+  itineraryStatusLabel?: string;
+}
 
 export interface BlueprintGuideComparisonDisplay {
   id: string;
@@ -69,10 +79,15 @@ export interface BlueprintPlaceGuideDisplay {
   cardSummary?: string;
   tags?: string[];
   footerNote?: string;
+  primaryActionLabel?: string;
   addActionLabel?: string;
   addBlockedLabel?: string;
+  scheduledActionLabel?: string;
+  informationalActionLabel?: string;
+  blockedActionLabel?: string;
   detailLeadTitle?: string;
   detailPlanTitle?: string;
+  detailSourceTitle?: string;
   comparisonTitle?: string;
   comparisonRows?: BlueprintGuideComparisonDisplay[];
 }
@@ -350,6 +365,17 @@ export interface BlueprintStop {
   role?: string;
 }
 
+export interface BlueprintItineraryBlockDisplayIntent {
+  /** Traveler-facing time text for this timeline card. */
+  timeLabel?: string;
+  /** Secondary traveler-facing text for this timeline card. */
+  meta?: string;
+  /** Whether this block participates in the formal day route and map markers. */
+  routeAnchor?: boolean;
+  /** Whether the Web workspace may stage same-day reorder edits for this block. */
+  reorderable?: boolean;
+}
+
 export interface BlueprintItineraryBlock {
   id: string;
   kind: BlueprintItineraryBlockKind;
@@ -362,6 +388,7 @@ export interface BlueprintItineraryBlock {
   summary?: string;
   durationMinutes?: number;
   role?: string;
+  display?: BlueprintItineraryBlockDisplayIntent;
   evidence: BlueprintEvidenceRef[];
 }
 
@@ -388,7 +415,19 @@ export interface BlueprintMovement {
   distanceMeters?: number;
   label?: string;
   detail?: string;
+  display?: BlueprintMovementDisplayIntent;
   evidence: BlueprintEvidenceRef[];
+}
+
+export interface BlueprintMovementDisplayIntent {
+  /** Traveler-facing route label for Web map/workspace surfaces. */
+  routeLabel?: string;
+  /** Explains why this route leg should be refreshed after direct edits or stale route checks. */
+  refreshReason?: string;
+  /** False means keep the movement as context but do not draw it as a formal map route. */
+  showAsFormalRoute?: boolean;
+  /** Explicit map line state so Web does not infer it from prose. */
+  mapLineState?: BlueprintMovementMapLineState;
 }
 
 export interface TripBlueprint {
@@ -545,6 +584,7 @@ export function tripBlueprintIntegrityIssues(blueprint: TripBlueprint, options: 
     const originIndex = day.stops.findIndex((stop) => stop.placeId === movement.originPlaceId);
     const destinationIndex = day.stops.findIndex((stop) => stop.placeId === movement.destinationPlaceId);
     if (originIndex < 0 || destinationIndex !== originIndex + 1) issues.push(`movement ${movement.id} must connect adjacent stops`);
+    if (movement.display) validateMovementDisplay(movement.display, issues, `movement ${movement.id || "<missing>"}`);
     validateEvidence(movement.evidence, sourceIds, issues, `movement ${movement.id}`);
     movementKeys.add(movementKey(day.id, movement.originPlaceId, movement.destinationPlaceId));
   }
@@ -589,11 +629,20 @@ function validatePlace(place: BlueprintPlace, sourceIds: Set<string>, placeIds: 
 function validatePlaceDisplay(display: BlueprintPlaceDisplayIntent, issues: string[], path: string): void {
   if (!validPlaceDisplayType(display.type)) issues.push(`${path} has invalid display type`);
   if (display.markerKind && !validPlaceDisplayType(display.markerKind)) issues.push(`${path} has invalid display marker kind`);
+  if (display.workspaceSignals) validatePlaceWorkspaceSignals(display.workspaceSignals, issues, path);
+}
+
+function validatePlaceWorkspaceSignals(signals: BlueprintPlaceWorkspaceSignals, issues: string[], path: string): void {
+  if (signals.reservation !== "required" && signals.reservation !== "recommended" && signals.reservation !== "none") issues.push(`${path} has invalid workspace reservation signal`);
+  if (typeof signals.needsRecheck !== "boolean") issues.push(`${path} has invalid workspace recheck signal`);
+  if (typeof signals.longStop !== "boolean") issues.push(`${path} has invalid workspace long-stop signal`);
+  if (signals.itineraryStatusLabel !== undefined && !signals.itineraryStatusLabel.trim()) issues.push(`${path} has an empty workspace itinerary status label`);
 }
 
 function validatePlaceGuideDisplay(display: BlueprintPlaceGuideDisplay, sourceIds: Set<string>, placeIds: Set<string>, issues: string[], path: string, selfPlaceId: string): void {
   if (display.state && !validGuideDisplayState(display.state)) issues.push(`${path} has invalid guide display state`);
   for (const tag of display.tags ?? []) if (!tag.trim()) issues.push(`${path} guide display contains an empty tag`);
+  for (const [field, value] of Object.entries(guideDisplayTextFields(display))) if (value !== undefined && !value.trim()) issues.push(`${path} guide display has an empty ${field}`);
   const rows = display.comparisonRows ?? [];
   uniqueIdentityIssues(`${path}.guideDisplay.comparisonRows`, rows.map((row) => row.id), issues);
   for (const row of rows) {
@@ -602,6 +651,23 @@ function validatePlaceGuideDisplay(display: BlueprintPlaceGuideDisplay, sourceId
     if (row.relatedPlaceId && (!placeIds.has(row.relatedPlaceId) || row.relatedPlaceId === selfPlaceId)) issues.push(`${path} guide display row ${row.id || "<missing>"} has invalid related place ${row.relatedPlaceId}`);
     validateEvidence(row.evidence ?? [], sourceIds, issues, `${path} guide display row ${row.id || "<missing>"}`);
   }
+}
+
+function guideDisplayTextFields(display: BlueprintPlaceGuideDisplay): Partial<Record<keyof BlueprintPlaceGuideDisplay, string | undefined>> {
+  return {
+    cardSummary: display.cardSummary,
+    footerNote: display.footerNote,
+    primaryActionLabel: display.primaryActionLabel,
+    addActionLabel: display.addActionLabel,
+    addBlockedLabel: display.addBlockedLabel,
+    scheduledActionLabel: display.scheduledActionLabel,
+    informationalActionLabel: display.informationalActionLabel,
+    blockedActionLabel: display.blockedActionLabel,
+    detailLeadTitle: display.detailLeadTitle,
+    detailPlanTitle: display.detailPlanTitle,
+    detailSourceTitle: display.detailSourceTitle,
+    comparisonTitle: display.comparisonTitle
+  };
 }
 
 function validateRequirement(requirement: BlueprintActionRequirement, placeIds: Set<string>, sourceIds: Set<string>, issues: string[]): void {
@@ -644,8 +710,18 @@ function validateItineraryBlocks(day: BlueprintItineraryDay, placeIds: Set<strin
     if (block.placeId && !placeIds.has(block.placeId)) issues.push(`day ${day.id} block ${block.id} references unknown place ${block.placeId}`);
     if (block.eventId && !eventIds.has(block.eventId)) issues.push(`day ${day.id} block ${block.id} references unknown event ${block.eventId}`);
     if (block.durationMinutes !== undefined && (!Number.isInteger(block.durationMinutes) || block.durationMinutes < 1)) issues.push(`day ${day.id} block ${block.id} has invalid duration`);
+    if (block.display) validateItineraryBlockDisplay(block, new Set(day.stops.map((stop) => stop.placeId)), issues, `day ${day.id} block ${block.id || "<missing>"}`);
     validateEvidence(block.evidence, sourceIds, issues, `day ${day.id} block ${block.id}`);
   }
+}
+
+function validateItineraryBlockDisplay(block: BlueprintItineraryBlock, scheduledPlaceIds: Set<string>, issues: string[], path: string): void {
+  const display = block.display!;
+  if (display.timeLabel !== undefined && !display.timeLabel.trim()) issues.push(`${path} has an empty display time label`);
+  if (display.meta !== undefined && !display.meta.trim()) issues.push(`${path} has an empty display meta`);
+  if (display.routeAnchor === true && !block.placeId) issues.push(`${path} display route anchor requires a place`);
+  if (display.reorderable === true && (display.routeAnchor === false || !block.placeId)) issues.push(`${path} display reorderable requires a route place`);
+  if (display.routeAnchor === true && block.placeId && !scheduledPlaceIds.has(block.placeId)) issues.push(`${path} display route anchor must use a scheduled stop`);
 }
 
 function validatePlaceRelationship(relationship: BlueprintPlaceRelationship, placeIds: Set<string>, dayIds: Set<string>, sourceIds: Set<string>, issues: string[], path: string): void {
@@ -739,6 +815,13 @@ function validateEvidence(evidence: BlueprintEvidenceRef[], sourceIds: Set<strin
   for (const ref of evidence) if (!sourceIds.has(ref.sourceId)) issues.push(`${path} references unknown source ${ref.sourceId}`);
 }
 
+function validateMovementDisplay(display: BlueprintMovementDisplayIntent, issues: string[], path: string): void {
+  if (display.routeLabel !== undefined && !display.routeLabel.trim()) issues.push(`${path} has an empty display route label`);
+  if (display.refreshReason !== undefined && !display.refreshReason.trim()) issues.push(`${path} has an empty display refresh reason`);
+  if (display.showAsFormalRoute !== undefined && typeof display.showAsFormalRoute !== "boolean") issues.push(`${path} has invalid formal route display flag`);
+  if (display.mapLineState !== undefined && !validMovementMapLineState(display.mapLineState)) issues.push(`${path} has invalid map line state`);
+}
+
 function uniqueIdentityIssues(path: string, ids: string[], issues: string[]): Set<string> {
   const result = new Set<string>();
   for (const id of ids) {
@@ -787,6 +870,10 @@ function validSchedulingDecision(value: unknown): value is BlueprintSchedulingDe
 
 function validPlaceRelationshipKind(value: unknown): value is BlueprintPlaceRelationshipKind {
   return value === "same_area" || value === "same_direction" || value === "alternative" || value === "supports_anchor" || value === "meal_support" || value === "rainy_day_alternative" || value === "low_energy_alternative" || value === "event_link" || value === "similar";
+}
+
+function validMovementMapLineState(value: unknown): value is BlueprintMovementMapLineState {
+  return value === "formal" || value === "needs_refresh" || value === "reference";
 }
 
 function validTravelTipTheme(value: unknown): value is BlueprintTravelTipTheme {

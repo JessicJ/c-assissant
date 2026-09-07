@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PlanCompilationOrigin } from "./plan-compiler.js";
 import type { DestinationArrivalEvent } from "./current-destination.js";
-import type { BlueprintExperienceTheme, BlueprintFieldEvidence, BlueprintGuideRelationshipGraph, BlueprintGuideTheme, BlueprintItineraryBlock, BlueprintLocalFood, BlueprintLocalProduct, BlueprintModuleIdentity, BlueprintPlaceDisplayIntent, BlueprintPlaceGuideDisplay, BlueprintPreparationChecklistItem, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelTip, TripBlueprint } from "./trip-blueprint.js";
+import type { BlueprintExperienceTheme, BlueprintFieldEvidence, BlueprintGuideRelationshipGraph, BlueprintGuideTheme, BlueprintItineraryBlock, BlueprintLocalFood, BlueprintLocalProduct, BlueprintModuleIdentity, BlueprintMovementDisplayIntent, BlueprintPlaceDisplayIntent, BlueprintPlaceGuideDisplay, BlueprintPreparationChecklistItem, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelTip, TripBlueprint } from "./trip-blueprint.js";
 
 export { recommendPlanTransport, type TransportMode, type TransportRecommendation, type TransportRouteFact } from "./transport.js";
 export { assessPolicyPreparation, type PolicyPreparationAssessment, type PolicyPreparationItem, type PolicyPreparationStatus } from "./policy-applicability.js";
@@ -70,6 +70,7 @@ export {
   type BlueprintGuideDisplayState,
   type BlueprintIntegrityOptions,
   type BlueprintItineraryBlock,
+  type BlueprintItineraryBlockDisplayIntent,
   type BlueprintItineraryBlockKind,
   type BlueprintItineraryDay,
   type BlueprintExperienceTheme,
@@ -77,12 +78,15 @@ export {
   type BlueprintLocalProduct,
   type BlueprintModuleIdentity,
   type BlueprintMovement,
+  type BlueprintMovementDisplayIntent,
+  type BlueprintMovementMapLineState,
   type BlueprintMovementMode,
   type BlueprintPlace,
   type BlueprintPlaceDisplayIntent,
   type BlueprintPlaceDisplayType,
   type BlueprintPlaceGuideDisplay,
   type BlueprintPlacePriority,
+  type BlueprintPlaceWorkspaceSignals,
   type BlueprintPreparationChecklistItem,
   type BlueprintPreparationGroup,
   type BlueprintPlaceRelationship,
@@ -322,6 +326,7 @@ export interface PlanRouteSegment {
   label?: string;
   detail?: string;
   breakRoute?: boolean;
+  display?: BlueprintMovementDisplayIntent;
 }
 
 /** Exploration data for itinerary-shaped Plans. It never replaces executable Stages and Tasks. */
@@ -401,7 +406,8 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
       sourceRefs: movement?.evidence.flatMap((ref) => sources.get(ref.sourceId)?.url ?? []) ?? [],
       dayId: day.id,
       label: movement?.label ?? "Route needs verification",
-      detail: movement?.detail ?? "This adjacent movement is reconstructed from the itinerary order and needs route verification before execution."
+      detail: movement?.detail ?? "This adjacent movement is reconstructed from the itinerary order and needs route verification before execution.",
+      ...(movement?.display ? { display: structuredClone(movement.display) } : {})
     };
   }));
   return {
