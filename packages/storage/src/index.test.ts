@@ -1901,3 +1901,205 @@ test("SQLite hydrates Blueprint presentation over stale stored Plan presentation
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("SQLite applies direct Blueprint Revision from active Blueprint despite stale Plan presentation", () => {
+  const directory = mkdtempSync(join(tmpdir(), "c-assistant-blueprint-direct-source-"));
+  try {
+    const databasePath = join(directory, "workspace.sqlite");
+    const store = new SqliteWorkspaceStore(databasePath);
+    const generationKey = "generation-direct-source";
+    const session = store.createPlanningSession("travel", new Date("2026-08-26T00:00:00.000Z"));
+    const proposal = { version: 1, title: "Tokyo", objective: "Plan Tokyo.", theme: "Source of truth", segments: ["Tokyo"], skeleton: ["2026-09-01"], tradeoffs: [], assumptions: [], decisionPoints: [] };
+    store.savePlanningSession({ ...session, status: "proposal_ready", proposal, updatedAt: "2026-08-26T00:00:01.000Z" });
+    store.confirmPlanningSession(session.id, 1);
+    store.saveBlueprintGeneration({
+      generationKey,
+      proposalRef: { sessionId: session.id, proposalVersion: 1 },
+      skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+      status: "running",
+      stage: "research",
+      createdAt: "2026-08-26T00:00:02.000Z",
+      updatedAt: "2026-08-26T00:00:02.000Z"
+    });
+    const research: ResearchSet = {
+      schemaVersion: TRIP_BLUEPRINT_SCHEMA_VERSION,
+      id: "research-direct-source",
+      generationKey,
+      proposalRef: { sessionId: session.id, proposalVersion: 1 },
+      skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+      status: "completed",
+      batches: [{ id: "tokyo", scopeLabel: "Tokyo", status: "completed", placeIds: ["a", "b"], eventIds: [], sourceIds: [], completedAt: "2026-08-26T00:01:00.000Z" }],
+      places: ["a", "b"].map((id) => ({ id, name: id, locationLabel: "Tokyo", city: "Tokyo", category: "sight", priority: "preferred" as const, coordinates: [35.68, 139.76] as [number, number], whyWorthIt: `Why ${id}`, plan: `Visit ${id}`, evidence: [] })),
+      events: [],
+      sources: [],
+      actionRequirements: [],
+      createdAt: "2026-08-26T00:00:02.000Z",
+      updatedAt: "2026-08-26T00:01:00.000Z",
+      completedAt: "2026-08-26T00:01:00.000Z"
+    };
+    store.saveResearchSet(research);
+    const blueprint: TripBlueprint = {
+      schemaVersion: TRIP_BLUEPRINT_SCHEMA_VERSION,
+      id: "blueprint-direct-source",
+      version: 1,
+      generationKey,
+      proposalRef: research.proposalRef,
+      skillLineage: research.skillLineage,
+      researchSetId: research.id,
+      title: "Tokyo",
+      summary: "Blueprint source presentation",
+      language: "en",
+      destinations: ["Tokyo"],
+      startDate: "2026-09-01",
+      endDate: "2026-09-01",
+      places: research.places,
+      events: [],
+      sources: [],
+      days: [{ id: "d1", date: "2026-09-01", kind: "scheduled", city: "Tokyo", title: "Day one", summary: "Two stops", stops: [{ placeId: "a", order: 1 }], candidatePlaceIds: ["b"] }],
+      movements: [],
+      actionRequirements: [],
+      createdAt: "2026-08-26T00:02:00.000Z"
+    };
+    store.saveTripBlueprint(blueprint);
+    const compiled = store.createCompiledBlueprintPlan(compileTripBlueprint(blueprint, { createdAt: "2026-08-26T00:02:01.000Z" })).activePlan;
+    store.close();
+
+    const raw = new DatabaseSync(databasePath);
+    raw.prepare("UPDATE plans SET presentation_json = ? WHERE id = ?").run(JSON.stringify({
+      ...compiled.presentation!,
+      summary: "stale stored presentation",
+      places: compiled.presentation!.places.filter((place) => place.id === "a"),
+      days: [{ ...compiled.presentation!.days[0]!, placeIds: ["a"], stops: [{ placeId: "a", order: 1 }], candidates: [] }],
+      routeSegments: []
+    }), compiled.id);
+    raw.close();
+
+    const reopened = new SqliteWorkspaceStore(databasePath);
+    assert.throws(() => reopened.applyDirectBlueprintRevision({
+      expectedPlanId: compiled.id,
+      expectedVersion: compiled.version,
+      expectedBlueprintVersion: 99,
+      revision: { kind: "add_place_to_day", placeId: "b", dayId: "d1", position: { kind: "end" }, createdAt: "2026-08-26T00:03:00.000Z" }
+    }), /Trip Blueprint changed/i);
+    const revised = reopened.applyDirectBlueprintRevision({
+      expectedPlanId: compiled.id,
+      expectedVersion: compiled.version,
+      expectedBlueprintVersion: 1,
+      revision: { kind: "add_place_to_day", placeId: "b", dayId: "d1", position: { kind: "end" }, createdAt: "2026-08-26T00:03:00.000Z" }
+    });
+    assert.equal(revised.activeBlueprint?.version, 2);
+    assert.deepEqual(revised.activeBlueprint?.days[0]?.stops.map((stop) => stop.placeId), ["a", "b"]);
+    assert.deepEqual(revised.activePlan.presentation?.days[0]?.placeIds, ["a", "b"]);
+    reopened.close();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("SQLite refreshes Blueprint routes from active Blueprint despite stale Plan presentation", () => {
+  const directory = mkdtempSync(join(tmpdir(), "c-assistant-blueprint-route-source-"));
+  try {
+    const databasePath = join(directory, "workspace.sqlite");
+    const store = new SqliteWorkspaceStore(databasePath);
+    const generationKey = "generation-route-source";
+    const session = store.createPlanningSession("travel", new Date("2026-08-26T00:00:00.000Z"));
+    const proposal = { version: 1, title: "Tokyo", objective: "Plan Tokyo.", theme: "Source of truth", segments: ["Tokyo"], skeleton: ["2026-09-01"], tradeoffs: [], assumptions: [], decisionPoints: [] };
+    store.savePlanningSession({ ...session, status: "proposal_ready", proposal, updatedAt: "2026-08-26T00:00:01.000Z" });
+    store.confirmPlanningSession(session.id, 1);
+    store.saveBlueprintGeneration({
+      generationKey,
+      proposalRef: { sessionId: session.id, proposalVersion: 1 },
+      skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+      status: "running",
+      stage: "research",
+      createdAt: "2026-08-26T00:00:02.000Z",
+      updatedAt: "2026-08-26T00:00:02.000Z"
+    });
+    const research: ResearchSet = {
+      schemaVersion: TRIP_BLUEPRINT_SCHEMA_VERSION,
+      id: "research-route-source",
+      generationKey,
+      proposalRef: { sessionId: session.id, proposalVersion: 1 },
+      skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+      status: "completed",
+      batches: [{ id: "tokyo", scopeLabel: "Tokyo", status: "completed", placeIds: ["a", "b"], eventIds: [], sourceIds: [], completedAt: "2026-08-26T00:01:00.000Z" }],
+      places: ["a", "b"].map((id) => ({ id, name: id, locationLabel: "Tokyo", city: "Tokyo", category: "sight", priority: "preferred" as const, coordinates: [35.68, 139.76] as [number, number], whyWorthIt: `Why ${id}`, plan: `Visit ${id}`, evidence: [] })),
+      events: [],
+      sources: [],
+      actionRequirements: [],
+      createdAt: "2026-08-26T00:00:02.000Z",
+      updatedAt: "2026-08-26T00:01:00.000Z",
+      completedAt: "2026-08-26T00:01:00.000Z"
+    };
+    store.saveResearchSet(research);
+    const blueprint: TripBlueprint = {
+      schemaVersion: TRIP_BLUEPRINT_SCHEMA_VERSION,
+      id: "blueprint-route-source",
+      version: 1,
+      generationKey,
+      proposalRef: research.proposalRef,
+      skillLineage: research.skillLineage,
+      researchSetId: research.id,
+      title: "Tokyo",
+      summary: "Blueprint source presentation",
+      language: "en",
+      destinations: ["Tokyo"],
+      startDate: "2026-09-01",
+      endDate: "2026-09-01",
+      places: research.places,
+      events: [],
+      sources: [],
+      days: [{ id: "d1", date: "2026-09-01", kind: "scheduled", city: "Tokyo", title: "Day one", summary: "Two stops", stops: [{ placeId: "a", order: 1, time: "09:00" }, { placeId: "b", order: 2, time: "10:30" }], candidatePlaceIds: [] }],
+      movements: [{ id: "move-a-b", dayId: "d1", originPlaceId: "a", destinationPlaceId: "b", mode: "walking", status: "recheck", evidence: [] }],
+      actionRequirements: [],
+      createdAt: "2026-08-26T00:02:00.000Z"
+    };
+    store.saveTripBlueprint(blueprint);
+    const compiled = store.createCompiledBlueprintPlan(compileTripBlueprint(blueprint, { createdAt: "2026-08-26T00:02:01.000Z" })).activePlan;
+    store.close();
+
+    const raw = new DatabaseSync(databasePath);
+    raw.prepare("UPDATE plans SET presentation_json = ? WHERE id = ?").run(JSON.stringify({
+      ...compiled.presentation!,
+      summary: "stale stored presentation",
+      routeSegments: [{ id: "stale-route", dayId: "d1", originPlaceId: "a", destinationPlaceId: "b", mode: "walking", verification: "needs_verification", sourceRefs: [] }]
+    }), compiled.id);
+    raw.close();
+
+    const reopened = new SqliteWorkspaceStore(databasePath);
+    assert.throws(() => reopened.saveGeneratedPlanRouteRefresh({
+      planId: compiled.id,
+      expectedVersion: compiled.version,
+      expectedBlueprintVersion: 99,
+      provider: "google_maps",
+      routes: [{
+        segmentId: "move-a-b",
+        observedAt: "2026-08-26T00:03:00.000Z",
+        distanceMeters: 900,
+        durationSeconds: 600,
+        originCoordinates: [139.76, 35.68],
+        destinationCoordinates: [139.77, 35.69]
+      }]
+    }), /Trip Blueprint changed/i);
+    const refreshed = reopened.saveGeneratedPlanRouteRefresh({
+      planId: compiled.id,
+      expectedVersion: compiled.version,
+      expectedBlueprintVersion: 1,
+      provider: "google_maps",
+      routes: [{
+        segmentId: "move-a-b",
+        observedAt: "2026-08-26T00:03:00.000Z",
+        distanceMeters: 900,
+        durationSeconds: 600,
+        originCoordinates: [139.76, 35.68],
+        destinationCoordinates: [139.77, 35.69]
+      }]
+    });
+    assert.equal(refreshed.workspace.activeBlueprint?.version, 2);
+    assert.deepEqual(refreshed.workspace.activeBlueprint?.movements.map((movement) => [movement.id, movement.status, movement.durationMinutes, movement.distanceMeters]), [["move-a-b", "verified", 10, 900]]);
+    assert.deepEqual(refreshed.workspace.activePlan.presentation?.routeSegments.map((segment) => [segment.id, segment.verification]), [["move-a-b", "verified"]]);
+    reopened.close();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

@@ -84,9 +84,11 @@ export function registerPlanManagementRoutes(server: FastifyInstance, dependenci
     if (getGeneratingPlan()) return reply.code(409).send({ error: "Another Plan generation is already running." });
     let revisions: DirectBlueprintRevision[];
     let expectedVersion: number;
+    let expectedBlueprintVersion: number | undefined;
     try {
       const createdAt = new Date().toISOString();
       expectedVersion = expectedVersionFromBody(request.body);
+      expectedBlueprintVersion = expectedBlueprintVersionFromBody(request.body);
       revisions = parseDirectBlueprintRevisions(request.body, createdAt);
     } catch (error) {
       return reply.code(400).send({ error: error instanceof Error ? error.message : "This Blueprint Revision is invalid." });
@@ -95,6 +97,7 @@ export function registerPlanManagementRoutes(server: FastifyInstance, dependenci
       const result = store.applyDirectBlueprintRevisionBatch({
         expectedPlanId: request.params.planId,
         expectedVersion,
+        ...(expectedBlueprintVersion !== undefined ? { expectedBlueprintVersion } : {}),
         revisions,
         runtime: store.getWorkspace().runtime.selectedKind
       });
@@ -270,6 +273,14 @@ function expectedVersionFromBody(value: unknown): number {
     throw new Error("Direct itinerary edits need the current Plan version.");
   }
   return value.expectedVersion;
+}
+
+function expectedBlueprintVersionFromBody(value: unknown): number | undefined {
+  if (!isRecord(value) || value.expectedBlueprintVersion === undefined) return undefined;
+  if (typeof value.expectedBlueprintVersion !== "number" || !Number.isInteger(value.expectedBlueprintVersion) || value.expectedBlueprintVersion <= 0) {
+    throw new Error("Direct itinerary edits need a valid Trip Blueprint version.");
+  }
+  return value.expectedBlueprintVersion;
 }
 
 function directRevisionPosition(value: unknown): DirectBlueprintRevision["position"] {

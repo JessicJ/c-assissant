@@ -69,6 +69,7 @@ test("Current Plan read model uses the active Blueprint over stale Plan presenta
   assert.equal(model.presentationSource, "blueprint");
   assert.equal(model.presentationVersion, 3);
   assert.equal(model.presentationKey, "blueprint:blueprint-1:3");
+  assert.deepEqual(model.mutationVersion, { expectedVersion: 1, expectedBlueprintVersion: 3 });
   assert.equal(model.plan.id, original.id);
   assert.equal(model.plan.version, original.version);
   assert.equal(original.presentation?.summary, "Stale stored presentation.");
@@ -90,6 +91,7 @@ test("Current Plan read model keeps legacy presentation when no Blueprint exists
   const model = currentPlanReadModel(original);
   assert.equal(model.presentationSource, "plan");
   assert.equal(model.presentationVersion, 1);
+  assert.deepEqual(model.mutationVersion, { expectedVersion: 1 });
   assert.equal(model.presentation, original.presentation);
   assert.equal(model.plan, original);
 });
@@ -100,4 +102,5 @@ test("Current Plan read model supports non-itinerary plans without inventing pre
   assert.equal(model.presentationSource, "none");
   assert.equal(model.presentation, undefined);
   assert.equal(model.presentationKey, "none:plan-1:1");
+  assert.deepEqual(model.mutationVersion, { expectedVersion: 1 });
 });

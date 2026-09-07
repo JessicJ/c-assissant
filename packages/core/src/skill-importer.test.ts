@@ -423,6 +423,7 @@ test("Skill Importer filters itinerary-scoped scheduling refs without changing e
         coordinates: [35.0, 135.0],
         whyWorthIt: "A matters.",
         plan: "Visit A.",
+        fieldEvidence: [{ path: "whyWorthIt", status: "verified", evidence: [{ sourceId: "official", status: "stale", supports: ["place value"] }] }],
         schedulingEligibility: {
           decision: "schedulable",
           reason: "Fits one Kyoto day.",
@@ -444,6 +445,7 @@ test("Skill Importer filters itinerary-scoped scheduling refs without changing e
   });
   assert.equal(research.places[0]?.schedulingEligibility?.evidence?.[0]?.sourceId, research.sources[0]?.id);
   assert.equal(research.places[0]?.schedulingEligibility?.evidence?.[0]?.status, "stale");
+  assert.deepEqual(research.places[0]?.fieldEvidence, [{ path: "whyWorthIt", status: "recheck", evidence: [{ sourceId: research.sources[0]!.id, status: "stale", supports: ["place value"] }] }]);
   const [a, b] = research.places.map((place) => place.id);
   const blueprint = importSkillItinerary(research, {
     title: "Kyoto",
@@ -458,4 +460,34 @@ test("Skill Importer filters itinerary-scoped scheduling refs without changing e
   assert.deepEqual(blueprint.places[0]?.schedulingEligibility?.suitableDayIds, ["d1"]);
   assert.equal(blueprint.places[0]?.schedulingEligibility?.blockedDayIds, undefined);
   assert.deepEqual(blueprint.places[0]?.schedulingEligibility?.evidence, [{ sourceId: research.sources[0]!.id, status: "stale", supports: ["opening window"] }]);
+});
+
+test("Skill Importer refuses to keep a verified movement when route evidence is not verified", () => {
+  const value = batch();
+  value.places = [
+    { id: "a", name: "Museum A", locationLabel: "Tokyo", city: "Tokyo", category: "museum", coordinates: [35.6812, 139.7671], whyWorthIt: "A strong anchor", plan: "Visit the main collection" },
+    { id: "b", name: "Garden B", locationLabel: "Tokyo", city: "Tokyo", category: "garden", coordinates: [35.6852, 139.7528], whyWorthIt: "A calm second stop", plan: "Walk the garden loop" }
+  ];
+  const research = importSkillResearchBatches([value], {
+    researchSetId: "research-route-evidence",
+    generationKey: "generation-route-evidence",
+    proposalRef: { sessionId: "session-route-evidence", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+    createdAt: "2026-08-26T00:00:00.000Z",
+    updatedAt: "2026-08-26T00:00:00.000Z"
+  });
+  const [a, b] = research.places.map((place) => place.id);
+  const blueprint = importSkillItinerary(research, {
+    title: "Tokyo",
+    summary: "Tokyo route.",
+    language: "en",
+    destinations: ["Tokyo"],
+    startDate: "2026-09-01",
+    endDate: "2026-09-01",
+    days: [{ id: "d1", date: "2026-09-01", kind: "scheduled", city: "Tokyo", title: "Day", summary: "Flow", stops: [{ placeId: a!, order: 1 }, { placeId: b!, order: 2 }], candidatePlaceIds: [] }],
+    movements: [{ id: "route-a-b", dayId: "d1", originPlaceId: a!, destinationPlaceId: b!, mode: "walking", status: "verified", durationMinutes: 12, evidence: [{ sourceId: research.sources[0]!.id, status: "stale", supports: ["route duration"] }] }]
+  }, { blueprintId: "blueprint-route-evidence", blueprintVersion: 1, createdAt: "2026-08-26T01:00:00.000Z" });
+
+  assert.equal(blueprint.movements[0]?.status, "recheck");
+  assert.deepEqual(blueprint.movements[0]?.evidence, [{ sourceId: research.sources[0]!.id, status: "stale", supports: ["route duration"] }]);
 });

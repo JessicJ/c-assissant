@@ -1,4 +1,4 @@
-import type { BlueprintEvidenceRef, BlueprintItineraryBlock, BlueprintPlaceRelationship, BlueprintPreparationGroup, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelTipTheme, ItineraryDay, Plan, PlanPlace, PlanPresentation, PlanPresentationEvent, PlanRouteSegment, SourceReference, Task } from "@c-assistant/core";
+import type { BlueprintEvidenceRef, BlueprintItineraryBlock, BlueprintPlaceRelationship, BlueprintPreparationGroup, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelTipTheme, DirectBlueprintRevisionBatchMetadata, ItineraryDay, Plan, PlanPlace, PlanPresentation, PlanPresentationEvent, PlanRouteSegment, SourceReference, Task } from "@c-assistant/core";
 import { groupPreparationItems } from "./plan-preparation-display.js";
 import { displayTripTitle } from "./trip-title.js";
 
@@ -254,6 +254,13 @@ export type PendingItineraryDraftSummary = {
   affectedDayLabel: string;
 };
 
+export type AppliedItineraryRevisionSummary = {
+  updateLabel: string;
+  affectedDayLabel: string;
+  routeRefreshLabel: string;
+  statusText: string;
+};
+
 export function mergePendingItineraryEdit(current: PendingItineraryEditDisplay[], edit: PendingItineraryEditDisplay): PendingItineraryEditDisplay[] {
   const existingIndex = current.findIndex((candidate) => samePendingItineraryEditTarget(candidate, edit));
   if (existingIndex === -1) return [...current, edit];
@@ -270,6 +277,23 @@ export function pendingItineraryDraftSummary(edits: PendingItineraryEditDisplay[
   const changeLabel = `${compactEdits.length} unsaved change${compactEdits.length === 1 ? "" : "s"}`;
   const affectedDayLabel = affectedDays.length ? affectedDays.join(", ") : "No affected days";
   return { changeLabel, affectedDayLabel };
+}
+
+export function appliedItineraryRevisionSummary(revision: DirectBlueprintRevisionBatchMetadata, presentation?: PlanPresentation): AppliedItineraryRevisionSummary {
+  const dayById = new Map((presentation?.days ?? []).map((day) => [day.id, day.shortLabel ?? day.date ?? day.label ?? day.id]));
+  const affectedDayLabels = revision.affectedDayIds.map((dayId) => dayById.get(dayId) ?? dayId);
+  const affectedDayLabel = affectedDayLabels.length ? affectedDayLabels.join(", ") : "No affected days";
+  const updateLabel = `${revision.revisionCount} itinerary update${revision.revisionCount === 1 ? "" : "s"}`;
+  const routeCount = new Set(revision.routeRefresh.movementIds).size;
+  const routeRefreshLabel = routeCount
+    ? `${routeCount} route leg${routeCount === 1 ? "" : "s"} need${routeCount === 1 ? "s" : ""} refresh`
+    : "No route legs need refresh";
+  return {
+    updateLabel,
+    affectedDayLabel,
+    routeRefreshLabel,
+    statusText: `Applied ${updateLabel} for ${affectedDayLabel}. ${routeRefreshLabel}.`
+  };
 }
 
 export function pendingItineraryEditRequest(edit: PendingItineraryEditDisplay): string {

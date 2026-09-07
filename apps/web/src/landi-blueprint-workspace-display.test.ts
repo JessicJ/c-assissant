@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Plan, PlanPlace, PlanPresentation } from "@c-assistant/core";
-import { buildBlueprintWorkspaceDisplay, buildPendingItineraryEditForWorkspace, buildPendingItineraryMoveForWorkspace, compactPendingItineraryEdits, detailDisplayForWorkspacePlace, filterGuideCards, itineraryDisplayForWorkspace, mergePendingItineraryEdit, pendingItineraryDraftSummary, pendingItineraryEditBatchRequest, pendingItineraryEditRequest, scheduledDayIdForPlace } from "./landi-blueprint-workspace-display.js";
+import type { DirectBlueprintRevisionBatchMetadata, Plan, PlanPlace, PlanPresentation } from "@c-assistant/core";
+import { appliedItineraryRevisionSummary, buildBlueprintWorkspaceDisplay, buildPendingItineraryEditForWorkspace, buildPendingItineraryMoveForWorkspace, compactPendingItineraryEdits, detailDisplayForWorkspacePlace, filterGuideCards, itineraryDisplayForWorkspace, mergePendingItineraryEdit, pendingItineraryDraftSummary, pendingItineraryEditBatchRequest, pendingItineraryEditRequest, scheduledDayIdForPlace } from "./landi-blueprint-workspace-display.js";
 
 function place(id: string, patch: Partial<PlanPlace> = {}): PlanPlace {
   return {
@@ -616,6 +616,43 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.equal(compactPendingItineraryEdits(edits).length, 2);
     assert.deepEqual(pendingItineraryDraftSummary(edits), { changeLabel: "2 unsaved changes", affectedDayLabel: "2026-10-01, 2026-10-02" });
     assert.match(pendingItineraryEditBatchRequest(edits), /Apply these 2 confirmed itinerary edits directly to the plan in one update/);
+  });
+
+  it("summarizes applied itinerary revisions from backend metadata", () => {
+    const presentation = presentationFixture({
+      days: [
+        presentationFixture().days[0]!,
+        { id: "day-2", label: "October 2", date: "2026-10-02", city: "Kyoto", placeIds: [], stops: [], candidates: [] }
+      ]
+    });
+    const revision: DirectBlueprintRevisionBatchMetadata = {
+      id: "direct-revision-batch-blueprint-1-v1-to-v3",
+      baseBlueprintVersion: 1,
+      appliedBlueprintVersion: 3,
+      createdAt: "2026-10-01T00:00:00.000Z",
+      revisionCount: 2,
+      kinds: ["add_place_to_day", "move_place_within_day"],
+      affectedDayIds: ["day-1", "day-2"],
+      affectedPlaceIds: ["tea", "craft"],
+      routeRefresh: {
+        dayIds: ["day-1", "day-2"],
+        movementIds: ["movement-day-1-1", "movement-day-1-2", "movement-day-2-1"],
+        reason: "These itinerary days were edited directly."
+      },
+      undo: {
+        previousBlueprintVersion: 1,
+        previousDays: [],
+        previousMovements: []
+      },
+      revisions: []
+    };
+
+    assert.deepEqual(appliedItineraryRevisionSummary(revision, presentation), {
+      updateLabel: "2 itinerary updates",
+      affectedDayLabel: "2026-10-01, 2026-10-02",
+      routeRefreshLabel: "3 route legs need refresh",
+      statusText: "Applied 2 itinerary updates for 2026-10-01, 2026-10-02. 3 route legs need refresh."
+    });
   });
 
   it("supports itinerary placement preview from the workspace read model", () => {

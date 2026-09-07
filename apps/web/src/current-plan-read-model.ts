@@ -9,6 +9,12 @@ export type CurrentPlanReadModel = {
   presentationSource: CurrentPlanPresentationSource;
   presentationVersion: number;
   presentationKey: string;
+  mutationVersion: CurrentPlanMutationVersion;
+};
+
+export type CurrentPlanMutationVersion = {
+  expectedVersion: number;
+  expectedBlueprintVersion?: number;
 };
 
 export function currentPlanReadModel(plan: Plan, blueprint?: TripBlueprint): CurrentPlanReadModel {
@@ -19,7 +25,8 @@ export function currentPlanReadModel(plan: Plan, blueprint?: TripBlueprint): Cur
       presentation,
       presentationSource: "blueprint",
       presentationVersion: blueprint.version,
-      presentationKey: `blueprint:${blueprint.id}:${blueprint.version}`
+      presentationKey: `blueprint:${blueprint.id}:${blueprint.version}`,
+      mutationVersion: { expectedVersion: plan.version, expectedBlueprintVersion: blueprint.version }
     };
   }
   if (plan.presentation) {
@@ -28,13 +35,15 @@ export function currentPlanReadModel(plan: Plan, blueprint?: TripBlueprint): Cur
       presentation: plan.presentation,
       presentationSource: "plan",
       presentationVersion: plan.version,
-      presentationKey: `plan:${plan.id}:${plan.version}`
+      presentationKey: `plan:${plan.id}:${plan.version}`,
+      mutationVersion: { expectedVersion: plan.version }
     };
   }
   return {
     plan,
     presentationSource: "none",
     presentationVersion: plan.version,
-    presentationKey: `none:${plan.id}:${plan.version}`
+    presentationKey: `none:${plan.id}:${plan.version}`,
+    mutationVersion: { expectedVersion: plan.version }
   };
 }

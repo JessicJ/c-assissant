@@ -245,7 +245,7 @@ test("presentation route refresh endpoint writes route facts back to the Trip Bl
     const response = await server.inject({
       method: "POST",
       url: `/api/plans/${plan.id}/presentation/routes/refresh`,
-      payload: { expectedVersion: plan.version, segmentIds: ["movement-d1-1"] }
+      payload: { expectedVersion: plan.version, expectedBlueprintVersion: store.getWorkspace().activeBlueprint?.version, segmentIds: ["movement-d1-1"] }
     });
 
     assert.equal(response.statusCode, 200, response.body);
@@ -263,6 +263,36 @@ test("presentation route refresh endpoint writes route facts back to the Trip Bl
   }
 });
 
+test("presentation route refresh endpoint rejects stale Trip Blueprint versions before Maps", async () => {
+  const server = Fastify({ logger: false });
+  const store = new SqliteWorkspaceStore(":memory:");
+  const { maps, geocodeCalls, routeCalls } = routeMaps();
+  try {
+    registerPlanPresentationRoutes(server, { store, getMaps: () => maps });
+    const plan = compiledBlueprintRoutePlan(store);
+    const blueprintVersion = store.getWorkspace().activeBlueprint?.version;
+    assert.ok(blueprintVersion !== undefined);
+    assert.equal(blueprintVersion, 2);
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/plans/${plan.id}/presentation/routes/refresh`,
+      payload: { expectedVersion: plan.version, expectedBlueprintVersion: blueprintVersion - 1, segmentIds: ["movement-d1-1"] }
+    });
+
+    assert.equal(response.statusCode, 409, response.body);
+    assert.match(response.json().error, /Trip Blueprint changed/i);
+    assert.deepEqual(geocodeCalls, []);
+    assert.deepEqual(routeCalls, []);
+    const workspace = store.getWorkspace();
+    assert.equal(workspace.activePlan.version, plan.version);
+    assert.equal(workspace.activeBlueprint?.version, blueprintVersion);
+  } finally {
+    await server.close();
+    store.close();
+  }
+});
+
 test("single presentation route refresh endpoint writes route facts back to the Trip Blueprint", async () => {
   const server = Fastify({ logger: false });
   const store = new SqliteWorkspaceStore(":memory:");
@@ -274,7 +304,7 @@ test("single presentation route refresh endpoint writes route facts back to the 
     const response = await server.inject({
       method: "POST",
       url: `/api/plans/${plan.id}/presentation/routes/movement-d1-1/refresh`,
-      payload: { expectedVersion: plan.version }
+      payload: { expectedVersion: plan.version, expectedBlueprintVersion: store.getWorkspace().activeBlueprint?.version }
     });
 
     assert.equal(response.statusCode, 200, response.body);
