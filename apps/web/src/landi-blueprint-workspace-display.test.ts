@@ -86,7 +86,7 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.equal(scheduledDayIdForPlace(display, "craft"), "day-1");
     assert.equal("candidates" in (display.days[0] as unknown as Record<string, unknown>), false);
     assert.equal("placeIds" in (display.days[0] as unknown as Record<string, unknown>), false);
-    assert.equal(/"category"|"priority"|"sourceRefs"|"evidenceSources"|"whyWorthIt"|"blocks"|"stops"|"candidates"|"placeIds"/.test(JSON.stringify(display)), false);
+    assert.equal(/"category"|"sourceRefs"|"evidenceSources"|"whyWorthIt"|"blocks"|"stops"|"candidates"|"placeIds"/.test(JSON.stringify(display)), false);
   });
 
   it("classifies itinerary guide material into sub-branches", () => {
@@ -542,6 +542,28 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.equal(cards.some((card) => /Higashiyama|Kyoto/i.test(card.tags.join(" "))), false);
   });
 
+  it("builds direct place status actions without making scheduled archive a one-click edit", () => {
+    const presentation = presentationFixture({
+      places: [
+        place("temple", { category: "temple", priority: "must" }),
+        place("tea", { category: "tea ceremony experience", priority: "nearby" })
+      ],
+      days: [{ ...presentationFixture().days[0]!, placeIds: ["temple"], stops: [{ placeId: "temple", order: 1 }] }]
+    });
+    const workspace = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation);
+    const cardById = new Map(workspace.guideCards.map((card) => [card.placeId, card]));
+    assert.equal(cardById.get("temple")?.priorityLabel, "Must go");
+    assert.equal(cardById.get("tea")?.priorityLabel, "Nearby");
+    assert.equal(workspace.itineraries[0]?.markers[0]?.priority, "must");
+    const scheduled = detailDisplayForWorkspacePlace(workspace, "temple")!;
+    const unscheduled = detailDisplayForWorkspacePlace(workspace, "tea")!;
+    assert.equal(scheduled.priorityLabel, "Must go");
+    assert.equal(scheduled.priorityActions.find((action) => action.priority === "archive")?.disabled, true);
+    assert.match(scheduled.priorityBlockedNote ?? "", /remove action/i);
+    assert.equal(unscheduled.priorityActions.find((action) => action.priority === "archive")?.disabled, undefined);
+    assert.equal(unscheduled.priorityActions.find((action) => action.priority === "nearby")?.active, true);
+  });
+
   it("filters guide cards by sub-branch and state", () => {
     const presentation = presentationFixture({
       places: [
@@ -634,7 +656,7 @@ describe("Landi Blueprint workspace display helpers", () => {
     const dayOne = itineraryDisplayForWorkspace(workspace, "day-1", [tea, garden]);
     const dayTwo = itineraryDisplayForWorkspace(workspace, "day-2", [tea, garden]);
     assert.deepEqual(dayOne.items.map((item) => item.kind === "pending" ? `pending:${item.placeId}` : item.placeId), ["temple", "lunch", "pending:tea", "craft"]);
-    assert.deepEqual(dayOne.markers.find((marker) => marker.placeId === "tea"), { placeId: "tea", title: "Tea Studio", type: "experience", coordinates: [35.15, 135.15], markerState: "pending" });
+    assert.deepEqual(dayOne.markers.find((marker) => marker.placeId === "tea"), { placeId: "tea", title: "Tea Studio", type: "experience", coordinates: [35.15, 135.15], markerState: "pending", priority: "preferred" });
     assert.deepEqual(dayTwo.items.map((item) => item.kind === "pending" ? `pending:${item.placeId}` : item.placeId), ["pending:garden"]);
     assert.deepEqual(dayTwo.markers.map((marker) => ({ id: marker.placeId, state: marker.markerState })), [{ id: "garden", state: "pending" }]);
   });
@@ -731,7 +753,8 @@ describe("Landi Blueprint workspace display helpers", () => {
       undo: {
         previousBlueprintVersion: 1,
         previousDays: [],
-        previousMovements: []
+        previousMovements: [],
+        previousPlaces: []
       },
       revisions: []
     };
@@ -754,7 +777,7 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.deepEqual(display.routePlaces.map((item) => item.id), ["temple", "lunch", "craft"]);
   });
 
-  it("marks unsaved itinerary drafts as needing route refresh after apply", () => {
+  it("marks unsaved itinerary drafts as needing route refresh after confirmation", () => {
     const presentation = presentationFixture({ places: [...presentationFixture().places, place("tea", { name: "Tea Studio", category: "tea ceremony experience" })] });
     const workspace = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation);
     const edit = buildPendingItineraryEditForWorkspace(workspace, "tea", { dayId: "day-1", positionId: "after-lunch" });
@@ -763,8 +786,8 @@ describe("Landi Blueprint workspace display helpers", () => {
       segmentCount: 1,
       segmentIds: [],
       dayLabel: "2026-10-01",
-      summary: "1 unsaved itinerary change will need route refresh after Apply.",
-      request: "After applying the itinerary draft for 2026-10-01, refresh routing, timing, meal spacing, and opening constraints before marking this day ready.",
+      summary: "1 unsaved itinerary change will need route refresh after you confirm.",
+      request: "After you confirm the itinerary draft for 2026-10-01, refresh routing, timing, meal spacing, and opening constraints before marking this day ready.",
       actionable: false
     });
   });
@@ -781,7 +804,9 @@ describe("Landi Blueprint workspace display helpers", () => {
     const edit = buildPendingItineraryEditForWorkspace(workspace, "tea", { dayId: "day-1", positionId: "after-lunch" });
     const display = itineraryDisplayForWorkspace(workspace, "day-1", edit);
     assert.equal(display.routeRefresh?.actionable, false);
+    assert.deepEqual(display.routeRefresh?.segmentIds, []);
     assert.match(display.routeRefresh?.summary ?? "", /unsaved itinerary change/);
+    assert.match(display.routeRefresh?.summary ?? "", /after you confirm/);
   });
 
   it("builds itinerary cards and map markers from the day display contract", () => {

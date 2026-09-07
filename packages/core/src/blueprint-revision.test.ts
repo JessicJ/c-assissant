@@ -91,11 +91,41 @@ test("Direct Blueprint Revision returns versioned metadata and an undo-ready day
   assert.equal(result.metadata.appliedBlueprintVersion, 2);
   assert.deepEqual(result.metadata.affectedDayIds, ["d1"]);
   assert.deepEqual(result.metadata.routeRefresh.movementIds, ["movement-d1-1", "movement-d1-2"]);
-  assert.deepEqual(result.metadata.undo.previousDay.stops.map((stop) => stop.placeId), ["a", "b"]);
+  assert.deepEqual(result.metadata.undo.previousDay?.stops.map((stop) => stop.placeId), ["a", "b"]);
   assert.deepEqual(result.metadata.undo.previousMovements.map((movement) => movement.id), ["m1"]);
 
   result.blueprint.days[0]!.stops[0]!.placeId = "mutated";
-  assert.deepEqual(result.metadata.undo.previousDay.stops.map((stop) => stop.placeId), ["a", "b"]);
+  assert.deepEqual(result.metadata.undo.previousDay?.stops.map((stop) => stop.placeId), ["a", "b"]);
+});
+
+test("Direct Blueprint Revision updates a place priority without route refresh", () => {
+  const original = blueprint();
+  const result = applyDirectBlueprintRevisionWithMetadata(original, {
+    kind: "update_place_priority",
+    placeId: "c",
+    priority: "must",
+    createdAt: "2026-08-27T00:00:00.000Z"
+  });
+  assert.equal(result.blueprint.version, 2);
+  assert.equal(result.blueprint.places.find((candidate) => candidate.id === "c")?.priority, "must");
+  assert.equal(original.places.find((candidate) => candidate.id === "c")?.priority, "preferred");
+  assert.deepEqual(result.blueprint.days[0]?.stops.map((stop) => stop.placeId), ["a", "b"]);
+  assert.deepEqual(result.blueprint.movements.map((movement) => [movement.id, movement.status]), [["m1", "verified"]]);
+  assert.equal(result.metadata.kind, "update_place_priority");
+  assert.deepEqual(result.metadata.affectedDayIds, []);
+  assert.deepEqual(result.metadata.affectedPlaceIds, ["c"]);
+  assert.deepEqual(result.metadata.routeRefresh.movementIds, []);
+  assert.equal(result.metadata.undo.previousPlace?.priority, "preferred");
+});
+
+test("Direct Blueprint Revision keeps scheduled archive changes assisted", () => {
+  const original = blueprint();
+  assert.throws(() => applyDirectBlueprintRevision(original, {
+    kind: "update_place_priority",
+    placeId: "a",
+    priority: "archive",
+    createdAt: "2026-08-27T00:00:00.000Z"
+  }), /removed from the day/i);
 });
 
 test("Direct Blueprint Revision rejects edits that need assisted replanning", () => {

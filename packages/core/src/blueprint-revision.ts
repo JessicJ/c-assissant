@@ -1,4 +1,4 @@
-import { assertTripBlueprintIntegrity, type BlueprintItineraryBlock, type BlueprintItineraryDay, type BlueprintMovement, type BlueprintMovementMode, type BlueprintPlace, type BlueprintStop, type TripBlueprint } from "./trip-blueprint.js";
+import { assertTripBlueprintIntegrity, type BlueprintItineraryBlock, type BlueprintItineraryDay, type BlueprintMovement, type BlueprintMovementMode, type BlueprintPlace, type BlueprintPlacePriority, type BlueprintStop, type TripBlueprint } from "./trip-blueprint.js";
 
 const DIRECT_EDIT_ROUTE_REFRESH_REASON = "Refresh this route leg after direct itinerary edits.";
 
@@ -16,7 +16,15 @@ export type DirectBlueprintRevision =
     dayId: string;
     position: { kind: "start" } | { kind: "end" } | { kind: "after"; afterPlaceId: string };
     createdAt: string;
+  }
+  | {
+    kind: "update_place_priority";
+    placeId: string;
+    priority: BlueprintPlacePriority;
+    createdAt: string;
   };
+
+type DirectBlueprintItineraryRevision = Extract<DirectBlueprintRevision, { kind: "add_place_to_day" | "move_place_within_day" }>;
 
 export interface DirectBlueprintRevisionMetadata {
   id: string;
@@ -32,9 +40,10 @@ export interface DirectBlueprintRevisionMetadata {
     reason: string;
   };
   undo: {
-    dayId: string;
-    previousDay: BlueprintItineraryDay;
+    dayId?: string;
+    previousDay?: BlueprintItineraryDay;
     previousMovements: BlueprintMovement[];
+    previousPlace?: BlueprintPlace;
   };
 }
 
@@ -61,6 +70,7 @@ export interface DirectBlueprintRevisionBatchMetadata {
     previousBlueprintVersion: number;
     previousDays: BlueprintItineraryDay[];
     previousMovements: BlueprintMovement[];
+    previousPlaces: BlueprintPlace[];
   };
   revisions: DirectBlueprintRevisionMetadata[];
 }
@@ -79,6 +89,7 @@ export function applyDirectBlueprintRevisionWithMetadata(blueprint: TripBlueprin
   if (!Number.isFinite(Date.parse(revision.createdAt))) throw new Error("Blueprint Revision needs a valid creation time.");
   if (revision.kind === "add_place_to_day") return addPlaceToDay(blueprint, revision);
   if (revision.kind === "move_place_within_day") return movePlaceWithinDay(blueprint, revision);
+  if (revision.kind === "update_place_priority") return updatePlacePriority(blueprint, revision);
   throw new Error("Unsupported Blueprint Revision.");
 }
 
@@ -101,7 +112,16 @@ export function applyDirectBlueprintRevisionBatchWithMetadata(blueprint: TripBlu
     return day ? [structuredClone(day)] : [];
   });
   const previousMovements = structuredClone(original.movements.filter((movement) => affectedDayIds.includes(movement.dayId)));
-  const currentMovements = current.movements.filter((movement) => affectedDayIds.includes(movement.dayId));
+  const previousPlaceIds = uniqueStrings(revisionMetadataItems.flatMap((item) => item.undo.previousPlace ? [item.undo.previousPlace.id] : []));
+  const previousPlaces = previousPlaceIds.flatMap((placeId) => {
+    const place = original.places.find((candidate) => candidate.id === placeId);
+    return place ? [structuredClone(place)] : [];
+  });
+  const routeRefreshDayIds = uniqueStrings(revisionMetadataItems.flatMap((item) => item.routeRefresh.dayIds));
+  const routeRefreshMovementIds = uniqueStrings(revisionMetadataItems.flatMap((item) => item.routeRefresh.movementIds));
+  const routeRefreshReason = routeRefreshMovementIds.length
+    ? "These itinerary days were edited directly, so affected route, timing, meal, and opening constraints need refresh before execution."
+    : "These place status updates do not change route order.";
   const createdAt = revisions[revisions.length - 1]!.createdAt;
 
   return {
@@ -116,14 +136,15 @@ export function applyDirectBlueprintRevisionBatchWithMetadata(blueprint: TripBlu
       affectedDayIds,
       affectedPlaceIds: uniqueStrings(revisionMetadataItems.flatMap((item) => item.affectedPlaceIds)),
       routeRefresh: {
-        dayIds: affectedDayIds,
-        movementIds: currentMovements.map((movement) => movement.id),
-        reason: "These itinerary days were edited directly, so affected route, timing, meal, and opening constraints need refresh before execution."
+        dayIds: routeRefreshDayIds,
+        movementIds: routeRefreshMovementIds,
+        reason: routeRefreshReason
       },
       undo: {
         previousBlueprintVersion: original.version,
         previousDays,
-        previousMovements
+        previousMovements,
+        previousPlaces
       },
       revisions: revisionMetadataItems
     }
@@ -213,6 +234,28 @@ function movePlaceWithinDay(blueprint: TripBlueprint, revision: Extract<DirectBl
   };
 }
 
+function updatePlacePriority(blueprint: TripBlueprint, revision: Extract<DirectBlueprintRevision, { kind: "update_place_priority" }>): DirectBlueprintRevisionResult {
+  const place = blueprint.places.find((candidate) => candidate.id === revision.placeId);
+  if (!place) throw new Error(`Blueprint Revision references unknown place ${revision.placeId}.`);
+  if (place.priority === revision.priority) throw new Error(`Place ${revision.placeId} already has priority ${revision.priority}.`);
+  const scheduledDay = blueprint.days.find((day) => day.stops.some((stop) => stop.placeId === revision.placeId));
+  if (scheduledDay && revision.priority === "archive") throw new Error(`Place ${revision.placeId} is scheduled and must be removed from the day before keeping it for later.`);
+
+  const previousDay = scheduledDay ? structuredClone(scheduledDay) : undefined;
+  const previousMovements = scheduledDay ? movementsForDay(blueprint, scheduledDay.id) : [];
+  const next: TripBlueprint = {
+    ...structuredClone(blueprint),
+    version: blueprint.version + 1,
+    places: blueprint.places.map((candidate) => candidate.id === revision.placeId ? { ...candidate, priority: revision.priority } : structuredClone(candidate)),
+    createdAt: revision.createdAt
+  };
+  assertTripBlueprintIntegrity(next, { expectedResearchPlaceIds: blueprint.places.map((candidate) => candidate.id) });
+  return {
+    blueprint: next,
+    metadata: placePriorityRevisionMetadata(blueprint, next, revision, place, previousDay, previousMovements)
+  };
+}
+
 function insertStop(stops: BlueprintStop[], revision: Extract<DirectBlueprintRevision, { kind: "add_place_to_day" }>): BlueprintStop[] {
   const ordered = [...stops].sort((left, right) => left.order - right.order).map((stop) => ({ ...stop }));
   const { position } = revision;
@@ -275,7 +318,7 @@ function blocksForDirectRevision(
   previousBlocks: BlueprintItineraryBlock[] | undefined,
   previousStops: BlueprintStop[],
   nextStops: BlueprintStop[],
-  revision: DirectBlueprintRevision
+  revision: DirectBlueprintItineraryRevision
 ): BlueprintItineraryBlock[] {
   if (!previousBlocks?.length) return blocksForStops(dayId, nextStops);
 
@@ -335,7 +378,7 @@ function insertRouteSlotTemplate(
   dayId: string,
   blocks: BlueprintItineraryBlock[],
   previousStopIds: Set<string>,
-  revision: DirectBlueprintRevision
+  revision: DirectBlueprintItineraryRevision
 ): BlueprintItineraryBlock[] {
   const slot: BlueprintItineraryBlock = {
     id: `__direct-route-slot-${dayId}-${revision.placeId}`,
@@ -454,7 +497,7 @@ function normalizedText(value: string): string {
 function revisionMetadata(
   before: TripBlueprint,
   after: TripBlueprint,
-  revision: DirectBlueprintRevision,
+  revision: DirectBlueprintItineraryRevision,
   previousDay: BlueprintItineraryDay,
   previousMovements: BlueprintMovement[]
 ): DirectBlueprintRevisionMetadata {
@@ -483,6 +526,36 @@ function revisionMetadata(
       dayId: revision.dayId,
       previousDay,
       previousMovements
+    }
+  };
+}
+
+function placePriorityRevisionMetadata(
+  before: TripBlueprint,
+  after: TripBlueprint,
+  revision: Extract<DirectBlueprintRevision, { kind: "update_place_priority" }>,
+  previousPlace: BlueprintPlace,
+  previousDay: BlueprintItineraryDay | undefined,
+  previousMovements: BlueprintMovement[]
+): DirectBlueprintRevisionMetadata {
+  const affectedDayIds = previousDay ? [previousDay.id] : [];
+  return {
+    id: `direct-revision-${before.id}-v${before.version}-to-v${after.version}`,
+    kind: revision.kind,
+    baseBlueprintVersion: before.version,
+    appliedBlueprintVersion: after.version,
+    createdAt: revision.createdAt,
+    affectedDayIds,
+    affectedPlaceIds: [revision.placeId],
+    routeRefresh: {
+      dayIds: [],
+      movementIds: [],
+      reason: "This place status update does not change the route order."
+    },
+    undo: {
+      ...(previousDay ? { dayId: previousDay.id, previousDay } : {}),
+      previousMovements,
+      previousPlace: structuredClone(previousPlace)
     }
   };
 }

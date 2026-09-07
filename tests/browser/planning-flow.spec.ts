@@ -360,15 +360,18 @@ test("an itinerary Plan renders the Skill-native interactive result inside Landi
   const editBar = page.getByRole("toolbar", { name: "Unsaved itinerary edits" });
   await expect(editBar.getByText("1 unsaved change")).toBeVisible();
   await expect(editBar.getByText("10/13", { exact: true })).toBeVisible();
-  await expect(page.getByText("After Apply", { exact: true })).toBeVisible();
+  await expect(page.locator(".blueprint-map-status")).toContainText("Routes will be checked");
+  await expect(page.getByText("After confirm", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh routes" })).toHaveCount(0);
+  expect(routeRefreshRequests).toEqual([]);
   await expect(sidePanel.getByRole("heading", { name: "Explore" })).toBeVisible();
   await expect(page.locator(".blueprint-timeline-list").getByRole("button", { name: /Pending itinerary edit for Mercado de Campo de Ourique/ })).toContainText("Draft");
   await expect(page.locator(".blueprint-map-bubble.pending").filter({ hasText: "Mercado de Campo de Ourique" })).toBeVisible();
   await expect(page.locator(".blueprint-map-bubble.selected").filter({ hasText: "Mercado de Campo de Ourique" })).toBeVisible();
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByText("unsaved change")).toHaveCount(0);
-  await expect(page.getByText("After Apply", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("After confirm", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Routes will be checked", { exact: true })).toHaveCount(0);
   await expect(page.locator(".blueprint-timeline-list").getByRole("button", { name: /Pending itinerary edit for Mercado de Campo de Ourique/ })).toHaveCount(0);
   await expect(page.locator(".blueprint-map-bubble").filter({ hasText: "Mercado de Campo de Ourique" })).toHaveCount(0);
   await expect(page.locator(".blueprint-map-bubble.selected").filter({ hasText: "LX Factory" })).toBeVisible();
@@ -399,8 +402,9 @@ test("an itinerary Plan renders the Skill-native interactive result inside Landi
   expect(agentRequests).toEqual([]);
   await expect(page.getByRole("region", { name: "Adjust your plan with Landi" })).toHaveCount(0);
   await expect(page.getByText("unsaved change")).toHaveCount(0);
-  await expect(page.getByText(/Applied 2 itinerary changes for 10\/13, 10\/12/)).toBeVisible();
-  await expect(page.getByText("After Apply", { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/Applied 2 itinerary updates for 10\/13, 10\/12/)).toBeVisible();
+  await expect(page.getByText("After confirm", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Routes will be checked", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Refresh routes" })).toBeVisible();
   await page.getByRole("button", { name: "Refresh routes" }).click();
   await expect.poll(() => routeRefreshRequests.length).toBe(1);
@@ -463,7 +467,9 @@ test("failed direct itinerary Apply keeps the local draft available", async ({ p
   const editBar = page.getByRole("toolbar", { name: "Unsaved itinerary edits" });
   await expect(editBar.getByText("1 unsaved change")).toBeVisible();
   await expect(page.locator(".blueprint-timeline-list").getByRole("button", { name: /Pending itinerary edit for Neighborhood Market/ })).toContainText("Draft");
-  await expect(page.locator(".blueprint-map-bubble.pending").filter({ hasText: "Neighborhood Market" })).toBeVisible();
+  await expect(page.locator(".blueprint-map-stage")).toBeVisible();
+  await expect(page.locator(".blueprint-map-status")).toContainText("Routes will be checked");
+  await expect(page.getByRole("button", { name: "Refresh routes" })).toHaveCount(0);
 
   await editBar.getByRole("button", { name: "Apply", exact: true }).click();
   await expect.poll(() => directRevisionRequests.length).toBe(1);
@@ -477,10 +483,10 @@ test("failed direct itinerary Apply keeps the local draft available", async ({ p
   await expect(page.locator(".agent-status-float.error")).toContainText("The plan changed before this edit could be saved.");
   await expect(editBar.getByText("1 unsaved change")).toBeVisible();
   await expect(editBar.getByRole("button", { name: "Apply", exact: true })).toBeEnabled();
-  await expect(page.getByText("After Apply", { exact: true })).toBeVisible();
+  await expect(page.locator(".blueprint-map-status")).toContainText("Routes will be checked");
+  await expect(page.getByText("After confirm", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh routes" })).toHaveCount(0);
   await expect(page.locator(".blueprint-timeline-list").getByRole("button", { name: /Pending itinerary edit for Neighborhood Market/ })).toBeVisible();
-  await expect(page.locator(".blueprint-map-bubble.pending").filter({ hasText: "Neighborhood Market" })).toBeVisible();
   await editBar.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByText("unsaved change")).toHaveCount(0);
   await expect(page.locator(".blueprint-map-bubble").filter({ hasText: "Neighborhood Market" })).toHaveCount(0);
@@ -538,6 +544,92 @@ test("failed route refresh keeps the affected itinerary routes retryable", async
   await expect(page.locator(".agent-status-float.error")).toContainText("Routes changed before refresh could run.");
   await expect(page.getByRole("button", { name: "Refresh routes" })).toBeEnabled();
   await expect(page.locator(".blueprint-map-status")).toContainText("Routes need refresh");
+  expect(pageErrors).toEqual([]);
+});
+
+test("place status updates save directly to the Trip Blueprint workspace", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  const workspace = {
+    profile: { status: "ready", displayName: "Trip tester", preferredLanguage: "English", nationality: "Singapore", gender: "prefer_not_to_say", immigrationStatus: "short_term_visitor" },
+    runtime: { selectedKind: "codex" },
+    inbox: [],
+    activePlan: {
+      id: "priority-trip", version: 1, title: "Lisbon status day", location: "Lisbon", dates: "2026-10-12", status: "draft", knownInformation: [], assumptions: [], nextAction: "Review.", createdAt: "2026-08-17T00:00:00.000Z",
+      configuration: { accommodation: { status: "not_set" }, arrival: {}, transport: { preference: "plan_recommended" }, travelContext: { partySize: 2 } },
+      stages: [],
+      sources: [],
+      presentation: {
+        kind: "itinerary", summary: "Lisbon status day", language: "en", startDate: "2026-10-12", endDate: "2026-10-12", cities: ["Lisbon"],
+        days: [{ id: "d1", label: "October 12", shortLabel: "10/12", city: "Lisbon", title: "Neighborhood day", summary: "A compact day.", placeIds: ["anchor"], stops: [{ placeId: "anchor", order: 1, time: "09:00" }], candidates: ["market"] }],
+        places: [
+          { id: "anchor", name: "Morning Museum", city: "Lisbon", area: "Baixa", locationLabel: "Baixa", coordinates: [38.711, -9.14], category: "museum", priority: "preferred", durationMinutes: 90, whyWorthIt: "A compact morning anchor.", plan: "Visit first.", detailSections: [], sourceRefs: [] },
+          { id: "market", name: "Neighborhood Market", city: "Lisbon", area: "Campo de Ourique", locationLabel: "Campo de Ourique", coordinates: [38.716, -9.166], category: "food market", priority: "nearby", durationMinutes: 60, whyWorthIt: "A flexible food stop.", plan: "Add if the day has room.", detailSections: [], sourceRefs: [] }
+        ],
+        routeSegments: []
+      }
+    }
+  };
+  await page.route("**/api/workspace", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(workspace) }));
+  await page.route("**/api/plans/history", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/api/configuration", (route) => route.fulfill({ contentType: "application/json", body: "{}" }));
+  await page.route("**/api/runtimes", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  const directRevisionRequests: unknown[] = [];
+  await page.route("**/api/plans/priority-trip/blueprint-revisions/direct", async (route) => {
+    const requestBody = route.request().postDataJSON();
+    directRevisionRequests.push(requestBody);
+    const updatedWorkspace = {
+      ...workspace,
+      activePlan: {
+        ...workspace.activePlan,
+        version: 2,
+        presentation: {
+          ...workspace.activePlan.presentation,
+          places: workspace.activePlan.presentation.places.map((place) => place.id === "market" ? { ...place, priority: "must" } : place)
+        }
+      }
+    };
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({
+      ...updatedWorkspace,
+      workspace: updatedWorkspace,
+      revision: {
+        id: "direct-revision-batch-blueprint-priority-v1-to-v2",
+        baseBlueprintVersion: 1,
+        appliedBlueprintVersion: 2,
+        createdAt: "2026-08-17T00:00:01.000Z",
+        revisionCount: 1,
+        kinds: ["update_place_priority"],
+        affectedDayIds: [],
+        affectedPlaceIds: ["market"],
+        routeRefresh: { dayIds: [], movementIds: [], reason: "These place status updates do not change route order." },
+        undo: { previousBlueprintVersion: 1, previousDays: [], previousMovements: [], previousPlaces: [workspace.activePlan.presentation.places[1]] },
+        revisions: []
+      }
+    }) });
+  });
+  const agentRequests: unknown[] = [];
+  await page.route("**/api/agent/chat", (route) => {
+    agentRequests.push(route.request().postDataJSON());
+    return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Agent route should not be used for direct place status updates." }) });
+  });
+
+  await page.goto("/");
+  const sidePanel = page.getByLabel("Itinerary side panel");
+  await expect(sidePanel.getByRole("button", { name: /Neighborhood Market/ })).toContainText("Nearby");
+  await sidePanel.getByRole("button", { name: /Neighborhood Market/ }).click();
+  await expect(sidePanel.getByRole("region", { name: "Place status" })).toContainText("Nearby");
+  await sidePanel.getByRole("button", { name: "Must go" }).click();
+  await expect.poll(() => directRevisionRequests.length).toBe(1);
+  expect(directRevisionRequests[0]).toMatchObject({
+    expectedVersion: 1,
+    revisions: [{ kind: "update_place_priority", placeId: "market", priority: "must" }]
+  });
+  expect(agentRequests).toEqual([]);
+  await expect(page.getByRole("button", { name: "Refresh routes" })).toHaveCount(0);
+  await expect(page.getByText("Updated Neighborhood Market.")).toBeVisible();
+  await expect(sidePanel.getByRole("button", { name: /Neighborhood Market/ })).toContainText("Must go");
+  await sidePanel.getByRole("button", { name: /Neighborhood Market/ }).click();
+  await expect(sidePanel.getByRole("region", { name: "Place status" })).toContainText("Must go");
   expect(pageErrors).toEqual([]);
 });
 
@@ -636,6 +728,9 @@ test("same-day itinerary drag reorder stages and confirms a direct Blueprint mov
   await expect(page.getByText("1 unsaved change")).toBeVisible();
   await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Fixed Museum", "Coffee Stop", "Book Street"]);
   await expect(timeline.locator(".blueprint-itinerary-card-main > span")).toHaveText(["09:00", "Late morning option", "Afternoon"]);
+  await expect(page.locator(".blueprint-map-status")).toContainText("Routes will be checked");
+  await expect(page.getByText("After confirm", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Refresh routes" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Apply", exact: true }).click();
   await expect.poll(() => directRevisionRequests.length).toBe(1);

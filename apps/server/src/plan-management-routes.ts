@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { DirectBlueprintRevision, PlanAccommodationInput, PlanArrivalInput, PlanTransportPreferenceInput, PlanTravelContextInput } from "@c-assistant/core";
+import type { BlueprintPlacePriority, DirectBlueprintRevision, PlanAccommodationInput, PlanArrivalInput, PlanTransportPreferenceInput, PlanTravelContextInput } from "@c-assistant/core";
 import type { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { prepareAccommodationDepartures } from "./accommodation-departure.js";
 import { connectorResponseStatus } from "./connector-bundle.js";
@@ -260,12 +260,28 @@ function parseDirectBlueprintRevisions(value: unknown, createdAt: string): Direc
 
 function parseDirectBlueprintRevision(value: unknown, createdAt: string): DirectBlueprintRevision {
   if (!isRecord(value)) throw new Error("Direct itinerary edits need a structured request.");
-  if (value.kind !== "add_place_to_day" && value.kind !== "move_place_within_day") throw new Error("Direct itinerary edits currently support adding or moving a place within a day.");
+  if (value.kind === "update_place_priority") {
+    return { kind: "update_place_priority", placeId: stringField(value, "placeId"), priority: directRevisionPlacePriority(value.priority), createdAt };
+  }
+  if (value.kind !== "add_place_to_day" && value.kind !== "move_place_within_day") throw new Error("Direct itinerary edits currently support adding or moving a place within a day, or updating a place status.");
   const placeId = stringField(value, "placeId");
   const dayId = stringField(value, "dayId");
   const position = directRevisionPosition(value.position);
   if (value.kind === "move_place_within_day") return { kind: "move_place_within_day", placeId, dayId, position, createdAt };
   return { kind: "add_place_to_day", placeId, dayId, position, createdAt };
+}
+
+function directRevisionPlacePriority(value: unknown): BlueprintPlacePriority {
+  if (
+    value === "must" ||
+    value === "preferred" ||
+    value === "nearby" ||
+    value === "archive" ||
+    value === "pending" ||
+    value === "recheck" ||
+    value === "booked"
+  ) return value;
+  throw new Error("Direct place status updates need a supported place status.");
 }
 
 function expectedVersionFromBody(value: unknown): number {
@@ -283,7 +299,7 @@ function expectedBlueprintVersionFromBody(value: unknown): number | undefined {
   return value.expectedBlueprintVersion;
 }
 
-function directRevisionPosition(value: unknown): DirectBlueprintRevision["position"] {
+function directRevisionPosition(value: unknown): Extract<DirectBlueprintRevision, { kind: "add_place_to_day" | "move_place_within_day" }>["position"] {
   if (!isRecord(value)) throw new Error("Direct itinerary edits need a placement position.");
   if (value.kind === "start") return { kind: "start" };
   if (value.kind === "end") return { kind: "end" };

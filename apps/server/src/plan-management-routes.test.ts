@@ -162,6 +162,18 @@ test("direct Blueprint Revision route adds a place without using assisted replan
     assert.deepEqual(payload.revision.affectedDayIds, ["d1"]);
     assert.deepEqual(payload.revision.affectedPlaceIds, ["b", "a"]);
     assert.equal(store.getPlanBlueprintLineage(workspace.activePlan.id)?.blueprintVersion, 2);
+
+    const priorityResponse = await server.inject({
+      method: "POST",
+      url: `/api/plans/${workspace.activePlan.id}/blueprint-revisions/direct`,
+      payload: { kind: "update_place_priority", expectedVersion: workspace.activePlan.version, expectedBlueprintVersion: 2, placeId: "b", priority: "must" }
+    });
+    assert.equal(priorityResponse.statusCode, 200, priorityResponse.body);
+    const priorityPayload = priorityResponse.json();
+    assert.equal(priorityPayload.workspace.activeBlueprint.version, 3);
+    assert.equal(priorityPayload.workspace.activeBlueprint.places.find((place: { id: string; priority: string }) => place.id === "b")?.priority, "must");
+    assert.deepEqual(priorityPayload.revision.routeRefresh.movementIds, []);
+    assert.equal(store.getPlanBlueprintLineage(priorityPayload.workspace.activePlan.id)?.blueprintVersion, 3);
   } finally {
     await server.close();
     store.close();

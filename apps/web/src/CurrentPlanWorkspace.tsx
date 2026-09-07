@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { DestinationArrivalEvent, DirectBlueprintRevisionBatchMetadata, Plan, PlanChangeSet, PlanReplacementAudit, TripBlueprint, WorkspaceSnapshot } from "@c-assistant/core";
+import type { DestinationArrivalEvent, DirectBlueprintRevisionBatchMetadata, Plan, PlanChangeSet, PlanPlacePriority, PlanReplacementAudit, TripBlueprint, WorkspaceSnapshot } from "@c-assistant/core";
 import { abandonActivePlan, applyDirectBlueprintRevisionBatch, deletePlan, refreshPlanRoutes, sendAgentChat, undoPlanReplacement } from "./api-client.js";
 import { BookingImportPanel } from "./BookingImportPanel.js";
 import { LandiBlueprintWorkspace } from "./LandiBlueprintWorkspace.js";
@@ -31,6 +31,7 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
   const [regenerating, setRegenerating] = useState(false);
   const [applyingItineraryEdits, setApplyingItineraryEdits] = useState(false);
   const [refreshingRoutes, setRefreshingRoutes] = useState(false);
+  const [updatingPlacePriorityId, setUpdatingPlacePriorityId] = useState("");
   const [regenerationStatus, setRegenerationStatus] = useState<string | null>(null);
   async function discardDraft() {
     if (discarding || plan.status !== "draft") return;
@@ -140,6 +141,30 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
       onOperationBusy(false);
     }
   }
+  async function updateBlueprintPlacePriority(placeId: string, priority: PlanPlacePriority) {
+    if (updatingPlacePriorityId) return;
+    const place = presentation?.places.find((candidate) => candidate.id === placeId);
+    const placeTitle = place?.localizedName ? `${place.name} · ${place.localizedName}` : place?.name ?? "this place";
+    setUpdatingPlacePriorityId(placeId);
+    onOperationBusy(true);
+    onError("");
+    onStatus({ tone: "working", text: `Updating ${placeTitle}...` });
+    try {
+      const payload = await applyDirectBlueprintRevisionBatch(plan.id, {
+        ...planReadModel.mutationVersion,
+        revisions: [{ kind: "update_place_priority", placeId, priority }]
+      });
+      await onWorkspace(payload.workspace);
+      onStatus({ tone: "success", text: `Updated ${placeTitle}.` });
+    } catch (caught) {
+      const messageText = caught instanceof Error ? caught.message : "Landi could not update this place.";
+      onError(messageText);
+      onStatus({ tone: "error", text: messageText });
+    } finally {
+      setUpdatingPlacePriorityId("");
+      onOperationBusy(false);
+    }
+  }
   async function undoReplacement() {
     try {
       const payload = await undoPlanReplacement(plan.id, plan.version);
@@ -203,7 +228,7 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
   if (presentation?.kind === "itinerary" && presentation.places.length) {
     return <article className="current-plan-card native-trip-plan">
       {latestPlanReplacement ? <PlanReplacementNotice audit={latestPlanReplacement} active={plan.status === "active"} onUndo={undoReplacement} /> : null}
-      <LandiBlueprintWorkspace key={planReadModel.presentationKey} plan={plan} presentation={presentation} onTaskToggle={onTaskToggle} onApplyItineraryEdits={applyBlueprintItineraryEdits} onRequestRouteRefresh={refreshItineraryRoutes} itineraryEditBusy={applyingItineraryEdits} routeRefreshBusy={refreshingRoutes} />
+      <LandiBlueprintWorkspace key={planReadModel.presentationKey} plan={plan} presentation={presentation} onTaskToggle={onTaskToggle} onApplyItineraryEdits={applyBlueprintItineraryEdits} onRequestRouteRefresh={refreshItineraryRoutes} onUpdatePlacePriority={updateBlueprintPlacePriority} itineraryEditBusy={applyingItineraryEdits} routeRefreshBusy={refreshingRoutes} priorityUpdateBusyPlaceId={updatingPlacePriorityId} />
       <footer className="plan-footer actions-only"><div className="plan-footer-actions">{plan.status === "draft" ? discardControl() : abandonControl()}<button className="secondary-action" onClick={() => onRevise()}>Adjust in conversation</button>{plan.status === "draft" ? <button className="primary-action" disabled={confirming} onClick={() => void onConfirm(plan.id)}>{confirming ? "Confirming…" : "Confirm and activate"}</button> : null}</div></footer>
     </article>;
   }
