@@ -53,6 +53,7 @@ export type BlueprintPlaceDisplay = {
     needsRecheck: boolean;
     longStop: boolean;
   };
+  contextualTip?: string;
 };
 
 type TimelineBlock = {
@@ -68,6 +69,7 @@ type TimelineBlock = {
   reorderable?: boolean;
   status?: string;
   routeAfter?: PlanRouteSegment;
+  contextualTip?: string;
 };
 
 export type ItineraryCardDisplay = {
@@ -82,6 +84,8 @@ export type ItineraryCardDisplay = {
   routeAnchor?: boolean;
   reorderable?: boolean;
   editState?: "moved";
+  draftActionLabel?: string;
+  contextualTip?: string;
 };
 
 export type BlueprintMapPointDisplay = Pick<BlueprintPlaceDisplay, "id" | "title" | "coordinates"> & {
@@ -127,6 +131,7 @@ export type ItineraryRouteRefreshDisplay = {
   segmentIds: string[];
   dayLabel: string;
   summary: string;
+  impactNotes?: string[];
   request: string;
   actionable?: boolean;
 };
@@ -142,6 +147,7 @@ export type GuideCardDisplay = {
   actionLabel?: string;
   canAdd: boolean;
   addBlockedReason?: string;
+  draftActionLabel?: string;
   priorityLabel: string;
   timeline?: { dayId: string; label: string; timeLabel: string };
 };
@@ -203,6 +209,11 @@ export type DetailPlaceDisplay = {
   primaryActionLabel: string;
   scheduled: boolean;
   canAdd: boolean;
+  canRemoveFromDay: boolean;
+  itineraryDraftNote?: string;
+  draftActionLabel?: string;
+  removeActionLabel?: string;
+  removeBlockedReason?: string;
   links: DetailLinkDisplay[];
 };
 
@@ -257,14 +268,14 @@ export type PlacementAdvisory = {
 };
 
 export type PendingItineraryEditDisplay = {
-  kind: "add_place_to_day" | "move_place_within_day";
+  kind: "add_place_to_day" | "move_place_within_day" | "remove_place_from_day";
   placeId: string;
   placeName: string;
   dayId: string;
   dayLabel: string;
-  positionId: string;
-  positionLabel: string;
-  position: PendingItineraryEditPosition;
+  positionId?: string;
+  positionLabel?: string;
+  position?: PendingItineraryEditPosition;
   advisories: PlacementAdvisory[];
 };
 
@@ -288,6 +299,17 @@ export function mergePendingItineraryEdit(current: PendingItineraryEditDisplay[]
 
 export function compactPendingItineraryEdits(edits: PendingItineraryEditDisplay[]): PendingItineraryEditDisplay[] {
   return edits.reduce<PendingItineraryEditDisplay[]>((next, edit) => mergePendingItineraryEdit(next, edit), []);
+}
+
+export function guideCardsForWorkspace(workspace: BlueprintWorkspaceDisplay, pendingEdits: PendingItineraryEditDisplay[] = []): GuideCardDisplay[] {
+  if (!pendingEdits.length) return workspace.guideCards;
+  return workspace.guideCards.map((card) => guideCardWithPendingItineraryEdit(card, pendingItineraryEditForPlace(pendingEdits, card.placeId)));
+}
+
+export function detailDisplayForWorkspacePlace(workspace: BlueprintWorkspaceDisplay, placeId: string, pendingEdits: PendingItineraryEditDisplay[] = []): DetailPlaceDisplay | undefined {
+  const detail = workspace.details.find((candidate) => candidate.placeId === placeId);
+  if (!detail) return undefined;
+  return detailWithPendingItineraryEdit(detail, pendingItineraryEditForPlace(pendingEdits, placeId));
 }
 
 export function pendingItineraryDraftSummary(edits: PendingItineraryEditDisplay[]): PendingItineraryDraftSummary {
@@ -316,16 +338,22 @@ export function appliedItineraryRevisionSummary(revision: DirectBlueprintRevisio
 }
 
 export function pendingItineraryEditRequest(edit: PendingItineraryEditDisplay): string {
+  if (edit.kind === "remove_place_from_day") return [
+    "Apply this confirmed itinerary edit directly to the plan.",
+    `Remove ${edit.placeName} from ${edit.dayLabel}.`,
+    "Keep the place available in the guide for later planning.",
+    "Refresh affected route, timing, meal, and opening constraints before execution."
+  ].join(" ");
   if (edit.kind === "move_place_within_day") return [
     "Apply this confirmed itinerary edit directly to the plan.",
     `Move ${edit.placeName} within ${edit.dayLabel}.`,
-    `Placement: ${edit.positionLabel}.`,
+    `Placement: ${edit.positionLabel ?? "Updated day order"}.`,
     "Keep the place catalog unchanged and refresh affected route checks before execution."
   ].join(" ");
   return [
     "Apply this confirmed itinerary edit directly to the plan.",
     `Add ${edit.placeName} to ${edit.dayLabel}.`,
-    `Placement: ${edit.positionLabel}.`,
+    `Placement: ${edit.positionLabel ?? "At the end of the day"}.`,
     "Keep the existing day order unless route validation shows this placement should become flexible or move elsewhere.",
     "Check travel time, opening or booking constraints, and any source recheck notes before returning the updated complete plan."
   ].join(" ");
@@ -336,7 +364,10 @@ export function pendingItineraryEditBatchRequest(edits: PendingItineraryEditDisp
   if (compactEdits.length === 1) return pendingItineraryEditRequest(compactEdits[0]!);
   return [
     `Apply these ${compactEdits.length} confirmed itinerary edits directly to the plan in one update.`,
-    ...compactEdits.map((edit, index) => `${index + 1}. ${edit.kind === "move_place_within_day" ? "Move" : "Add"} ${edit.placeName} ${edit.kind === "move_place_within_day" ? `within ${edit.dayLabel}` : `to ${edit.dayLabel}`}. Placement: ${edit.positionLabel}.`),
+    ...compactEdits.map((edit, index) => {
+      if (edit.kind === "remove_place_from_day") return `${index + 1}. Remove ${edit.placeName} from ${edit.dayLabel}.`;
+      return `${index + 1}. ${edit.kind === "move_place_within_day" ? "Move" : "Add"} ${edit.placeName} ${edit.kind === "move_place_within_day" ? `within ${edit.dayLabel}` : `to ${edit.dayLabel}`}. Placement: ${edit.positionLabel ?? "At the end of the day"}.`;
+    }),
     "Keep existing day order unless route validation shows a placement should become flexible or move elsewhere.",
     "Check travel time, opening or booking constraints, city compatibility, and source recheck notes before returning the updated complete plan."
   ].join(" ");
@@ -352,7 +383,7 @@ export function buildBlueprintWorkspaceDisplay(plan: Plan, presentation: PlanPre
     initialPlaceId: presentation.days[0]?.placeIds[0] ?? presentation.places[0]?.id ?? "",
     areas: workspaceAreasForPresentation(presentation),
     days: presentation.days.map(dayTabForDay),
-    places: presentation.places.map(placeDisplayForPlace),
+    places: presentation.places.map((place) => placeDisplayForPlace(place, presentation.travelTips)),
     itineraries,
     guideFilters: blueprintGuideFilters,
     guideCards: guideCardsForPresentation(presentation, plan.sources),
@@ -363,8 +394,9 @@ export function buildBlueprintWorkspaceDisplay(plan: Plan, presentation: PlanPre
   };
 }
 
-function placeDisplayForPlace(place: PlanPlace): BlueprintPlaceDisplay {
+function placeDisplayForPlace(place: PlanPlace, travelTips: PlanPresentation["travelTips"] = []): BlueprintPlaceDisplay {
   const signals = workspaceSignalsForPlace(place);
+  const contextualTip = contextualTipForPlace(place, travelTips);
   return {
     id: place.id,
     title: displayPlaceName(place),
@@ -377,7 +409,8 @@ function placeDisplayForPlace(place: PlanPlace): BlueprintPlaceDisplay {
     priority: place.priority,
     priorityLabel: placePriorityLabel(place.priority),
     ...(place.schedulingEligibility ? { schedulingEligibility: place.schedulingEligibility } : {}),
-    placementSignals: signals
+    placementSignals: signals,
+    ...(contextualTip ? { contextualTip } : {})
   };
 }
 
@@ -395,6 +428,25 @@ function workspaceSignalsForPlace(place: PlanPlace): BlueprintPlaceDisplay["plac
     needsRecheck: place.priority === "recheck" || place.reservation?.verification === "needs_recheck" || Boolean(place.evidenceSources?.some((source) => source.status && source.status !== "verified")),
     longStop: Boolean(place.durationMinutes && place.durationMinutes >= 180)
   };
+}
+
+function contextualTipForPlace(place: PlanPlace, travelTips: PlanPresentation["travelTips"] = [], context: { dayId?: string; blockId?: string } = {}): string | undefined {
+  const placeTips = travelTips.filter((tip) => tip.placeId === place.id || (context.blockId && tip.blockId === context.blockId));
+  const matchingTip = placeTips.find((tip) => context.blockId && tip.blockId === context.blockId)
+    ?? placeTips.find((tip) => context.dayId && tip.dayId === context.dayId)
+    ?? placeTips.find((tip) => !tip.dayId && !tip.blockId)
+    ?? placeTips[0];
+  const tipText = matchingTip?.body || place.tip || place.reservation?.note || workspaceSignalTip(workspaceSignalsForPlace(place));
+  const sentence = tipText ? firstUsefulSentence(tipText) || tipText.trim() : "";
+  return sentence ? shorten(sentence, 118) : undefined;
+}
+
+function workspaceSignalTip(signals: BlueprintPlaceDisplay["placementSignals"]): string | undefined {
+  if (signals.reservation === "required") return "Reservation or timed entry should be checked before this stop.";
+  if (signals.needsRecheck) return "Some details need recheck before this stop is execution-ready.";
+  if (signals.longStop) return "This is a long stop, so keep the surrounding day lighter.";
+  if (signals.reservation === "recommended") return "Reservation may reduce friction for this stop.";
+  return undefined;
 }
 
 function mapPointForPlace(place: PlanPlace | BlueprintPlaceDisplay): BlueprintMapPointDisplay {
@@ -417,7 +469,7 @@ function routeSegmentDisplayForSegment(segment: PlanRouteSegment, planSources: S
     label: segment.display?.routeLabel?.trim() || segment.label || "Movement",
     verification: segment.verification,
     needsRefresh,
-    mapLineState: segment.display?.mapLineState ?? (needsRefresh ? "needs_refresh" : "formal"),
+    mapLineState: segment.verification === "verified" ? "formal" : segment.display?.mapLineState ?? (needsRefresh ? "needs_refresh" : "formal"),
     ...(refreshReason ? { refreshReason } : {}),
     ...(segment.durationMinutes ? { durationLabel: `${segment.durationMinutes} min` } : {}),
     ...(segment.detail ? { detail: segment.detail } : {}),
@@ -426,6 +478,8 @@ function routeSegmentDisplayForSegment(segment: PlanRouteSegment, planSources: S
 }
 
 function routeSegmentNeedsRefresh(segment: PlanRouteSegment): boolean {
+  if (segment.verification === "verified") return false;
+  if (segment.display?.refreshScope) return true;
   if (segment.display?.mapLineState === "needs_refresh") return true;
   if (segment.display?.refreshReason?.trim()) return true;
   return directEditRouteNeedsRefresh(segment);
@@ -436,6 +490,7 @@ function routeSegmentShowsAsFormalRoute(segment: PlanRouteSegment): boolean {
 }
 
 function routeRefreshReason(segment: PlanRouteSegment): string | undefined {
+  if (segment.verification === "verified") return undefined;
   if (segment.display?.refreshReason?.trim()) return segment.display.refreshReason.trim();
   return directEditRouteNeedsRefresh(segment) ? "Route after needs refresh" : undefined;
 }
@@ -500,6 +555,7 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
       const reorderable = Boolean(routeAnchor && place && (block.display?.reorderable ?? directMoveAllowed(place)));
       const routeAfter = routeAnchor && place ? presentation.routeSegments.find((segment) => segment.dayId === day.id && segment.originPlaceId === place.id) : undefined;
       const status = place ? itineraryBlockStatus(place) : undefined;
+      const contextualTip = place ? contextualTipForPlace(place, presentation.travelTips, { dayId: day.id, blockId: block.id }) : undefined;
       return [{
         day: displayDay,
         ...(place ? { place } : {}),
@@ -512,6 +568,7 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
         ...(routeAnchor ? { routeAnchor: true } : {}),
         ...(reorderable ? { reorderable: true } : {}),
         ...(status ? { status } : {}),
+        ...(contextualTip ? { contextualTip } : {}),
         ...(routeAfter ? { routeAfter } : {})
       }];
     });
@@ -524,6 +581,7 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
     if (!place) return [];
     const routeAfter = presentation.routeSegments.find((segment) => segment.dayId === day.id && segment.originPlaceId === place.id);
     const status = itineraryBlockStatus(place);
+    const contextualTip = contextualTipForPlace(place, presentation.travelTips, { dayId: day.id });
     return [{
       day: displayDay,
       place,
@@ -533,6 +591,7 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
       routeAnchor: true,
       ...(directMoveAllowed(place) ? { reorderable: true } : {}),
       ...(status ? { status } : {}),
+      ...(contextualTip ? { contextualTip } : {}),
       ...(routeAfter ? { routeAfter } : {})
     }];
   });
@@ -540,7 +599,7 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
 
 function itineraryDisplayForDay(presentation: PlanPresentation, day: ItineraryDay, planSources: SourceReference[] = [], pendingEdit?: PendingItineraryEditDisplay | null): ItineraryDayDisplay {
   const blocks = timelineBlocksForDay(presentation, day);
-  return itineraryDisplayFromBlocks(dayTabForDay(day), blocks, presentation.places, planSources, presentation.sourceCatalog, pendingEdit);
+  return itineraryDisplayFromBlocks(dayTabForDay(day), blocks, presentation.places, planSources, presentation.sourceCatalog, presentation.travelTips, pendingEdit);
 }
 
 export function itineraryDisplayForWorkspace(workspace: BlueprintWorkspaceDisplay, dayId: string, pendingEdit?: PendingItineraryEditDisplay | PendingItineraryEditDisplay[] | null): ItineraryDayDisplay {
@@ -549,7 +608,7 @@ export function itineraryDisplayForWorkspace(workspace: BlueprintWorkspaceDispla
   return itineraryDisplayWithPending(base, workspace.places, pendingEdit);
 }
 
-function itineraryDisplayFromBlocks(day: BlueprintDayTabDisplay, blocks: TimelineBlock[], places: PlanPlace[], planSources: SourceReference[], sourceCatalog: BlueprintSource[] = [], pendingEdit?: PendingItineraryEditDisplay | null): ItineraryDayDisplay {
+function itineraryDisplayFromBlocks(day: BlueprintDayTabDisplay, blocks: TimelineBlock[], places: PlanPlace[], planSources: SourceReference[], sourceCatalog: BlueprintSource[] = [], travelTips: PlanPresentation["travelTips"] = [], pendingEdit?: PendingItineraryEditDisplay | null): ItineraryDayDisplay {
   const routeSegments = blocks.slice(0, -1).flatMap((block) => {
     const routeSegment = block.routeAfter ? routeSegmentDisplayForSegment(block.routeAfter, planSources, sourceCatalog) : undefined;
     return routeSegment ? [routeSegment] : [];
@@ -576,22 +635,32 @@ function itineraryDisplayFromBlocks(day: BlueprintDayTabDisplay, blocks: Timelin
       };
     })
   };
-  return itineraryDisplayWithPending(base, places.map(placeDisplayForPlace), pendingEdit);
+  return itineraryDisplayWithPending(base, places.map((place) => placeDisplayForPlace(place, travelTips)), pendingEdit);
 }
 
 function itineraryDisplayWithPending(base: ItineraryDayDisplay, places: BlueprintPlaceDisplay[], pendingEdit?: PendingItineraryEditDisplay | PendingItineraryEditDisplay[] | null): ItineraryDayDisplay {
   const edits = compactPendingItineraryEdits(Array.isArray(pendingEdit) ? pendingEdit : pendingEdit ? [pendingEdit] : []).filter((edit) => edit.dayId === base.dayId);
   if (!edits.length) return base;
   let items = base.items;
+  let routePlaces = base.routePlaces;
+  let routeSegments = base.routeSegments;
   const markers = [...base.markers];
   for (const edit of edits) {
     if (edit.kind === "move_place_within_day") {
       items = movePendingCard(items, edit);
       continue;
     }
+    if (edit.kind === "remove_place_from_day") {
+      items = removePendingCard(items, edit);
+      routePlaces = routePlaces.filter((place) => place.placeId !== edit.placeId);
+      routeSegments = routeSegments.filter((segment) => segment.originPlaceId !== edit.placeId && segment.destinationPlaceId !== edit.placeId);
+      const markerIndex = markers.findIndex((marker) => marker.placeId === edit.placeId);
+      if (markerIndex !== -1) markers.splice(markerIndex, 1);
+      continue;
+    }
     const pendingPlace = places.find((place) => place.id === edit.placeId);
     if (!pendingPlace) continue;
-    items = insertPendingCard(items, itineraryCardForPendingPlace(pendingPlace, edit), edit.positionId);
+    items = insertPendingCard(items, itineraryCardForPendingPlace(pendingPlace, edit), edit.positionId ?? "end");
     if (pendingPlace.coordinates && !markers.some((marker) => marker.placeId === pendingPlace.id)) {
       markers.push({
         placeId: pendingPlace.id,
@@ -606,8 +675,10 @@ function itineraryDisplayWithPending(base: ItineraryDayDisplay, places: Blueprin
   return {
     ...base,
     items,
+    routePlaces,
+    routeSegments,
     markers,
-    routeRefresh: draftRouteRefreshDisplayForPendingEdits(base, edits)
+    routeRefresh: draftRouteRefreshDisplayForPendingEdits(base, items, places, edits)
   };
 }
 
@@ -616,8 +687,59 @@ function samePendingItineraryEditTarget(left: PendingItineraryEditDisplay, right
   return left.kind === "add_place_to_day" || left.dayId === right.dayId;
 }
 
-export function detailDisplayForWorkspacePlace(workspace: BlueprintWorkspaceDisplay, placeId: string): DetailPlaceDisplay | undefined {
-  return workspace.details.find((detail) => detail.placeId === placeId);
+function pendingItineraryEditForPlace(edits: PendingItineraryEditDisplay[], placeId: string): PendingItineraryEditDisplay | undefined {
+  return compactPendingItineraryEdits(edits).filter((edit) => edit.placeId === placeId).at(-1);
+}
+
+function guideCardWithPendingItineraryEdit(card: GuideCardDisplay, edit: PendingItineraryEditDisplay | undefined): GuideCardDisplay {
+  if (!edit) return card;
+  if (edit.kind === "remove_place_from_day") {
+    const { timeline: _timeline, ...rest } = card;
+    return {
+      ...rest,
+      state: "unscheduled",
+      canAdd: true,
+      actionLabel: card.actionLabel ?? "Add",
+      draftActionLabel: "Undo draft",
+      footerNote: `Removed from ${edit.dayLabel} (not saved)`
+    };
+  }
+  const { actionLabel: _actionLabel, addBlockedReason: _addBlockedReason, ...rest } = card;
+  return {
+    ...rest,
+    state: "scheduled",
+    canAdd: false,
+    draftActionLabel: "Undo draft",
+    footerNote: edit.kind === "move_place_within_day" ? `Moved within ${edit.dayLabel} (not saved)` : `Added to ${edit.dayLabel} (not saved)`,
+    timeline: { dayId: edit.dayId, label: edit.dayLabel, timeLabel: edit.kind === "add_place_to_day" ? "Draft" : "Not saved" }
+  };
+}
+
+function detailWithPendingItineraryEdit(detail: DetailPlaceDisplay, edit: PendingItineraryEditDisplay | undefined): DetailPlaceDisplay {
+  if (!edit) return detail;
+  if (edit.kind === "remove_place_from_day") {
+    const { priorityBlockedNote: _priorityBlockedNote, removeActionLabel: _removeActionLabel, removeBlockedReason: _removeBlockedReason, ...rest } = detail;
+    return {
+      ...rest,
+      scheduled: false,
+      canAdd: true,
+      canRemoveFromDay: false,
+      primaryActionLabel: "Add to itinerary",
+      priorityActions: placePriorityActions({ priority: detail.priority }, false),
+      itineraryDraftNote: `Removed from ${edit.dayLabel} (not saved).`,
+      draftActionLabel: "Undo draft"
+    };
+  }
+  const { removeActionLabel: _removeActionLabel, removeBlockedReason: _removeBlockedReason, ...rest } = detail;
+  return {
+    ...rest,
+    scheduled: true,
+    canAdd: false,
+    canRemoveFromDay: false,
+    primaryActionLabel: "Show in itinerary",
+    itineraryDraftNote: edit.kind === "move_place_within_day" ? `Moved within ${edit.dayLabel} (not saved).` : `Added to ${edit.dayLabel} (not saved).`,
+    draftActionLabel: "Undo draft"
+  };
 }
 
 export function scheduledDayIdForPlace(workspace: BlueprintWorkspaceDisplay, placeId: string): string | undefined {
@@ -658,6 +780,8 @@ function detailDisplayForPlace(presentation: PlanPresentation, planSources: Sour
   const comparisonRows = comparisonRowsForPlace(presentation, place);
   const comparisonHeading = comparisonRows.length ? place.guideDisplay?.comparisonTitle ?? comparisonTitle(type) : undefined;
   const canAdd = !scheduledDay && directAddAllowed(place);
+  const canRemoveFromDay = Boolean(scheduledDay && directRemoveAllowed(place));
+  const removeBlockedReason = scheduledDay && !canRemoveFromDay ? directRemoveBlockedLabel(place) : undefined;
   return {
     placeId: place.id,
     title: displayPlaceName(place),
@@ -678,6 +802,9 @@ function detailDisplayForPlace(presentation: PlanPresentation, planSources: Sour
     primaryActionLabel: detailPrimaryActionLabel(place, Boolean(scheduledDay), canAdd),
     scheduled: Boolean(scheduledDay),
     canAdd,
+    canRemoveFromDay,
+    ...(canRemoveFromDay ? { removeActionLabel: "Remove from day" } : {}),
+    ...(removeBlockedReason ? { removeBlockedReason } : {}),
     links: detailLinks(place)
   };
 }
@@ -809,6 +936,23 @@ export function buildPendingItineraryMoveForWorkspace(workspace: BlueprintWorksp
   };
 }
 
+export function buildPendingItineraryRemoveForWorkspace(workspace: BlueprintWorkspaceDisplay, input: { dayId: string; placeId: string }): PendingItineraryEditDisplay | undefined {
+  const itinerary = workspace.itineraries.find((candidate) => candidate.dayId === input.dayId);
+  const place = workspace.places.find((candidate) => candidate.id === input.placeId);
+  const detail = workspace.details.find((candidate) => candidate.placeId === input.placeId);
+  if (!itinerary || !place || !detail?.scheduled || !detail.canRemoveFromDay) return undefined;
+  if (!itinerary.items.some((item) => item.kind === "block" && item.placeId === input.placeId && item.routeAnchor)) return undefined;
+  const dayLabel = itinerary.day.shortLabel ?? itinerary.day.date ?? itinerary.day.label;
+  return {
+    kind: "remove_place_from_day",
+    placeId: place.id,
+    placeName: place.title,
+    dayId: itinerary.dayId,
+    dayLabel,
+    advisories: [{ tone: "neutral", text: "This day will need route and timing refresh after removing this stop." }]
+  };
+}
+
 function eligibleItineraryForPlace(workspace: BlueprintWorkspaceDisplay, place: BlueprintPlaceDisplay, requested: ItineraryDayDisplay | undefined): ItineraryDayDisplay | undefined {
   if (requested && itineraryAllowsPlace(place, requested.dayId)) return requested;
   return workspace.itineraries.find((itinerary) => itineraryAllowsPlace(place, itinerary.dayId)) ?? workspace.itineraries[0];
@@ -840,33 +984,125 @@ function routeRefreshDisplayForDay(day: BlueprintDayTabDisplay, routeSegments: B
     segmentCount,
     segmentIds: refreshSegments.map((segment) => segment.id),
     dayLabel,
-    summary: segmentCount === 1 ? "1 route leg needs refresh." : `${segmentCount} route legs need refresh.`,
+    summary: segmentCount === 1 ? `1 route leg on ${dayLabel} needs refresh.` : `${segmentCount} route legs on ${dayLabel} need refresh.`,
     request: `Refresh routes for ${dayLabel}. Recheck the affected route leg${segmentCount === 1 ? "" : "s"}, timing, meal spacing, and opening constraints before marking this itinerary ready.`
   };
 }
 
-function draftRouteRefreshDisplayForPendingEdits(base: ItineraryDayDisplay, edits: PendingItineraryEditDisplay[]): ItineraryRouteRefreshDisplay {
+function draftRouteRefreshDisplayForPendingEdits(base: ItineraryDayDisplay, previewItems: ItineraryCardDisplay[], places: BlueprintPlaceDisplay[], edits: PendingItineraryEditDisplay[]): ItineraryRouteRefreshDisplay {
   const dayLabel = base.day.shortLabel ?? base.day.date ?? base.day.label;
   const changeCount = edits.length;
+  const impactNotes = pendingEditImpactNotes(base, previewItems, places, edits);
   return {
     segmentCount: Math.max(1, base.routeSegments.length, changeCount),
     segmentIds: [],
     dayLabel,
     summary: `${changeCount} unsaved itinerary change${changeCount === 1 ? "" : "s"} will need route refresh after you confirm.`,
+    ...(impactNotes.length ? { impactNotes } : {}),
     request: `After you confirm the itinerary draft for ${dayLabel}, refresh routing, timing, meal spacing, and opening constraints before marking this day ready.`,
     actionable: false
   };
 }
 
+function pendingEditImpactNotes(base: ItineraryDayDisplay, previewItems: ItineraryCardDisplay[], places: BlueprintPlaceDisplay[], edits: PendingItineraryEditDisplay[]): string[] {
+  const placesById = new Map(places.map((place) => [place.id, place] as const));
+  const routePlaceIds = previewItineraryPlaceIds(previewItems);
+  const routePlaces = routePlaceIds.flatMap((placeId) => {
+    const place = placesById.get(placeId);
+    return place ? [place] : [];
+  });
+  const notes: string[] = ["Route and timing will be rechecked after confirmation."];
+  if (edits.some((edit) => edit.kind === "add_place_to_day")) {
+    notes.push(addImpactNote(routePlaces));
+  }
+  notes.push(...spatialImpactNotes(base, previewItems, placesById, edits));
+  if (edits.some((edit) => edit.kind === "remove_place_from_day")) {
+    notes.push(removeImpactNote(routePlaces, placesById, edits));
+  }
+  if (edits.some((edit) => edit.kind === "move_place_within_day")) {
+    notes.push("Moved stops keep their current time labels until timing is refreshed.");
+  }
+  notes.push(...edits.flatMap((edit) => edit.advisories.map((advisory) => advisory.text)));
+  return uniqueStrings(notes).slice(0, 5);
+}
+
+function previewItineraryPlaceIds(items: ItineraryCardDisplay[]): string[] {
+  return items.filter((item) => item.placeId && (item.routeAnchor || item.kind === "pending")).map((item) => item.placeId);
+}
+
+function addImpactNote(routePlaces: BlueprintPlaceDisplay[]): string {
+  return routePlaces.length >= 5
+    ? `This preview has ${routePlaces.length} planned stops, so pacing may be tight.`
+    : "Added places may affect meal spacing, opening windows, and route order.";
+}
+
+function removeImpactNote(routePlaces: BlueprintPlaceDisplay[], placesById: Map<string, BlueprintPlaceDisplay>, edits: PendingItineraryEditDisplay[]): string {
+  const removeEdits = edits.filter((edit) => edit.kind === "remove_place_from_day");
+  const removedPlaces = removeEdits.flatMap((edit) => {
+    const place = placesById.get(edit.placeId);
+    return place ? [place] : [];
+  });
+  if ((removedPlaces.some((place) => place.markerType === "dining") || removeEdits.some((edit) => mealOrRestText(edit.placeName))) && !routePlaces.some((place) => place.markerType === "dining" || mealOrRestText(place.title))) {
+    return "Removing this stop leaves the day without a clear meal or rest anchor.";
+  }
+  return "Removed stops stay in Explore and may leave a gap in the day.";
+}
+
+function mealOrRestText(text: string): boolean {
+  return /\b(restaurant|market|lunch|dinner|breakfast|coffee|cafe|tea|dessert|bakery|bar)\b/i.test(text);
+}
+
+function spatialImpactNotes(base: ItineraryDayDisplay, previewItems: ItineraryCardDisplay[], placesById: Map<string, BlueprintPlaceDisplay>, edits: PendingItineraryEditDisplay[]): string[] {
+  const notes: string[] = [];
+  const changedPlaces = edits.flatMap((edit) => {
+    const place = placesById.get(edit.placeId);
+    return place ? [place] : [];
+  });
+  const crossCity = changedPlaces.find((place) => base.day.city && place.city && !sameText(base.day.city, place.city));
+  if (crossCity && base.day.city) {
+    notes.push(`This edit reaches ${crossCity.city}, while ${base.day.city} is the day base.`);
+  }
+  const originalAreas = new Set(previewItineraryPlaceIds(base.items).flatMap((placeId) => {
+    const area = placesById.get(placeId)?.area?.trim();
+    return area ? [area.toLocaleLowerCase()] : [];
+  }));
+  const changedArea = changedPlaces.find((place) => place.area?.trim() && !originalAreas.has(place.area.trim().toLocaleLowerCase()));
+  if (changedArea && !crossCity) {
+    notes.push("This edit adds another area to the day, so route fit needs a closer check.");
+  }
+  if (previewOrderRevisitsArea(previewItems, placesById)) {
+    notes.push("The previewed order revisits an area, so it may create backtracking.");
+  }
+  return notes;
+}
+
+function previewOrderRevisitsArea(items: ItineraryCardDisplay[], placesById: Map<string, BlueprintPlaceDisplay>): boolean {
+  const areas = previewItineraryPlaceIds(items).flatMap((placeId) => {
+    const area = placesById.get(placeId)?.area?.trim().toLocaleLowerCase();
+    return area ? [area] : [];
+  });
+  const seen = new Set<string>();
+  let previous = "";
+  for (const area of areas) {
+    if (area === previous) continue;
+    if (seen.has(area)) return true;
+    seen.add(area);
+    previous = area;
+  }
+  return false;
+}
+
 function itineraryCardForPendingPlace(place: BlueprintPlaceDisplay, edit: PendingItineraryEditDisplay): ItineraryCardDisplay {
   return {
     kind: "pending",
-    key: `pending-${edit.dayId}-${edit.placeId}-${edit.positionId}`,
+    key: `pending-${edit.dayId}-${edit.placeId}-${edit.positionId ?? "end"}`,
     placeId: place.id,
     title: place.title,
     timeLabel: "Draft",
-    meta: edit.positionLabel,
-    statusLabel: "Not saved"
+    ...(edit.positionLabel ? { meta: edit.positionLabel } : {}),
+    statusLabel: "Not saved",
+    draftActionLabel: "Undo draft",
+    ...(place.contextualTip ? { contextualTip: place.contextualTip } : {})
   };
 }
 
@@ -882,7 +1118,8 @@ function itineraryCardForBlock(block: TimelineBlock): ItineraryCardDisplay {
     ...(block.status ? { statusLabel: block.status } : {}),
     ...(routeStatusLabel ? { routeStatusLabel } : {}),
     ...(block.routeAnchor ? { routeAnchor: true } : {}),
-    ...(block.place && block.reorderable ? { reorderable: true } : {})
+    ...(block.place && block.reorderable ? { reorderable: true } : {}),
+    ...(block.contextualTip ? { contextualTip: block.contextualTip } : {})
   };
 }
 
@@ -903,10 +1140,11 @@ function insertPendingCard(items: ItineraryCardDisplay[], pending: ItineraryCard
 }
 
 function movePendingCard(items: ItineraryCardDisplay[], edit: PendingItineraryEditDisplay): ItineraryCardDisplay[] {
+  if (!edit.position) return items;
   const currentIndex = items.findIndex((item) => item.placeId === edit.placeId && item.kind === "block" && item.routeAnchor);
   if (currentIndex === -1) return items;
   const slotTimeLabels = items.map((item) => item.timeLabel);
-  const moving = { ...items[currentIndex]!, statusLabel: "Not saved", editState: "moved" as const };
+  const moving = { ...items[currentIndex]!, statusLabel: "Not saved", editState: "moved" as const, draftActionLabel: "Undo draft" };
   const next = items.filter((_, index) => index !== currentIndex);
   const { position } = edit;
   let insertionIndex = 0;
@@ -917,6 +1155,10 @@ function movePendingCard(items: ItineraryCardDisplay[], edit: PendingItineraryEd
   }
   return [...next.slice(0, insertionIndex), moving, ...next.slice(insertionIndex)]
     .map((item, index) => ({ ...item, timeLabel: slotTimeLabels[index] ?? item.timeLabel }));
+}
+
+function removePendingCard(items: ItineraryCardDisplay[], edit: PendingItineraryEditDisplay): ItineraryCardDisplay[] {
+  return items.filter((item) => !(item.kind === "block" && item.routeAnchor && item.placeId === edit.placeId));
 }
 
 function movePlaceOrder(placeIds: string[], placeId: string, position: PendingItineraryEditPosition): string[] {
@@ -1246,6 +1488,16 @@ function directMoveAllowed(place: Pick<PlanPlace, "priority" | "schedulingEligib
   if (place.priority === "booked" || reservationSignal === "required" || (!reservationSignal && place.reservation?.requirement === "required")) return false;
   const decision = place.schedulingEligibility?.decision;
   return decision === undefined || decision === "schedulable";
+}
+
+function directRemoveAllowed(place: Pick<PlanPlace, "priority" | "schedulingEligibility" | "reservation" | "display">): boolean {
+  return directMoveAllowed(place);
+}
+
+function directRemoveBlockedLabel(place: Pick<PlanPlace, "priority" | "schedulingEligibility" | "reservation" | "display">): string {
+  const reservationSignal = place.display?.workspaceSignals?.reservation;
+  if (place.priority === "booked" || reservationSignal === "required" || (!reservationSignal && place.reservation?.requirement === "required")) return "Fixed booking";
+  return addBlockedLabel(place);
 }
 
 function addBlockedLabel(place: Pick<PlanPlace, "schedulingEligibility">): string {

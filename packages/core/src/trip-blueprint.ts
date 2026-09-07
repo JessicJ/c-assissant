@@ -424,10 +424,21 @@ export interface BlueprintMovementDisplayIntent {
   routeLabel?: string;
   /** Explains why this route leg should be refreshed after direct edits or stale route checks. */
   refreshReason?: string;
+  /** Structured refresh target so Web does not infer the affected leg from prose. */
+  refreshScope?: BlueprintMovementRefreshScope;
   /** False means keep the movement as context but do not draw it as a formal map route. */
   showAsFormalRoute?: boolean;
   /** Explicit map line state so Web does not infer it from prose. */
   mapLineState?: BlueprintMovementMapLineState;
+}
+
+export type BlueprintMovementRefreshReason = "direct_itinerary_edit" | "unverified_route" | "route_conflict";
+
+export interface BlueprintMovementRefreshScope {
+  dayId: string;
+  originPlaceId: string;
+  destinationPlaceId: string;
+  reason: BlueprintMovementRefreshReason;
 }
 
 export interface TripBlueprint {
@@ -818,8 +829,16 @@ function validateEvidence(evidence: BlueprintEvidenceRef[], sourceIds: Set<strin
 function validateMovementDisplay(display: BlueprintMovementDisplayIntent, issues: string[], path: string): void {
   if (display.routeLabel !== undefined && !display.routeLabel.trim()) issues.push(`${path} has an empty display route label`);
   if (display.refreshReason !== undefined && !display.refreshReason.trim()) issues.push(`${path} has an empty display refresh reason`);
+  if (display.refreshScope !== undefined) validateMovementRefreshScope(display.refreshScope, issues, path);
   if (display.showAsFormalRoute !== undefined && typeof display.showAsFormalRoute !== "boolean") issues.push(`${path} has invalid formal route display flag`);
   if (display.mapLineState !== undefined && !validMovementMapLineState(display.mapLineState)) issues.push(`${path} has invalid map line state`);
+}
+
+function validateMovementRefreshScope(scope: BlueprintMovementRefreshScope, issues: string[], path: string): void {
+  if (!scope.dayId?.trim()) issues.push(`${path} has an empty refresh day`);
+  if (!scope.originPlaceId?.trim()) issues.push(`${path} has an empty refresh origin`);
+  if (!scope.destinationPlaceId?.trim()) issues.push(`${path} has an empty refresh destination`);
+  if (!["direct_itinerary_edit", "unverified_route", "route_conflict"].includes(scope.reason)) issues.push(`${path} has invalid refresh reason`);
 }
 
 function uniqueIdentityIssues(path: string, ids: string[], issues: string[]): Set<string> {

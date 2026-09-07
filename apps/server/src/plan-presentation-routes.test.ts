@@ -60,6 +60,54 @@ function routeRefreshPlan(store: SqliteWorkspaceStore) {
   }).activePlan;
 }
 
+function multiDayRouteRefreshPlan(store: SqliteWorkspaceStore) {
+  return store.createGeneratedPlan({
+    title: "Tokyo route refresh",
+    location: "Tokyo",
+    dates: "October 2026",
+    knownInformation: [],
+    assumptions: [],
+    nextAction: "Refresh routes.",
+    presentation: {
+      kind: "itinerary",
+      summary: "Two mapped days.",
+      startDate: "2026-10-04",
+      endDate: "2026-10-05",
+      cities: ["Tokyo"],
+      days: [
+        {
+          id: "day-1",
+          label: "2026-10-04",
+          date: "2026-10-04",
+          city: "Tokyo",
+          placeIds: ["museum", "garden", "coffee"],
+          stops: [{ placeId: "museum", order: 1, time: "09:00" }, { placeId: "garden", order: 2, time: "10:30" }, { placeId: "coffee", order: 3, time: "12:00" }]
+        },
+        {
+          id: "day-2",
+          label: "2026-10-05",
+          date: "2026-10-05",
+          city: "Tokyo",
+          placeIds: ["coffee", "shopping"],
+          stops: [{ placeId: "coffee", order: 1, time: "10:00" }, { placeId: "shopping", order: 2, time: "14:00" }]
+        }
+      ],
+      places: [
+        { id: "museum", name: "Fukagawa Edo Museum", locationLabel: "Tokyo", city: "Tokyo", coordinates: [35.681, 139.797], category: "museum", priority: "must", whyWorthIt: "Compact history.", plan: "Visit.", durationMinutes: 60, detailSections: [], sourceRefs: [] },
+        { id: "garden", name: "Kiyosumi Gardens", locationLabel: "Tokyo", city: "Tokyo", coordinates: [35.682, 139.798], category: "garden", priority: "preferred", whyWorthIt: "Calm walk.", plan: "Visit.", durationMinutes: 45, detailSections: [], sourceRefs: [] },
+        { id: "coffee", name: "ARiSE Coffee Roasters", locationLabel: "Tokyo", city: "Tokyo", coordinates: [35.683, 139.799], category: "coffee", priority: "preferred", whyWorthIt: "Coffee break.", plan: "Visit.", durationMinutes: 30, detailSections: [], sourceRefs: [] },
+        { id: "shopping", name: "Kagurazaka", locationLabel: "Tokyo", city: "Tokyo", coordinates: [35.703, 139.740], category: "shopping", priority: "preferred", whyWorthIt: "Browse.", plan: "Visit.", durationMinutes: 60, detailSections: [], sourceRefs: [] }
+      ],
+      routeSegments: [
+        { id: "route-1", dayId: "day-1", originPlaceId: "museum", destinationPlaceId: "garden", mode: "walking", verification: "needs_verification", detail: "This day was edited directly. Route needs refresh.", sourceRefs: [] },
+        { id: "route-2", dayId: "day-1", originPlaceId: "garden", destinationPlaceId: "coffee", mode: "walking", verification: "needs_verification", detail: "This day was edited directly. Route needs refresh.", sourceRefs: [] },
+        { id: "route-3", dayId: "day-2", originPlaceId: "coffee", destinationPlaceId: "shopping", mode: "walking", verification: "needs_verification", detail: "This day was edited directly. Route needs refresh.", sourceRefs: [] }
+      ]
+    },
+    stages: [{ title: "Itinerary", description: "Mapped day.", presentationKind: "itinerary", tasks: [{ title: "Tour Tokyo", owner: "user", dueLabel: "2026-10-04" }] }]
+  }).activePlan;
+}
+
 function routeMaps(failingRouteIds = new Set<string>()): { maps: PresentationRouteMaps; geocodeCalls: string[]; routeCalls: string[] } {
   const coordinates = new Map([
     ["Fukagawa Edo Museum, Tokyo", "139.797,35.681"],
@@ -183,6 +231,38 @@ test("presentation route refresh endpoint saves only requested route legs in one
     assert.equal(segments.find((segment: { id: string }) => segment.id === "route-1").verification, "verified");
     assert.equal(segments.find((segment: { id: string }) => segment.id === "route-2").verification, "verified");
     assert.equal(segments.find((segment: { id: string }) => segment.id === "route-3").verification, "needs_verification");
+  } finally {
+    await server.close();
+    store.close();
+  }
+});
+
+test("presentation route refresh endpoint preserves other days that still need refresh", async () => {
+  const server = Fastify({ logger: false });
+  const store = new SqliteWorkspaceStore(":memory:");
+  const { maps, routeCalls } = routeMaps();
+  try {
+    registerPlanPresentationRoutes(server, { store, getMaps: () => maps });
+    const plan = multiDayRouteRefreshPlan(store);
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/plans/${plan.id}/presentation/routes/refresh`,
+      payload: { expectedVersion: plan.version, segmentIds: ["route-1"] }
+    });
+
+    assert.equal(response.statusCode, 200, response.body);
+    const payload = response.json();
+    assert.deepEqual(payload.routeRefresh.segmentIds, ["route-1"]);
+    assert.deepEqual(payload.routeRefresh.refreshedSegmentIds, ["route-1"]);
+    assert.deepEqual(routeCalls, ["route-1"]);
+    const segments = payload.workspace.activePlan.presentation.routeSegments;
+    assert.deepEqual(segments.map((segment: { id: string; dayId?: string; verification: string }) => [segment.id, segment.dayId, segment.verification]), [
+      ["route-1", "day-1", "verified"],
+      ["route-2", "day-1", "needs_verification"],
+      ["route-3", "day-2", "needs_verification"]
+    ]);
+    assert.equal(payload.workspace.activePlan.version, plan.version + 1);
   } finally {
     await server.close();
     store.close();

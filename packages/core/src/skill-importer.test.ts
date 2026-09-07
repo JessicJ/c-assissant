@@ -66,6 +66,13 @@ test("Skill Importer adds a reasonableness pass for candidates and unverified mo
   assert.equal(blueprint.movements[0]?.status, "recheck");
   assert.equal(typeof blueprint.movements[0]?.durationMinutes, "number");
   assert.match(blueprint.movements[0]?.detail ?? "", /conservative planning estimate/);
+  assert.deepEqual(blueprint.movements[0]?.display, {
+    routeLabel: "Walk to Garden B",
+    refreshReason: "Refresh this route leg after itinerary verification.",
+    refreshScope: { dayId: "d1", originPlaceId: a!, destinationPlaceId: b!, reason: "unverified_route" },
+    showAsFormalRoute: true,
+    mapLineState: "needs_refresh"
+  });
 });
 
 test("Skill Importer preserves movement display intent into the Trip Blueprint", () => {
@@ -89,6 +96,7 @@ test("Skill Importer preserves movement display intent into the Trip Blueprint",
       display: {
         routeLabel: "  Reviewed lane walk  ",
         refreshReason: "  Refresh after direct edits.  ",
+        refreshScope: { dayId: " d1 ", originPlaceId: ` ${a!} `, destinationPlaceId: ` ${b!} `, reason: "direct_itinerary_edit" },
         showAsFormalRoute: true,
         mapLineState: "needs_refresh"
       },
@@ -98,8 +106,46 @@ test("Skill Importer preserves movement display intent into the Trip Blueprint",
   assert.deepEqual(blueprint.movements[0]?.display, {
     routeLabel: "Reviewed lane walk",
     refreshReason: "Refresh after direct edits.",
+    refreshScope: { dayId: "d1", originPlaceId: a!, destinationPlaceId: b!, reason: "direct_itinerary_edit" },
     showAsFormalRoute: true,
     mapLineState: "needs_refresh"
+  });
+});
+
+test("Skill Importer removes refresh intent from verified movements", () => {
+  const research = importSkillResearchBatches([{ ...batch(), places: batch().places.slice(0, 2) }], {
+    researchSetId: "research-1", generationKey: "generation-1", proposalRef: { sessionId: "session-1", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" }, createdAt: "2026-08-26T00:00:00.000Z", updatedAt: "2026-08-26T00:00:00.000Z"
+  });
+  const [a, b] = research.places.map((place) => place.id);
+  const sourceId = research.sources[0]!.id;
+  const blueprint = importSkillItinerary(research, {
+    title: "Tokyo", summary: "Tokyo", language: "en", destinations: ["Tokyo"], startDate: "2026-09-01", endDate: "2026-09-01",
+    days: [{ id: "d1", date: "2026-09-01", kind: "scheduled", city: "Tokyo", title: "Day", summary: "Flow", stops: [{ placeId: a!, order: 1 }, { placeId: b!, order: 2 }], candidatePlaceIds: [] }],
+    movements: [{
+      id: "a-b",
+      dayId: "d1",
+      originPlaceId: a!,
+      destinationPlaceId: b!,
+      mode: "walking",
+      status: "verified",
+      label: "Verified lane walk",
+      detail: "Verified detail.",
+      display: {
+        routeLabel: "Verified lane walk",
+        refreshReason: "This should not leak into Web.",
+        refreshScope: { dayId: "d1", originPlaceId: a!, destinationPlaceId: b!, reason: "direct_itinerary_edit" },
+        showAsFormalRoute: true,
+        mapLineState: "needs_refresh"
+      },
+      evidence: [{ sourceId, status: "verified", supports: ["route duration"] }]
+    }]
+  }, { blueprintId: "blueprint-1", blueprintVersion: 1, createdAt: "2026-08-26T01:00:00.000Z" });
+  assert.equal(blueprint.movements[0]?.status, "verified");
+  assert.deepEqual(blueprint.movements[0]?.display, {
+    routeLabel: "Verified lane walk",
+    showAsFormalRoute: true,
+    mapLineState: "formal"
   });
 });
 

@@ -5,9 +5,11 @@ import type { Plan, PlanPlacePriority, PlanPresentation } from "@c-assistant/cor
 import {
   buildPendingItineraryEditForWorkspace,
   buildPendingItineraryMoveForWorkspace,
+  buildPendingItineraryRemoveForWorkspace,
   buildBlueprintWorkspaceDisplay,
   detailDisplayForWorkspacePlace,
   filterGuideCards,
+  guideCardsForWorkspace,
   guideFilterLabel,
   itineraryDisplayForWorkspace,
   compactPendingItineraryEdits,
@@ -91,7 +93,8 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
   const timelineListRef = useRef<HTMLDivElement>(null);
   const itineraryDragRef = useRef<{ pointerId: number; placeId: string; activeDropId: string } | null>(null);
   const selectedDay = workspace.days.find((day) => day.id === selectedDayId) ?? workspace.days[0];
-  const selectedDetail = detailDisplayForWorkspacePlace(workspace, selectedPlaceId);
+  const guideCards = guideCardsForWorkspace(workspace, pendingEdits);
+  const selectedDetail = detailDisplayForWorkspacePlace(workspace, selectedPlaceId, pendingEdits);
   const itinerary = itineraryDisplayForWorkspace(workspace, selectedDay?.id ?? "", pendingEdits);
 
   useEffect(() => {
@@ -109,6 +112,14 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
     setSelectedPlaceId(placeId);
     setPlacementPlaceId(placeId);
     setPanelMode("placement");
+  }
+
+  function stageRemoveFromDay(placeId: string) {
+    const dayId = scheduledDayIdForPlace(workspace, placeId) ?? selectedDay?.id;
+    if (!dayId) return;
+    const edit = buildPendingItineraryRemoveForWorkspace(workspace, { dayId, placeId });
+    if (!edit) return;
+    stagePendingEdit(edit);
   }
 
   function stagePendingEdit(edit: PendingItineraryEditDisplay) {
@@ -223,6 +234,11 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
     setPanelMode("explore");
   }
 
+  function undoPendingEdit(placeId: string) {
+    setPendingEdits((current) => current.filter((edit) => edit.placeId !== placeId));
+    setSelectedPlaceId(placeId);
+  }
+
   async function confirmPendingEdits() {
     if (!pendingEdits.length || itineraryEditBusy || !onApplyItineraryEdits) return;
     try {
@@ -295,10 +311,10 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
         </div>
         <div className="blueprint-timeline-list" ref={timelineListRef}>
           {itinerary.items.map((item) => item.kind === "pending"
-            ? <PendingItineraryCard item={item} selected={selectedPlaceId === item.placeId} onSelect={() => selectPlace(item.placeId)} key={item.key} />
+            ? <PendingItineraryCard item={item} selected={selectedPlaceId === item.placeId} onSelect={() => selectPlace(item.placeId)} onUndoDraft={() => undoPendingEdit(item.placeId)} key={item.key} />
             : <Fragment key={item.key}>
               {item.reorderable ? <ItineraryDropZone dropId={`before-${item.key}`} active={dragOverDropId === `before-${item.key}`} /> : null}
-              <ItineraryBlockCard item={item} dragging={Boolean(item.placeId) && draggedPlaceId === item.placeId} selected={Boolean(item.placeId) && selectedPlaceId === item.placeId} onSelect={() => item.placeId ? selectPlace(item.placeId) : undefined} onDragStart={(event) => startItineraryCardDrag(event, item)} onDragMove={moveItineraryCardDrag} onDragEnd={endItineraryCardDrag} onDragCancel={cancelItineraryCardDrag} />
+              <ItineraryBlockCard item={item} dragging={Boolean(item.placeId) && draggedPlaceId === item.placeId} selected={Boolean(item.placeId) && selectedPlaceId === item.placeId} onSelect={() => item.placeId ? selectPlace(item.placeId) : undefined} onUndoDraft={() => undoPendingEdit(item.placeId)} onDragStart={(event) => startItineraryCardDrag(event, item)} onDragMove={moveItineraryCardDrag} onDragEnd={endItineraryCardDrag} onDragCancel={cancelItineraryCardDrag} />
             </Fragment>)}
           {itinerary.items.some((item) => item.reorderable) ? <ItineraryDropZone dropId="end" active={dragOverDropId === "end"} /> : null}
           {!itinerary.items.length ? <p className="blueprint-empty-note">No itinerary blocks are available for this day.</p> : null}
@@ -309,8 +325,8 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
 
       <aside className="blueprint-side-panel" aria-label="Itinerary side panel">
         <div className="blueprint-panel-body">
-          <ExplorePanel filters={workspace.guideFilters} cards={workspace.guideCards} filter={guideFilter} hidden={panelMode !== "explore"} onFilter={setGuideFilter} onSelect={selectPlace} onAdd={openPlacement} />
-          {selectedDetail ? <DetailPanel detail={selectedDetail} hidden={panelMode !== "detail"} onBack={() => setPanelMode("explore")} onSelect={selectPlace} onAdd={openPlacement} onPriorityChange={onUpdatePlacePriority} priorityBusy={priorityUpdateBusyPlaceId === selectedDetail.placeId} /> : <p className="blueprint-empty-note" hidden={panelMode !== "detail"}>Select an itinerary block or guide card to open details.</p>}
+          <ExplorePanel filters={workspace.guideFilters} cards={guideCards} filter={guideFilter} hidden={panelMode !== "explore"} onFilter={setGuideFilter} onSelect={selectPlace} onAdd={openPlacement} onUndoDraft={undoPendingEdit} />
+          {selectedDetail ? <DetailPanel detail={selectedDetail} hidden={panelMode !== "detail"} onBack={() => setPanelMode("explore")} onSelect={selectPlace} onAdd={openPlacement} onRemove={stageRemoveFromDay} onUndoDraft={undoPendingEdit} onPriorityChange={onUpdatePlacePriority} priorityBusy={priorityUpdateBusyPlaceId === selectedDetail.placeId} /> : <p className="blueprint-empty-note" hidden={panelMode !== "detail"}>Select an itinerary block or guide card to open details.</p>}
           {placementPlaceId ? <PlacementPanel key={placementPlaceId} workspace={workspace} place={workspace.places.find((place) => place.id === placementPlaceId)} hidden={panelMode !== "placement"} selectedDayId={selectedDay?.id} onBack={() => setPanelMode("explore")} onPreview={stagePendingEdit} /> : null}
         </div>
       </aside>
@@ -358,7 +374,7 @@ function scheduledBlockOrder(items: ItineraryCardDisplay[]): string[] {
   return items.filter((item) => item.kind === "block" && item.placeId && item.routeAnchor).map((item) => item.placeId);
 }
 
-function moveItineraryPlaceOrder(placeIds: string[], placeId: string, position: PendingItineraryEditDisplay["position"]): string[] {
+function moveItineraryPlaceOrder(placeIds: string[], placeId: string, position: NonNullable<PendingItineraryEditDisplay["position"]>): string[] {
   const next = placeIds.filter((candidate) => candidate !== placeId);
   let insertionIndex = 0;
   if (position.kind === "end") insertionIndex = next.length;
@@ -377,7 +393,7 @@ function ItineraryDropZone({ dropId, active }: { dropId: string; active: boolean
   return <div className={active ? "blueprint-itinerary-drop-zone active" : "blueprint-itinerary-drop-zone"} data-drop-id={dropId} />;
 }
 
-function ItineraryBlockCard({ item, selected, dragging, onSelect, onDragStart, onDragMove, onDragEnd, onDragCancel }: { item: ItineraryCardDisplay; selected: boolean; dragging: boolean; onSelect: () => void; onDragStart: (event: PointerEvent<HTMLElement>) => void; onDragMove: (event: PointerEvent<HTMLElement>) => void; onDragEnd: (event: PointerEvent<HTMLElement>) => void; onDragCancel: (event: PointerEvent<HTMLElement>) => void }) {
+function ItineraryBlockCard({ item, selected, dragging, onSelect, onUndoDraft, onDragStart, onDragMove, onDragEnd, onDragCancel }: { item: ItineraryCardDisplay; selected: boolean; dragging: boolean; onSelect: () => void; onUndoDraft: () => void; onDragStart: (event: PointerEvent<HTMLElement>) => void; onDragMove: (event: PointerEvent<HTMLElement>) => void; onDragEnd: (event: PointerEvent<HTMLElement>) => void; onDragCancel: (event: PointerEvent<HTMLElement>) => void }) {
   const className = [
     "blueprint-itinerary-block",
     selected ? "selected" : "",
@@ -391,22 +407,28 @@ function ItineraryBlockCard({ item, selected, dragging, onSelect, onDragStart, o
       <div>
         <strong>{item.title}</strong>
         {item.meta ? <small>{item.meta}</small> : null}
+        {item.contextualTip ? <p className="blueprint-itinerary-context-tip">{item.contextualTip}</p> : null}
         {item.statusLabel ? <em>{item.statusLabel}</em> : null}
         {item.routeStatusLabel ? <em className="route-refresh">{item.routeStatusLabel}</em> : null}
       </div>
     </button>
+    {item.draftActionLabel ? <button type="button" className="blueprint-itinerary-draft-action" onClick={onUndoDraft}>{item.draftActionLabel}</button> : null}
   </article>;
 }
 
-function PendingItineraryCard({ item, selected, onSelect }: { item: ItineraryCardDisplay; selected: boolean; onSelect: () => void }) {
-  return <button type="button" className={`blueprint-itinerary-block blueprint-itinerary-block-pending${selected ? " selected" : ""}`} aria-label={`Pending itinerary edit for ${item.title}`} onClick={onSelect}>
-    <span>{item.timeLabel}</span>
-    <div>
-      <strong>{item.title}</strong>
-      {item.meta ? <small>{item.meta}</small> : null}
-      {item.statusLabel ? <em>{item.statusLabel}</em> : null}
-    </div>
-  </button>;
+function PendingItineraryCard({ item, selected, onSelect, onUndoDraft }: { item: ItineraryCardDisplay; selected: boolean; onSelect: () => void; onUndoDraft: () => void }) {
+  return <article className={`blueprint-itinerary-block blueprint-itinerary-block-pending${selected ? " selected" : ""}`}>
+    <button type="button" className="blueprint-itinerary-card-main" aria-label={`Pending itinerary edit for ${item.title}`} onClick={onSelect}>
+      <span>{item.timeLabel}</span>
+      <div>
+        <strong>{item.title}</strong>
+        {item.meta ? <small>{item.meta}</small> : null}
+        {item.contextualTip ? <p className="blueprint-itinerary-context-tip">{item.contextualTip}</p> : null}
+        {item.statusLabel ? <em>{item.statusLabel}</em> : null}
+      </div>
+    </button>
+    {item.draftActionLabel ? <button type="button" className="blueprint-itinerary-draft-action" onClick={onUndoDraft}>{item.draftActionLabel}</button> : null}
+  </article>;
 }
 
 function BlueprintMap(props: { routePlaces: BlueprintMapPointDisplay[]; routeSegments: BlueprintRouteSegmentDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; onRequestRouteRefresh?: ((refresh: ItineraryRouteRefreshDisplay) => void) | undefined; routeRefreshBusy?: boolean }) {
@@ -636,17 +658,18 @@ function MapRouteRefreshHeader({ routeRefresh, onRequestRouteRefresh, routeRefre
   const pendingConfirmation = routeRefresh.actionable === false;
   return <header className="blueprint-map-status">
     <div>
-      <h3>{pendingConfirmation ? "Routes will be checked" : "Routes need refresh"}</h3>
+      <h3>{pendingConfirmation ? "Routes will be checked" : `Routes need refresh for ${routeRefresh.dayLabel}`}</h3>
       <p>{routeRefresh.summary}</p>
+      {routeRefresh.impactNotes?.length ? <ul className="blueprint-map-impact-notes">{routeRefresh.impactNotes.map((note) => <li key={note}>{note}</li>)}</ul> : null}
     </div>
     <div className="blueprint-map-status-actions">
-      <span>{pendingConfirmation ? "After confirm" : "Routes need refresh"}</span>
+      <span>{pendingConfirmation ? "After confirm" : `${routeRefresh.dayLabel} routes`}</span>
       {canRefresh && requestRouteRefresh ? <button type="button" disabled={routeRefreshBusy} onClick={() => requestRouteRefresh(routeRefresh)}>{routeRefreshBusy ? "Refreshing..." : "Refresh routes"}</button> : null}
     </div>
   </header>;
 }
 
-function ExplorePanel({ filters, cards, filter, hidden, onFilter, onSelect, onAdd }: { filters: readonly Exclude<GuideFilter, "all">[]; cards: GuideCardDisplay[]; filter: GuideFilter; hidden: boolean; onFilter: (filter: GuideFilter) => void; onSelect: (placeId: string) => void; onAdd: (placeId: string) => void }) {
+function ExplorePanel({ filters, cards, filter, hidden, onFilter, onSelect, onAdd, onUndoDraft }: { filters: readonly Exclude<GuideFilter, "all">[]; cards: GuideCardDisplay[]; filter: GuideFilter; hidden: boolean; onFilter: (filter: GuideFilter) => void; onSelect: (placeId: string) => void; onAdd: (placeId: string) => void; onUndoDraft: (placeId: string) => void }) {
   const visibleCards = filterGuideCards(cards, { type: filter });
   return <div className="blueprint-explore-panel blueprint-panel-view" hidden={hidden}>
     <header><h3>Explore</h3></header>
@@ -658,14 +681,14 @@ function ExplorePanel({ filters, cards, filter, hidden, onFilter, onSelect, onAd
           <p>{card.summary}</p>
           {card.tags.length ? <div className="blueprint-guide-tags">{card.tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
         </button>
-        {(card.footerNote || card.canAdd) ? <footer>{card.footerNote ? <span>{card.footerNote}</span> : <span />}{card.canAdd && card.actionLabel ? <button type="button" onClick={() => onAdd(card.placeId)}>{card.actionLabel}</button> : null}</footer> : null}
+        {(card.footerNote || card.canAdd || card.draftActionLabel) ? <footer>{card.footerNote ? <span>{card.footerNote}</span> : <span />}{card.canAdd && card.actionLabel ? <button type="button" onClick={() => onAdd(card.placeId)}>{card.actionLabel}</button> : null}{card.draftActionLabel ? <button type="button" className="secondary" onClick={() => onUndoDraft(card.placeId)}>{card.draftActionLabel}</button> : null}</footer> : null}
       </article>)}
       {!visibleCards.length ? <p className="blueprint-empty-note">No guide cards match these filters.</p> : null}
     </div>
   </div>;
 }
 
-function DetailPanel({ detail, hidden, onBack, onSelect, onAdd, onPriorityChange, priorityBusy = false }: { detail: DetailPlaceDisplay; hidden: boolean; onBack: () => void; onSelect: (placeId: string) => void; onAdd: (placeId: string) => void; onPriorityChange?: ((placeId: string, priority: PlanPlacePriority) => Promise<void>) | undefined; priorityBusy?: boolean }) {
+function DetailPanel({ detail, hidden, onBack, onSelect, onAdd, onRemove, onUndoDraft, onPriorityChange, priorityBusy = false }: { detail: DetailPlaceDisplay; hidden: boolean; onBack: () => void; onSelect: (placeId: string) => void; onAdd: (placeId: string) => void; onRemove: (placeId: string) => void; onUndoDraft: (placeId: string) => void; onPriorityChange?: ((placeId: string, priority: PlanPlacePriority) => Promise<void>) | undefined; priorityBusy?: boolean }) {
   return <div className="blueprint-detail-panel blueprint-panel-view" hidden={hidden}>
     <header>
       <button type="button" className="blueprint-detail-back" aria-label="Back to explore" onClick={onBack}><span aria-hidden="true" /></button>
@@ -677,6 +700,7 @@ function DetailPanel({ detail, hidden, onBack, onSelect, onAdd, onPriorityChange
         if (action.active) return;
         void onPriorityChange?.(detail.placeId, action.priority);
       }} key={action.priority}>{action.label}</button>)}</div>
+      {detail.itineraryDraftNote ? <p>{detail.itineraryDraftNote}</p> : null}
       {detail.priorityBlockedNote ? <p>{detail.priorityBlockedNote}</p> : null}
     </section>
     <section><h4>{detail.leadTitle}</h4><p>{detail.leadBody}</p></section>
@@ -696,6 +720,8 @@ function DetailPanel({ detail, hidden, onBack, onSelect, onAdd, onPriorityChange
     </div></section> : null}
     <section className="blueprint-detail-actions">
       {detail.scheduled || detail.canAdd ? <button type="button" onClick={() => detail.scheduled ? onSelect(detail.placeId) : onAdd(detail.placeId)}>{detail.primaryActionLabel}</button> : <span>{detail.primaryActionLabel}</span>}
+      {detail.scheduled && (detail.canRemoveFromDay || detail.removeBlockedReason) ? <button type="button" className="secondary" disabled={!detail.canRemoveFromDay} title={detail.removeBlockedReason} onClick={() => onRemove(detail.placeId)}>{detail.removeActionLabel ?? detail.removeBlockedReason ?? "Remove from day"}</button> : null}
+      {detail.draftActionLabel ? <button type="button" className="secondary" onClick={() => onUndoDraft(detail.placeId)}>{detail.draftActionLabel}</button> : null}
       {detail.links.map((link) => <a href={link.url} target="_blank" rel="noreferrer" key={`${link.label}-${link.url}`}>{link.label}</a>)}
     </section>
   </div>;

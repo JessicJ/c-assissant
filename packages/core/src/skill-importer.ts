@@ -711,23 +711,66 @@ function enrichMovement(movement: BlueprintMovement, origin?: BlueprintPlace, de
   const inferredMode = movement.mode === "unknown" ? inferMovementMode(origin, destination) : movement.mode;
   const durationMinutes = movement.durationMinutes ?? estimateMovementMinutes(origin, destination, inferredMode);
   const status = movement.status === "verified" && evidenceIsFullyVerified(movement.evidence) ? "verified" : "recheck";
+  const label = movement.label?.trim() || movementLabel(inferredMode, destination);
+  const detail = movement.detail?.trim() || movementDetail(inferredMode, durationMinutes);
+  const display = normalizeMovementDisplayForStatus(movement, normalizeMovementDisplay(movement.display), status, label);
   return {
     ...movement,
     mode: inferredMode,
     status,
     ...(durationMinutes ? { durationMinutes } : {}),
-    label: movement.label?.trim() || movementLabel(inferredMode, destination),
-    detail: movement.detail?.trim() || movementDetail(inferredMode, durationMinutes),
-    ...(movement.display ? { display: normalizeMovementDisplay(movement.display) } : {})
+    label,
+    detail,
+    ...(display ? { display } : {})
   };
 }
 
-function normalizeMovementDisplay(display: NonNullable<BlueprintMovement["display"]>): NonNullable<BlueprintMovement["display"]> {
+function normalizeMovementDisplay(display: BlueprintMovement["display"]): NonNullable<BlueprintMovement["display"]> | undefined {
+  if (!display) return undefined;
   return {
     ...(display.routeLabel?.trim() ? { routeLabel: display.routeLabel.trim() } : {}),
     ...(display.refreshReason?.trim() ? { refreshReason: display.refreshReason.trim() } : {}),
+    ...(display.refreshScope ? { refreshScope: normalizeMovementRefreshScope(display.refreshScope) } : {}),
     ...(display.showAsFormalRoute === undefined ? {} : { showAsFormalRoute: display.showAsFormalRoute }),
     ...(display.mapLineState ? { mapLineState: display.mapLineState } : {})
+  };
+}
+
+function normalizeMovementDisplayForStatus(movement: BlueprintMovement, display: NonNullable<BlueprintMovement["display"]> | undefined, status: BlueprintMovement["status"], label: string): NonNullable<BlueprintMovement["display"]> | undefined {
+  if (status === "verified") {
+    if (!display) return undefined;
+    const { refreshReason: _refreshReason, refreshScope: _refreshScope, ...rest } = display;
+    const mapLineState = rest.mapLineState === "needs_refresh" ? "formal" : rest.mapLineState;
+    return compactMovementDisplay({
+      ...rest,
+      ...(mapLineState ? { mapLineState } : {})
+    });
+  }
+  return compactMovementDisplay({
+    ...display,
+    routeLabel: display?.routeLabel ?? label,
+    refreshReason: display?.refreshReason ?? "Refresh this route leg after itinerary verification.",
+    refreshScope: display?.refreshScope ?? {
+      dayId: movement.dayId,
+      originPlaceId: movement.originPlaceId,
+      destinationPlaceId: movement.destinationPlaceId,
+      reason: "unverified_route"
+    },
+    showAsFormalRoute: display?.showAsFormalRoute ?? true,
+    mapLineState: display?.mapLineState ?? "needs_refresh"
+  });
+}
+
+function compactMovementDisplay(display: NonNullable<BlueprintMovement["display"]>): NonNullable<BlueprintMovement["display"]> | undefined {
+  return Object.keys(display).length ? display : undefined;
+}
+
+function normalizeMovementRefreshScope(scope: NonNullable<BlueprintMovement["display"]>["refreshScope"]): NonNullable<NonNullable<BlueprintMovement["display"]>["refreshScope"]> {
+  return {
+    dayId: scope?.dayId?.trim() ?? "",
+    originPlaceId: scope?.originPlaceId?.trim() ?? "",
+    destinationPlaceId: scope?.destinationPlaceId?.trim() ?? "",
+    reason: scope?.reason ?? "unverified_route"
   };
 }
 

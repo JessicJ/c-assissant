@@ -263,7 +263,10 @@ function parseDirectBlueprintRevision(value: unknown, createdAt: string): Direct
   if (value.kind === "update_place_priority") {
     return { kind: "update_place_priority", placeId: stringField(value, "placeId"), priority: directRevisionPlacePriority(value.priority), createdAt };
   }
-  if (value.kind !== "add_place_to_day" && value.kind !== "move_place_within_day") throw new Error("Direct itinerary edits currently support adding or moving a place within a day, or updating a place status.");
+  if (value.kind === "remove_place_from_day") {
+    return { kind: "remove_place_from_day", placeId: stringField(value, "placeId"), dayId: stringField(value, "dayId"), createdAt };
+  }
+  if (value.kind !== "add_place_to_day" && value.kind !== "move_place_within_day") throw new Error("Direct itinerary edits currently support adding, moving, or removing a place within a day, or updating a place status.");
   const placeId = stringField(value, "placeId");
   const dayId = stringField(value, "dayId");
   const position = directRevisionPosition(value.position);
