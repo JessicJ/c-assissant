@@ -1795,6 +1795,10 @@ test("SQLite persists recoverable Blueprint checkpoints, events, lineage, and ex
   assert.equal(routeRefresh.workspace.activePlan.version, batchWorkspace.activePlan.version + 1);
   assert.equal(routeRefresh.workspace.activeBlueprint?.version, 5);
   assert.deepEqual(routeRefresh.workspace.activeBlueprint?.movements.map((movement) => [movement.id, movement.status, movement.durationMinutes, movement.distanceMeters]), [["movement-d1-1", "verified", 9, 850], ["movement-d1-2", "recheck", undefined, undefined]]);
+  assert.deepEqual(routeRefresh.workspace.activeBlueprint?.movements.map((movement) => [movement.id, movement.display?.mapLineState, movement.display?.refreshReason ?? ""]), [
+    ["movement-d1-1", "formal", ""],
+    ["movement-d1-2", "needs_refresh", "Refresh this route leg after direct itinerary edits."]
+  ]);
   assert.deepEqual(routeRefresh.workspace.activeBlueprint?.movements[0]?.evidence, [{ sourceId: "google_maps", status: "verified", checkedAt: "2026-08-26T00:06:00.000Z", supports: ["route duration", "route distance"] }]);
   assert.deepEqual(routeRefresh.workspace.activeBlueprint?.days[0]?.blocks?.map((block) => [block.id, block.kind, block.placeId ?? "", block.startTime ?? ""]), [
     ["block-b", "stop", "b", "09:00"],
@@ -1803,6 +1807,7 @@ test("SQLite persists recoverable Blueprint checkpoints, events, lineage, and ex
     ["block-a", "stop", "a", "10:30"]
   ]);
   assert.equal(routeRefresh.workspace.activePlan.presentation?.routeSegments[0]?.verification, "verified");
+  assert.equal(routeRefresh.workspace.activePlan.presentation?.routeSegments[0]?.display?.mapLineState, "formal");
   assert.equal(store.getPlanBlueprintLineage(routeRefresh.workspace.activePlan.id)?.blueprintVersion, 5);
   assert.equal(store.getPlanBlueprintLineage(routeRefresh.workspace.activePlan.id)?.planVersion, routeRefresh.workspace.activePlan.version);
 

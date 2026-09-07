@@ -1235,6 +1235,7 @@ export class SqliteWorkspaceStore {
           ...(durationMinutes ? { durationMinutes } : {}),
           ...(segment.label ?? movement.label ? { label: segment.label ?? movement.label } : {}),
           ...(segment.detail ?? movement.detail ? { detail: segment.detail ?? movement.detail } : {}),
+          display: refreshedBlueprintMovementDisplay(movement, segment),
           evidence: [{
             sourceId: providerSource.id,
             status: "verified" as const,
@@ -3701,6 +3702,23 @@ function routeRefreshProviderSource(provider: "google_maps", observedAt: string)
     url: "https://www.google.com/maps",
     retrievedAt: observedAt,
     status: "verified"
+  };
+}
+
+function refreshedBlueprintMovementDisplay(movement: BlueprintMovement, segment: PlanRouteSegment): NonNullable<BlueprintMovement["display"]> {
+  const routeLabel = segment.label?.trim() || movement.display?.routeLabel?.trim() || movement.label?.trim() || "Reviewed route";
+  if (segment.verification === "stale") {
+    return {
+      routeLabel,
+      refreshReason: "This refreshed route conflicts with a fixed itinerary time and still needs replanning.",
+      showAsFormalRoute: movement.display?.showAsFormalRoute ?? true,
+      mapLineState: "needs_refresh"
+    };
+  }
+  return {
+    routeLabel,
+    showAsFormalRoute: movement.display?.showAsFormalRoute ?? true,
+    mapLineState: "formal"
   };
 }
 

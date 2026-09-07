@@ -254,8 +254,13 @@ test("presentation route refresh endpoint writes route facts back to the Trip Bl
     assert.equal(payload.workspace.activePlan.version, plan.version + 1);
     assert.equal(payload.workspace.activeBlueprint.version, 3);
     assert.deepEqual(payload.workspace.activeBlueprint.movements.map((movement: { id: string; status: string; durationMinutes?: number; distanceMeters?: number }) => [movement.id, movement.status, movement.durationMinutes, movement.distanceMeters]), [["movement-d1-1", "verified", 9, 700], ["movement-d1-2", "recheck", undefined, undefined]]);
+    assert.deepEqual(payload.workspace.activeBlueprint.movements.map((movement: { id: string; display?: { mapLineState?: string; refreshReason?: string } }) => [movement.id, movement.display?.mapLineState, movement.display?.refreshReason ?? ""]), [
+      ["movement-d1-1", "formal", ""],
+      ["movement-d1-2", "needs_refresh", "Refresh this route leg after direct itinerary edits."]
+    ]);
     assert.equal(payload.workspace.activeBlueprint.movements[0].evidence[0].sourceId, "google_maps");
     assert.equal(payload.workspace.activePlan.presentation.routeSegments[0].verification, "verified");
+    assert.equal(payload.workspace.activePlan.presentation.routeSegments[0].display.mapLineState, "formal");
     assert.equal(store.getPlanBlueprintLineage(plan.id)?.blueprintVersion, 3);
   } finally {
     await server.close();
@@ -313,8 +318,11 @@ test("single presentation route refresh endpoint writes route facts back to the 
     assert.equal(payload.workspace.activeBlueprint.version, 3);
     assert.equal(payload.workspace.activeBlueprint.movements[0].status, "verified");
     assert.equal(payload.workspace.activeBlueprint.movements[0].durationMinutes, 9);
+    assert.equal(payload.workspace.activeBlueprint.movements[0].display.mapLineState, "formal");
     assert.equal(payload.workspace.activePlan.presentation.routeSegments[0].verification, "verified");
+    assert.equal(payload.workspace.activePlan.presentation.routeSegments[0].display.mapLineState, "formal");
     assert.equal(payload.segment.verification, "verified");
+    assert.equal(payload.segment.display.mapLineState, "formal");
     assert.equal(store.getPlanBlueprintLineage(plan.id)?.blueprintVersion, 3);
   } finally {
     await server.close();
