@@ -161,6 +161,26 @@ test("direct Blueprint Revision route adds a place without using assisted replan
     assert.equal(payload.revision.revisionCount, 1);
     assert.deepEqual(payload.revision.affectedDayIds, ["d1"]);
     assert.deepEqual(payload.revision.affectedPlaceIds, ["b", "a"]);
+    assert.deepEqual(payload.revision.routeImpact.days.map((day: { dayId: string; addedPlaceIds: string[]; movementIds: string[]; requiresTimingReview: boolean; requiresMealRestSpacingReview: boolean; readiness: string }) => ({
+      dayId: day.dayId,
+      addedPlaceIds: day.addedPlaceIds,
+      movementIds: day.movementIds,
+      requiresTimingReview: day.requiresTimingReview,
+      requiresMealRestSpacingReview: day.requiresMealRestSpacingReview,
+      readiness: day.readiness
+    })), [{
+      dayId: "d1",
+      addedPlaceIds: ["b"],
+      movementIds: ["movement-d1-1"],
+      requiresTimingReview: true,
+      requiresMealRestSpacingReview: true,
+      readiness: "ready_for_route_refresh"
+    }]);
+    assert.deepEqual(payload.revision.replanReadiness, {
+      status: "ready_for_route_refresh",
+      dayIds: ["d1"],
+      reason: "These direct itinerary edits are saved, but affected routes and timing still need refresh before execution."
+    });
     assert.equal(store.getPlanBlueprintLineage(workspace.activePlan.id)?.blueprintVersion, 2);
 
     const priorityResponse = await server.inject({
@@ -358,6 +378,156 @@ test("direct Blueprint Revision route applies batched add and move edits once", 
     assert.equal(afterInvalidRequests.activeBlueprint?.version, 4);
     assert.equal(afterInvalidRequests.activePlan.version, workspace.activePlan.version);
     assert.deepEqual(afterInvalidRequests.activeBlueprint?.days[0]?.stops.map((stop) => stop.placeId), ["a", "c", "b"]);
+  } finally {
+    await server.close();
+    store.close();
+  }
+});
+
+test("direct Blueprint Revision route returns structured assisted replanning requirements", async () => {
+  const server = Fastify({ logger: false });
+  const store = new SqliteWorkspaceStore(":memory:");
+  try {
+    registerPlanManagementRoutes(server, {
+      store,
+      getMaps: () => maps,
+      startActivePlanMonitoring: () => {},
+      getGeneratingPlan: () => false
+    });
+    const session = store.createPlanningSession("travel", new Date("2026-08-26T00:00:00.000Z"));
+    const proposal = { version: 1, title: "Tokyo", objective: "Visit Tokyo", theme: "Culture", segments: ["Tokyo"], skeleton: ["2026-09-01"], tradeoffs: [], assumptions: [], decisionPoints: [] };
+    store.savePlanningSession({ ...session, status: "proposal_ready", proposal, updatedAt: "2026-08-26T00:00:01.000Z" });
+    store.confirmPlanningSession(session.id, 1);
+    const generationKey = `${session.id}:1:interactive-trip-planner@0.2.0`;
+    store.saveBlueprintGeneration({
+      generationKey,
+      proposalRef: { sessionId: session.id, proposalVersion: 1 },
+      skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+      status: "running",
+      stage: "research",
+      createdAt: "2026-08-26T00:00:02.000Z",
+      updatedAt: "2026-08-26T00:00:02.000Z"
+    });
+    const places = ["a", "b"].map((id) => ({
+      id,
+      name: id === "a" ? "Morning anchor" : "Faraway dinner",
+      locationLabel: "Tokyo",
+      city: "Tokyo",
+      category: id === "a" ? "sight" : "restaurant",
+      priority: "preferred" as const,
+      coordinates: [35.68, 139.76] as [number, number],
+      whyWorthIt: `Why ${id}`,
+      plan: `Visit ${id}`,
+      ...(id === "b" ? { schedulingEligibility: { decision: "high_impact" as const, reason: "Requires another city day.", highImpactReasons: ["Different city"] } } : {}),
+      evidence: []
+    }));
+    const research: ResearchSet = {
+      schemaVersion: TRIP_BLUEPRINT_SCHEMA_VERSION,
+      id: "research-tokyo-structured-replan",
+      generationKey,
+      proposalRef: { sessionId: session.id, proposalVersion: 1 },
+      skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+      status: "completed",
+      batches: [{ id: "tokyo", scopeLabel: "Tokyo", status: "completed", placeIds: ["a", "b"], eventIds: [], sourceIds: [], completedAt: "2026-08-26T00:01:00.000Z" }],
+      places,
+      events: [],
+      sources: [],
+      actionRequirements: [],
+      createdAt: "2026-08-26T00:00:02.000Z",
+      updatedAt: "2026-08-26T00:01:00.000Z",
+      completedAt: "2026-08-26T00:01:00.000Z"
+    };
+    store.saveResearchSet(research);
+    const blueprint: TripBlueprint = {
+      schemaVersion: TRIP_BLUEPRINT_SCHEMA_VERSION,
+      id: "blueprint-tokyo-structured-replan",
+      version: 1,
+      generationKey,
+      proposalRef: research.proposalRef,
+      skillLineage: research.skillLineage,
+      researchSetId: research.id,
+      title: "Tokyo",
+      summary: "Tokyo plan",
+      language: "en",
+      destinations: ["Tokyo"],
+      startDate: "2026-09-01",
+      endDate: "2026-09-01",
+      places,
+      events: [],
+      sources: [],
+      days: [{ id: "d1", date: "2026-09-01", kind: "scheduled", city: "Tokyo", title: "Day one", summary: "One stop", stops: [{ placeId: "a", order: 1 }], candidatePlaceIds: ["b"] }],
+      movements: [],
+      actionRequirements: [],
+      createdAt: "2026-08-26T00:02:00.000Z"
+    };
+    store.saveTripBlueprint(blueprint);
+    const compiled = store.createCompiledBlueprintPlan(compileTripBlueprint(blueprint, { createdAt: "2026-08-26T00:02:01.000Z" })).activePlan;
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/plans/${compiled.id}/blueprint-revisions/direct`,
+      payload: { kind: "add_place_to_day", expectedVersion: compiled.version, expectedBlueprintVersion: 1, placeId: "b", dayId: "d1", position: { kind: "end" } }
+    });
+
+    assert.equal(response.statusCode, 409, response.body);
+    const payload = response.json();
+    assert.equal(payload.code, "assisted_replanning_required");
+    assert.equal(payload.replanRequirement.status, "assisted_replanning_required");
+    assert.equal(payload.replanRequirement.reasonCode, "high_impact_place");
+    assert.equal(payload.replanRequirement.editKind, "add_place_to_day");
+    assert.deepEqual(payload.replanRequirement.affectedDayIds, ["d1"]);
+    assert.deepEqual(payload.replanRequirement.affectedPlaceIds, ["b", "a"]);
+    assert.match(payload.replanRequirement.explanation, /needs to replan/i);
+    assert.match(payload.replanRequirement.suggestedRequest, /Replan the affected itinerary day/i);
+    assert.equal(payload.workspace, undefined);
+    assert.equal(store.getWorkspace().activeBlueprint?.version, 1);
+
+    const assisted = await server.inject({
+      method: "POST",
+      url: `/api/plans/${compiled.id}/blueprint-revisions/assisted-replanning`,
+      payload: {
+        expectedVersion: compiled.version,
+        expectedBlueprintVersion: 1,
+        replanRequirement: payload.replanRequirement,
+        revisions: [{ kind: "add_place_to_day", placeId: "b", dayId: "d1", position: { kind: "end" } }]
+      }
+    });
+    assert.equal(assisted.statusCode, 200, assisted.body);
+    const assistedPayload = assisted.json();
+    assert.equal(assistedPayload.workspace.activeBlueprint.version, 1);
+    assert.equal(assistedPayload.handoff.status, "ready_for_assisted_replanning");
+    assert.equal(assistedPayload.handoff.baseBlueprintVersion, 1);
+    assert.deepEqual(assistedPayload.handoff.affectedDayIds, ["d1"]);
+    assert.deepEqual(assistedPayload.handoff.affectedPlaceIds, ["b", "a"]);
+    assert.match(assistedPayload.handoff.request, /Replan the affected itinerary day for Tokyo/);
+    assert.match(assistedPayload.handoff.request, /Add Faraway dinner at the end of the day on 2026-09-01/);
+    assert.equal(store.getWorkspace().activeBlueprint?.version, 1);
+
+    const stalePlan = await server.inject({
+      method: "POST",
+      url: `/api/plans/${compiled.id}/blueprint-revisions/assisted-replanning`,
+      payload: {
+        expectedVersion: compiled.version + 1,
+        expectedBlueprintVersion: 1,
+        replanRequirement: payload.replanRequirement,
+        revisions: [{ kind: "add_place_to_day", placeId: "b", dayId: "d1", position: { kind: "end" } }]
+      }
+    });
+    assert.equal(stalePlan.statusCode, 409, stalePlan.body);
+    assert.match(stalePlan.json().error, /Plan changed/i);
+
+    const staleBlueprint = await server.inject({
+      method: "POST",
+      url: `/api/plans/${compiled.id}/blueprint-revisions/assisted-replanning`,
+      payload: {
+        expectedVersion: compiled.version,
+        expectedBlueprintVersion: 2,
+        replanRequirement: payload.replanRequirement,
+        revisions: [{ kind: "add_place_to_day", placeId: "b", dayId: "d1", position: { kind: "end" } }]
+      }
+    });
+    assert.equal(staleBlueprint.statusCode, 409, staleBlueprint.body);
+    assert.match(staleBlueprint.json().error, /Trip Blueprint changed/i);
   } finally {
     await server.close();
     store.close();

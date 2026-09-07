@@ -1,6 +1,6 @@
 import { useState } from "react";
-import type { DestinationArrivalEvent, DirectBlueprintRevisionBatchMetadata, Plan, PlanChangeSet, PlanPlacePriority, PlanReplacementAudit, TripBlueprint, WorkspaceSnapshot } from "@c-assistant/core";
-import { abandonActivePlan, applyDirectBlueprintRevisionBatch, deletePlan, refreshPlanRoutes, sendAgentChat, undoPlanReplacement } from "./api-client.js";
+import type { DestinationArrivalEvent, DirectBlueprintReplanRequirement, DirectBlueprintRevisionBatchMetadata, Plan, PlanChangeSet, PlanPlacePriority, PlanReplacementAudit, TripBlueprint, WorkspaceSnapshot } from "@c-assistant/core";
+import { abandonActivePlan, ApiRequestError, applyDirectBlueprintRevisionBatch, deletePlan, prepareDirectBlueprintAssistedReplanning, refreshPlanRoutes, sendAgentChat, undoPlanReplacement, type DirectBlueprintRevisionInput } from "./api-client.js";
 import { BookingImportPanel } from "./BookingImportPanel.js";
 import { LandiBlueprintWorkspace } from "./LandiBlueprintWorkspace.js";
 import { PlanMapWorkspace } from "./PlanMapWorkspace.js";
@@ -19,6 +19,50 @@ type PlanWorkspaceView = "plan" | "preparation" | "bookings" | "decisions" | "re
 
 function itineraryRevisionImpactStatus(revision: DirectBlueprintRevisionBatchMetadata, presentation?: Plan["presentation"]): string {
   return appliedItineraryRevisionSummary(revision, presentation).statusText;
+}
+
+function directReplanRequirementFromError(caught: unknown): DirectBlueprintReplanRequirement | undefined {
+  const payload = caught instanceof ApiRequestError
+    ? caught.payload
+    : caught && typeof caught === "object" && "payload" in caught
+      ? (caught as { payload?: unknown }).payload
+      : undefined;
+  if (!payload || typeof payload !== "object") return undefined;
+  const requirement = (payload as { replanRequirement?: unknown }).replanRequirement;
+  if (!requirement || typeof requirement !== "object") return undefined;
+  const candidate = requirement as Partial<DirectBlueprintReplanRequirement>;
+  if (candidate.status !== "assisted_replanning_required" || typeof candidate.explanation !== "string") return undefined;
+  return candidate as DirectBlueprintReplanRequirement;
+}
+
+function directReplanRequirementStatus(requirement: DirectBlueprintReplanRequirement): string {
+  return `${requirement.explanation} Your draft is still here.`;
+}
+
+function directBlueprintRevisionInputs(edits: PendingItineraryEditDisplay[]): DirectBlueprintRevisionInput[] {
+  return edits.map((edit) => edit.kind === "remove_place_from_day"
+    ? { kind: edit.kind, placeId: edit.placeId, dayId: edit.dayId }
+    : {
+      kind: edit.kind,
+      placeId: edit.placeId,
+      dayId: edit.dayId,
+      position: edit.position!
+    });
+}
+
+function assistedReplanningPreparedStatus(dayCount: number): string {
+  const dayText = dayCount === 1 ? "the affected day" : `${dayCount} affected days`;
+  return `Landi prepared a replanning request for ${dayText}.`;
+}
+
+function assistedReplanningAppliedStatus(dayCount: number): string {
+  const dayText = dayCount === 1 ? "the affected day" : `${dayCount} affected days`;
+  return `Landi updated ${dayText}. Review the refreshed draft before confirming the plan.`;
+}
+
+function assistedReplanningPreparationFailedStatus(requirement: DirectBlueprintReplanRequirement, caught: unknown): string {
+  const detail = caught instanceof Error ? caught.message : "The preparation step could not start.";
+  return `${requirement.explanation} ${detail} Your draft is still here.`;
 }
 
 export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanChange, latestPlanReplacement, onRevise, onTaskToggle, onTaskReorder, onUndoChange, onConfirm, onWorkspace, onStatus, onError, onOperationBusy, confirming }: { plan: Plan; blueprint?: TripBlueprint | undefined; destinationArrivals: DestinationArrivalEvent[]; latestPlanChange?: PlanChangeSet | undefined; latestPlanReplacement?: PlanReplacementAudit | undefined; onRevise: (message?: string) => void; onTaskToggle: (planId: string, taskId: string, checked: boolean) => Promise<void>; onTaskReorder: (planId: string, taskId: string, direction: "up" | "down") => Promise<void>; onUndoChange: (planId: string, changeId: string) => Promise<void>; onConfirm: (planId: string) => Promise<void>; onWorkspace: (workspace: WorkspaceSnapshot) => Promise<void>; onStatus: (status: AgentStatus) => void; onError: (message: string) => void; onOperationBusy: (busy: boolean) => void; confirming: boolean }) {
@@ -83,28 +127,49 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
   }
   async function applyBlueprintItineraryEdits(edits: PendingItineraryEditDisplay[]) {
     if (applyingItineraryEdits) return;
+    const compactEdits = compactPendingItineraryEdits(edits);
+    const revisions = directBlueprintRevisionInputs(compactEdits);
     setApplyingItineraryEdits(true);
     onOperationBusy(true);
     onError("");
     onStatus({ tone: "working", text: "Updating the itinerary…" });
     try {
-      const compactEdits = compactPendingItineraryEdits(edits);
       if (!compactEdits.length) throw new Error("There were no itinerary edits to apply.");
       const payload = await applyDirectBlueprintRevisionBatch(plan.id, {
         ...planReadModel.mutationVersion,
-        revisions: compactEdits.map((edit) => edit.kind === "remove_place_from_day"
-          ? { kind: edit.kind, placeId: edit.placeId, dayId: edit.dayId }
-          : {
-            kind: edit.kind,
-            placeId: edit.placeId,
-            dayId: edit.dayId,
-            position: edit.position!
-          })
+        revisions
       });
       await onWorkspace(payload.workspace);
       onStatus({ tone: "success", text: itineraryRevisionImpactStatus(payload.revision, presentation) });
     } catch (caught) {
-      const messageText = caught instanceof Error ? caught.message : "Landi could not update the itinerary.";
+      const replanRequirement = directReplanRequirementFromError(caught);
+      let messageText = replanRequirement
+        ? directReplanRequirementStatus(replanRequirement)
+        : caught instanceof Error ? caught.message : "Landi could not update the itinerary.";
+      if (replanRequirement && revisions.length) {
+        try {
+          const payload = await prepareDirectBlueprintAssistedReplanning(plan.id, {
+            ...planReadModel.mutationVersion,
+            replanRequirement,
+            revisions
+          });
+          onStatus({ tone: "working", text: assistedReplanningPreparedStatus(payload.handoff.affectedDayIds.length) });
+          const replanned = await sendAgentChat({
+            mode: "revise_plan",
+            message: payload.handoff.request,
+            expectedPlanId: plan.id,
+            expectedVersion: plan.version,
+            impactConfirmed: true,
+            assistedReplanning: payload.handoff
+          });
+          if (!replanned.workspace) throw new Error(replanned.error ?? "Landi could not replan the affected itinerary day.");
+          await onWorkspace(replanned.workspace);
+          onStatus({ tone: "success", text: assistedReplanningAppliedStatus(payload.handoff.affectedDayIds.length) });
+          return;
+        } catch (handoffCaught) {
+          messageText = assistedReplanningPreparationFailedStatus(replanRequirement, handoffCaught);
+        }
+      }
       onError(messageText);
       onStatus({ tone: "error", text: messageText });
       throw caught;

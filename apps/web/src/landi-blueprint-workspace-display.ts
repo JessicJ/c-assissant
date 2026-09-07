@@ -329,12 +329,28 @@ export function appliedItineraryRevisionSummary(revision: DirectBlueprintRevisio
   const routeRefreshLabel = routeCount
     ? `${routeCount} route leg${routeCount === 1 ? "" : "s"} need${routeCount === 1 ? "s" : ""} refresh`
     : "No route legs need refresh";
+  const impactReviewLabel = appliedItineraryImpactReviewLabel(revision);
   return {
     updateLabel,
     affectedDayLabel,
     routeRefreshLabel,
-    statusText: `Applied ${updateLabel} for ${affectedDayLabel}. ${routeRefreshLabel}.`
+    statusText: `Applied ${updateLabel} for ${affectedDayLabel}. ${routeRefreshLabel}${impactReviewLabel ? `; ${impactReviewLabel}` : ""}.`
   };
+}
+
+function appliedItineraryImpactReviewLabel(revision: DirectBlueprintRevisionBatchMetadata): string {
+  const impactDays = revision.routeImpact?.days ?? [];
+  if (!impactDays.length) return "";
+  if (revision.replanReadiness?.status === "assisted_replanning_required") return "assisted replanning is required before execution";
+  const reviewLabels = [
+    impactDays.some((day) => day.requiresTimingReview) ? "timing" : "",
+    impactDays.some((day) => day.requiresMealRestSpacingReview) ? "meal/rest spacing" : "",
+    impactDays.some((day) => day.capacityRisk) ? "day pacing" : "",
+    impactDays.some((day) => day.backtrackingRisk) ? "backtracking" : "",
+    impactDays.some((day) => day.fixedTimeRisk) ? "fixed time slots" : ""
+  ].filter(Boolean);
+  if (!reviewLabels.length) return "";
+  return `review ${reviewLabels.join(", ")} before execution`;
 }
 
 export function pendingItineraryEditRequest(edit: PendingItineraryEditDisplay): string {
@@ -1440,11 +1456,30 @@ function workspaceAreasForPresentation(presentation: PlanPresentation): readonly
 
 function shortGuideSummary(place: PlanPlace): string {
   if (place.guideDisplay?.cardSummary?.trim()) return place.guideDisplay.cardSummary.trim();
-  return shorten(firstUsefulSentence(place.plan) || firstUsefulSentence(place.whyWorthIt) || `${place.area ?? place.locationLabel}.`, 125);
+  return shorten(firstUsefulSentence(place.whyWorthIt) || firstTravelerFacingPlanSentence(place.plan) || `${place.area ?? place.locationLabel}.`, 125);
 }
 
 function firstUsefulSentence(value: string): string {
   return value.split(/(?<=[.!?。！？])\s+/)[0]?.trim() ?? "";
+}
+
+function firstTravelerFacingPlanSentence(value: string): string {
+  return value.split(/(?<=[.!?。！？])\s+/).map((sentence) => sentence.trim()).find((sentence) => sentence && !looksLikeSchedulingConstraint(sentence)) ?? "";
+}
+
+function looksLikeSchedulingConstraint(value: string): boolean {
+  const normalized = value.toLowerCase();
+  return [
+    /\bdo not schedule\b/,
+    /\bdon't schedule\b/,
+    /\bavoid scheduling\b/,
+    /\bnot schedule (?:it|this)\b/,
+    /\bcross-city day\b/,
+    /\btiring\b/,
+    /\broute order\b/,
+    /\bneeds? replanning\b/,
+    /\breplan(?:ning)?\b/
+  ].some((pattern) => pattern.test(normalized));
 }
 
 function shorten(value: string, max: number): string {

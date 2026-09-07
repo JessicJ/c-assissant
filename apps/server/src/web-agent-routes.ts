@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { RuntimeAdapterError, type ClaudeCodeRuntimeAdapter, type CodexRuntimeAdapter } from "@c-assistant/agent-adapters";
-import type { AgentRuntimeKind } from "@c-assistant/core";
+import { prepareDirectBlueprintAssistedReplanningHandoff, type AgentRuntimeKind, type DirectBlueprintAssistedReplanningHandoff, type PlanChangeImpactPreview, type TripBlueprint } from "@c-assistant/core";
 import type { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { planRefinementState } from "./plan-refinement.js";
 import { previewPlanChange } from "./plan-change-impact.js";
@@ -83,19 +83,29 @@ export function registerWebAgentRoutes(server: FastifyInstance, dependencies: {
     try {
       const workspace = store.getWorkspace();
       if (workspace.profile.status !== "ready") return reply.code(409).send({ error: "Complete the required Profile basics before creating or revising a Plan." });
-      let changeImpact;
+      let changeImpact: PlanChangeImpactPreview | undefined;
+      let assistedHandoff: DirectBlueprintAssistedReplanningHandoff | undefined;
       if (turn.mode === "revise_plan") {
         if (turn.expectedPlanId !== workspace.activePlan.id || turn.expectedVersion !== workspace.activePlan.version) return reply.code(409).send({ error: "The Plan changed before this revision could start. Refresh the workspace and review the latest version." });
-        if (workspace.activeBlueprint) return reply.code(409).send({
-          error: "This Plan is backed by a Trip Blueprint. Assisted Replanning is not enabled yet, so Landi kept the Blueprint and current Plan unchanged. Start a new planning conversation for now."
-        });
-        changeImpact = previewPlanChange(workspace.activePlan, turn.message);
-        if (changeImpact.requiresConfirmation && !turn.impactConfirmed) return reply.code(409).send({ error: "This high-impact Plan change needs explicit confirmation before replanning.", impactPreview: changeImpact });
+        if (workspace.activeBlueprint) {
+          if (!turn.assistedReplanning) return reply.code(409).send({
+            error: "This Plan is backed by a Trip Blueprint. Use an assisted itinerary handoff for Blueprint-backed replanning so Landi can preserve version and route boundaries."
+          });
+          try {
+            assistedHandoff = validateAssistedBlueprintHandoff(workspace.activeBlueprint, turn.assistedReplanning, turn.message);
+          } catch (error) {
+            return reply.code(409).send({ error: error instanceof Error ? error.message : "The assisted itinerary handoff no longer matches the current Trip Blueprint." });
+          }
+          changeImpact = blueprintAssistedReplanningImpact(workspace.activePlan.id, workspace.activePlan.version, assistedHandoff);
+        } else {
+          changeImpact = previewPlanChange(workspace.activePlan, turn.message);
+          if (changeImpact.requiresConfirmation && !turn.impactConfirmed) return reply.code(409).send({ error: "This high-impact Plan change needs explicit confirmation before replanning.", impactPreview: changeImpact });
+        }
       }
       runId = store.startPlanGenerationRun({ runtimeKind: workspace.runtime.selectedKind, trigger: "web" }).id;
       const runtime = selectedRuntimeAdapter(workspace.runtime.selectedKind);
       const draft = await runtime.generatePlanDraft({
-        request: turn.message,
+        request: assistedHandoff?.request ?? turn.message,
         ...(turn.mode === "revise_plan" ? {
           currentPlan: planDraftForRevision(workspace.activePlan),
           completedTasks: completedTasksForRevision(workspace.activePlan)
@@ -224,4 +234,43 @@ function runtimeErrorStatusCode(error: unknown): number {
     : error instanceof RuntimeAdapterError && (error.code === "not_installed" || error.code === "not_authenticated")
       ? 503
       : 400;
+}
+
+function validateAssistedBlueprintHandoff(blueprint: TripBlueprint, handoff: DirectBlueprintAssistedReplanningHandoff, message: string): DirectBlueprintAssistedReplanningHandoff {
+  if (handoff.baseBlueprintId !== blueprint.id || handoff.baseBlueprintVersion !== blueprint.version) {
+    throw new Error("The Trip Blueprint changed before assisted replanning could start. Refresh the workspace and review the latest version.");
+  }
+  const prepared = prepareDirectBlueprintAssistedReplanningHandoff(blueprint, {
+    replanRequirement: handoff.replanRequirement,
+    revisions: handoff.revisions
+  });
+  if (prepared.request.trim() !== handoff.request.trim() || prepared.request.trim() !== message.trim()) {
+    throw new Error("The assisted itinerary handoff no longer matches the prepared replanning request.");
+  }
+  if (!sameStringSet(prepared.affectedDayIds, handoff.affectedDayIds) || !sameStringSet(prepared.affectedPlaceIds, handoff.affectedPlaceIds)) {
+    throw new Error("The assisted itinerary handoff no longer matches the affected itinerary scope.");
+  }
+  return prepared;
+}
+
+function blueprintAssistedReplanningImpact(planId: string, baseVersion: number, handoff: DirectBlueprintAssistedReplanningHandoff): PlanChangeImpactPreview {
+  return {
+    planId,
+    baseVersion,
+    impact: "high",
+    summary: "This assisted itinerary update creates a replacement draft for the affected Trip Blueprint days.",
+    reasons: [
+      handoff.replanRequirement.explanation,
+      "Landi must recheck route order, timing, meal and rest spacing, and opening constraints before the itinerary is execution-ready."
+    ],
+    affectedAreas: ["itinerary"],
+    requiresConfirmation: false,
+    createsReplacementDraft: true
+  };
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const rightValues = new Set(right);
+  return left.every((value) => rightValues.has(value));
 }

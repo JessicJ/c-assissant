@@ -255,6 +255,35 @@ describe("Landi Blueprint workspace display helpers", () => {
     }]);
   });
 
+  it("keeps scheduling constraints out of left guide card summaries", () => {
+    const presentation = presentationFixture({
+      places: [
+        place("market", {
+          category: "food market",
+          whyWorthIt: "A neighborhood market that adds a concrete local food stop.",
+          plan: "Do not schedule it after a tiring cross-city day. Use it only after Landi replans the route.",
+          schedulingEligibility: {
+            decision: "high_impact",
+            reason: "Do not schedule it after a tiring cross-city day.",
+            highImpactReasons: ["Late cross-city route"]
+          }
+        }),
+        place("tea", {
+          category: "tea",
+          whyWorthIt: "",
+          plan: "Do not schedule this after a tiring cross-city day. A quiet tea counter with hands-on preparation.",
+          schedulingEligibility: { decision: "schedulable", reason: "Fits the day." }
+        })
+      ],
+      days: []
+    });
+    const cards = guideCardsForWorkspace(buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation));
+    const cardById = new Map(cards.map((card) => [card.placeId, card]));
+    assert.equal(cardById.get("market")?.summary, "A neighborhood market that adds a concrete local food stop.");
+    assert.equal(cardById.get("tea")?.summary, "A quiet tea counter with hands-on preparation.");
+    assert.equal(cards.some((card) => /do not schedule|tiring cross-city|replan/i.test(card.summary)), false);
+  });
+
   it("uses Blueprint travel tips and preparation checklist before plan inference", () => {
     const presentation = presentationFixture({
       places: [
@@ -854,6 +883,45 @@ describe("Landi Blueprint workspace display helpers", () => {
         movementIds: ["movement-day-1-1", "movement-day-1-2", "movement-day-2-1"],
         reason: "These itinerary days were edited directly."
       },
+      routeImpact: {
+        days: [
+          {
+            dayId: "day-1",
+            addedPlaceIds: ["tea"],
+            removedPlaceIds: [],
+            movedPlaceIds: [],
+            movementIds: ["movement-day-1-1", "movement-day-1-2"],
+            requiresRouteRefresh: true,
+            requiresTimingReview: true,
+            requiresMealRestSpacingReview: true,
+            capacityRisk: false,
+            backtrackingRisk: false,
+            fixedTimeRisk: false,
+            readiness: "ready_for_route_refresh",
+            reasons: []
+          },
+          {
+            dayId: "day-2",
+            addedPlaceIds: [],
+            removedPlaceIds: [],
+            movedPlaceIds: ["craft"],
+            movementIds: ["movement-day-2-1"],
+            requiresRouteRefresh: true,
+            requiresTimingReview: true,
+            requiresMealRestSpacingReview: false,
+            capacityRisk: true,
+            backtrackingRisk: false,
+            fixedTimeRisk: false,
+            readiness: "ready_for_route_refresh",
+            reasons: []
+          }
+        ]
+      },
+      replanReadiness: {
+        status: "ready_for_route_refresh",
+        dayIds: ["day-1", "day-2"],
+        reason: "These direct itinerary edits are saved, but affected routes and timing still need refresh before execution."
+      },
       undo: {
         previousBlueprintVersion: 1,
         previousDays: [],
@@ -867,7 +935,7 @@ describe("Landi Blueprint workspace display helpers", () => {
       updateLabel: "2 itinerary updates",
       affectedDayLabel: "2026-10-01, 2026-10-02",
       routeRefreshLabel: "3 route legs need refresh",
-      statusText: "Applied 2 itinerary updates for 2026-10-01, 2026-10-02. 3 route legs need refresh."
+      statusText: "Applied 2 itinerary updates for 2026-10-01, 2026-10-02. 3 route legs need refresh; review timing, meal/rest spacing, day pacing before execution."
     });
   });
 

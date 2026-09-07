@@ -33,6 +33,61 @@ export type DirectBlueprintRevision =
 type DirectBlueprintItineraryRevision = Extract<DirectBlueprintRevision, { kind: "add_place_to_day" | "move_place_within_day" }>;
 type DirectBlueprintDayRevision = Extract<DirectBlueprintRevision, { kind: "add_place_to_day" | "move_place_within_day" | "remove_place_from_day" }>;
 
+export type DirectBlueprintReplanReadinessStatus = "no_replan_needed" | "ready_for_route_refresh" | "assisted_replanning_required";
+
+export interface DirectBlueprintRouteImpactDay {
+  dayId: string;
+  addedPlaceIds: string[];
+  removedPlaceIds: string[];
+  movedPlaceIds: string[];
+  movementIds: string[];
+  requiresRouteRefresh: boolean;
+  requiresTimingReview: boolean;
+  requiresMealRestSpacingReview: boolean;
+  capacityRisk: boolean;
+  backtrackingRisk: boolean;
+  fixedTimeRisk: boolean;
+  readiness: DirectBlueprintReplanReadinessStatus;
+  reasons: string[];
+}
+
+export interface DirectBlueprintReplanReadiness {
+  status: DirectBlueprintReplanReadinessStatus;
+  dayIds: string[];
+  reason: string;
+}
+
+export type DirectBlueprintReplanRequirementReasonCode =
+  | "blocked_place"
+  | "fixed_booking"
+  | "high_impact_place"
+  | "informational_place"
+  | "scheduled_archive"
+  | "unsuitable_day";
+
+export interface DirectBlueprintReplanRequirement {
+  status: "assisted_replanning_required";
+  editKind: DirectBlueprintRevision["kind"];
+  placeId: string;
+  dayId?: string;
+  reasonCode: DirectBlueprintReplanRequirementReasonCode;
+  affectedDayIds: string[];
+  affectedPlaceIds: string[];
+  explanation: string;
+  suggestedRequest: string;
+}
+
+export class DirectBlueprintReplanRequirementError extends Error {
+  readonly code = "assisted_replanning_required";
+  readonly replanRequirement: DirectBlueprintReplanRequirement;
+
+  constructor(replanRequirement: DirectBlueprintReplanRequirement) {
+    super(replanRequirement.explanation);
+    this.name = "DirectBlueprintReplanRequirementError";
+    this.replanRequirement = replanRequirement;
+  }
+}
+
 export interface DirectBlueprintRevisionMetadata {
   id: string;
   kind: DirectBlueprintRevision["kind"];
@@ -46,6 +101,10 @@ export interface DirectBlueprintRevisionMetadata {
     movementIds: string[];
     reason: string;
   };
+  routeImpact?: {
+    days: DirectBlueprintRouteImpactDay[];
+  };
+  replanReadiness?: DirectBlueprintReplanReadiness;
   undo: {
     dayId?: string;
     previousDay?: BlueprintItineraryDay;
@@ -73,6 +132,10 @@ export interface DirectBlueprintRevisionBatchMetadata {
     movementIds: string[];
     reason: string;
   };
+  routeImpact?: {
+    days: DirectBlueprintRouteImpactDay[];
+  };
+  replanReadiness?: DirectBlueprintReplanReadiness;
   undo: {
     previousBlueprintVersion: number;
     previousDays: BlueprintItineraryDay[];
@@ -85,6 +148,17 @@ export interface DirectBlueprintRevisionBatchMetadata {
 export interface DirectBlueprintRevisionBatchResult {
   blueprint: TripBlueprint;
   metadata: DirectBlueprintRevisionBatchMetadata;
+}
+
+export interface DirectBlueprintAssistedReplanningHandoff {
+  status: "ready_for_assisted_replanning";
+  baseBlueprintId: string;
+  baseBlueprintVersion: number;
+  replanRequirement: DirectBlueprintReplanRequirement;
+  revisions: DirectBlueprintRevision[];
+  affectedDayIds: string[];
+  affectedPlaceIds: string[];
+  request: string;
 }
 
 export function applyDirectBlueprintRevision(blueprint: TripBlueprint, revision: DirectBlueprintRevision): TripBlueprint {
@@ -127,6 +201,7 @@ export function applyDirectBlueprintRevisionBatchWithMetadata(blueprint: TripBlu
   });
   const routeRefreshDayIds = uniqueStrings(revisionMetadataItems.flatMap((item) => item.routeRefresh.dayIds));
   const routeRefreshMovementIds = uniqueStrings(revisionMetadataItems.flatMap((item) => item.routeRefresh.movementIds));
+  const routeImpactDays = mergeRouteImpactDays(revisionMetadataItems.flatMap((item) => item.routeImpact?.days ?? []));
   const hasItineraryEdit = revisionMetadataItems.some((item) => item.kind !== "update_place_priority");
   const routeRefreshReason = hasItineraryEdit
     ? "These itinerary days were edited directly, so affected route, timing, meal, and opening constraints need refresh before execution."
@@ -149,6 +224,10 @@ export function applyDirectBlueprintRevisionBatchWithMetadata(blueprint: TripBlu
         movementIds: routeRefreshMovementIds,
         reason: routeRefreshReason
       },
+      routeImpact: {
+        days: routeImpactDays
+      },
+      replanReadiness: replanReadinessForImpacts(routeImpactDays),
       undo: {
         previousBlueprintVersion: original.version,
         previousDays,
@@ -160,6 +239,52 @@ export function applyDirectBlueprintRevisionBatchWithMetadata(blueprint: TripBlu
   };
 }
 
+export function prepareDirectBlueprintAssistedReplanningHandoff(
+  blueprint: TripBlueprint,
+  input: { replanRequirement: DirectBlueprintReplanRequirement; revisions: DirectBlueprintRevision[] }
+): DirectBlueprintAssistedReplanningHandoff {
+  assertTripBlueprintIntegrity(blueprint);
+  assertDirectBlueprintReplanRequirement(input.replanRequirement);
+  if (!input.revisions.length) throw new Error("Assisted replanning needs at least one pending itinerary edit.");
+  for (const revision of input.revisions) {
+    if (!Number.isFinite(Date.parse(revision.createdAt))) throw new Error("Assisted replanning needs valid edit creation times.");
+    if (!blueprint.places.some((place) => place.id === revision.placeId)) throw new Error(`Assisted replanning references unknown place ${revision.placeId}.`);
+    if ("dayId" in revision && !blueprint.days.some((day) => day.id === revision.dayId)) throw new Error(`Assisted replanning references unknown day ${revision.dayId}.`);
+  }
+  const requirement = input.replanRequirement;
+  const requirementPlace = blueprint.places.find((place) => place.id === requirement.placeId);
+  if (!requirementPlace) throw new Error(`Assisted replanning requirement references unknown place ${requirement.placeId}.`);
+  if (requirement.dayId && !blueprint.days.some((day) => day.id === requirement.dayId)) throw new Error(`Assisted replanning requirement references unknown day ${requirement.dayId}.`);
+  const blueprintDayIds = new Set(blueprint.days.map((day) => day.id));
+  const blueprintPlaceIds = new Set(blueprint.places.map((place) => place.id));
+  const unknownAffectedDay = requirement.affectedDayIds.find((dayId) => !blueprintDayIds.has(dayId));
+  if (unknownAffectedDay) throw new Error(`Assisted replanning requirement references unknown affected day ${unknownAffectedDay}.`);
+  const unknownAffectedPlace = requirement.affectedPlaceIds.find((placeId) => !blueprintPlaceIds.has(placeId));
+  if (unknownAffectedPlace) throw new Error(`Assisted replanning requirement references unknown affected place ${unknownAffectedPlace}.`);
+  if (requirement.dayId && !requirement.affectedDayIds.includes(requirement.dayId)) throw new Error("Assisted replanning requirement must include its target day in affectedDayIds.");
+  if (!requirement.affectedPlaceIds.includes(requirement.placeId)) throw new Error("Assisted replanning requirement must include its target place in affectedPlaceIds.");
+  if (!input.revisions.some((revision) => revisionMatchesRequirement(revision, requirement))) throw new Error("Assisted replanning needs a pending edit that matches the replanning requirement.");
+  const affectedDayIds = uniqueStrings([
+    ...requirement.affectedDayIds,
+    ...input.revisions.flatMap((revision) => "dayId" in revision ? [revision.dayId] : [])
+  ]);
+  const affectedPlaceIds = uniqueStrings([
+    ...requirement.affectedPlaceIds,
+    ...input.revisions.map((revision) => revision.placeId),
+    ...affectedDayIds.flatMap((dayId) => blueprint.days.find((day) => day.id === dayId)?.stops.map((stop) => stop.placeId) ?? [])
+  ]);
+  return {
+    status: "ready_for_assisted_replanning",
+    baseBlueprintId: blueprint.id,
+    baseBlueprintVersion: blueprint.version,
+    replanRequirement: structuredClone(requirement),
+    revisions: structuredClone(input.revisions),
+    affectedDayIds,
+    affectedPlaceIds,
+    request: assistedReplanningHandoffRequest(blueprint, requirement, input.revisions, affectedDayIds, affectedPlaceIds)
+  };
+}
+
 function addPlaceToDay(blueprint: TripBlueprint, revision: Extract<DirectBlueprintRevision, { kind: "add_place_to_day" }>): DirectBlueprintRevisionResult {
   const place = blueprint.places.find((candidate) => candidate.id === revision.placeId);
   if (!place) throw new Error(`Blueprint Revision references unknown place ${revision.placeId}.`);
@@ -167,10 +292,10 @@ function addPlaceToDay(blueprint: TripBlueprint, revision: Extract<DirectBluepri
   if (!day) throw new Error(`Blueprint Revision references unknown day ${revision.dayId}.`);
   if (day.stops.some((stop) => stop.placeId === revision.placeId)) throw new Error(`Place ${revision.placeId} is already scheduled on day ${revision.dayId}.`);
   const eligibility = place.schedulingEligibility;
-  if (eligibility?.decision === "informational") throw new Error(`Place ${revision.placeId} is informational and cannot be inserted directly.`);
-  if (eligibility?.decision === "blocked") throw new Error(`Place ${revision.placeId} is blocked for direct scheduling.`);
-  if (eligibility?.decision === "high_impact") throw new Error(`Place ${revision.placeId} needs assisted replanning before scheduling.`);
-  if (eligibility?.suitableDayIds?.length && !eligibility.suitableDayIds.includes(revision.dayId)) throw new Error(`Place ${revision.placeId} is not eligible for day ${revision.dayId}.`);
+  if (eligibility?.decision === "informational") throw directReplanRequirementError(blueprint, revision, "informational_place", `${place.name} is background information, so Landi needs to replan before placing it into ${dayLabel(day, revision.dayId)}.`);
+  if (eligibility?.decision === "blocked") throw directReplanRequirementError(blueprint, revision, "blocked_place", `${place.name} is blocked for direct scheduling, so Landi needs to replan before it can be added to ${dayLabel(day, revision.dayId)}.`);
+  if (eligibility?.decision === "high_impact") throw directReplanRequirementError(blueprint, revision, "high_impact_place", `${place.name} changes the shape of ${dayLabel(day, revision.dayId)}, so Landi needs to replan that day before saving it.`);
+  if (eligibility?.suitableDayIds?.length && !eligibility.suitableDayIds.includes(revision.dayId)) throw directReplanRequirementError(blueprint, revision, "unsuitable_day", `${place.name} is not eligible for ${dayLabel(day, revision.dayId)}, so Landi needs to replan before saving this placement.`);
 
   const previousDay = structuredClone(day);
   const previousMovements = movementsForDay(blueprint, day.id);
@@ -209,9 +334,11 @@ function movePlaceWithinDay(blueprint: TripBlueprint, revision: Extract<DirectBl
   if (!day) throw new Error(`Blueprint Revision references unknown day ${revision.dayId}.`);
   const stop = day.stops.find((candidate) => candidate.placeId === revision.placeId);
   if (!stop) throw new Error(`Place ${revision.placeId} is not scheduled on day ${revision.dayId}.`);
-  if (place.priority === "booked" || hasReservationRequirement(blueprint, revision.placeId)) throw new Error(`Place ${revision.placeId} is fixed by a booking and cannot be moved directly.`);
+  if (place.priority === "booked" || hasReservationRequirement(blueprint, revision.placeId)) throw directReplanRequirementError(blueprint, revision, "fixed_booking", `${place.name} is tied to a booking or reservation, so Landi needs to replan before moving it.`);
   const eligibility = place.schedulingEligibility;
-  if (eligibility?.decision === "informational" || eligibility?.decision === "blocked" || eligibility?.decision === "high_impact") throw new Error(`Place ${revision.placeId} needs assisted replanning before moving.`);
+  if (eligibility?.decision === "informational") throw directReplanRequirementError(blueprint, revision, "informational_place", `${place.name} is background information, so Landi needs to replan before moving it inside ${dayLabel(day, revision.dayId)}.`);
+  if (eligibility?.decision === "blocked") throw directReplanRequirementError(blueprint, revision, "blocked_place", `${place.name} is blocked for direct scheduling, so Landi needs to replan before moving it.`);
+  if (eligibility?.decision === "high_impact") throw directReplanRequirementError(blueprint, revision, "high_impact_place", `${place.name} changes the shape of ${dayLabel(day, revision.dayId)}, so Landi needs to replan that day before moving it.`);
   if (revision.position.kind === "after" && revision.position.afterPlaceId === revision.placeId) throw new Error("Blueprint Revision cannot move a place after itself.");
 
   const previousDay = structuredClone(day);
@@ -249,9 +376,11 @@ function removePlaceFromDay(blueprint: TripBlueprint, revision: Extract<DirectBl
   const day = blueprint.days.find((candidate) => candidate.id === revision.dayId);
   if (!day) throw new Error(`Blueprint Revision references unknown day ${revision.dayId}.`);
   if (!day.stops.some((stop) => stop.placeId === revision.placeId)) throw new Error(`Place ${revision.placeId} is not scheduled on day ${revision.dayId}.`);
-  if (place.priority === "booked" || hasReservationRequirement(blueprint, revision.placeId)) throw new Error(`Place ${revision.placeId} is fixed by a booking and cannot be removed directly.`);
+  if (place.priority === "booked" || hasReservationRequirement(blueprint, revision.placeId)) throw directReplanRequirementError(blueprint, revision, "fixed_booking", `${place.name} is tied to a booking or reservation, so Landi needs to replan before removing it.`);
   const eligibility = place.schedulingEligibility;
-  if (eligibility?.decision === "informational" || eligibility?.decision === "blocked" || eligibility?.decision === "high_impact") throw new Error(`Place ${revision.placeId} needs assisted replanning before removing.`);
+  if (eligibility?.decision === "informational") throw directReplanRequirementError(blueprint, revision, "informational_place", `${place.name} is background information, so Landi needs to replan before removing it from ${dayLabel(day, revision.dayId)}.`);
+  if (eligibility?.decision === "blocked") throw directReplanRequirementError(blueprint, revision, "blocked_place", `${place.name} is blocked for direct scheduling, so Landi needs to replan before removing it.`);
+  if (eligibility?.decision === "high_impact") throw directReplanRequirementError(blueprint, revision, "high_impact_place", `${place.name} changes the shape of ${dayLabel(day, revision.dayId)}, so Landi needs to replan that day before removing it.`);
 
   const previousDay = structuredClone(day);
   const previousMovements = movementsForDay(blueprint, day.id);
@@ -288,7 +417,7 @@ function updatePlacePriority(blueprint: TripBlueprint, revision: Extract<DirectB
   if (!place) throw new Error(`Blueprint Revision references unknown place ${revision.placeId}.`);
   if (place.priority === revision.priority) throw new Error(`Place ${revision.placeId} already has priority ${revision.priority}.`);
   const scheduledDay = blueprint.days.find((day) => day.stops.some((stop) => stop.placeId === revision.placeId));
-  if (scheduledDay && revision.priority === "archive") throw new Error(`Place ${revision.placeId} is scheduled and must be removed from the day before keeping it for later.`);
+  if (scheduledDay && revision.priority === "archive") throw directReplanRequirementError(blueprint, revision, "scheduled_archive", `${place.name} is already scheduled on ${dayLabel(scheduledDay, scheduledDay.id)}, so Landi needs to replan before keeping it for later.`);
 
   const previousDay = scheduledDay ? structuredClone(scheduledDay) : undefined;
   const previousMovements = scheduledDay ? movementsForDay(blueprint, scheduledDay.id) : [];
@@ -353,6 +482,145 @@ function removeStop(stops: BlueprintStop[], revision: Extract<DirectBlueprintRev
 
 function hasReservationRequirement(blueprint: TripBlueprint, placeId: string): boolean {
   return blueprint.actionRequirements.some((requirement) => requirement.placeId === placeId && requirement.kind === "reservation");
+}
+
+function directReplanRequirementError(
+  blueprint: TripBlueprint,
+  revision: DirectBlueprintRevision,
+  reasonCode: DirectBlueprintReplanRequirementReasonCode,
+  explanation: string
+): DirectBlueprintReplanRequirementError {
+  const place = blueprint.places.find((candidate) => candidate.id === revision.placeId);
+  const day = "dayId" in revision
+    ? blueprint.days.find((candidate) => candidate.id === revision.dayId)
+    : blueprint.days.find((candidate) => candidate.stops.some((stop) => stop.placeId === revision.placeId));
+  const dayId = "dayId" in revision ? revision.dayId : day?.id;
+  const affectedDayIds = dayId ? [dayId] : [];
+  const affectedPlaceIds = uniqueStrings([
+    revision.placeId,
+    ...(day?.stops.map((stop) => stop.placeId) ?? [])
+  ]);
+  return new DirectBlueprintReplanRequirementError({
+    status: "assisted_replanning_required",
+    editKind: revision.kind,
+    placeId: revision.placeId,
+    ...(dayId ? { dayId } : {}),
+    reasonCode,
+    affectedDayIds,
+    affectedPlaceIds,
+    explanation,
+    suggestedRequest: assistedReplanningRequest({
+      editKind: revision.kind,
+      placeName: place?.name ?? revision.placeId,
+      ...(day ? { dayName: dayLabel(day, day.id) } : {}),
+      reasonCode
+    })
+  });
+}
+
+function assistedReplanningRequest(input: { editKind: DirectBlueprintRevision["kind"]; placeName: string; dayName?: string; reasonCode: DirectBlueprintReplanRequirementReasonCode }): string {
+  const action = input.editKind === "add_place_to_day"
+    ? "add"
+    : input.editKind === "move_place_within_day"
+      ? "move"
+      : input.editKind === "remove_place_from_day"
+        ? "remove"
+        : "update";
+  const target = input.dayName ? `${input.placeName} on ${input.dayName}` : input.placeName;
+  const fixedGuard = input.reasonCode === "fixed_booking" || input.reasonCode === "scheduled_archive"
+    ? " Preserve fixed bookings and reservations."
+    : "";
+  return `Replan the affected itinerary day so it can ${action} ${target}. Keep unaffected days and places unchanged.${fixedGuard} Recheck route order, timing, meal and rest spacing, opening constraints, and publish a new Trip Blueprint version only when the affected day is coherent.`;
+}
+
+function assistedReplanningHandoffRequest(
+  blueprint: TripBlueprint,
+  requirement: DirectBlueprintReplanRequirement,
+  revisions: DirectBlueprintRevision[],
+  affectedDayIds: string[],
+  affectedPlaceIds: string[]
+): string {
+  const dayById = new Map(blueprint.days.map((day) => [day.id, day] as const));
+  const placeById = new Map(blueprint.places.map((place) => [place.id, place] as const));
+  const affectedDays = affectedDayIds.map((dayId) => {
+    const day = dayById.get(dayId);
+    return day ? dayLabel(day, dayId) : dayId;
+  }).join(", ");
+  const affectedPlaces = affectedPlaceIds.map((placeId) => placeById.get(placeId)?.name ?? placeId).join(", ");
+  const editLines = revisions.map((revision, index) => `${index + 1}. ${revisionRequestLine(revision, dayById, placeById)}`);
+  const fixedPlaces = affectedPlaceIds.flatMap((placeId) => {
+    const place = placeById.get(placeId);
+    if (!place) return [];
+    return place.priority === "booked" || hasReservationRequirement(blueprint, placeId) ? [place.name] : [];
+  });
+  return [
+    `Replan the affected itinerary day for ${blueprint.title}.`,
+    `Base Trip Blueprint: ${blueprint.id} v${blueprint.version}.`,
+    `Why this needs Landi: ${requirement.explanation}`,
+    `Confirmed traveler edits:`,
+    ...editLines,
+    `Affected day${affectedDayIds.length === 1 ? "" : "s"}: ${affectedDays}.`,
+    `Affected places: ${affectedPlaces}.`,
+    `Keep every unlisted day and unaffected place unchanged.`,
+    ...(fixedPlaces.length ? [`Preserve fixed bookings and reservations: ${uniqueStrings(fixedPlaces).join(", ")}.`] : []),
+    `Recheck route order, timing, meal and rest spacing, opening constraints, and the route impact before publishing a new Trip Blueprint version.`
+  ].join("\n");
+}
+
+function revisionRequestLine(
+  revision: DirectBlueprintRevision,
+  dayById: Map<string, BlueprintItineraryDay>,
+  placeById: Map<string, BlueprintPlace>
+): string {
+  const placeName = placeById.get(revision.placeId)?.name ?? revision.placeId;
+  if (revision.kind === "update_place_priority") return `Set ${placeName} to ${revision.priority}.`;
+  const day = dayById.get(revision.dayId);
+  const dayName = day ? dayLabel(day, revision.dayId) : revision.dayId;
+  if (revision.kind === "remove_place_from_day") return `Remove ${placeName} from ${dayName}.`;
+  const placement = revision.position.kind === "start"
+    ? "at the start of the day"
+    : revision.position.kind === "end"
+      ? "at the end of the day"
+      : `after ${placeById.get(revision.position.afterPlaceId)?.name ?? revision.position.afterPlaceId}`;
+  return `${revision.kind === "add_place_to_day" ? "Add" : "Move"} ${placeName} ${placement} on ${dayName}.`;
+}
+
+function revisionMatchesRequirement(revision: DirectBlueprintRevision, requirement: DirectBlueprintReplanRequirement): boolean {
+  if (revision.kind !== requirement.editKind || revision.placeId !== requirement.placeId) return false;
+  if (!("dayId" in revision) || !requirement.dayId) return !("dayId" in revision) && !requirement.dayId;
+  return revision.dayId === requirement.dayId;
+}
+
+function assertDirectBlueprintReplanRequirement(value: DirectBlueprintReplanRequirement): void {
+  if (!value || typeof value !== "object") throw new Error("Assisted replanning needs a structured requirement.");
+  if (value.status !== "assisted_replanning_required") throw new Error("Assisted replanning needs an assisted requirement.");
+  if (!isDirectRevisionKind(value.editKind)) throw new Error("Assisted replanning requirement needs a supported edit kind.");
+  if (typeof value.placeId !== "string" || !value.placeId.trim()) throw new Error("Assisted replanning requirement needs a place.");
+  if (value.dayId !== undefined && (typeof value.dayId !== "string" || !value.dayId.trim())) throw new Error("Assisted replanning requirement needs a valid day.");
+  if (!isDirectReplanRequirementReasonCode(value.reasonCode)) throw new Error("Assisted replanning requirement needs a supported reason.");
+  if (!Array.isArray(value.affectedDayIds) || !Array.isArray(value.affectedPlaceIds)) throw new Error("Assisted replanning requirement needs affected days and places.");
+  if (!value.affectedPlaceIds.length) throw new Error("Assisted replanning requirement needs at least one affected place.");
+  if (value.affectedDayIds.some((dayId) => typeof dayId !== "string" || !dayId.trim())) throw new Error("Assisted replanning requirement has an invalid affected day.");
+  if (value.affectedPlaceIds.some((placeId) => typeof placeId !== "string" || !placeId.trim())) throw new Error("Assisted replanning requirement has an invalid affected place.");
+  if (typeof value.explanation !== "string" || !value.explanation.trim()) throw new Error("Assisted replanning requirement needs an explanation.");
+  if (typeof value.suggestedRequest !== "string" || !value.suggestedRequest.trim()) throw new Error("Assisted replanning requirement needs a suggested request.");
+}
+
+function isDirectRevisionKind(value: unknown): value is DirectBlueprintRevision["kind"] {
+  return value === "add_place_to_day" || value === "move_place_within_day" || value === "remove_place_from_day" || value === "update_place_priority";
+}
+
+function isDirectReplanRequirementReasonCode(value: unknown): value is DirectBlueprintReplanRequirementReasonCode {
+  return value === "blocked_place"
+    || value === "fixed_booking"
+    || value === "high_impact_place"
+    || value === "informational_place"
+    || value === "scheduled_archive"
+    || value === "unsuitable_day";
+}
+
+function dayLabel(day: BlueprintItineraryDay, fallbackId: string): string {
+  return day.date || day.title || fallbackId;
 }
 
 function blocksForStops(dayId: string, stops: BlueprintStop[]): BlueprintItineraryBlock[] {
@@ -611,6 +879,7 @@ function revisionMetadata(
 ): DirectBlueprintRevisionMetadata {
   const nextDay = after.days.find((day) => day.id === revision.dayId);
   const nextMovements = after.movements.filter((movement) => movement.dayId === revision.dayId);
+  const impactDay = routeImpactDay(before, after, revision, previousDay, nextMovements);
   const affectedPlaceIds = uniqueStrings([
     revision.placeId,
     ...(revision.kind !== "remove_place_from_day" && revision.position.kind === "after" ? [revision.position.afterPlaceId] : []),
@@ -630,6 +899,10 @@ function revisionMetadata(
       movementIds: nextMovements.map((movement) => movement.id),
       reason: "This itinerary day was edited directly, so adjacent route, timing, meal, and opening constraints need refresh before execution."
     },
+    routeImpact: {
+      days: [impactDay]
+    },
+    replanReadiness: replanReadinessForImpacts([impactDay]),
     undo: {
       dayId: revision.dayId,
       previousDay,
@@ -660,12 +933,149 @@ function placePriorityRevisionMetadata(
       movementIds: [],
       reason: "This place status update does not change the route order."
     },
+    routeImpact: {
+      days: []
+    },
+    replanReadiness: {
+      status: "no_replan_needed",
+      dayIds: [],
+      reason: "This place status update does not change route order or timing."
+    },
     undo: {
       ...(previousDay ? { dayId: previousDay.id, previousDay } : {}),
       previousMovements,
       previousPlace: structuredClone(previousPlace)
     }
   };
+}
+
+function routeImpactDay(
+  before: TripBlueprint,
+  after: TripBlueprint,
+  revision: DirectBlueprintDayRevision,
+  previousDay: BlueprintItineraryDay,
+  nextMovements: BlueprintMovement[]
+): DirectBlueprintRouteImpactDay {
+  const nextDay = after.days.find((day) => day.id === revision.dayId);
+  const movementIds = uniqueStrings(nextMovements.map((movement) => movement.id));
+  const addedPlaceIds = revision.kind === "add_place_to_day" ? [revision.placeId] : [];
+  const removedPlaceIds = revision.kind === "remove_place_from_day" ? [revision.placeId] : [];
+  const movedPlaceIds = revision.kind === "move_place_within_day" ? [revision.placeId] : [];
+  const requiresTimingReview = Boolean(movementIds.length);
+  const requiresMealRestSpacingReview = revision.kind === "add_place_to_day"
+    || revision.kind === "remove_place_from_day"
+    || movedPlaceIds.some((placeId) => placeAffectsMealRestSpacing(before, placeId));
+  const capacityRisk = (nextDay?.stops.length ?? 0) >= 5;
+  const backtrackingRisk = Boolean(nextDay && dayHasAreaBacktracking(after, nextDay));
+  const fixedTimeRisk = fixedTimeStopCount(previousDay) >= 2 || fixedTimeStopCount(nextDay) >= 2;
+  const readiness: DirectBlueprintReplanReadinessStatus = movementIds.length ? "ready_for_route_refresh" : "no_replan_needed";
+  return {
+    dayId: revision.dayId,
+    addedPlaceIds,
+    removedPlaceIds,
+    movedPlaceIds,
+    movementIds,
+    requiresRouteRefresh: Boolean(movementIds.length),
+    requiresTimingReview,
+    requiresMealRestSpacingReview,
+    capacityRisk,
+    backtrackingRisk,
+    fixedTimeRisk,
+    readiness,
+    reasons: routeImpactReasons({ revision, requiresTimingReview, requiresMealRestSpacingReview, capacityRisk, backtrackingRisk, fixedTimeRisk })
+  };
+}
+
+function routeImpactReasons(input: { revision: DirectBlueprintDayRevision; requiresTimingReview: boolean; requiresMealRestSpacingReview: boolean; capacityRisk: boolean; backtrackingRisk: boolean; fixedTimeRisk: boolean }): string[] {
+  const reasons = [`${input.revision.kind} changed the saved itinerary order for this day.`];
+  if (input.requiresTimingReview) reasons.push("Adjacent movement timing should be reviewed before execution.");
+  if (input.requiresMealRestSpacingReview) reasons.push("Meal and rest spacing should be checked after this edit.");
+  if (input.capacityRisk) reasons.push("The edited day has five or more planned stops.");
+  if (input.backtrackingRisk) reasons.push("The edited sequence revisits an area and may create backtracking.");
+  if (input.fixedTimeRisk) reasons.push("The edited day includes multiple fixed time labels.");
+  return uniqueStrings(reasons);
+}
+
+function mergeRouteImpactDays(days: DirectBlueprintRouteImpactDay[]): DirectBlueprintRouteImpactDay[] {
+  const byDay = new Map<string, DirectBlueprintRouteImpactDay>();
+  for (const day of days) {
+    const existing = byDay.get(day.dayId);
+    if (!existing) {
+      byDay.set(day.dayId, structuredClone(day));
+      continue;
+    }
+    byDay.set(day.dayId, {
+      dayId: day.dayId,
+      addedPlaceIds: uniqueStrings([...existing.addedPlaceIds, ...day.addedPlaceIds]),
+      removedPlaceIds: uniqueStrings([...existing.removedPlaceIds, ...day.removedPlaceIds]),
+      movedPlaceIds: uniqueStrings([...existing.movedPlaceIds, ...day.movedPlaceIds]),
+      movementIds: uniqueStrings([...existing.movementIds, ...day.movementIds]),
+      requiresRouteRefresh: existing.requiresRouteRefresh || day.requiresRouteRefresh,
+      requiresTimingReview: existing.requiresTimingReview || day.requiresTimingReview,
+      requiresMealRestSpacingReview: existing.requiresMealRestSpacingReview || day.requiresMealRestSpacingReview,
+      capacityRisk: existing.capacityRisk || day.capacityRisk,
+      backtrackingRisk: existing.backtrackingRisk || day.backtrackingRisk,
+      fixedTimeRisk: existing.fixedTimeRisk || day.fixedTimeRisk,
+      readiness: strongerReadiness(existing.readiness, day.readiness),
+      reasons: uniqueStrings([...existing.reasons, ...day.reasons])
+    });
+  }
+  return [...byDay.values()];
+}
+
+function replanReadinessForImpacts(days: DirectBlueprintRouteImpactDay[]): DirectBlueprintReplanReadiness {
+  const assistedDayIds = days.filter((day) => day.readiness === "assisted_replanning_required").map((day) => day.dayId);
+  if (assistedDayIds.length) {
+    return {
+      status: "assisted_replanning_required",
+      dayIds: assistedDayIds,
+      reason: "At least one edited day needs assisted replanning before it can be treated as execution-ready."
+    };
+  }
+  const routeDayIds = days.filter((day) => day.requiresRouteRefresh).map((day) => day.dayId);
+  if (routeDayIds.length) {
+    return {
+      status: "ready_for_route_refresh",
+      dayIds: routeDayIds,
+      reason: "These direct itinerary edits are saved, but affected routes and timing still need refresh before execution."
+    };
+  }
+  return {
+    status: "no_replan_needed",
+    dayIds: [],
+    reason: "This direct edit does not change route order or timing."
+  };
+}
+
+function strongerReadiness(left: DirectBlueprintReplanReadinessStatus, right: DirectBlueprintReplanReadinessStatus): DirectBlueprintReplanReadinessStatus {
+  const rank: Record<DirectBlueprintReplanReadinessStatus, number> = {
+    no_replan_needed: 0,
+    ready_for_route_refresh: 1,
+    assisted_replanning_required: 2
+  };
+  return rank[right] > rank[left] ? right : left;
+}
+
+function placeAffectsMealRestSpacing(blueprint: TripBlueprint, placeId: string): boolean {
+  const place = blueprint.places.find((candidate) => candidate.id === placeId);
+  const text = normalizedText(`${place?.category ?? ""} ${place?.visitRole ?? ""} ${place?.name ?? ""}`);
+  return /\b(lunch|dinner|breakfast|meal|restaurant|food|market|coffee|cafe|café|tea|dessert|bakery|bar|rest|break|hotel|lodging)\b/.test(text);
+}
+
+function dayHasAreaBacktracking(blueprint: TripBlueprint, day: BlueprintItineraryDay): boolean {
+  const placeById = new Map(blueprint.places.map((place) => [place.id, place] as const));
+  const areas = day.stops.map((stop) => normalizedText(placeById.get(stop.placeId)?.area ?? placeById.get(stop.placeId)?.locationLabel ?? "")).filter(Boolean);
+  const lastIndexByArea = new Map<string, number>();
+  for (const [index, area] of areas.entries()) {
+    const lastIndex = lastIndexByArea.get(area);
+    if (lastIndex !== undefined && index - lastIndex > 1) return true;
+    lastIndexByArea.set(area, index);
+  }
+  return false;
+}
+
+function fixedTimeStopCount(day: BlueprintItineraryDay | undefined): number {
+  return day?.stops.filter((stop) => Boolean(stop.time)).length ?? 0;
 }
 
 function movementsForDay(blueprint: TripBlueprint, dayId: string): BlueprintMovement[] {

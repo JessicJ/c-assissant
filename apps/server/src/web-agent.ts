@@ -1,10 +1,10 @@
-import type { Plan } from "@c-assistant/core";
+import type { DirectBlueprintAssistedReplanningHandoff, Plan } from "@c-assistant/core";
 
 export type WebAgentMode = "new_plan" | "revise_plan";
 
-export function parseWebAgentTurn(value: unknown): { message: string; mode: WebAgentMode; impactConfirmed?: boolean; expectedPlanId?: string; expectedVersion?: number } {
+export function parseWebAgentTurn(value: unknown): { message: string; mode: WebAgentMode; impactConfirmed?: boolean; expectedPlanId?: string; expectedVersion?: number; assistedReplanning?: DirectBlueprintAssistedReplanningHandoff } {
   if (!value || typeof value !== "object") throw new Error("Tell the Agent what you need first.");
-  const body = value as { message?: unknown; mode?: unknown; impactConfirmed?: unknown; expectedPlanId?: unknown; expectedVersion?: unknown };
+  const body = value as { message?: unknown; mode?: unknown; impactConfirmed?: unknown; expectedPlanId?: unknown; expectedVersion?: unknown; assistedReplanning?: unknown };
   const mode = body.mode ?? "new_plan";
   if (mode !== "new_plan" && mode !== "revise_plan") throw new Error("Choose whether to create a new Plan or revise the current draft.");
   if (mode === "new_plan") {
@@ -15,11 +15,25 @@ export function parseWebAgentTurn(value: unknown): { message: string; mode: WebA
   }
   const message = typeof body.message === "string" ? body.message.trim() : "";
   if (!message) throw new Error("Tell the Agent what you need first.");
-  if (message.length > 1_500) throw new Error("Keep the message under 1,500 characters.");
+  const assistedReplanning = parseAssistedReplanningHandoff(body.assistedReplanning);
+  if (message.length > (assistedReplanning ? 8_000 : 1_500)) throw new Error(assistedReplanning ? "Keep the assisted replanning request under 8,000 characters." : "Keep the message under 1,500 characters.");
   if (body.impactConfirmed !== undefined && typeof body.impactConfirmed !== "boolean") throw new Error("Impact confirmation must be a boolean.");
   if (body.expectedPlanId !== undefined && (typeof body.expectedPlanId !== "string" || !body.expectedPlanId.trim())) throw new Error("Expected Plan id must be a non-empty string.");
   if (body.expectedVersion !== undefined && (!Number.isInteger(body.expectedVersion) || Number(body.expectedVersion) < 1)) throw new Error("Expected Plan version must be a positive integer.");
-  return { message, mode, ...(body.impactConfirmed === true ? { impactConfirmed: true } : {}), ...(typeof body.expectedPlanId === "string" ? { expectedPlanId: body.expectedPlanId } : {}), ...(typeof body.expectedVersion === "number" ? { expectedVersion: body.expectedVersion } : {}) };
+  return { message, mode, ...(body.impactConfirmed === true ? { impactConfirmed: true } : {}), ...(typeof body.expectedPlanId === "string" ? { expectedPlanId: body.expectedPlanId } : {}), ...(typeof body.expectedVersion === "number" ? { expectedVersion: body.expectedVersion } : {}), ...(assistedReplanning ? { assistedReplanning } : {}) };
+}
+
+function parseAssistedReplanningHandoff(value: unknown): DirectBlueprintAssistedReplanningHandoff | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Assisted replanning needs a structured handoff.");
+  const handoff = value as { status?: unknown; baseBlueprintId?: unknown; baseBlueprintVersion?: unknown; request?: unknown; affectedDayIds?: unknown; affectedPlaceIds?: unknown; replanRequirement?: unknown; revisions?: unknown };
+  if (handoff.status !== "ready_for_assisted_replanning") throw new Error("Assisted replanning needs a prepared handoff.");
+  if (typeof handoff.baseBlueprintId !== "string" || !handoff.baseBlueprintId.trim()) throw new Error("Assisted replanning needs a base Trip Blueprint.");
+  if (!Number.isInteger(handoff.baseBlueprintVersion) || Number(handoff.baseBlueprintVersion) < 1) throw new Error("Assisted replanning needs a base Trip Blueprint version.");
+  if (typeof handoff.request !== "string" || !handoff.request.trim()) throw new Error("Assisted replanning needs a request.");
+  if (!Array.isArray(handoff.affectedDayIds) || !Array.isArray(handoff.affectedPlaceIds) || !Array.isArray(handoff.revisions)) throw new Error("Assisted replanning needs affected scope and pending edits.");
+  if (!handoff.replanRequirement || typeof handoff.replanRequirement !== "object" || Array.isArray(handoff.replanRequirement)) throw new Error("Assisted replanning needs its requirement.");
+  return value as DirectBlueprintAssistedReplanningHandoff;
 }
 
 export function assertWebAgentPlanUnchanged(expected: Pick<Plan, "id" | "version">, current: Pick<Plan, "id" | "version">): void {

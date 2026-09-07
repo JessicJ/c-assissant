@@ -3,6 +3,8 @@ import type { ConnectorResult, WeatherSnapshot } from "@c-assistant/connectors";
 import type {
   AgentRuntimeKind,
   BookingImportPreview,
+  DirectBlueprintAssistedReplanningHandoff,
+  DirectBlueprintReplanRequirement,
   DirectBlueprintRevision,
   DirectBlueprintRevisionBatchMetadata,
   Plan,
@@ -111,10 +113,27 @@ export type DirectBlueprintRevisionBatchRequest = VersionedPlanMutationRequest &
   revisions: DirectBlueprintRevisionInput[];
 };
 
+export type DirectBlueprintAssistedReplanningRequest = VersionedPlanMutationRequest & {
+  replanRequirement: DirectBlueprintReplanRequirement;
+  revisions: DirectBlueprintRevisionInput[];
+};
+
 export type DirectBlueprintRevisionResponse = WorkspaceSnapshot & {
   workspace: WorkspaceSnapshot;
   revision: DirectBlueprintRevisionBatchMetadata;
   error?: string;
+};
+
+export type DirectBlueprintAssistedReplanningResponse = {
+  workspace: WorkspaceSnapshot;
+  handoff: DirectBlueprintAssistedReplanningHandoff;
+  error?: string;
+};
+
+export type DirectBlueprintRevisionErrorResponse = {
+  error?: string;
+  code?: string;
+  replanRequirement?: DirectBlueprintReplanRequirement;
 };
 
 export type ConnectorTestKind = "google" | "uber" | "telegram";
@@ -139,10 +158,22 @@ async function readJson<T>(response: Response): Promise<T> {
   }
 }
 
+export class ApiRequestError extends Error {
+  readonly status: number;
+  readonly payload: unknown;
+
+  constructor(message: string, status: number, payload: unknown) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
 async function requestJson<T>(path: string, init: RequestInit | undefined, defaultError: string): Promise<T> {
   const response = await fetch(path, init);
   const payload = await readJson<T & { error?: string }>(response);
-  if (!response.ok) throw new Error(payload.error ?? defaultError);
+  if (!response.ok) throw new ApiRequestError(payload.error ?? defaultError, response.status, payload);
   return payload;
 }
 
@@ -229,6 +260,14 @@ export async function applyDirectBlueprintRevisionBatch(planId: string, body: Di
   );
 }
 
+export async function prepareDirectBlueprintAssistedReplanning(planId: string, body: DirectBlueprintAssistedReplanningRequest): Promise<DirectBlueprintAssistedReplanningResponse> {
+  return await requestJson<DirectBlueprintAssistedReplanningResponse>(
+    `/api/plans/${encodeURIComponent(planId)}/blueprint-revisions/assisted-replanning`,
+    jsonRequest("POST", body),
+    "Unable to prepare assisted replanning for this itinerary edit."
+  );
+}
+
 export async function refreshPlanRoutes(planId: string, body: PlanRouteRefreshRequest): Promise<PlanRouteRefreshResponse> {
   return await requestJson<PlanRouteRefreshResponse>(
     `/api/plans/${encodeURIComponent(planId)}/presentation/routes/refresh`,
@@ -263,6 +302,7 @@ export async function sendAgentChat(body: {
   expectedPlanId?: string;
   expectedVersion?: number;
   impactConfirmed?: boolean;
+  assistedReplanning?: DirectBlueprintAssistedReplanningHandoff;
 }): Promise<AgentChatResponse> {
   return await requestJson<AgentChatResponse>("/api/agent/chat", jsonRequest("POST", body), "Landi is temporarily unavailable.");
 }

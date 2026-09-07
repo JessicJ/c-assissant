@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import type { BlueprintPlacePriority, DirectBlueprintRevision, PlanAccommodationInput, PlanArrivalInput, PlanTransportPreferenceInput, PlanTravelContextInput } from "@c-assistant/core";
+import type { BlueprintPlacePriority, DirectBlueprintReplanRequirement, DirectBlueprintRevision, PlanAccommodationInput, PlanArrivalInput, PlanTransportPreferenceInput, PlanTravelContextInput } from "@c-assistant/core";
+import { DirectBlueprintReplanRequirementError, prepareDirectBlueprintAssistedReplanningHandoff } from "@c-assistant/core";
 import type { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { prepareAccommodationDepartures } from "./accommodation-departure.js";
 import { connectorResponseStatus } from "./connector-bundle.js";
@@ -103,8 +104,41 @@ export function registerPlanManagementRoutes(server: FastifyInstance, dependenci
       });
       return { ...result.workspace, workspace: result.workspace, revision: result.revision };
     } catch (error) {
+      if (error instanceof DirectBlueprintReplanRequirementError) {
+        return reply.code(409).send({ error: error.message, code: error.code, replanRequirement: error.replanRequirement });
+      }
       const message = error instanceof Error ? error.message : "This Blueprint Revision could not be applied.";
       return reply.code(/changed before|already working|already scheduled/i.test(message) ? 409 : 400).send({ error: message });
+    }
+  });
+  server.post<{ Params: { planId: string }; Body: unknown }>("/api/plans/:planId/blueprint-revisions/assisted-replanning", async (request, reply) => {
+    if (getGeneratingPlan()) return reply.code(409).send({ error: "Another Plan generation is already running." });
+    let revisions: DirectBlueprintRevision[];
+    let replanRequirement: DirectBlueprintReplanRequirement;
+    let expectedVersion: number;
+    let expectedBlueprintVersion: number | undefined;
+    try {
+      const createdAt = new Date().toISOString();
+      expectedVersion = expectedVersionFromBody(request.body);
+      expectedBlueprintVersion = expectedBlueprintVersionFromBody(request.body);
+      revisions = parseDirectBlueprintRevisions(request.body, createdAt);
+      replanRequirement = replanRequirementFromBody(request.body);
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "This assisted replanning request is invalid." });
+    }
+    try {
+      const workspace = store.getWorkspace();
+      if (workspace.activePlan.id !== request.params.planId || workspace.activePlan.version !== expectedVersion) {
+        return reply.code(409).send({ error: "The Plan changed before assisted replanning could start. Refresh the workspace and review the latest version." });
+      }
+      if (!workspace.activeBlueprint) return reply.code(409).send({ error: "Assisted replanning needs a current Trip Blueprint." });
+      if (expectedBlueprintVersion !== undefined && workspace.activeBlueprint.version !== expectedBlueprintVersion) {
+        return reply.code(409).send({ error: "The Trip Blueprint changed before assisted replanning could start. Refresh the workspace and review the latest version." });
+      }
+      const handoff = prepareDirectBlueprintAssistedReplanningHandoff(workspace.activeBlueprint, { replanRequirement, revisions });
+      return { workspace, handoff };
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "This assisted replanning request could not be prepared." });
     }
   });
   server.post<{ Params: { planId: string }; Body: { message?: string; expectedVersion?: number } }>("/api/plans/:planId/change-impact", async (request, reply) => {
@@ -308,6 +342,11 @@ function directRevisionPosition(value: unknown): Extract<DirectBlueprintRevision
   if (value.kind === "end") return { kind: "end" };
   if (value.kind === "after") return { kind: "after", afterPlaceId: stringField(value, "afterPlaceId") };
   throw new Error("Direct itinerary edits need a supported placement position.");
+}
+
+function replanRequirementFromBody(value: unknown): DirectBlueprintReplanRequirement {
+  if (!isRecord(value) || !isRecord(value.replanRequirement)) throw new Error("Assisted replanning needs the replanning requirement from the failed direct edit.");
+  return value.replanRequirement as unknown as DirectBlueprintReplanRequirement;
 }
 
 function stringField(value: Record<string, unknown>, key: string): string {
