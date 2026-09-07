@@ -1,5 +1,7 @@
 import { assertTripBlueprintIntegrity, type BlueprintItineraryBlock, type BlueprintItineraryDay, type BlueprintMovement, type BlueprintMovementMode, type BlueprintPlace, type BlueprintStop, type TripBlueprint } from "./trip-blueprint.js";
 
+const DIRECT_EDIT_ROUTE_REFRESH_REASON = "Refresh this route leg after direct itinerary edits.";
+
 export type DirectBlueprintRevision =
   | {
     kind: "add_place_to_day";
@@ -407,6 +409,12 @@ function movementsForStops(dayId: string, stops: BlueprintStop[], places: Bluepr
     status: "recheck",
     label: "Route needs refresh",
     detail: "This day was edited directly. Refresh routing, timing, meals, and opening constraints before execution.",
+    display: {
+      routeLabel: "Route needs refresh",
+      refreshReason: DIRECT_EDIT_ROUTE_REFRESH_REASON,
+      showAsFormalRoute: true,
+      mapLineState: "needs_refresh"
+    },
     evidence: []
   }));
 }

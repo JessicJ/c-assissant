@@ -69,6 +69,10 @@ test("Direct Blueprint Revision adds a place to one day without losing catalog c
   assert.deepEqual(revised.days[0]?.blocks?.map((block) => [block.kind, block.placeId, block.order]), [["stop", "a", 1], ["stop", "c", 2], ["stop", "b", 3]]);
   assert.deepEqual(revised.movements.map((movement) => [movement.originPlaceId, movement.destinationPlaceId, movement.status]), [["a", "c", "recheck"], ["c", "b", "recheck"]]);
   assert.deepEqual(revised.movements.map((movement) => movement.mode), ["walking", "walking"]);
+  assert.deepEqual(revised.movements.map((movement) => movement.display), [
+    { routeLabel: "Route needs refresh", refreshReason: "Refresh this route leg after direct itinerary edits.", showAsFormalRoute: true, mapLineState: "needs_refresh" },
+    { routeLabel: "Route needs refresh", refreshReason: "Refresh this route leg after direct itinerary edits.", showAsFormalRoute: true, mapLineState: "needs_refresh" }
+  ]);
   assert.deepEqual(revised.places.map((candidate) => candidate.id), ["a", "b", "c"]);
 });
 
@@ -145,6 +149,51 @@ test("Direct Blueprint Revision moves a scheduled place within one day", () => {
   assert.deepEqual(revised.days[0]?.candidatePlaceIds, ["c"]);
   assert.deepEqual(revised.movements.map((movement) => [movement.originPlaceId, movement.destinationPlaceId, movement.status]), [["b", "a", "recheck"]]);
   assert.deepEqual(revised.movements.map((movement) => movement.mode), ["walking"]);
+  assert.deepEqual(revised.movements.map((movement) => movement.display?.mapLineState), ["needs_refresh"]);
+});
+
+test("Direct Blueprint Revision only marks edited-day movements as needing route refresh", () => {
+  const original = blueprint();
+  original.endDate = "2026-09-02";
+  original.places.push(place("d"), place("e"));
+  original.days.push({
+    id: "d2",
+    date: "2026-09-02",
+    kind: "scheduled",
+    city: "Tokyo",
+    title: "West Tokyo",
+    summary: "Another compact sequence.",
+    stops: [{ placeId: "d", order: 1 }, { placeId: "e", order: 2 }],
+    candidatePlaceIds: []
+  });
+  original.movements.push({
+    id: "m2",
+    dayId: "d2",
+    originPlaceId: "d",
+    destinationPlaceId: "e",
+    mode: "walking",
+    status: "verified",
+    durationMinutes: 12,
+    label: "Verified day two walk",
+    detail: "Keep this saved route.",
+    display: { routeLabel: "Verified day two walk", showAsFormalRoute: true, mapLineState: "formal" },
+    evidence: []
+  });
+
+  const result = applyDirectBlueprintRevisionWithMetadata(original, {
+    kind: "add_place_to_day",
+    placeId: "c",
+    dayId: "d1",
+    position: { kind: "after", afterPlaceId: "a" },
+    createdAt: "2026-08-27T00:00:00.000Z"
+  });
+
+  assert.deepEqual(result.metadata.affectedDayIds, ["d1"]);
+  assert.deepEqual(result.metadata.routeRefresh.dayIds, ["d1"]);
+  assert.deepEqual(result.metadata.routeRefresh.movementIds, ["movement-d1-1", "movement-d1-2"]);
+  const dayTwoMovement = result.blueprint.movements.find((movement) => movement.id === "m2");
+  assert.equal(dayTwoMovement?.status, "verified");
+  assert.equal(dayTwoMovement?.display?.mapLineState, "formal");
 });
 
 test("Direct Blueprint Revision uses transit when edited adjacent places are far apart or transport nodes", () => {

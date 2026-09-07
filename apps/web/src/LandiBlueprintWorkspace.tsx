@@ -16,6 +16,7 @@ import {
   scheduledDayIdForPlace,
   type BlueprintMapMarkerDisplay,
   type BlueprintMapPointDisplay,
+  type BlueprintRouteSegmentDisplay,
   type BlueprintPlaceDisplay,
   type BlueprintWorkspaceArea,
   type BlueprintWorkspaceDisplay,
@@ -38,6 +39,12 @@ type GoogleMapInstance = {
 type GoogleLatLngLiteral = { lat: number; lng: number };
 type GoogleLatLngBounds = { extend: (latLng: GoogleLatLngLiteral) => void };
 type GoogleMapLayer = { setMap: (map: GoogleMapInstance | null) => void };
+type MapRouteLineState = BlueprintRouteSegmentDisplay["mapLineState"];
+type BlueprintMapRouteLine = {
+  id: string;
+  mapLineState: MapRouteLineState;
+  points: [BlueprintMapPointDisplay, BlueprintMapPointDisplay];
+};
 type GoogleMapsNamespace = {
   Map: new (element: HTMLElement, options: Record<string, unknown>) => GoogleMapInstance;
   LatLngBounds: new () => GoogleLatLngBounds;
@@ -296,7 +303,7 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
         </div>
       </aside>
 
-      <BlueprintMap routePlaces={itinerary.routePlaces} routeRefresh={itinerary.routeRefresh} markers={itinerary.markers} selectedPlaceId={selectedPlaceId} onSelectPlace={selectMapPlace} onRequestRouteRefresh={onRequestRouteRefresh} routeRefreshBusy={routeRefreshBusy} />
+      <BlueprintMap routePlaces={itinerary.routePlaces} routeSegments={itinerary.routeSegments} routeRefresh={itinerary.routeRefresh} markers={itinerary.markers} selectedPlaceId={selectedPlaceId} onSelectPlace={selectMapPlace} onRequestRouteRefresh={onRequestRouteRefresh} routeRefreshBusy={routeRefreshBusy} />
 
       <aside className="blueprint-side-panel" aria-label="Itinerary side panel">
         <div className="blueprint-panel-body">
@@ -400,7 +407,7 @@ function PendingItineraryCard({ item, selected, onSelect }: { item: ItineraryCar
   </button>;
 }
 
-function BlueprintMap(props: { routePlaces: BlueprintMapPointDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; onRequestRouteRefresh?: ((refresh: ItineraryRouteRefreshDisplay) => void) | undefined; routeRefreshBusy?: boolean }) {
+function BlueprintMap(props: { routePlaces: BlueprintMapPointDisplay[]; routeSegments: BlueprintRouteSegmentDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; onRequestRouteRefresh?: ((refresh: ItineraryRouteRefreshDisplay) => void) | undefined; routeRefreshBusy?: boolean }) {
   const [googleUnavailable, setGoogleUnavailable] = useState(false);
   const handleGoogleUnavailable = useCallback(() => setGoogleUnavailable(true), []);
   const apiKey = __LANDI_GOOGLE_MAPS_API_KEY__;
@@ -408,7 +415,7 @@ function BlueprintMap(props: { routePlaces: BlueprintMapPointDisplay[]; routeRef
   return <LeafletBlueprintMap {...props} />;
 }
 
-function GoogleBlueprintMap({ routePlaces, routeRefresh, markers, selectedPlaceId, onSelectPlace, onRequestRouteRefresh, routeRefreshBusy, apiKey, onUnavailable }: { routePlaces: BlueprintMapPointDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; onRequestRouteRefresh?: ((refresh: ItineraryRouteRefreshDisplay) => void) | undefined; routeRefreshBusy?: boolean; apiKey: string; onUnavailable: () => void }) {
+function GoogleBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers, selectedPlaceId, onSelectPlace, onRequestRouteRefresh, routeRefreshBusy, apiKey, onUnavailable }: { routePlaces: BlueprintMapPointDisplay[]; routeSegments: BlueprintRouteSegmentDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; onRequestRouteRefresh?: ((refresh: ItineraryRouteRefreshDisplay) => void) | undefined; routeRefreshBusy?: boolean; apiKey: string; onUnavailable: () => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<GoogleMapInstance | null>(null);
   const mapsRef = useRef<GoogleMapsNamespace | null>(null);
@@ -416,10 +423,12 @@ function GoogleBlueprintMap({ routePlaces, routeRefresh, markers, selectedPlaceI
   const lastFitKeyRef = useRef("");
   const [mapReady, setMapReady] = useState(false);
   const points = markers.filter((marker) => validCoordinates(marker.coordinates));
+  const routeLines = routeLinesForMap(routePlaces, routeSegments);
   const routeLatLngs = routePlaces.filter((place) => validCoordinates(place.coordinates)).map((place) => googleLatLngForCoordinates(place.coordinates!));
   const fitLatLngs = routeLatLngs.length ? routeLatLngs : points.map((marker) => googleLatLngForCoordinates(marker.coordinates!));
   const fitKey = [
     routePlaces.filter((place) => validCoordinates(place.coordinates)).map((place) => `route:${place.placeId}:${place.coordinates!.join(",")}`).join("|"),
+    routeLines.map((line) => `line:${line.id}:${line.mapLineState}`).join("|"),
     points.map((marker) => `marker:${marker.placeId}:${marker.coordinates!.join(",")}:${marker.markerState}:${marker.type}`).join("|")
   ].join("::");
 
@@ -469,14 +478,21 @@ function GoogleBlueprintMap({ routePlaces, routeRefresh, markers, selectedPlaceI
     clearGoogleMapLayers(layersRef.current);
     const nextLayers: GoogleMapLayer[] = [];
 
-    if (routeLatLngs.length > 1) {
+    if (routeLines.length) {
+      for (const line of routeLines) {
+        nextLayers.push(new maps.Polyline({
+          geodesic: true,
+          map,
+          path: line.points.map((point) => googleLatLngForCoordinates(point.coordinates!)),
+          ...googleRouteLineStyle(line.mapLineState)
+        }));
+      }
+    } else if (routeLatLngs.length > 1) {
       nextLayers.push(new maps.Polyline({
         geodesic: true,
         map,
         path: routeLatLngs,
-        strokeColor: routeRefresh ? "#6f97a8" : "#276758",
-        strokeOpacity: routeRefresh ? 0.38 : 0.72,
-        strokeWeight: 3
+        ...googleRouteLineStyle(routeRefresh ? "needs_refresh" : "formal")
       }));
     }
 
@@ -508,7 +524,7 @@ function GoogleBlueprintMap({ routePlaces, routeRefresh, markers, selectedPlaceI
       map.setZoom(11);
     }
     lastFitKeyRef.current = fitKey;
-  }, [fitKey, fitLatLngs, mapReady, onSelectPlace, points, routeLatLngs, routeRefresh, selectedPlaceId]);
+  }, [fitKey, fitLatLngs, mapReady, onSelectPlace, points, routeLatLngs, routeLines, routeRefresh, selectedPlaceId]);
 
   return <section className={routeRefresh ? "blueprint-map needs-refresh" : "blueprint-map"} aria-label="Itinerary map context">
     <MapRouteRefreshHeader routeRefresh={routeRefresh} onRequestRouteRefresh={onRequestRouteRefresh} routeRefreshBusy={Boolean(routeRefreshBusy)} />
@@ -516,16 +532,18 @@ function GoogleBlueprintMap({ routePlaces, routeRefresh, markers, selectedPlaceI
   </section>;
 }
 
-function LeafletBlueprintMap({ routePlaces, routeRefresh, markers, selectedPlaceId, onSelectPlace, onRequestRouteRefresh, routeRefreshBusy }: { routePlaces: BlueprintMapPointDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; onRequestRouteRefresh?: ((refresh: ItineraryRouteRefreshDisplay) => void) | undefined; routeRefreshBusy?: boolean }) {
+function LeafletBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers, selectedPlaceId, onSelectPlace, onRequestRouteRefresh, routeRefreshBusy }: { routePlaces: BlueprintMapPointDisplay[]; routeSegments: BlueprintRouteSegmentDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; onRequestRouteRefresh?: ((refresh: ItineraryRouteRefreshDisplay) => void) | undefined; routeRefreshBusy?: boolean }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layersRef = useRef<L.LayerGroup | null>(null);
   const lastFitKeyRef = useRef("");
   const points = markers.filter((marker) => validCoordinates(marker.coordinates));
+  const routeLines = routeLinesForMap(routePlaces, routeSegments);
   const routeLatLngs = routePlaces.filter((place) => validCoordinates(place.coordinates)).map((place) => latLngForCoordinates(place.coordinates!));
   const fitLatLngs = routeLatLngs.length ? routeLatLngs : points.map((marker) => latLngForCoordinates(marker.coordinates!));
   const fitKey = [
     routePlaces.filter((place) => validCoordinates(place.coordinates)).map((place) => `route:${place.placeId}:${place.coordinates!.join(",")}`).join("|"),
+    routeLines.map((line) => `line:${line.id}:${line.mapLineState}`).join("|"),
     points.map((marker) => `marker:${marker.placeId}:${marker.coordinates!.join(",")}:${marker.markerState}:${marker.type}`).join("|")
   ].join("::");
 
@@ -558,12 +576,17 @@ function LeafletBlueprintMap({ routePlaces, routeRefresh, markers, selectedPlace
     if (!map || !layers) return;
     layers.clearLayers();
 
-    if (routeLatLngs.length > 1) {
+    if (routeLines.length) {
+      for (const line of routeLines) {
+        L.polyline(line.points.map((point) => latLngForCoordinates(point.coordinates!)), {
+          ...leafletRouteLineStyle(line.mapLineState),
+          lineCap: "round",
+          lineJoin: "round"
+        }).addTo(layers);
+      }
+    } else if (routeLatLngs.length > 1) {
       L.polyline(routeLatLngs, {
-        color: routeRefresh ? "#6f97a8" : "#276758",
-        opacity: routeRefresh ? 0.42 : 0.72,
-        weight: 3,
-        ...(routeRefresh ? { dashArray: "6 8" } : {}),
+        ...leafletRouteLineStyle(routeRefresh ? "needs_refresh" : "formal"),
         lineCap: "round",
         lineJoin: "round"
       }).addTo(layers);
@@ -596,7 +619,7 @@ function LeafletBlueprintMap({ routePlaces, routeRefresh, markers, selectedPlace
       map.setView([35.6812, 139.7671], 11);
     }
     lastFitKeyRef.current = fitKey;
-  }, [fitKey, fitLatLngs, onSelectPlace, points, routeLatLngs, routeRefresh, selectedPlaceId]);
+  }, [fitKey, fitLatLngs, onSelectPlace, points, routeLatLngs, routeLines, routeRefresh, selectedPlaceId]);
 
   return <section className={routeRefresh ? "blueprint-map needs-refresh" : "blueprint-map"} aria-label="Itinerary map context">
     <MapRouteRefreshHeader routeRefresh={routeRefresh} onRequestRouteRefresh={onRequestRouteRefresh} routeRefreshBusy={Boolean(routeRefreshBusy)} />
@@ -879,6 +902,27 @@ function recolorMapFeatureTile(context: CanvasRenderingContext2D, width: number,
     data[index + 3] = Math.round(alpha * (isWater ? 0.88 : 0.8));
   }
   context.putImageData(imageData, 0, 0);
+}
+
+function routeLinesForMap(routePlaces: BlueprintMapPointDisplay[], routeSegments: BlueprintRouteSegmentDisplay[]): BlueprintMapRouteLine[] {
+  const placeById = new Map(routePlaces.filter((place) => validCoordinates(place.coordinates)).map((place) => [place.placeId, place] as const));
+  return routeSegments.flatMap((segment) => {
+    const origin = placeById.get(segment.originPlaceId);
+    const destination = placeById.get(segment.destinationPlaceId);
+    return origin && destination ? [{ id: segment.id, mapLineState: segment.mapLineState, points: [origin, destination] as [BlueprintMapPointDisplay, BlueprintMapPointDisplay] }] : [];
+  });
+}
+
+function googleRouteLineStyle(state: MapRouteLineState): Record<string, unknown> {
+  if (state === "needs_refresh") return { strokeColor: "#6f97a8", strokeOpacity: 0.42, strokeWeight: 3, zIndex: 2 };
+  if (state === "reference") return { strokeColor: "#84958f", strokeOpacity: 0.34, strokeWeight: 2, zIndex: 1 };
+  return { strokeColor: "#276758", strokeOpacity: 0.72, strokeWeight: 3, zIndex: 3 };
+}
+
+function leafletRouteLineStyle(state: MapRouteLineState): L.PolylineOptions {
+  if (state === "needs_refresh") return { color: "#6f97a8", opacity: 0.42, weight: 3, dashArray: "6 8" };
+  if (state === "reference") return { color: "#84958f", opacity: 0.34, weight: 2, dashArray: "2 7" };
+  return { color: "#276758", opacity: 0.72, weight: 3 };
 }
 
 function mapMarkerHtml(marker: BlueprintMapMarkerDisplay, selected: boolean): string {

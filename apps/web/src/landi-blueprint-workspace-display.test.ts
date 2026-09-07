@@ -956,14 +956,14 @@ describe("Landi Blueprint workspace display helpers", () => {
   it("surfaces direct edit route refresh without marking unrelated routes", () => {
     const presentation = presentationFixture({
       routeSegments: [
-        { id: "route-1", dayId: "day-1", originPlaceId: "temple", destinationPlaceId: "lunch", mode: "unknown", verification: "needs_verification", label: "Route needs refresh", detail: "This day was edited directly. Refresh routing, timing, meals, and opening constraints before execution.", sourceRefs: [] },
+        { id: "route-1", dayId: "day-1", originPlaceId: "temple", destinationPlaceId: "lunch", mode: "unknown", verification: "needs_verification", label: "Walk toward lunch", detail: "Keep this adjacent leg in the itinerary order.", display: { routeLabel: "Walk toward lunch", refreshReason: "Refresh this route leg after direct itinerary edits.", showAsFormalRoute: true, mapLineState: "needs_refresh" }, sourceRefs: [] },
         { id: "route-2", dayId: "day-1", originPlaceId: "lunch", destinationPlaceId: "craft", mode: "walking", verification: "verified", label: "Short walk", sourceRefs: [] }
       ]
     });
     const itinerary = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).itineraries[0]!;
     assert.equal(itinerary.routeSegments[0]?.needsRefresh, true);
     assert.equal(itinerary.routeSegments[1]?.needsRefresh, false);
-    assert.equal(itinerary.items[0]?.routeStatusLabel, "Route after needs refresh");
+    assert.equal(itinerary.items[0]?.routeStatusLabel, "Refresh this route leg after direct itinerary edits.");
     assert.equal(itinerary.items[1]?.routeStatusLabel, undefined);
     assert.deepEqual(itinerary.routeRefresh, {
       segmentCount: 1,
