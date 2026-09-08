@@ -1,4 +1,4 @@
-import type { BlueprintEvidenceRef, BlueprintItineraryBlock, BlueprintPlaceRelationship, BlueprintPreparationGroup, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelTipTheme, DirectBlueprintRevisionBatchMetadata, ItineraryDay, Plan, PlanPlace, PlanPlacePriority, PlanPresentation, PlanPresentationEvent, PlanRouteSegment, SourceReference, Task } from "@c-assistant/core";
+import type { BlueprintActionRequirement, BlueprintBookingConstraint, BlueprintEvidenceRef, BlueprintItineraryBlock, BlueprintPlaceRelationship, BlueprintPreparationGroup, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelTipTheme, DirectBlueprintRevisionBatchMetadata, ItineraryDay, Plan, PlanPlace, PlanPlacePriority, PlanPresentation, PlanPresentationEvent, PlanRouteSegment, SourceReference, Task } from "@c-assistant/core";
 import { groupPreparationItems } from "./plan-preparation-display.js";
 import { displayTripTitle } from "./trip-title.js";
 
@@ -80,7 +80,8 @@ export type ItineraryCardDisplay = {
   timeLabel: string;
   meta?: string;
   statusLabel?: string;
-  routeStatusLabel?: string;
+  routeAfterLabel?: string;
+  routeAfterStatusLabel?: string;
   routeAnchor?: boolean;
   reorderable?: boolean;
   editState?: "moved";
@@ -156,6 +157,7 @@ export type SourceMarkerDisplay = {
   label: string;
   summary: string;
   url?: string;
+  contexts?: string[];
 };
 
 export type ComparisonRow = {
@@ -188,6 +190,27 @@ export type DetailEventDisplay = {
   sources: SourceMarkerDisplay[];
 };
 
+export type DetailGuideContextDisplay = {
+  id: string;
+  kind: "food" | "product" | "experience";
+  label: string;
+  title: string;
+  description: string;
+  context?: string;
+  sources: SourceMarkerDisplay[];
+};
+
+type InformationalGuideTopic = {
+  id: string;
+  kind: "food" | "product" | "experience";
+  type: Exclude<GuideFilter, "all">;
+  label: string;
+  title: string;
+  summary: string;
+  context?: string;
+  evidence: BlueprintEvidenceRef[];
+};
+
 export type DetailPlaceDisplay = {
   placeId: string;
   title: string;
@@ -200,7 +223,9 @@ export type DetailPlaceDisplay = {
   planTitle?: string;
   planBody?: string;
   reservationNote?: string;
+  visitNotes: DetailRequirementNoteDisplay[];
   detailSections: DetailSectionDisplay[];
+  guideContext: DetailGuideContextDisplay[];
   relatedEvents: DetailEventDisplay[];
   sources: SourceMarkerDisplay[];
   sourceTitle?: string;
@@ -215,6 +240,13 @@ export type DetailPlaceDisplay = {
   removeActionLabel?: string;
   removeBlockedReason?: string;
   links: DetailLinkDisplay[];
+};
+
+export type DetailRequirementNoteDisplay = {
+  id: string;
+  title: string;
+  body: string;
+  completion?: string;
 };
 
 export type PlacePriorityActionDisplay = {
@@ -242,6 +274,8 @@ export type PreparationChecklistItemDisplay = {
   id: string;
   title: string;
   description?: string;
+  completion?: string;
+  context?: string;
   checked: boolean;
 };
 
@@ -327,8 +361,8 @@ export function appliedItineraryRevisionSummary(revision: DirectBlueprintRevisio
   const updateLabel = `${revision.revisionCount} itinerary update${revision.revisionCount === 1 ? "" : "s"}`;
   const routeCount = new Set(revision.routeRefresh.movementIds).size;
   const routeRefreshLabel = routeCount
-    ? `${routeCount} route leg${routeCount === 1 ? "" : "s"} need${routeCount === 1 ? "s" : ""} refresh`
-    : "No route legs need refresh";
+    ? `${routeCount} travel leg${routeCount === 1 ? " needs" : "s need"} checking`
+    : "No travel legs need checking";
   const impactReviewLabel = appliedItineraryImpactReviewLabel(revision);
   return {
     updateLabel,
@@ -341,7 +375,7 @@ export function appliedItineraryRevisionSummary(revision: DirectBlueprintRevisio
 function appliedItineraryImpactReviewLabel(revision: DirectBlueprintRevisionBatchMetadata): string {
   const impactDays = revision.routeImpact?.days ?? [];
   if (!impactDays.length) return "";
-  if (revision.replanReadiness?.status === "assisted_replanning_required") return "assisted replanning is required before execution";
+  if (revision.replanReadiness?.status === "assisted_replanning_required") return "Landi needs to review the affected day before the itinerary is finalized";
   const reviewLabels = [
     impactDays.some((day) => day.requiresTimingReview) ? "timing" : "",
     impactDays.some((day) => day.requiresMealRestSpacingReview) ? "meal/rest spacing" : "",
@@ -350,7 +384,7 @@ function appliedItineraryImpactReviewLabel(revision: DirectBlueprintRevisionBatc
     impactDays.some((day) => day.fixedTimeRisk) ? "fixed time slots" : ""
   ].filter(Boolean);
   if (!reviewLabels.length) return "";
-  return `review ${reviewLabels.join(", ")} before execution`;
+  return `review ${reviewLabels.join(", ")} before the itinerary is finalized`;
 }
 
 export function pendingItineraryEditRequest(edit: PendingItineraryEditDisplay): string {
@@ -358,13 +392,13 @@ export function pendingItineraryEditRequest(edit: PendingItineraryEditDisplay): 
     "Apply this confirmed itinerary edit directly to the plan.",
     `Remove ${edit.placeName} from ${edit.dayLabel}.`,
     "Keep the place available in the guide for later planning.",
-    "Refresh affected route, timing, meal, and opening constraints before execution."
+    "Check affected travel time, timing, meal, and opening constraints before finalizing the itinerary."
   ].join(" ");
   if (edit.kind === "move_place_within_day") return [
     "Apply this confirmed itinerary edit directly to the plan.",
     `Move ${edit.placeName} within ${edit.dayLabel}.`,
     `Placement: ${edit.positionLabel ?? "Updated day order"}.`,
-    "Keep the place catalog unchanged and refresh affected route checks before execution."
+    "Keep the place catalog unchanged and check affected travel legs before finalizing the itinerary."
   ].join(" ");
   return [
     "Apply this confirmed itinerary edit directly to the plan.",
@@ -392,27 +426,31 @@ export function pendingItineraryEditBatchRequest(edits: PendingItineraryEditDisp
 export function buildBlueprintWorkspaceDisplay(plan: Plan, presentation: PlanPresentation): BlueprintWorkspaceDisplay {
   const tips = tipsForPresentation(plan, presentation);
   const itineraries = presentation.days.map((day) => itineraryDisplayForDay(presentation, day, plan.sources));
+  const informationalTopics = informationalGuideTopics(presentation);
   return {
     title: displayTripTitle(presentation, plan.title),
     dateLabel: blueprintDateLabel(plan, presentation),
     initialDayId: presentation.days[0]?.id ?? "",
-    initialPlaceId: presentation.days[0]?.placeIds[0] ?? presentation.places[0]?.id ?? "",
+    initialPlaceId: presentation.days[0]?.placeIds[0] ?? presentation.places[0]?.id ?? informationalTopics[0]?.id ?? "",
     areas: workspaceAreasForPresentation(presentation),
     days: presentation.days.map(dayTabForDay),
-    places: presentation.places.map((place) => placeDisplayForPlace(place, presentation.travelTips)),
+    places: presentation.places.map((place) => placeDisplayForPlace(place, presentation.travelTips, requirementsForPlace(presentation, place.id), presentation.bookingConstraints)),
     itineraries,
     guideFilters: blueprintGuideFilters,
-    guideCards: guideCardsForPresentation(presentation, plan.sources),
-    details: presentation.places.map((place) => detailDisplayForPlace(presentation, plan.sources, place)),
+    guideCards: guideCardsForPresentation(presentation, plan.sources, informationalTopics),
+    details: [
+      ...presentation.places.map((place) => detailDisplayForPlace(presentation, plan.sources, place)),
+      ...informationalTopics.map((topic) => detailDisplayForInformationalTopic(presentation, topic))
+    ],
     preparationGroups: preparationGroupsForPresentation(plan, presentation),
     tipGroups: groupTipsByTheme(tips),
     sources: sourceMarkersForPlan(plan, presentation)
   };
 }
 
-function placeDisplayForPlace(place: PlanPlace, travelTips: PlanPresentation["travelTips"] = []): BlueprintPlaceDisplay {
-  const signals = workspaceSignalsForPlace(place);
-  const contextualTip = contextualTipForPlace(place, travelTips);
+function placeDisplayForPlace(place: PlanPlace, travelTips: PlanPresentation["travelTips"] = [], requirements: BlueprintActionRequirement[] = [], bookingConstraints: BlueprintBookingConstraint[] | undefined = []): BlueprintPlaceDisplay {
+  const signals = workspaceSignalsForPlace(place, requirements, bookingConstraints);
+  const contextualTip = contextualTipForPlace(place, travelTips, {}, requirements);
   return {
     id: place.id,
     title: displayPlaceName(place),
@@ -430,7 +468,7 @@ function placeDisplayForPlace(place: PlanPlace, travelTips: PlanPresentation["tr
   };
 }
 
-function workspaceSignalsForPlace(place: PlanPlace): BlueprintPlaceDisplay["placementSignals"] {
+function workspaceSignalsForPlace(place: PlanPlace, requirements: BlueprintActionRequirement[] = [], bookingConstraints: BlueprintBookingConstraint[] | undefined = []): BlueprintPlaceDisplay["placementSignals"] {
   const explicit = place.display?.workspaceSignals;
   if (explicit) {
     return {
@@ -439,20 +477,22 @@ function workspaceSignalsForPlace(place: PlanPlace): BlueprintPlaceDisplay["plac
       longStop: explicit.longStop
     };
   }
+  const reservation = reservationRequirementForPlace(requirements);
+  const fixedBooking = Boolean(fixedBookingConstraintForPlace(bookingConstraints, place));
   return {
-    reservation: place.reservation?.requirement === "required" ? "required" : place.reservation?.requirement === "recommended" ? "recommended" : "none",
-    needsRecheck: place.priority === "recheck" || place.reservation?.verification === "needs_recheck" || Boolean(place.evidenceSources?.some((source) => source.status && source.status !== "verified")),
+    reservation: reservation || fixedBooking ? "required" : place.reservation?.requirement === "required" ? "required" : place.reservation?.requirement === "recommended" ? "recommended" : "none",
+    needsRecheck: requirementNeedsRecheck(requirements) || place.priority === "recheck" || place.reservation?.verification === "needs_recheck" || Boolean(place.evidenceSources?.some((source) => source.status && source.status !== "verified")),
     longStop: Boolean(place.durationMinutes && place.durationMinutes >= 180)
   };
 }
 
-function contextualTipForPlace(place: PlanPlace, travelTips: PlanPresentation["travelTips"] = [], context: { dayId?: string; blockId?: string } = {}): string | undefined {
+function contextualTipForPlace(place: PlanPlace, travelTips: PlanPresentation["travelTips"] = [], context: { dayId?: string; blockId?: string } = {}, requirements: BlueprintActionRequirement[] = []): string | undefined {
   const placeTips = travelTips.filter((tip) => tip.placeId === place.id || (context.blockId && tip.blockId === context.blockId));
   const matchingTip = placeTips.find((tip) => context.blockId && tip.blockId === context.blockId)
     ?? placeTips.find((tip) => context.dayId && tip.dayId === context.dayId)
     ?? placeTips.find((tip) => !tip.dayId && !tip.blockId)
     ?? placeTips[0];
-  const tipText = matchingTip?.body || place.tip || place.reservation?.note || workspaceSignalTip(workspaceSignalsForPlace(place));
+  const tipText = matchingTip?.body || place.tip || requirementContextualTip(requirements) || place.reservation?.note || workspaceSignalTip(workspaceSignalsForPlace(place, requirements));
   const cleanTip = travelerFacingDefaultText(tipText);
   const sentence = cleanTip ? firstUsefulSentence(cleanTip) || cleanTip : "";
   return sentence ? shorten(sentence, 118) : undefined;
@@ -483,15 +523,26 @@ function routeSegmentDisplayForSegment(segment: PlanRouteSegment, planSources: S
     id: segment.id,
     originPlaceId: segment.originPlaceId,
     destinationPlaceId: segment.destinationPlaceId,
-    label: segment.display?.routeLabel?.trim() || segment.label || "Movement",
+    label: routeDisplayLabel(segment),
     verification: segment.verification,
     needsRefresh,
     mapLineState: segment.verification === "verified" ? "formal" : segment.display?.mapLineState ?? (needsRefresh ? "needs_refresh" : "formal"),
     ...(refreshReason ? { refreshReason } : {}),
     ...(segment.durationMinutes ? { durationLabel: `${segment.durationMinutes} min` } : {}),
-    ...(segment.detail ? { detail: segment.detail } : {}),
-    sources: sourceSummariesForRefs(segment.sourceRefs, planSources, sourceCatalog)
+    ...(travelerFacingDefaultText(segment.detail) ? { detail: travelerFacingDefaultText(segment.detail) } : {}),
+    sources: sourceSummariesForRouteSegment(segment, planSources, sourceCatalog)
   };
+}
+
+function routeDisplayLabel(segment: PlanRouteSegment): string {
+  return travelerFacingLabel(segment.display?.routeLabel?.trim() || segment.label, routeFallbackLabel(segment));
+}
+
+function routeFallbackLabel(segment: PlanRouteSegment): string {
+  if (segment.mode === "walking") return segment.durationMinutes ? `${segment.durationMinutes} min walk` : "Walk between stops";
+  if (segment.mode === "transit") return segment.durationMinutes ? `${segment.durationMinutes} min by transit` : "Transit between stops";
+  if (segment.mode === "driving") return segment.durationMinutes ? `${segment.durationMinutes} min by car` : "Go by car";
+  return segment.durationMinutes ? `${segment.durationMinutes} min journey` : "Move between stops";
 }
 
 function routeSegmentNeedsRefresh(segment: PlanRouteSegment): boolean {
@@ -508,8 +559,13 @@ function routeSegmentShowsAsFormalRoute(segment: PlanRouteSegment): boolean {
 
 function routeRefreshReason(segment: PlanRouteSegment): string | undefined {
   if (segment.verification === "verified") return undefined;
-  if (segment.display?.refreshReason?.trim()) return segment.display.refreshReason.trim();
-  return directEditRouteNeedsRefresh(segment) ? "Route after needs refresh" : undefined;
+  if (segment.display?.refreshReason?.trim()) return travelerFacingRouteCheckReason(segment.display.refreshReason);
+  return directEditRouteNeedsRefresh(segment) ? "Check travel time after this stop." : undefined;
+}
+
+function travelerFacingRouteCheckReason(value: string): string {
+  if (/^refresh\b/i.test(value.trim())) return "Check travel time after this stop.";
+  return travelerFacingDefaultText(value) || "Check travel time after this stop.";
 }
 
 function directEditRouteNeedsRefresh(segment: PlanRouteSegment): boolean {
@@ -568,11 +624,12 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
     return [...day.blocks].sort((left, right) => left.order - right.order).flatMap((block, index) => {
       const place = block.placeId ? placeById.get(block.placeId) : undefined;
       if (block.placeId && !place) return [];
+      const requirements = place ? requirementsForPlace(presentation, place.id) : [];
       const routeAnchor = block.display?.routeAnchor ?? Boolean(place && scheduledPlaceIds.has(place.id) && block.kind !== "event");
-      const reorderable = Boolean(routeAnchor && place && (block.display?.reorderable ?? directMoveAllowed(place)));
+      const reorderable = Boolean(routeAnchor && place && (block.display?.reorderable ?? directMoveAllowed(place, requirements, presentation.bookingConstraints)));
       const routeAfter = routeAnchor && place ? presentation.routeSegments.find((segment) => segment.dayId === day.id && segment.originPlaceId === place.id) : undefined;
-      const status = place ? itineraryBlockStatus(place) : undefined;
-      const contextualTip = place ? contextualTipForPlace(place, presentation.travelTips, { dayId: day.id, blockId: block.id }) : undefined;
+      const status = place ? itineraryBlockStatus(place, requirements) : undefined;
+      const contextualTip = place ? contextualTipForPlace(place, presentation.travelTips, { dayId: day.id, blockId: block.id }, requirements) : undefined;
       return [{
         day: displayDay,
         ...(place ? { place } : {}),
@@ -596,9 +653,10 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
   return stops.flatMap((stop, index) => {
     const place = placeById.get(stop.placeId);
     if (!place) return [];
+    const requirements = requirementsForPlace(presentation, place.id);
     const routeAfter = presentation.routeSegments.find((segment) => segment.dayId === day.id && segment.originPlaceId === place.id);
-    const status = itineraryBlockStatus(place);
-    const contextualTip = contextualTipForPlace(place, presentation.travelTips, { dayId: day.id });
+    const status = itineraryBlockStatus(place, requirements);
+    const contextualTip = contextualTipForPlace(place, presentation.travelTips, { dayId: day.id }, requirements);
     return [{
       day: displayDay,
       place,
@@ -606,7 +664,7 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
       timeLabel: roughTimeLabel(stop.time, stop.role, place, index),
       type: guideTypeForPlace(place),
       routeAnchor: true,
-      ...(directMoveAllowed(place) ? { reorderable: true } : {}),
+      ...(directMoveAllowed(place, requirements, presentation.bookingConstraints) ? { reorderable: true } : {}),
       ...(status ? { status } : {}),
       ...(contextualTip ? { contextualTip } : {}),
       ...(routeAfter ? { routeAfter } : {})
@@ -658,7 +716,7 @@ function itineraryDisplayFromBlocks(day: BlueprintDayTabDisplay, blocks: Timelin
 function itineraryDisplayWithPending(base: ItineraryDayDisplay, places: BlueprintPlaceDisplay[], pendingEdit?: PendingItineraryEditDisplay | PendingItineraryEditDisplay[] | null): ItineraryDayDisplay {
   const edits = compactPendingItineraryEdits(Array.isArray(pendingEdit) ? pendingEdit : pendingEdit ? [pendingEdit] : []).filter((edit) => edit.dayId === base.dayId);
   if (!edits.length) return base;
-  let items = base.items;
+  let items = base.items.map(({ routeAfterLabel: _routeAfterLabel, routeAfterStatusLabel: _routeAfterStatusLabel, ...item }) => item);
   let routePlaces = base.routePlaces;
   let routeSegments = base.routeSegments;
   const markers = [...base.markers];
@@ -691,7 +749,7 @@ function itineraryDisplayWithPending(base: ItineraryDayDisplay, places: Blueprin
   }
   return {
     ...base,
-    items,
+    items: itineraryItemsWithPendingRouteCheckReadouts(items),
     routePlaces,
     routeSegments,
     markers,
@@ -763,7 +821,7 @@ export function scheduledDayIdForPlace(workspace: BlueprintWorkspaceDisplay, pla
   return workspace.itineraries.find((itinerary) => itinerary.items.some((item) => item.kind === "block" && item.placeId === placeId && item.routeAnchor))?.dayId;
 }
 
-function guideCardsForPresentation(presentation: PlanPresentation, planSources: SourceReference[] = []): GuideCardDisplay[] {
+function guideCardsForPresentation(presentation: PlanPresentation, planSources: SourceReference[] = [], informationalTopics = informationalGuideTopics(presentation)): GuideCardDisplay[] {
   const scheduledPlaceIds = new Set(presentation.days.flatMap((day) => day.placeIds));
   const firstTimelineByPlace = new Map<string, GuideCardDisplay["timeline"]>();
   for (const day of presentation.days) {
@@ -773,34 +831,51 @@ function guideCardsForPresentation(presentation: PlanPresentation, planSources: 
       firstTimelineByPlace.set(place.id, { dayId: day.id, label: day.shortLabel ?? day.date ?? day.label, timeLabel: block.timeLabel });
     }
   }
-  return presentation.places
+  const placeCards = presentation.places
     .filter(isGuidePlace)
     .map((place) => {
       const state = guideStateForPlace(place, scheduledPlaceIds);
+      const requirements = requirementsForPlace(presentation, place.id);
       return {
         placeId: place.id,
         title: displayPlaceName(place),
         type: guideTypeForPlace(place),
         state,
         summary: shortGuideSummary(place),
-        tags: guideTags(presentation, place),
+        tags: guideTags(presentation, place, requirements),
         priorityLabel: placePriorityLabel(place.priority),
-        ...guideCardAction(place, state, firstTimelineByPlace.get(place.id)),
+        ...guideCardAction(place, state, firstTimelineByPlace.get(place.id), requirements),
         ...(firstTimelineByPlace.get(place.id) ? { timeline: firstTimelineByPlace.get(place.id)! } : {})
       };
     });
+  return [
+    ...placeCards,
+    ...informationalTopics.map((topic) => ({
+      placeId: topic.id,
+      title: topic.title,
+      type: topic.type,
+      state: "informational" as const,
+      summary: topic.summary,
+      tags: [topic.label, topic.context].filter((value): value is string => Boolean(value)).slice(0, 3),
+      priorityLabel: "Background",
+      canAdd: false,
+      actionLabel: "Background note"
+    }))
+  ];
 }
 
 function detailDisplayForPlace(presentation: PlanPresentation, planSources: SourceReference[], place: PlanPlace): DetailPlaceDisplay {
   const type = guideTypeForPlace(place);
   const scheduledDay = presentation.days.find((day) => day.placeIds.includes(place.id));
+  const requirements = requirementsForPlace(presentation, place.id);
   const comparisonRows = comparisonRowsForPlace(presentation, place);
   const comparisonHeading = comparisonRows.length ? place.guideDisplay?.comparisonTitle ?? comparisonTitle(type) : undefined;
   const canAdd = !scheduledDay && directAddAllowed(place);
-  const canRemoveFromDay = Boolean(scheduledDay && directRemoveAllowed(place));
-  const removeBlockedReason = scheduledDay && !canRemoveFromDay ? directRemoveBlockedLabel(place) : undefined;
+  const canRemoveFromDay = Boolean(scheduledDay && directRemoveAllowed(place, requirements, presentation.bookingConstraints));
+  const removeBlockedReason = scheduledDay && !canRemoveFromDay ? directRemoveBlockedLabel(place, requirements, presentation.bookingConstraints) : undefined;
   const leadBody = travelerFacingDefaultText(place.whyWorthIt) || travelerFacingDefaultText(place.plan);
   const planBody = travelerFacingDefaultText(place.plan);
+  const reservationNote = reservationRequirementNote(requirements) || travelerFacingDefaultText(place.reservation?.note);
   return {
     placeId: place.id,
     title: displayPlaceName(place),
@@ -811,10 +886,12 @@ function detailDisplayForPlace(presentation: PlanPresentation, planSources: Sour
     leadTitle: place.guideDisplay?.detailLeadTitle ?? detailLeadTitle(type),
     leadBody,
     ...(planBody ? { planTitle: place.guideDisplay?.detailPlanTitle ?? detailPlanTitle(type), planBody } : {}),
-    ...(place.reservation?.note ? { reservationNote: place.reservation.note } : {}),
+    ...(reservationNote ? { reservationNote } : {}),
+    visitNotes: visitNotesForRequirements(requirements),
     detailSections: travelerFacingDetailSections(place.detailSections),
+    guideContext: guideContextForPlace(presentation, place.id),
     relatedEvents: relatedEventsForPlace(presentation, planSources, place.id),
-    sources: sourceSummariesForPlace(place, planSources),
+    sources: sourceSummariesForPlace(place, planSources, presentation.sourceCatalog, blockEvidenceForPlace(presentation, place.id)),
     ...(place.guideDisplay?.detailSourceTitle?.trim() ? { sourceTitle: place.guideDisplay.detailSourceTitle.trim() } : {}),
     ...(comparisonHeading ? { comparisonTitle: comparisonHeading } : {}),
     comparisonRows: comparisonHeading ? comparisonRows : [],
@@ -828,11 +905,36 @@ function detailDisplayForPlace(presentation: PlanPresentation, planSources: Sour
   };
 }
 
+function detailDisplayForInformationalTopic(presentation: PlanPresentation, topic: InformationalGuideTopic): DetailPlaceDisplay {
+  const sourceCatalog = presentation.sourceCatalog ?? [];
+  return {
+    placeId: topic.id,
+    title: topic.title,
+    priority: "archive",
+    priorityLabel: "Background",
+    priorityActions: [],
+    leadTitle: topic.label,
+    leadBody: topic.summary,
+    ...(topic.context ? { planTitle: "How to use it", planBody: topic.context } : {}),
+    visitNotes: [],
+    detailSections: [],
+    guideContext: [],
+    relatedEvents: [],
+    sources: sourceSummariesForEvidenceRefs(topic.evidence, sourceCatalog, `Supports ${topic.title}`),
+    comparisonRows: [],
+    primaryActionLabel: "Background note",
+    scheduled: false,
+    canAdd: false,
+    canRemoveFromDay: false,
+    links: []
+  };
+}
+
 function comparisonRowsForPlace(presentation: PlanPresentation, selectedPlace: PlanPlace): ComparisonRow[] {
-  const displayRows = comparisonRowsFromGuideDisplay(presentation, selectedPlace);
-  if (displayRows.length) return displayRows;
   const graphRows = comparisonRowsFromRelationshipGraph(presentation, selectedPlace);
   if (graphRows.length) return graphRows;
+  const displayRows = comparisonRowsFromGuideDisplay(presentation, selectedPlace);
+  if (displayRows.length) return displayRows;
   const selectedType = guideTypeForPlace(selectedPlace);
   return presentation.places
     .filter((place) => place.id !== selectedPlace.id && isGuidePlace(place) && guideTypeForPlace(place) === selectedType)
@@ -842,7 +944,7 @@ function comparisonRowsForPlace(presentation: PlanPresentation, selectedPlace: P
       name: displayPlaceName(place),
       area: place.area ?? place.locationLabel,
       routeFit: routeFitLabel(place, selectedPlace),
-      timing: timingLabel(place),
+      timing: timingLabel(place, requirementsForPlace(presentation, place.id)),
       effort: effortLabel(place),
       sourceState: sourceStateLabel(place)
     }));
@@ -859,7 +961,7 @@ function comparisonRowsFromGuideDisplay(presentation: PlanPresentation, selected
       name: row.name?.trim() || (related ? displayPlaceName(related) : row.id),
       area: row.area,
       routeFit: travelerFacingComparisonText(row.routeFit, related ? routeFitLabel(related, selectedPlace) : "Related option"),
-      timing: travelerFacingComparisonText(row.timing, related ? timingLabel(related) : "Flexible timing"),
+      timing: travelerFacingComparisonText(row.timing, related ? timingLabel(related, requirementsForPlace(presentation, related.id)) : "Flexible timing"),
       effort: travelerFacingComparisonText(row.effort, related ? effortLabel(related) : "Review details"),
       sourceState: travelerFacingComparisonText(row.sourceState, related ? sourceStateLabel(related) : "Referenced")
     };
@@ -880,9 +982,9 @@ function comparisonRowsFromRelationshipGraph(presentation: PlanPresentation, sel
         name: displayPlaceName(place),
         area: place.area ?? place.locationLabel,
         routeFit: relationshipKindLabel(relationship.kind),
-        timing: relationship.dayIds?.length ? relationship.dayIds.map((dayId) => dayLabelForId(presentation, dayId)).join(", ") : timingLabel(place),
+        timing: relationship.dayIds?.length ? relationship.dayIds.map((dayId) => dayLabelForId(presentation, dayId)).join(", ") : timingLabel(place, requirementsForPlace(presentation, place.id)),
         effort: travelerFacingComparisonText(relationship.rationale, relationshipKindLabel(relationship.kind)),
-        sourceState: relationship.evidence.some((ref) => ref.status === "verified") ? "Verified relationship" : sourceStateLabel(place)
+        sourceState: relationshipSourceStateLabel(relationship, place)
       }];
     })
     .slice(0, 5);
@@ -951,7 +1053,7 @@ export function buildPendingItineraryMoveForWorkspace(workspace: BlueprintWorksp
     positionId: positionIdForPendingPosition(input.position),
     positionLabel: positionLabelForPendingPosition(workspace, input.position),
     position: input.position,
-    advisories: [{ tone: "neutral", text: "This day will need route and timing refresh after reordering." }]
+    advisories: [{ tone: "neutral", text: "This day will need travel-time and timing checks after reordering." }]
   };
 }
 
@@ -968,7 +1070,7 @@ export function buildPendingItineraryRemoveForWorkspace(workspace: BlueprintWork
     placeName: place.title,
     dayId: itinerary.dayId,
     dayLabel,
-    advisories: [{ tone: "neutral", text: "This day will need route and timing refresh after removing this stop." }]
+    advisories: [{ tone: "neutral", text: "This day will need travel-time and timing checks after removing this stop." }]
   };
 }
 
@@ -1003,8 +1105,8 @@ function routeRefreshDisplayForDay(day: BlueprintDayTabDisplay, routeSegments: B
     segmentCount,
     segmentIds: refreshSegments.map((segment) => segment.id),
     dayLabel,
-    summary: segmentCount === 1 ? `1 route leg on ${dayLabel} needs refresh.` : `${segmentCount} route legs on ${dayLabel} need refresh.`,
-    request: `Refresh routes for ${dayLabel}. Recheck the affected route leg${segmentCount === 1 ? "" : "s"}, timing, meal spacing, and opening constraints before marking this itinerary ready.`
+    summary: segmentCount === 1 ? `1 travel leg on ${dayLabel} will be checked automatically.` : `${segmentCount} travel legs on ${dayLabel} will be checked automatically.`,
+    request: `Check travel times for ${dayLabel}. Review the affected travel leg${segmentCount === 1 ? "" : "s"}, timing, meal spacing, and opening constraints before marking this itinerary ready.`
   };
 }
 
@@ -1016,9 +1118,9 @@ function draftRouteRefreshDisplayForPendingEdits(base: ItineraryDayDisplay, prev
     segmentCount: Math.max(1, base.routeSegments.length, changeCount),
     segmentIds: [],
     dayLabel,
-    summary: `${changeCount} unsaved itinerary change${changeCount === 1 ? "" : "s"} will need route refresh after you confirm.`,
+    summary: `${changeCount} unsaved itinerary change${changeCount === 1 ? "" : "s"} will have travel times checked after you confirm.`,
     ...(impactNotes.length ? { impactNotes } : {}),
-    request: `After you confirm the itinerary draft for ${dayLabel}, refresh routing, timing, meal spacing, and opening constraints before marking this day ready.`,
+    request: `After you confirm the itinerary draft for ${dayLabel}, check travel times, timing, meal spacing, and opening constraints before marking this day ready.`,
     actionable: false
   };
 }
@@ -1030,7 +1132,7 @@ function pendingEditImpactNotes(base: ItineraryDayDisplay, previewItems: Itinera
     const place = placesById.get(placeId);
     return place ? [place] : [];
   });
-  const notes: string[] = ["Route and timing will be rechecked after confirmation."];
+  const notes: string[] = ["Travel time and timing will be checked after confirmation."];
   if (edits.some((edit) => edit.kind === "add_place_to_day")) {
     notes.push(addImpactNote(routePlaces));
   }
@@ -1039,7 +1141,7 @@ function pendingEditImpactNotes(base: ItineraryDayDisplay, previewItems: Itinera
     notes.push(removeImpactNote(routePlaces, placesById, edits));
   }
   if (edits.some((edit) => edit.kind === "move_place_within_day")) {
-    notes.push("Moved stops keep their current time labels until timing is refreshed.");
+    notes.push("Moved stops keep their current time labels until timing is checked.");
   }
   notes.push(...edits.flatMap((edit) => edit.advisories.map((advisory) => advisory.text)));
   return uniqueStrings(notes).slice(0, 5);
@@ -1120,13 +1222,16 @@ function itineraryCardForPendingPlace(place: BlueprintPlaceDisplay, edit: Pendin
     timeLabel: "Draft",
     ...(edit.positionLabel ? { meta: edit.positionLabel } : {}),
     statusLabel: "Not saved",
+    routeAnchor: true,
     draftActionLabel: "Undo draft",
     ...(place.contextualTip ? { contextualTip: place.contextualTip } : {})
   };
 }
 
 function itineraryCardForBlock(block: TimelineBlock): ItineraryCardDisplay {
-  const routeStatusLabel = block.routeAfter && routeSegmentShowsAsFormalRoute(block.routeAfter) && routeSegmentNeedsRefresh(block.routeAfter) ? routeRefreshReason(block.routeAfter) ?? "Route after needs refresh" : undefined;
+  const routeAfterNeedsCheck = Boolean(block.routeAfter && routeSegmentShowsAsFormalRoute(block.routeAfter) && routeSegmentNeedsRefresh(block.routeAfter));
+  const routeAfterLabel = routeAfterNeedsCheck ? undefined : itineraryRouteReadout(block.routeAfter);
+  const routeAfterStatusLabel = routeAfterNeedsCheck ? routeCheckReadoutLabel(false) : undefined;
   return {
     kind: "block",
     key: `${block.day.id}-${block.place?.id ?? block.block?.id ?? block.order}-${block.order}`,
@@ -1135,11 +1240,30 @@ function itineraryCardForBlock(block: TimelineBlock): ItineraryCardDisplay {
     timeLabel: block.timeLabel,
     ...(block.meta ? { meta: block.meta } : {}),
     ...(block.status ? { statusLabel: block.status } : {}),
-    ...(routeStatusLabel ? { routeStatusLabel } : {}),
+    ...(routeAfterLabel ? { routeAfterLabel } : {}),
+    ...(routeAfterStatusLabel ? { routeAfterStatusLabel } : {}),
     ...(block.routeAnchor ? { routeAnchor: true } : {}),
     ...(block.place && block.reorderable ? { reorderable: true } : {}),
     ...(block.contextualTip ? { contextualTip: block.contextualTip } : {})
   };
+}
+
+function itineraryRouteReadout(segment: PlanRouteSegment | undefined): string | undefined {
+  if (!segment || segment.verification !== "verified" || !routeSegmentShowsAsFormalRoute(segment)) return undefined;
+  return routeDisplayLabel(segment);
+}
+
+function routeCheckReadoutLabel(afterConfirmation: boolean): string {
+  return afterConfirmation ? "Travel time will be checked after confirm." : "Travel time will be checked automatically.";
+}
+
+function itineraryItemsWithPendingRouteCheckReadouts(items: ItineraryCardDisplay[]): ItineraryCardDisplay[] {
+  const routeAnchorIndexes = items.flatMap((item, index) => item.placeId && item.routeAnchor ? [index] : []);
+  if (routeAnchorIndexes.length < 2) return items;
+  const indexesWithNextRoute = new Set(routeAnchorIndexes.slice(0, -1));
+  return items.map((item, index) => indexesWithNextRoute.has(index)
+    ? { ...item, routeAfterStatusLabel: routeCheckReadoutLabel(true) }
+    : item);
 }
 
 function insertPendingCard(items: ItineraryCardDisplay[], pending: ItineraryCardDisplay, positionId: string): ItineraryCardDisplay[] {
@@ -1250,16 +1374,24 @@ function localTipsForPlan(plan: Pick<Plan, "stages" | "presentation" | "location
 function preparationGroupsForPresentation(plan: Plan, presentation: PlanPresentation): PreparationGroupDisplay[] {
   if (presentation.preparationChecklist === undefined) return preparationGroupsForPlan(plan);
   const canonical = presentation.preparationChecklist;
+  const requirements = new Map((presentation.actionRequirements ?? []).map((requirement) => [requirement.id, requirement] as const));
+  const places = new Map(presentation.places.map((place) => [place.id, place] as const));
   const completedTaskIds = new Set(plan.stages.flatMap((stage) => stage.tasks.filter((task) => task.status === "completed").map((task) => task.id)));
   const completedRequirementIds = new Set(plan.stages.flatMap((stage) => stage.tasks.flatMap((task) => task.status === "completed" && task.requirementId ? [task.requirementId] : [])));
   const groups = new Map<BlueprintPreparationGroup, PreparationChecklistItemDisplay[]>();
   for (const item of canonical) {
-    const title = travelerFacingLabel(item.title, "Travel preparation");
-    const description = travelerFacingDefaultText(item.description ?? item.completionCondition ?? "");
+    const requirement = item.requirementId ? requirements.get(item.requirementId) : undefined;
+    const place = item.placeId ? places.get(item.placeId) : requirement?.placeId ? places.get(requirement.placeId) : undefined;
+    const title = preparationItemTitle(item.title, requirement);
+    const description = firstUsefulText([item.description, requirement?.description, item.completionCondition, requirement?.completionCondition]);
+    const completion = firstUsefulText([item.completionCondition, requirement?.completionCondition], description);
+    const context = place ? `For ${displayPlaceName(place)}` : undefined;
     groups.set(item.group, [...(groups.get(item.group) ?? []), {
       id: item.id,
       title,
       ...(description ? { description } : {}),
+      ...(completion ? { completion } : {}),
+      ...(context ? { context } : {}),
       checked: completedTaskIds.has(item.id) || Boolean(item.requirementId && completedRequirementIds.has(item.requirementId))
     }]);
   }
@@ -1280,11 +1412,32 @@ function preparationGroupsForPlan(plan: Plan): PreparationGroupDisplay[] {
     title: group.title,
     items: group.items.map(({ task }) => ({
       id: task.id,
-      title: travelerFacingLabel(task.title, "Travel preparation"),
+      title: preparationItemTitle(task.title),
       ...(travelerFacingDefaultText(task.description ?? "") ? { description: travelerFacingDefaultText(task.description ?? "") } : {}),
       checked: task.status === "completed"
     }))
   }));
+}
+
+function preparationItemTitle(title: string | undefined, requirement?: BlueprintActionRequirement): string {
+  const primary = travelerFacingDefaultText(title);
+  if (primary && !looksLikePreparationCategoryLabel(primary)) return primary;
+  const requirementTitle = travelerFacingDefaultText(requirement?.title);
+  if (requirementTitle && !looksLikePreparationCategoryLabel(requirementTitle)) return requirementTitle;
+  return requirement ? "Travel documents" : "Travel preparation";
+}
+
+function firstUsefulText(values: Array<string | undefined>, skip?: string): string {
+  const skipped = skip?.trim();
+  for (const value of values) {
+    const text = travelerFacingDefaultText(value);
+    if (text && text !== skipped) return text;
+  }
+  return "";
+}
+
+function looksLikePreparationCategoryLabel(value: string): boolean {
+  return /\btravel authorization\b/i.test(value.trim());
 }
 
 function roughTimeLabel(time: string | undefined, role: string | undefined, place: Pick<PlanPlace, "category" | "name" | "visitRole">, index: number): string {
@@ -1336,8 +1489,10 @@ function blockMeta(block: BlueprintItineraryBlock): string | undefined {
   return block.summary ?? block.role ?? (block.durationMinutes ? `${block.durationMinutes} min` : undefined);
 }
 
-function sourceSummariesForPlace(place: Pick<PlanPlace, "evidenceSources" | "sourceRefs">, planSources: SourceReference[]): SourceMarkerDisplay[] {
+function sourceSummariesForPlace(place: Pick<PlanPlace, "evidenceSources" | "fieldEvidence" | "sourceRefs">, planSources: SourceReference[], sourceCatalog: BlueprintSource[] = [], blockEvidence: SourceMarkerDisplay[] = []): SourceMarkerDisplay[] {
   const sources = [
+    ...sourceSummariesForFieldEvidence(place.fieldEvidence, sourceCatalog),
+    ...blockEvidence,
     ...(place.evidenceSources?.map((evidence) => {
       return {
         label: "Source",
@@ -1345,68 +1500,157 @@ function sourceSummariesForPlace(place: Pick<PlanPlace, "evidenceSources" | "sou
         url: evidence.url
       };
     }) ?? []),
-    ...place.sourceRefs.flatMap((sourceUrl) => {
-      const source = planSources.find((candidate) => candidate.url === sourceUrl);
-      return [{ label: "Source", summary: source ? sourceReferenceSummary(source) : sourceUrl, url: sourceUrl }];
+    ...place.sourceRefs.flatMap((sourceRef) => {
+      const source = sourceReferenceForRef(sourceRef, planSources, sourceCatalog);
+      const url = source?.url ?? (isHttpUrl(sourceRef) ? sourceRef : undefined);
+      return [{ label: "Source", summary: source ? sourceReferenceSummary(source) : sourceRef, ...(url ? { url } : {}) }];
     })
   ];
-  const seen = new Set<string>();
-  return sources.filter((source) => {
-    const key = source.url ?? source.summary;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  return uniqueSourceMarkers(sources);
 }
 
 function sourceSummariesForRefs(sourceRefs: string[] | undefined, planSources: SourceReference[], sourceCatalog: BlueprintSource[] = []): SourceMarkerDisplay[] {
   return (sourceRefs ?? []).flatMap((sourceRef) => {
-    const source = planSources.find((candidate) => candidate.url === sourceRef) ?? sourceCatalog.find((candidate) => candidate.url === sourceRef || candidate.id === sourceRef);
-    const url = source?.url ?? (sourceRef.startsWith("http") ? sourceRef : undefined);
+    const source = sourceReferenceForRef(sourceRef, planSources, sourceCatalog);
+    const url = source?.url ?? (isHttpUrl(sourceRef) ? sourceRef : undefined);
     return [{ label: "Source", summary: source ? sourceReferenceSummary(source) : sourceRef, ...(url ? { url } : {}) }];
   });
 }
 
-function sourceSummariesForEvidenceRefs(evidence: BlueprintEvidenceRef[] | undefined, sourceCatalog: BlueprintSource[]): SourceMarkerDisplay[] {
+function sourceSummariesForRouteSegment(segment: Pick<PlanRouteSegment, "evidence" | "sourceRefs">, planSources: SourceReference[], sourceCatalog: BlueprintSource[] = []): SourceMarkerDisplay[] {
+  return uniqueSourceMarkers([
+    ...sourceSummariesForEvidenceRefs(segment.evidence, sourceCatalog),
+    ...sourceSummariesForRefs(segment.sourceRefs, planSources, sourceCatalog)
+  ]);
+}
+
+function sourceSummariesForEvent(event: Pick<PlanPresentationEvent, "evidence" | "sourceRefs">, planSources: SourceReference[], sourceCatalog: BlueprintSource[] = [], context?: string): SourceMarkerDisplay[] {
+  return uniqueSourceMarkers([
+    ...sourceSummariesForEvidenceRefs(event.evidence, sourceCatalog, context),
+    ...sourceSummariesForRefs(event.sourceRefs, planSources, sourceCatalog)
+  ]);
+}
+
+function sourceSummariesForEvidenceRefs(evidence: BlueprintEvidenceRef[] | undefined, sourceCatalog: BlueprintSource[], context?: string): SourceMarkerDisplay[] {
   return (evidence ?? []).flatMap((ref) => {
     const source = sourceCatalog.find((candidate) => candidate.id === ref.sourceId);
     if (!source) return [];
-    const refSummary = [sourceReferenceSummary(source), ref.supports?.slice(0, 2).join("; "), ref.status !== "verified" ? "needs recheck" : undefined, ref.checkedAt ? `checked ${ref.checkedAt}` : undefined].filter(Boolean).join(" · ");
-    return [{ label: "Source", summary: refSummary, url: source.url }];
+    const refSummary = [sourceReferenceSummary(source), ref.supports?.slice(0, 2).join("; "), evidenceStatusLabel(ref.status), ref.checkedAt ? `checked ${ref.checkedAt}` : undefined].filter(Boolean).join(" · ");
+    const contexts = sourceEvidenceContexts(ref, context);
+    return [{ label: "Source", summary: refSummary, url: source.url, ...(contexts.length ? { contexts } : {}) }];
   });
 }
 
 function sourceMarkersForPlan(plan: Plan, presentation: PlanPresentation): SourceMarkerDisplay[] {
   const sourceCatalog = presentation.sourceCatalog ?? [];
   const fromPlan = plan.sources.map((source) => ({ label: "Source", summary: sourceReferenceSummary(source), url: source.url }));
-  const fromPlaces = presentation.places.flatMap((place) => place.evidenceSources?.map((source) => ({ label: "Source", summary: [source.title, source.role, source.status && source.status !== "verified" ? "needs recheck" : undefined, source.checkedAt ? `checked ${source.checkedAt}` : undefined].filter(Boolean).join(" · "), url: source.url })) ?? []);
-  const fromEvents = (presentation.events ?? []).flatMap((event) => sourceSummariesForRefs(event.sourceRefs, plan.sources, sourceCatalog));
+  const fromPlaces = presentation.places.flatMap((place) => place.evidenceSources?.map((source) => ({ label: "Source", summary: [source.title, source.role, source.status && source.status !== "verified" ? "Needs confirmation close to the trip" : undefined, source.checkedAt ? `checked ${source.checkedAt}` : undefined].filter(Boolean).join(" · "), url: source.url, contexts: [`Supports ${displayPlaceName(place)}`] })) ?? []);
+  const fromEvents = (presentation.events ?? []).flatMap((event) => sourceSummariesForEvent(event, plan.sources, sourceCatalog, "Supports event timing"));
   const fromPresentation = [
     ...sourceCatalog.map((source) => ({ label: "Source", summary: sourceReferenceSummary(source), url: source.url })),
-    ...sourceSummariesForFieldEvidence(presentation.fieldEvidence, sourceCatalog),
-    ...(presentation.places ?? []).flatMap((place) => sourceSummariesForFieldEvidence(place.fieldEvidence, sourceCatalog)),
-    ...(presentation.travelTips ?? []).flatMap((tip) => sourceSummariesForEvidenceRefs(tip.evidence, sourceCatalog)),
-    ...(presentation.preparationChecklist ?? []).flatMap((item) => sourceSummariesForEvidenceRefs(item.evidence, sourceCatalog)),
-    ...(presentation.localFoods ?? []).flatMap((item) => sourceSummariesForEvidenceRefs(item.evidence, sourceCatalog)),
-    ...(presentation.localProducts ?? []).flatMap((item) => sourceSummariesForEvidenceRefs(item.evidence, sourceCatalog)),
-    ...(presentation.experienceThemes ?? []).flatMap((item) => sourceSummariesForEvidenceRefs(item.evidence, sourceCatalog)),
-    ...(presentation.guideRelationshipGraph?.relationships ?? []).flatMap((relationship) => sourceSummariesForEvidenceRefs(relationship.evidence, sourceCatalog))
+    ...sourceSummariesForFieldEvidence(presentation.fieldEvidence, sourceCatalog, "Supports trip planning details"),
+    ...(presentation.places ?? []).flatMap((place) => sourceSummariesForFieldEvidence(place.fieldEvidence, sourceCatalog, `Supports ${displayPlaceName(place)}`)),
+    ...blockEvidenceForPlan(presentation, sourceCatalog),
+    ...(presentation.routeSegments ?? []).flatMap((segment) => sourceSummariesForEvidenceRefs(segment.evidence, sourceCatalog, "Supports route timing")),
+    ...(presentation.travelTips ?? []).flatMap((tip) => sourceSummariesForEvidenceRefs(tip.evidence, sourceCatalog, `Supports ${travelTipThemeLabel(tip.theme).toLocaleLowerCase()} tip`)),
+    ...(presentation.preparationChecklist ?? []).flatMap((item) => sourceSummariesForEvidenceRefs(item.evidence, sourceCatalog, "Supports travel preparation")),
+    ...(presentation.actionRequirements ?? []).flatMap((item) => sourceSummariesForEvidenceRefs(item.evidence, sourceCatalog, actionRequirementSourceContext(item))),
+    ...(presentation.localFoods ?? []).flatMap((item) => sourceSummariesForEvidenceRefs(item.evidence, sourceCatalog, "Supports local food note")),
+    ...(presentation.localProducts ?? []).flatMap((item) => sourceSummariesForEvidenceRefs(item.evidence, sourceCatalog, "Supports local find")),
+    ...(presentation.experienceThemes ?? []).flatMap((item) => sourceSummariesForEvidenceRefs(item.evidence, sourceCatalog, "Supports experience note")),
+    ...(presentation.guideRelationshipGraph?.relationships ?? []).flatMap((relationship) => sourceSummariesForEvidenceRefs(relationship.evidence, sourceCatalog, "Supports place pairing"))
   ];
-  return uniqueSourceMarkers([...fromPlan, ...fromPresentation, ...fromPlaces, ...fromEvents]);
+  return uniqueSourceMarkers([...fromPresentation, ...fromPlan, ...fromPlaces, ...fromEvents]);
 }
 
-function sourceSummariesForFieldEvidence(fieldEvidence: Array<{ evidence: BlueprintEvidenceRef[] }> | undefined, sourceCatalog: BlueprintSource[]): SourceMarkerDisplay[] {
-  return (fieldEvidence ?? []).flatMap((field) => sourceSummariesForEvidenceRefs(field.evidence, sourceCatalog));
+function blockEvidenceForPlace(presentation: PlanPresentation, placeId: string): SourceMarkerDisplay[] {
+  const sourceCatalog = presentation.sourceCatalog ?? [];
+  return uniqueSourceMarkers(presentation.days.flatMap((day) => (day.blocks ?? [])
+    .filter((block) => block.placeId === placeId)
+    .flatMap((block) => sourceSummariesForEvidenceRefs(block.evidence, sourceCatalog, blockSourceContext(day, block)))));
+}
+
+function blockEvidenceForPlan(presentation: PlanPresentation, sourceCatalog: BlueprintSource[]): SourceMarkerDisplay[] {
+  return presentation.days.flatMap((day) => (day.blocks ?? [])
+    .flatMap((block) => sourceSummariesForEvidenceRefs(block.evidence, sourceCatalog, blockSourceContext(day, block))));
+}
+
+function blockSourceContext(day: Pick<ItineraryDay, "label" | "date">, block: BlueprintItineraryBlock): string {
+  const label = day.date ?? day.label;
+  const title = block.title?.trim();
+  return `Supports ${label}${title ? ` ${title}` : ""} itinerary block`;
+}
+
+function sourceSummariesForFieldEvidence(fieldEvidence: Array<{ evidence: BlueprintEvidenceRef[] }> | undefined, sourceCatalog: BlueprintSource[], context?: string): SourceMarkerDisplay[] {
+  return (fieldEvidence ?? []).flatMap((field) => sourceSummariesForEvidenceRefs(field.evidence, sourceCatalog, context));
+}
+
+function sourceReferenceForRef(sourceRef: string, planSources: SourceReference[], sourceCatalog: BlueprintSource[]): Pick<SourceReference, "title" | "authority" | "retrievedAt" | "url"> | undefined {
+  const normalizedRefUrl = isHttpUrl(sourceRef) ? normalizeSourceUrl(sourceRef) : undefined;
+  return sourceCatalog.find((candidate) => candidate.id === sourceRef || candidate.url === sourceRef || (normalizedRefUrl && normalizeSourceUrl(candidate.url) === normalizedRefUrl))
+    ?? planSources.find((candidate) => candidate.url === sourceRef || (normalizedRefUrl && normalizeSourceUrl(candidate.url) === normalizedRefUrl));
 }
 
 function uniqueSourceMarkers(sources: SourceMarkerDisplay[]): SourceMarkerDisplay[] {
-  const seen = new Set<string>();
-  return sources.filter((source) => {
-    const key = source.url ?? source.summary;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const merged = new Map<string, SourceMarkerDisplay>();
+  for (const source of sources) {
+    const key = sourceMarkerKey(source);
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, { ...source, ...(source.contexts?.length ? { contexts: uniqueStrings(source.contexts) } : {}) });
+      continue;
+    }
+    const contexts = uniqueStrings([...(existing.contexts ?? []), ...(source.contexts ?? [])]);
+    merged.set(key, {
+      ...existing,
+      ...(contexts.length ? { contexts } : {})
+    });
+  }
+  return [...merged.values()];
+}
+
+function sourceMarkerKey(source: SourceMarkerDisplay): string {
+  return source.url ? `url:${normalizeSourceUrl(source.url)}` : `summary:${source.summary.trim().toLocaleLowerCase()}`;
+}
+
+function normalizeSourceUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    url.search = "";
+    const pathname = url.pathname.replace(/\/+$/, "") || "/";
+    return `${url.protocol}//${url.host}${pathname}`.toLocaleLowerCase();
+  } catch {
+    return value.trim().toLocaleLowerCase();
+  }
+}
+
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+function evidenceStatusLabel(status: BlueprintEvidenceRef["status"]): string | undefined {
+  return status === "verified" ? undefined : "Needs confirmation close to the trip";
+}
+
+function sourceEvidenceContexts(ref: BlueprintEvidenceRef, context?: string): string[] {
+  return uniqueStrings([
+    context,
+    ...(ref.supports?.slice(0, 2).map((support) => `Supports ${support}`) ?? []),
+    evidenceStatusLabel(ref.status),
+    ref.checkedAt ? `Checked ${ref.checkedAt}` : undefined
+  ].filter(Boolean) as string[]);
+}
+
+function actionRequirementSourceContext(requirement: BlueprintActionRequirement): string {
+  switch (requirement.kind) {
+    case "reservation": return "Supports reservation planning";
+    case "travel_authorization": return "Supports entry preparation";
+    case "time_sensitive_recheck": return "Supports details to confirm close to the trip";
+    case "transport": return "Supports transport preparation";
+    case "preparation": return "Supports travel preparation";
+    case "other": return "Supports trip preparation";
+  }
 }
 
 function displayPlaceName(place: Pick<PlanPlace, "name" | "localizedName">): string {
@@ -1511,9 +1755,11 @@ function looksLikeInternalWorkspaceText(value: string): boolean {
     /\bcross-city day\b/,
     /\btiring\b/,
     /\broute order\b/,
+    /\broute needs refresh\b/,
     /\broute refresh\b/,
     /\brefresh affected route\b/,
     /\bneeds? route\b/,
+    /\bedited directly\b/,
     /\bworkspace\b/,
     /\bschema\b/,
     /\brenderer\b/,
@@ -1536,17 +1782,18 @@ function shorten(value: string, max: number): string {
   return `${value.slice(0, max - 1).replace(/\s+\S*$/, "")}…`;
 }
 
-function guideTags(presentation: PlanPresentation, place: PlanPlace): string[] {
+function guideTags(presentation: PlanPresentation, place: PlanPlace, requirements: BlueprintActionRequirement[] = []): string[] {
   const catalogTags = catalogTagsForPlace(presentation, place.id);
+  const reservation = reservationRequirementForPlace(requirements);
   const baseTags = place.guideDisplay?.tags?.length
     ? place.guideDisplay.tags
-    : [place.durationMinutes ? `${place.durationMinutes} min` : undefined, place.reservation?.requirement === "required" ? "Reservation" : undefined].filter(Boolean) as string[];
+    : [place.durationMinutes ? `${place.durationMinutes} min` : undefined, reservation || place.reservation?.requirement === "required" ? "Reservation" : undefined].filter(Boolean) as string[];
   return uniqueStrings([...baseTags, ...catalogTags]).slice(0, 4);
 }
 
-function guideCardAction(place: PlanPlace, state: GuideState, timeline: GuideCardDisplay["timeline"]): Pick<GuideCardDisplay, "canAdd" | "actionLabel" | "footerNote" | "addBlockedReason"> {
+function guideCardAction(place: PlanPlace, state: GuideState, timeline: GuideCardDisplay["timeline"], requirements: BlueprintActionRequirement[] = []): Pick<GuideCardDisplay, "canAdd" | "actionLabel" | "footerNote" | "addBlockedReason"> {
   if (state === "unscheduled" && directAddAllowed(place)) {
-    const footerNote = travelerFacingDefaultText(place.guideDisplay?.footerNote);
+    const footerNote = travelerFacingDefaultText(place.guideDisplay?.footerNote) || requirementCardNote(requirements);
     return {
       canAdd: true,
       actionLabel: travelerFacingLabel(place.guideDisplay?.addActionLabel ?? place.guideDisplay?.primaryActionLabel, "Add"),
@@ -1554,7 +1801,7 @@ function guideCardAction(place: PlanPlace, state: GuideState, timeline: GuideCar
     };
   }
   if (state === "unscheduled") {
-    const label = travelerFacingLabel(place.guideDisplay?.addBlockedLabel ?? place.guideDisplay?.blockedActionLabel, addBlockedLabel(place));
+    const label = travelerFacingLabel(place.guideDisplay?.addBlockedLabel ?? place.guideDisplay?.blockedActionLabel, requirementCardNote(requirements) || addBlockedLabel(place));
     return { canAdd: false, footerNote: label, addBlockedReason: label };
   }
   if (state === "scheduled") return { canAdd: false, ...(timeline ? { footerNote: `${timeline.label} ${timeline.timeLabel}` } : {}) };
@@ -1575,21 +1822,106 @@ function directAddAllowed(place: Pick<PlanPlace, "schedulingEligibility">): bool
   return decision === undefined || decision === "schedulable";
 }
 
-function directMoveAllowed(place: Pick<PlanPlace, "priority" | "schedulingEligibility" | "reservation" | "display">): boolean {
+function directMoveAllowed(place: Pick<PlanPlace, "priority" | "schedulingEligibility" | "reservation" | "display" | "id" | "name" | "localizedName" | "locationLabel">, requirements: BlueprintActionRequirement[] = [], bookingConstraints: BlueprintBookingConstraint[] | undefined = []): boolean {
   const reservationSignal = place.display?.workspaceSignals?.reservation;
-  if (place.priority === "booked" || reservationSignal === "required" || (!reservationSignal && place.reservation?.requirement === "required")) return false;
+  if (place.priority === "booked" || Boolean(fixedBookingConstraintForPlace(bookingConstraints, place)) || reservationSignal === "required" || (!reservationSignal && (reservationRequirementForPlace(requirements) || place.reservation?.requirement === "required"))) return false;
   const decision = place.schedulingEligibility?.decision;
   return decision === undefined || decision === "schedulable";
 }
 
-function directRemoveAllowed(place: Pick<PlanPlace, "priority" | "schedulingEligibility" | "reservation" | "display">): boolean {
-  return directMoveAllowed(place);
+function directRemoveAllowed(place: Pick<PlanPlace, "priority" | "schedulingEligibility" | "reservation" | "display" | "id" | "name" | "localizedName" | "locationLabel">, requirements: BlueprintActionRequirement[] = [], bookingConstraints: BlueprintBookingConstraint[] | undefined = []): boolean {
+  return directMoveAllowed(place, requirements, bookingConstraints);
 }
 
-function directRemoveBlockedLabel(place: Pick<PlanPlace, "priority" | "schedulingEligibility" | "reservation" | "display">): string {
+function directRemoveBlockedLabel(place: Pick<PlanPlace, "priority" | "schedulingEligibility" | "reservation" | "display" | "id" | "name" | "localizedName" | "locationLabel">, requirements: BlueprintActionRequirement[] = [], bookingConstraints: BlueprintBookingConstraint[] | undefined = []): string {
   const reservationSignal = place.display?.workspaceSignals?.reservation;
-  if (place.priority === "booked" || reservationSignal === "required" || (!reservationSignal && place.reservation?.requirement === "required")) return "Fixed booking";
+  if (place.priority === "booked" || Boolean(fixedBookingConstraintForPlace(bookingConstraints, place)) || reservationSignal === "required" || (!reservationSignal && (reservationRequirementForPlace(requirements) || place.reservation?.requirement === "required"))) return "Fixed booking";
   return addBlockedLabel(place);
+}
+
+function fixedBookingConstraintForPlace(bookingConstraints: BlueprintBookingConstraint[] | undefined, place: Pick<PlanPlace, "name" | "localizedName" | "locationLabel">): BlueprintBookingConstraint | undefined {
+  const nameKeys = bookingMatchKeys([place.name, place.localizedName]);
+  const locationKeys = bookingMatchKeys([place.locationLabel]).filter((key) => key.length >= 8);
+  if (!nameKeys.length && !locationKeys.length) return undefined;
+  return (bookingConstraints ?? []).find((constraint) => {
+    if (constraint.status === "cancelled" || constraint.constraintStrength === "ignored") return false;
+    const constraintTexts = bookingMatchTexts([constraint.title]);
+    const nameMatched = nameKeys.some((key) => constraintTexts.some((text) => bookingTextMatches(text, key)));
+    if (nameMatched && constraint.segments.some((segment) => segment.fixedCommitment && segment.constraintStrength === "hard")) return true;
+    return constraint.segments.some((segment) => {
+      if (!segment.fixedCommitment || segment.constraintStrength !== "hard") return false;
+      const segmentTexts = bookingMatchTexts([segment.title, segment.location]);
+      return nameKeys.some((key) => segmentTexts.some((text) => bookingTextMatches(text, key)))
+        || locationKeys.some((key) => segmentTexts.some((text) => bookingTextMatches(text, key)));
+    });
+  });
+}
+
+function bookingMatchKeys(values: Array<string | undefined>): string[] {
+  return uniqueStrings(values.flatMap((value) => {
+    const text = normalizeBookingText(value);
+    return text && text.length >= 3 ? [text] : [];
+  }));
+}
+
+function bookingMatchTexts(values: Array<string | undefined>): string[] {
+  return values.flatMap((value) => {
+    const text = normalizeBookingText(value);
+    return text ? [text] : [];
+  });
+}
+
+function normalizeBookingText(value: string | undefined): string {
+  return (value ?? "").normalize("NFKD").replace(/[^\p{L}\p{N}]+/gu, " ").trim().toLocaleLowerCase();
+}
+
+function bookingTextMatches(text: string, key: string): boolean {
+  return text === key || (key.length >= 8 && text.length >= 8 && (text.includes(key) || key.includes(text)));
+}
+
+function requirementsForPlace(presentation: Pick<PlanPresentation, "actionRequirements">, placeId: string): BlueprintActionRequirement[] {
+  return (presentation.actionRequirements ?? []).filter((requirement) => requirement.placeId === placeId);
+}
+
+function reservationRequirementForPlace(requirements: BlueprintActionRequirement[]): BlueprintActionRequirement | undefined {
+  return requirements.find((requirement) => requirement.kind === "reservation");
+}
+
+function requirementNeedsRecheck(requirements: BlueprintActionRequirement[]): boolean {
+  return requirements.some((requirement) => requirement.kind === "time_sensitive_recheck" || requirement.evidence.some((ref) => ref.status === "recheck" || ref.status === "stale"));
+}
+
+function reservationRequirementNote(requirements: BlueprintActionRequirement[]): string {
+  const requirement = reservationRequirementForPlace(requirements);
+  return requirement ? firstUsefulText([requirement.description, requirement.completionCondition, requirement.title]) : "";
+}
+
+function requirementContextualTip(requirements: BlueprintActionRequirement[]): string {
+  const requirement = reservationRequirementForPlace(requirements)
+    ?? requirements.find((item) => item.kind === "time_sensitive_recheck")
+    ?? requirements.find((item) => item.kind === "preparation");
+  return requirement ? firstUsefulText([requirement.description, requirement.completionCondition, requirement.title]) : "";
+}
+
+function requirementCardNote(requirements: BlueprintActionRequirement[]): string {
+  const note = requirementContextualTip(requirements);
+  return note ? shorten(note, 88) : "";
+}
+
+function visitNotesForRequirements(requirements: BlueprintActionRequirement[]): DetailRequirementNoteDisplay[] {
+  return requirements.flatMap((requirement, index) => {
+    if (requirement.kind === "reservation") return [];
+    const title = preparationItemTitle(requirement.title, requirement);
+    const body = firstUsefulText([requirement.description, requirement.completionCondition], title);
+    if (!body) return [];
+    const completion = firstUsefulText([requirement.completionCondition], body);
+    return [{
+      id: `visit-note-${index + 1}`,
+      title,
+      body,
+      ...(completion ? { completion } : {})
+    }];
+  });
 }
 
 function addBlockedLabel(place: Pick<PlanPlace, "schedulingEligibility">): string {
@@ -1628,11 +1960,11 @@ function sameText(left: string, right: string): boolean {
   return left.trim().toLocaleLowerCase() === right.trim().toLocaleLowerCase();
 }
 
-function itineraryBlockStatus(place: PlanPlace): string | undefined {
+function itineraryBlockStatus(place: PlanPlace, requirements: BlueprintActionRequirement[] = []): string | undefined {
   const explicit = place.display?.workspaceSignals?.itineraryStatusLabel?.trim();
   if (explicit) return explicit;
-  if (place.reservation?.requirement === "required") return "Reservation required";
-  if (place.priority === "recheck" || place.reservation?.verification === "needs_recheck") return "Needs recheck";
+  if (reservationRequirementForPlace(requirements) || place.reservation?.requirement === "required") return "Reservation required";
+  if (requirementNeedsRecheck(requirements) || place.priority === "recheck" || place.reservation?.verification === "needs_recheck") return "Needs recheck";
   if (place.priority === "booked") return "Booked";
   return undefined;
 }
@@ -1643,8 +1975,8 @@ function routeFitLabel(place: PlanPlace, selectedPlace: PlanPlace): string {
   return place.locationLabel;
 }
 
-function timingLabel(place: PlanPlace): string {
-  if (place.reservation?.requirement === "required") return "Reserve ahead";
+function timingLabel(place: PlanPlace, requirements: BlueprintActionRequirement[] = []): string {
+  if (reservationRequirementForPlace(requirements) || place.reservation?.requirement === "required") return "Reserve ahead";
   if (place.reservation?.requirement === "recommended") return "Reservation useful";
   return place.durationMinutes ? `${place.durationMinutes} min` : "Flexible timing";
 }
@@ -1662,12 +1994,101 @@ function sourceStateLabel(place: PlanPlace): string {
   return "No source listed";
 }
 
+function relationshipSourceStateLabel(relationship: BlueprintPlaceRelationship, place: PlanPlace): string {
+  if (relationship.evidence.some((ref) => ref.status === "verified")) return "Verified connection";
+  if (relationship.evidence.length) return "Referenced connection";
+  return sourceStateLabel(place);
+}
+
 function catalogTagsForPlace(presentation: PlanPresentation, placeId: string): string[] {
   return [
     ...(presentation.localFoods ?? []).flatMap((item) => item.diningPlaceIds.includes(placeId) ? [item.title] : []),
     ...(presentation.localProducts ?? []).flatMap((item) => item.purchasePlaceIds.includes(placeId) ? [item.title] : []),
     ...(presentation.experienceThemes ?? []).flatMap((item) => item.offeringPlaceIds.includes(placeId) ? [item.title] : [])
   ];
+}
+
+function guideContextForPlace(presentation: PlanPresentation, placeId: string): DetailGuideContextDisplay[] {
+  const sourceCatalog = presentation.sourceCatalog ?? [];
+  const contexts: DetailGuideContextDisplay[] = [
+    ...(presentation.localFoods ?? []).flatMap((item) => item.diningPlaceIds.includes(placeId) ? [{
+      id: item.id,
+      kind: "food" as const,
+      label: "Local food",
+      title: item.title,
+      description: travelerFacingDefaultText(item.description),
+      ...(travelerFacingDefaultText(item.context) ? { context: travelerFacingDefaultText(item.context) } : {}),
+      sources: sourceSummariesForEvidenceRefs(item.evidence, sourceCatalog)
+    }] : []),
+    ...(presentation.localProducts ?? []).flatMap((item) => item.purchasePlaceIds.includes(placeId) ? [{
+      id: item.id,
+      kind: "product" as const,
+      label: "Local find",
+      title: item.title,
+      description: travelerFacingDefaultText(item.description),
+      ...(travelerFacingDefaultText(item.context) ? { context: travelerFacingDefaultText(item.context) } : {}),
+      sources: sourceSummariesForEvidenceRefs(item.evidence, sourceCatalog)
+    }] : []),
+    ...(presentation.experienceThemes ?? []).flatMap((item) => item.offeringPlaceIds.includes(placeId) ? [{
+      id: item.id,
+      kind: "experience" as const,
+      label: "Experience",
+      title: item.title,
+      description: travelerFacingDefaultText(item.description),
+      ...(travelerFacingDefaultText(item.context) ? { context: travelerFacingDefaultText(item.context) } : {}),
+      sources: sourceSummariesForEvidenceRefs(item.evidence, sourceCatalog)
+    }] : [])
+  ];
+  return contexts.filter((item) => item.title.trim() && item.description.trim());
+}
+
+function informationalGuideTopics(presentation: PlanPresentation): InformationalGuideTopic[] {
+  return [
+    ...(presentation.localFoods ?? [])
+      .filter((item) => !item.diningPlaceIds.length)
+      .map((item): InformationalGuideTopic => ({
+        id: topicDisplayId("food", item.id),
+        kind: "food",
+        type: "dining",
+        label: "Local food",
+        title: item.title,
+        summary: topicSummary(item.description, item.context),
+        ...(travelerFacingDefaultText(item.context) ? { context: travelerFacingDefaultText(item.context) } : {}),
+        evidence: item.evidence
+      })),
+    ...(presentation.localProducts ?? [])
+      .filter((item) => !item.purchasePlaceIds.length)
+      .map((item): InformationalGuideTopic => ({
+        id: topicDisplayId("product", item.id),
+        kind: "product",
+        type: "shopping",
+        label: "Local find",
+        title: item.title,
+        summary: topicSummary(item.description, item.context),
+        ...(travelerFacingDefaultText(item.context) ? { context: travelerFacingDefaultText(item.context) } : {}),
+        evidence: item.evidence
+      })),
+    ...(presentation.experienceThemes ?? [])
+      .filter((item) => !item.offeringPlaceIds.length)
+      .map((item): InformationalGuideTopic => ({
+        id: topicDisplayId("experience", item.id),
+        kind: "experience",
+        type: "experience",
+        label: "Experience",
+        title: item.title,
+        summary: topicSummary(item.description, item.context),
+        ...(travelerFacingDefaultText(item.context) ? { context: travelerFacingDefaultText(item.context) } : {}),
+        evidence: item.evidence
+      }))
+  ].filter((topic) => topic.title.trim() && topic.summary.trim());
+}
+
+function topicDisplayId(kind: InformationalGuideTopic["kind"], id: string): string {
+  return `topic:${kind}:${id}`;
+}
+
+function topicSummary(description: string, context: string | undefined): string {
+  return shorten(travelerFacingDefaultText(description) || travelerFacingDefaultText(context) || "Useful background for this trip.", 132);
 }
 
 function uniqueStrings(values: string[]): string[] {
@@ -1772,7 +2193,7 @@ function relatedEventsForPlace(presentation: PlanPresentation, planSources: Sour
       description: event.description,
       ...(eventDateLabel(event) ? { dateLabel: eventDateLabel(event)! } : {}),
       ...(event.locationLabel ? { locationLabel: event.locationLabel } : {}),
-      sources: sourceSummariesForRefs(event.sourceRefs, planSources, presentation.sourceCatalog)
+      sources: sourceSummariesForEvent(event, planSources, presentation.sourceCatalog)
     }));
 }
 

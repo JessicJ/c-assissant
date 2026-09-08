@@ -291,6 +291,7 @@ function addPlaceToDay(blueprint: TripBlueprint, revision: Extract<DirectBluepri
   const day = blueprint.days.find((candidate) => candidate.id === revision.dayId);
   if (!day) throw new Error(`Blueprint Revision references unknown day ${revision.dayId}.`);
   if (day.stops.some((stop) => stop.placeId === revision.placeId)) throw new Error(`Place ${revision.placeId} is already scheduled on day ${revision.dayId}.`);
+  if (hasFixedBookingConstraint(blueprint, place)) throw directReplanRequirementError(blueprint, revision, "fixed_booking", `${place.name} is tied to a fixed booking, so Landi needs to place it with the right timing.`);
   const eligibility = place.schedulingEligibility;
   if (eligibility?.decision === "informational") throw directReplanRequirementError(blueprint, revision, "informational_place", `${place.name} is background information, so Landi needs to replan before placing it into ${dayLabel(day, revision.dayId)}.`);
   if (eligibility?.decision === "blocked") throw directReplanRequirementError(blueprint, revision, "blocked_place", `${place.name} is blocked for direct scheduling, so Landi needs to replan before it can be added to ${dayLabel(day, revision.dayId)}.`);
@@ -334,7 +335,7 @@ function movePlaceWithinDay(blueprint: TripBlueprint, revision: Extract<DirectBl
   if (!day) throw new Error(`Blueprint Revision references unknown day ${revision.dayId}.`);
   const stop = day.stops.find((candidate) => candidate.placeId === revision.placeId);
   if (!stop) throw new Error(`Place ${revision.placeId} is not scheduled on day ${revision.dayId}.`);
-  if (place.priority === "booked" || hasReservationRequirement(blueprint, revision.placeId)) throw directReplanRequirementError(blueprint, revision, "fixed_booking", `${place.name} is tied to a booking or reservation, so Landi needs to replan before moving it.`);
+  if (place.priority === "booked" || hasReservationRequirement(blueprint, revision.placeId) || hasFixedBookingConstraint(blueprint, place)) throw directReplanRequirementError(blueprint, revision, "fixed_booking", `${place.name} is tied to a booking or reservation, so Landi needs to replan before moving it.`);
   const eligibility = place.schedulingEligibility;
   if (eligibility?.decision === "informational") throw directReplanRequirementError(blueprint, revision, "informational_place", `${place.name} is background information, so Landi needs to replan before moving it inside ${dayLabel(day, revision.dayId)}.`);
   if (eligibility?.decision === "blocked") throw directReplanRequirementError(blueprint, revision, "blocked_place", `${place.name} is blocked for direct scheduling, so Landi needs to replan before moving it.`);
@@ -376,7 +377,7 @@ function removePlaceFromDay(blueprint: TripBlueprint, revision: Extract<DirectBl
   const day = blueprint.days.find((candidate) => candidate.id === revision.dayId);
   if (!day) throw new Error(`Blueprint Revision references unknown day ${revision.dayId}.`);
   if (!day.stops.some((stop) => stop.placeId === revision.placeId)) throw new Error(`Place ${revision.placeId} is not scheduled on day ${revision.dayId}.`);
-  if (place.priority === "booked" || hasReservationRequirement(blueprint, revision.placeId)) throw directReplanRequirementError(blueprint, revision, "fixed_booking", `${place.name} is tied to a booking or reservation, so Landi needs to replan before removing it.`);
+  if (place.priority === "booked" || hasReservationRequirement(blueprint, revision.placeId) || hasFixedBookingConstraint(blueprint, place)) throw directReplanRequirementError(blueprint, revision, "fixed_booking", `${place.name} is tied to a booking or reservation, so Landi needs to replan before removing it.`);
   const eligibility = place.schedulingEligibility;
   if (eligibility?.decision === "informational") throw directReplanRequirementError(blueprint, revision, "informational_place", `${place.name} is background information, so Landi needs to replan before removing it from ${dayLabel(day, revision.dayId)}.`);
   if (eligibility?.decision === "blocked") throw directReplanRequirementError(blueprint, revision, "blocked_place", `${place.name} is blocked for direct scheduling, so Landi needs to replan before removing it.`);
@@ -482,6 +483,46 @@ function removeStop(stops: BlueprintStop[], revision: Extract<DirectBlueprintRev
 
 function hasReservationRequirement(blueprint: TripBlueprint, placeId: string): boolean {
   return blueprint.actionRequirements.some((requirement) => requirement.placeId === placeId && requirement.kind === "reservation");
+}
+
+function hasFixedBookingConstraint(blueprint: TripBlueprint, place: Pick<BlueprintPlace, "name" | "localizedName" | "locationLabel">): boolean {
+  const nameKeys = bookingMatchKeys([place.name, place.localizedName]);
+  const locationKeys = bookingMatchKeys([place.locationLabel]).filter((key) => key.length >= 8);
+  if (!nameKeys.length && !locationKeys.length) return false;
+  return (blueprint.bookingConstraints ?? []).some((constraint) => {
+    if (constraint.status === "cancelled" || constraint.constraintStrength === "ignored") return false;
+    const constraintTexts = bookingMatchTexts([constraint.title]);
+    const nameMatched = nameKeys.some((key) => constraintTexts.some((text) => bookingTextMatches(text, key)));
+    if (nameMatched && constraint.segments.some((segment) => segment.fixedCommitment && segment.constraintStrength === "hard")) return true;
+    return constraint.segments.some((segment) => {
+      if (!segment.fixedCommitment || segment.constraintStrength !== "hard") return false;
+      const segmentTexts = bookingMatchTexts([segment.title, segment.location]);
+      return nameKeys.some((key) => segmentTexts.some((text) => bookingTextMatches(text, key)))
+        || locationKeys.some((key) => segmentTexts.some((text) => bookingTextMatches(text, key)));
+    });
+  });
+}
+
+function bookingMatchKeys(values: Array<string | undefined>): string[] {
+  return uniqueStrings(values.flatMap((value) => {
+    const text = normalizeBookingText(value);
+    return text && text.length >= 3 ? [text] : [];
+  }));
+}
+
+function bookingMatchTexts(values: Array<string | undefined>): string[] {
+  return values.flatMap((value) => {
+    const text = normalizeBookingText(value);
+    return text ? [text] : [];
+  });
+}
+
+function normalizeBookingText(value: string | undefined): string {
+  return (value ?? "").normalize("NFKD").replace(/[^\p{L}\p{N}]+/gu, " ").trim().toLocaleLowerCase();
+}
+
+function bookingTextMatches(text: string, key: string): boolean {
+  return text === key || (key.length >= 8 && text.length >= 8 && (text.includes(key) || key.includes(text)));
 }
 
 function directReplanRequirementError(

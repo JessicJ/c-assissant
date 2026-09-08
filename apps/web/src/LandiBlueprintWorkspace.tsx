@@ -29,6 +29,8 @@ import {
   type ItineraryRouteRefreshDisplay,
   type PendingItineraryEditDisplay
 } from "./landi-blueprint-workspace-display.js";
+import { fallbackRouteLineState, routeLineRenderState, routeLinesForMap, type MapRouteLineRenderState } from "./blueprint-map-route-lines.js";
+import { automaticRouteRefreshGate, mapRouteRefreshHeaderText } from "./current-plan-route-refresh.js";
 
 type BlueprintPanelMode = "explore" | "detail" | "placement";
 type GoogleMapInstance = {
@@ -41,12 +43,6 @@ type GoogleMapInstance = {
 type GoogleLatLngLiteral = { lat: number; lng: number };
 type GoogleLatLngBounds = { extend: (latLng: GoogleLatLngLiteral) => void };
 type GoogleMapLayer = { setMap: (map: GoogleMapInstance | null) => void };
-type MapRouteLineState = BlueprintRouteSegmentDisplay["mapLineState"];
-type BlueprintMapRouteLine = {
-  id: string;
-  mapLineState: MapRouteLineState;
-  points: [BlueprintMapPointDisplay, BlueprintMapPointDisplay];
-};
 type GoogleMapsNamespace = {
   Map: new (element: HTMLElement, options: Record<string, unknown>) => GoogleMapInstance;
   LatLngBounds: new () => GoogleLatLngBounds;
@@ -96,10 +92,26 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
   const guideCards = guideCardsForWorkspace(workspace, pendingEdits);
   const selectedDetail = detailDisplayForWorkspacePlace(workspace, selectedPlaceId, pendingEdits);
   const itinerary = itineraryDisplayForWorkspace(workspace, selectedDay?.id ?? "", pendingEdits);
+  const autoRouteRefreshAttemptedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     setPendingEdits([]);
   }, [plan.id, plan.version]);
+
+  useEffect(() => {
+    const request = automaticRouteRefreshGate({
+      planId: plan.id,
+      planVersion: plan.version,
+      dayId: itinerary.dayId,
+      routeRefresh: itinerary.routeRefresh,
+      pendingEditCount: pendingEdits.length,
+      routeRefreshBusy,
+      canRequest: Boolean(onRequestRouteRefresh)
+    }, autoRouteRefreshAttemptedRef.current);
+    if (!request || !onRequestRouteRefresh) return;
+    autoRouteRefreshAttemptedRef.current.add(request.key);
+    onRequestRouteRefresh(request.refresh);
+  }, [itinerary.dayId, itinerary.routeRefresh, onRequestRouteRefresh, pendingEdits.length, plan.id, plan.version, routeRefreshBusy]);
 
   function selectPlace(placeId: string, mode: BlueprintPanelMode = "detail") {
     setSelectedPlaceId(placeId);
@@ -315,13 +327,14 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
             : <Fragment key={item.key}>
               {item.reorderable ? <ItineraryDropZone dropId={`before-${item.key}`} active={dragOverDropId === `before-${item.key}`} /> : null}
               <ItineraryBlockCard item={item} dragging={Boolean(item.placeId) && draggedPlaceId === item.placeId} selected={Boolean(item.placeId) && selectedPlaceId === item.placeId} onSelect={() => item.placeId ? selectPlace(item.placeId) : undefined} onUndoDraft={() => undoPendingEdit(item.placeId)} onDragStart={(event) => startItineraryCardDrag(event, item)} onDragMove={moveItineraryCardDrag} onDragEnd={endItineraryCardDrag} onDragCancel={cancelItineraryCardDrag} />
+              {item.routeAfterLabel || item.routeAfterStatusLabel ? <ItineraryRouteReadout label={routeReadoutLabel(item, routeRefreshBusy)} state={routeReadoutState(item, routeRefreshBusy)} /> : null}
             </Fragment>)}
           {itinerary.items.some((item) => item.reorderable) ? <ItineraryDropZone dropId="end" active={dragOverDropId === "end"} /> : null}
           {!itinerary.items.length ? <p className="blueprint-empty-note">No itinerary blocks are available for this day.</p> : null}
         </div>
       </aside>
 
-      <BlueprintMap routePlaces={itinerary.routePlaces} routeSegments={itinerary.routeSegments} routeRefresh={itinerary.routeRefresh} markers={itinerary.markers} selectedPlaceId={selectedPlaceId} onSelectPlace={selectMapPlace} onRequestRouteRefresh={onRequestRouteRefresh} routeRefreshBusy={routeRefreshBusy} />
+      <BlueprintMap routePlaces={itinerary.routePlaces} routeSegments={itinerary.routeSegments} routeRefresh={itinerary.routeRefresh} markers={itinerary.markers} selectedPlaceId={selectedPlaceId} onSelectPlace={selectMapPlace} routeRefreshBusy={routeRefreshBusy} />
 
       <aside className="blueprint-side-panel" aria-label="Itinerary side panel">
         <div className="blueprint-panel-body">
@@ -341,6 +354,8 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
             <span><strong>{item.title}</strong></span>
           </summary>
           {item.description ? <p>{item.description}</p> : null}
+          {item.completion ? <small>{item.completion}</small> : null}
+          {item.context ? <small>{item.context}</small> : null}
         </details>)}</div>
       </section>) : <p className="blueprint-empty-note">No explicit travel preparation checklist is available for this plan.</p>}
     </section> : null}
@@ -356,7 +371,10 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
     </section> : null}
 
     {area === "sources" ? <section className="blueprint-page blueprint-sources" aria-label="Sources">
-      {workspace.sources.length ? <div className="blueprint-source-list">{workspace.sources.map((source) => source.url ? <a href={source.url} target="_blank" rel="noreferrer" key={`${source.url}-${source.summary}`}>{source.summary}</a> : <p key={source.summary}>{source.summary}</p>)}</div> : <p className="blueprint-empty-note">No sources are listed for this plan yet.</p>}
+      {workspace.sources.length ? <div className="blueprint-source-list">{workspace.sources.map((source) => {
+        const content = <><strong>{source.summary}</strong>{source.contexts?.length ? <span>{source.contexts.join(" · ")}</span> : null}</>;
+        return source.url ? <a href={source.url} target="_blank" rel="noreferrer" key={`${source.url}-${source.summary}`}>{content}</a> : <p key={source.summary}>{content}</p>;
+      })}</div> : <p className="blueprint-empty-note">No sources are listed for this plan yet.</p>}
     </section> : null}
   </section>;
 }
@@ -393,6 +411,23 @@ function ItineraryDropZone({ dropId, active }: { dropId: string; active: boolean
   return <div className={active ? "blueprint-itinerary-drop-zone active" : "blueprint-itinerary-drop-zone"} data-drop-id={dropId} />;
 }
 
+function routeReadoutLabel(item: ItineraryCardDisplay, routeRefreshBusy: boolean): string {
+  if (item.routeAfterStatusLabel && routeRefreshBusy) return "Checking travel time...";
+  return item.routeAfterLabel ?? item.routeAfterStatusLabel ?? "";
+}
+
+function routeReadoutState(item: ItineraryCardDisplay, routeRefreshBusy: boolean): "confirmed" | "pending" | "checking" {
+  if (item.routeAfterStatusLabel && routeRefreshBusy) return "checking";
+  return item.routeAfterStatusLabel ? "pending" : "confirmed";
+}
+
+function ItineraryRouteReadout({ label, state }: { label: string; state: "confirmed" | "pending" | "checking" }) {
+  return <div className={`blueprint-itinerary-route-readout ${state}`} aria-label={`Next route: ${label}`}>
+    <span />
+    <strong>{label}</strong>
+  </div>;
+}
+
 function ItineraryBlockCard({ item, selected, dragging, onSelect, onUndoDraft, onDragStart, onDragMove, onDragEnd, onDragCancel }: { item: ItineraryCardDisplay; selected: boolean; dragging: boolean; onSelect: () => void; onUndoDraft: () => void; onDragStart: (event: PointerEvent<HTMLElement>) => void; onDragMove: (event: PointerEvent<HTMLElement>) => void; onDragEnd: (event: PointerEvent<HTMLElement>) => void; onDragCancel: (event: PointerEvent<HTMLElement>) => void }) {
   const className = [
     "blueprint-itinerary-block",
@@ -409,7 +444,6 @@ function ItineraryBlockCard({ item, selected, dragging, onSelect, onUndoDraft, o
         {item.meta ? <small>{item.meta}</small> : null}
         {item.contextualTip ? <p className="blueprint-itinerary-context-tip">{item.contextualTip}</p> : null}
         {item.statusLabel ? <em>{item.statusLabel}</em> : null}
-        {item.routeStatusLabel ? <em className="route-refresh">{item.routeStatusLabel}</em> : null}
       </div>
     </button>
     {item.draftActionLabel ? <button type="button" className="blueprint-itinerary-draft-action" onClick={onUndoDraft}>{item.draftActionLabel}</button> : null}
@@ -431,7 +465,7 @@ function PendingItineraryCard({ item, selected, onSelect, onUndoDraft }: { item:
   </article>;
 }
 
-function BlueprintMap(props: { routePlaces: BlueprintMapPointDisplay[]; routeSegments: BlueprintRouteSegmentDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; onRequestRouteRefresh?: ((refresh: ItineraryRouteRefreshDisplay) => void) | undefined; routeRefreshBusy?: boolean }) {
+function BlueprintMap(props: { routePlaces: BlueprintMapPointDisplay[]; routeSegments: BlueprintRouteSegmentDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; routeRefreshBusy?: boolean }) {
   const [googleUnavailable, setGoogleUnavailable] = useState(false);
   const handleGoogleUnavailable = useCallback(() => setGoogleUnavailable(true), []);
   const apiKey = __LANDI_GOOGLE_MAPS_API_KEY__;
@@ -439,7 +473,7 @@ function BlueprintMap(props: { routePlaces: BlueprintMapPointDisplay[]; routeSeg
   return <LeafletBlueprintMap {...props} />;
 }
 
-function GoogleBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers, selectedPlaceId, onSelectPlace, onRequestRouteRefresh, routeRefreshBusy, apiKey, onUnavailable }: { routePlaces: BlueprintMapPointDisplay[]; routeSegments: BlueprintRouteSegmentDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; onRequestRouteRefresh?: ((refresh: ItineraryRouteRefreshDisplay) => void) | undefined; routeRefreshBusy?: boolean; apiKey: string; onUnavailable: () => void }) {
+function GoogleBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers, selectedPlaceId, onSelectPlace, routeRefreshBusy, apiKey, onUnavailable }: { routePlaces: BlueprintMapPointDisplay[]; routeSegments: BlueprintRouteSegmentDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; routeRefreshBusy?: boolean; apiKey: string; onUnavailable: () => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<GoogleMapInstance | null>(null);
   const mapsRef = useRef<GoogleMapsNamespace | null>(null);
@@ -448,11 +482,13 @@ function GoogleBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers,
   const [mapReady, setMapReady] = useState(false);
   const points = markers.filter((marker) => validCoordinates(marker.coordinates));
   const routeLines = routeLinesForMap(routePlaces, routeSegments);
+  const fallbackLineState = fallbackRouteLineState(routeSegments, routeRefresh);
   const routeLatLngs = routePlaces.filter((place) => validCoordinates(place.coordinates)).map((place) => googleLatLngForCoordinates(place.coordinates!));
   const fitLatLngs = routeLatLngs.length ? routeLatLngs : points.map((marker) => googleLatLngForCoordinates(marker.coordinates!));
   const fitKey = [
     routePlaces.filter((place) => validCoordinates(place.coordinates)).map((place) => `route:${place.placeId}:${place.coordinates!.join(",")}`).join("|"),
     routeLines.map((line) => `line:${line.id}:${line.mapLineState}`).join("|"),
+    `fallback:${fallbackLineState ?? ""}`,
     points.map((marker) => `marker:${marker.placeId}:${marker.coordinates!.join(",")}:${marker.markerState}:${marker.type}`).join("|")
   ].join("::");
 
@@ -508,15 +544,15 @@ function GoogleBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers,
           geodesic: true,
           map,
           path: line.points.map((point) => googleLatLngForCoordinates(point.coordinates!)),
-          ...googleRouteLineStyle(line.mapLineState)
+          ...googleRouteLineStyle(routeLineRenderState(line.mapLineState, Boolean(routeRefreshBusy)))
         }));
       }
-    } else if (routeLatLngs.length > 1) {
+    } else if (fallbackLineState && routeLatLngs.length > 1) {
       nextLayers.push(new maps.Polyline({
         geodesic: true,
         map,
         path: routeLatLngs,
-        ...googleRouteLineStyle(routeRefresh ? "needs_refresh" : "formal")
+        ...googleRouteLineStyle(fallbackLineState)
       }));
     }
 
@@ -548,26 +584,28 @@ function GoogleBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers,
       map.setZoom(11);
     }
     lastFitKeyRef.current = fitKey;
-  }, [fitKey, fitLatLngs, mapReady, onSelectPlace, points, routeLatLngs, routeLines, routeRefresh, selectedPlaceId]);
+  }, [fallbackLineState, fitKey, fitLatLngs, mapReady, onSelectPlace, points, routeLatLngs, routeLines, routeRefreshBusy, selectedPlaceId]);
 
   return <section className={routeRefresh ? "blueprint-map needs-refresh" : "blueprint-map"} aria-label="Itinerary map context">
-    <MapRouteRefreshHeader routeRefresh={routeRefresh} onRequestRouteRefresh={onRequestRouteRefresh} routeRefreshBusy={Boolean(routeRefreshBusy)} />
+    <MapRouteRefreshHeader routeRefresh={routeRefresh} routeRefreshBusy={Boolean(routeRefreshBusy)} />
     <div className="blueprint-map-stage blueprint-google-map" ref={hostRef} />
   </section>;
 }
 
-function LeafletBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers, selectedPlaceId, onSelectPlace, onRequestRouteRefresh, routeRefreshBusy }: { routePlaces: BlueprintMapPointDisplay[]; routeSegments: BlueprintRouteSegmentDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; onRequestRouteRefresh?: ((refresh: ItineraryRouteRefreshDisplay) => void) | undefined; routeRefreshBusy?: boolean }) {
+function LeafletBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers, selectedPlaceId, onSelectPlace, routeRefreshBusy }: { routePlaces: BlueprintMapPointDisplay[]; routeSegments: BlueprintRouteSegmentDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; routeRefreshBusy?: boolean }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layersRef = useRef<L.LayerGroup | null>(null);
   const lastFitKeyRef = useRef("");
   const points = markers.filter((marker) => validCoordinates(marker.coordinates));
   const routeLines = routeLinesForMap(routePlaces, routeSegments);
+  const fallbackLineState = fallbackRouteLineState(routeSegments, routeRefresh);
   const routeLatLngs = routePlaces.filter((place) => validCoordinates(place.coordinates)).map((place) => latLngForCoordinates(place.coordinates!));
   const fitLatLngs = routeLatLngs.length ? routeLatLngs : points.map((marker) => latLngForCoordinates(marker.coordinates!));
   const fitKey = [
     routePlaces.filter((place) => validCoordinates(place.coordinates)).map((place) => `route:${place.placeId}:${place.coordinates!.join(",")}`).join("|"),
     routeLines.map((line) => `line:${line.id}:${line.mapLineState}`).join("|"),
+    `fallback:${fallbackLineState ?? ""}`,
     points.map((marker) => `marker:${marker.placeId}:${marker.coordinates!.join(",")}:${marker.markerState}:${marker.type}`).join("|")
   ].join("::");
 
@@ -603,14 +641,14 @@ function LeafletBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers
     if (routeLines.length) {
       for (const line of routeLines) {
         L.polyline(line.points.map((point) => latLngForCoordinates(point.coordinates!)), {
-          ...leafletRouteLineStyle(line.mapLineState),
+          ...leafletRouteLineStyle(routeLineRenderState(line.mapLineState, Boolean(routeRefreshBusy))),
           lineCap: "round",
           lineJoin: "round"
         }).addTo(layers);
       }
-    } else if (routeLatLngs.length > 1) {
+    } else if (fallbackLineState && routeLatLngs.length > 1) {
       L.polyline(routeLatLngs, {
-        ...leafletRouteLineStyle(routeRefresh ? "needs_refresh" : "formal"),
+        ...leafletRouteLineStyle(fallbackLineState),
         lineCap: "round",
         lineJoin: "round"
       }).addTo(layers);
@@ -643,28 +681,25 @@ function LeafletBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers
       map.setView([35.6812, 139.7671], 11);
     }
     lastFitKeyRef.current = fitKey;
-  }, [fitKey, fitLatLngs, onSelectPlace, points, routeLatLngs, routeLines, routeRefresh, selectedPlaceId]);
+  }, [fallbackLineState, fitKey, fitLatLngs, onSelectPlace, points, routeLatLngs, routeLines, routeRefreshBusy, selectedPlaceId]);
 
   return <section className={routeRefresh ? "blueprint-map needs-refresh" : "blueprint-map"} aria-label="Itinerary map context">
-    <MapRouteRefreshHeader routeRefresh={routeRefresh} onRequestRouteRefresh={onRequestRouteRefresh} routeRefreshBusy={Boolean(routeRefreshBusy)} />
+    <MapRouteRefreshHeader routeRefresh={routeRefresh} routeRefreshBusy={Boolean(routeRefreshBusy)} />
     <div className="blueprint-map-stage" ref={hostRef} />
   </section>;
 }
 
-function MapRouteRefreshHeader({ routeRefresh, onRequestRouteRefresh, routeRefreshBusy = false }: { routeRefresh?: ItineraryRouteRefreshDisplay | undefined; onRequestRouteRefresh?: ((refresh: ItineraryRouteRefreshDisplay) => void) | undefined; routeRefreshBusy?: boolean }) {
+function MapRouteRefreshHeader({ routeRefresh, routeRefreshBusy = false }: { routeRefresh?: ItineraryRouteRefreshDisplay | undefined; routeRefreshBusy?: boolean }) {
   if (!routeRefresh) return null;
-  const requestRouteRefresh = onRequestRouteRefresh;
-  const canRefresh = routeRefresh.actionable !== false && routeRefresh.segmentIds.length > 0 && Boolean(requestRouteRefresh);
-  const pendingConfirmation = routeRefresh.actionable === false;
+  const { title, actionLabel } = mapRouteRefreshHeaderText(routeRefresh, routeRefreshBusy);
   return <header className="blueprint-map-status">
     <div>
-      <h3>{pendingConfirmation ? "Routes will be checked" : `Routes need refresh for ${routeRefresh.dayLabel}`}</h3>
+      <h3>{title}</h3>
       <p>{routeRefresh.summary}</p>
       {routeRefresh.impactNotes?.length ? <ul className="blueprint-map-impact-notes">{routeRefresh.impactNotes.map((note) => <li key={note}>{note}</li>)}</ul> : null}
     </div>
     <div className="blueprint-map-status-actions">
-      <span>{pendingConfirmation ? "After confirm" : `${routeRefresh.dayLabel} routes`}</span>
-      {canRefresh && requestRouteRefresh ? <button type="button" disabled={routeRefreshBusy} onClick={() => requestRouteRefresh(routeRefresh)}>{routeRefreshBusy ? "Refreshing..." : "Refresh routes"}</button> : null}
+      <span>{actionLabel}</span>
     </div>
   </header>;
 }
@@ -706,7 +741,19 @@ function DetailPanel({ detail, hidden, onBack, onSelect, onAdd, onRemove, onUndo
     <section><h4>{detail.leadTitle}</h4><p>{detail.leadBody}</p></section>
     {detail.planTitle && detail.planBody ? <section><h4>{detail.planTitle}</h4><p>{detail.planBody}</p></section> : null}
     {detail.reservationNote ? <section><h4>Reservation</h4><p>{detail.reservationNote}</p></section> : null}
+    {detail.visitNotes.length ? <section><h4>Before you go</h4><div className="blueprint-detail-visit-notes">{detail.visitNotes.map((note) => <article key={note.id}>
+      <strong>{note.title}</strong>
+      <p>{note.body}</p>
+      {note.completion ? <small>{note.completion}</small> : null}
+    </article>)}</div></section> : null}
     {detail.detailSections.map((section) => <section key={section.title}><h4>{section.title}</h4>{section.body ? <p>{section.body}</p> : null}{section.items?.length ? <ul>{section.items.map((item) => <li key={item}>{item}</li>)}</ul> : null}</section>)}
+    {detail.guideContext.length ? <section className="blueprint-detail-guide-context"><h4>Worth noticing here</h4><div>{detail.guideContext.map((item) => <article key={`${item.kind}-${item.id}`}>
+      <span>{item.label}</span>
+      <strong>{item.title}</strong>
+      {item.context ? <small>{item.context}</small> : null}
+      <p>{item.description}</p>
+      {item.sources.length ? <div>{item.sources.map((source) => source.url ? <a href={source.url} target="_blank" rel="noreferrer" key={`${item.kind}-${item.id}-${source.url}`}>{source.summary}</a> : <span key={`${item.kind}-${item.id}-${source.summary}`}>{source.summary}</span>)}</div> : null}
+    </article>)}</div></section> : null}
     {detail.relatedEvents.length ? <section className="blueprint-detail-events"><h4>Timing notes</h4><div>{detail.relatedEvents.map((event) => <article key={event.id}>
       <strong>{event.title}</strong>
       <p>{event.description}</p>
@@ -941,22 +988,15 @@ function recolorMapFeatureTile(context: CanvasRenderingContext2D, width: number,
   context.putImageData(imageData, 0, 0);
 }
 
-function routeLinesForMap(routePlaces: BlueprintMapPointDisplay[], routeSegments: BlueprintRouteSegmentDisplay[]): BlueprintMapRouteLine[] {
-  const placeById = new Map(routePlaces.filter((place) => validCoordinates(place.coordinates)).map((place) => [place.placeId, place] as const));
-  return routeSegments.flatMap((segment) => {
-    const origin = placeById.get(segment.originPlaceId);
-    const destination = placeById.get(segment.destinationPlaceId);
-    return origin && destination ? [{ id: segment.id, mapLineState: segment.mapLineState, points: [origin, destination] as [BlueprintMapPointDisplay, BlueprintMapPointDisplay] }] : [];
-  });
-}
-
-function googleRouteLineStyle(state: MapRouteLineState): Record<string, unknown> {
+function googleRouteLineStyle(state: MapRouteLineRenderState): Record<string, unknown> {
+  if (state === "checking") return { strokeColor: "#91d5ff", strokeOpacity: 0.78, strokeWeight: 4, zIndex: 4 };
   if (state === "needs_refresh") return { strokeColor: "#6f97a8", strokeOpacity: 0.42, strokeWeight: 3, zIndex: 2 };
   if (state === "reference") return { strokeColor: "#84958f", strokeOpacity: 0.34, strokeWeight: 2, zIndex: 1 };
   return { strokeColor: "#276758", strokeOpacity: 0.72, strokeWeight: 3, zIndex: 3 };
 }
 
-function leafletRouteLineStyle(state: MapRouteLineState): L.PolylineOptions {
+function leafletRouteLineStyle(state: MapRouteLineRenderState): L.PolylineOptions {
+  if (state === "checking") return { color: "#91d5ff", opacity: 0.78, weight: 4, dashArray: "3 9" };
   if (state === "needs_refresh") return { color: "#6f97a8", opacity: 0.42, weight: 3, dashArray: "6 8" };
   if (state === "reference") return { color: "#84958f", opacity: 0.34, weight: 2, dashArray: "2 7" };
   return { color: "#276758", opacity: 0.72, weight: 3 };

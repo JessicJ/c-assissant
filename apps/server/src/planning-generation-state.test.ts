@@ -4,6 +4,7 @@ import { RuntimeAdapterError } from "@c-assistant/agent-adapters";
 import type { BlueprintGeneration } from "@c-assistant/core";
 import {
   blueprintGenerationKey,
+  savedBlueprintGenerationKey,
   errorDiagnostic,
   generationFailurePath,
   planGenerationFailureCode,
@@ -40,12 +41,26 @@ test("public persisted generation maps completed status and surfaces first failu
 });
 
 test("planning generation key and failure diagnostics stay deterministic", () => {
-  assert.equal(blueprintGenerationKey("session-1", 3), "session-1:3:interactive-trip-planner@0.2.0");
+  assert.equal(blueprintGenerationKey("session-1", 3), "session-1:3:landi-trip-blueprint@1.0.0");
   assert.equal(planGenerationFailureCode(new RuntimeAdapterError("timed_out", "Timeout")), "timed_out");
   assert.equal(planGenerationFailureCode(new Error("Boom")), "generation_failed");
   assert.equal(generationFailurePath(new Error("Research contract failed"), "research"), "research.contract");
   assert.equal(generationFailurePath(new Error("Network failed"), "research"), "research");
   assert.equal(errorDiagnostic(new Error("Outer", { cause: new Error("Inner detail") })), "Inner detail");
+});
+
+test("generation lookup preserves legacy checkpoints and prefers an existing current generation", () => {
+  const currentKey = blueprintGenerationKey("session-1", 3);
+  const legacyKey = "session-1:3:interactive-trip-planner@0.2.0";
+  const saved = new Map<string, BlueprintGeneration>();
+  const lookup = (key: string) => saved.get(key);
+  assert.equal(savedBlueprintGenerationKey("session-1", 3, lookup), currentKey);
+  saved.set(legacyKey, generationFixture({ generationKey: legacyKey, status: "failed" }));
+  assert.equal(savedBlueprintGenerationKey("session-1", 3, lookup), legacyKey);
+  assert.equal(savedBlueprintGenerationKey("session-1", 4, lookup), blueprintGenerationKey("session-1", 4));
+  saved.set(currentKey, generationFixture({ generationKey: currentKey }));
+  assert.equal(savedBlueprintGenerationKey("session-1", 3, lookup), currentKey);
+  assert.equal(saved.get(legacyKey)?.skillLineage.skillId, "interactive-trip-planner");
 });
 
 test("updating a generation job mutates only public state fields and timestamp", () => {

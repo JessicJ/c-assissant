@@ -4,6 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
 
 import { importSkillItinerary, importSkillResearchBatches } from "@c-assistant/core";
+import { LANDI_BLUEPRINT_SKILL, LEGACY_BLUEPRINT_SKILL } from "./landi-blueprint-policy.js";
 import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError, areLocationsCompatible, buildPlanDraftPrompt, buildPlanRepairPrompt, buildPlanResearchPrompt, buildSkillItineraryPrompt, buildSkillResearchBatchPrompt, codexStrictOutputSchema, parseClaudePrintResult, parsePlanDraft, parsePlanResearchBrief, parsePlanningConversationTurn, parseSkillItineraryArtifact, parseSkillResearchBatchArtifact, planDraftSchema, planResearchBriefToSkillBatch, planResearchSchema, skillItinerarySchema, skillResearchBatchSchema, type RuntimeProcess } from "./index.js";
 
 const validDraft = JSON.stringify({
@@ -247,7 +248,9 @@ test("Skill research batch prompt scopes work without quotas or Xiaohongshu impo
     batch: { id: "tokyo", scopeLabel: "Tokyo" },
     profile: { preferredLanguage: "English", nationality: "Canada", gender: "not_specified", immigrationStatus: "not_obtained" }
   });
-  assert.match(prompt, /Use \$interactive-trip-planner/i);
+  assert.match(prompt, /Landi Trip Blueprint generation policy 1\.0\.0/);
+  assert.doesNotMatch(prompt, /Use \$interactive-trip-planner|Regional Source Pack/);
+  assert.match(prompt, /Select sources by capability and actual availability/);
   assert.match(prompt, /Geographic scope: Tokyo/);
   assert.match(prompt, /Do not import from Xiaohongshu/i);
   assert.match(prompt, /never a validity quota/i);
@@ -269,6 +272,67 @@ test("Skill research batch prompt scopes work without quotas or Xiaohongshu impo
   assert.ok(skillResearchBatchSchema.required.includes("experienceThemes"));
   assert.ok(skillResearchBatchSchema.required.includes("travelTips"));
   assert.ok(skillResearchBatchSchema.required.includes("relationships"));
+});
+
+test("research invocations carry the selected policy and unsupported versions never invoke the runtime", async () => {
+  const prompts: string[] = [];
+  const adapter = new CodexRuntimeAdapter({ run: async (_command, args) => {
+    if (args.includes("--version")) return { code: 0, stdout: "codex test", stderr: "" };
+    if (args[0] === "login") return { code: 0, stdout: "logged in", stderr: "" };
+    prompts.push(args.at(-1)!);
+    const outputPath = args[args.indexOf("--output-last-message") + 1]!;
+    await writeFile(outputPath, JSON.stringify(outputPath.endsWith("skill-itinerary.json") ? {
+      title: "Lisbon", summary: "Arrival rest day", language: "en", destinations: ["Lisbon"], startDate: "2026-10-12", endDate: "2026-10-12",
+      days: [{ id: "d1", date: "2026-10-12", kind: "rest", city: "Lisbon", title: "Rest", summary: "Keep arrival flexible", stops: [], candidatePlaceIds: [] }], movements: []
+    } : {
+      id: "batch", scopeLabel: "Lisbon", sources: [], events: [], actionRequirements: [],
+      places: [{ id: "museum", name: "Museum", locationLabel: "Lisbon", category: "museum", whyWorthIt: "Local ceramic collection", plan: "Explore the collection", sourceUrls: [] }]
+    }));
+    return { code: 0, stdout: "", stderr: "" };
+  } });
+  const input = { request: "Lisbon", batch: { id: "lisbon", scopeLabel: "Lisbon" }, profile: { preferredLanguage: "English", nationality: "Canada", gender: "not_specified" as const, immigrationStatus: "not_obtained" as const } };
+  const artifact = await adapter.generateSkillResearchBatch(input);
+  const research = importSkillResearchBatches([artifact], { researchSetId: "r", generationKey: "g", proposalRef: { sessionId: "s", proposalVersion: 1 }, skillLineage: LANDI_BLUEPRINT_SKILL, createdAt: "2026-09-08T00:00:00Z", updatedAt: "2026-09-08T00:00:00Z" });
+  assert.equal(research.places.length, 1);
+  assert.equal(research.places[0]?.whyWorthIt, "Local ceramic collection");
+  assert.equal(research.places[0]?.evidence.some((ref) => ref.status === "verified"), false);
+  assert.match(prompts[0]!, /Landi Trip Blueprint generation policy/);
+  assert.doesNotMatch(prompts[0]!, /Use \$interactive-trip-planner/);
+  await adapter.generateSkillResearchBatch({ ...input, skillLineage: LEGACY_BLUEPRINT_SKILL });
+  assert.match(prompts[1]!, /Use \$interactive-trip-planner/);
+  assert.match(prompts[1]!, /Regional Source Pack/);
+  await assert.rejects(adapter.generateSkillResearchBatch({ ...input, skillLineage: { ...LANDI_BLUEPRINT_SKILL, skillVersion: "99.0.0" } }), /Unsupported Blueprint generation policy/);
+  assert.equal(prompts.length, 2);
+  const prompt = buildSkillItineraryPrompt({ ...input, research: { ...research, status: "completed" } });
+  assert.match(prompt, /Landi Trip Blueprint generation policy/);
+  assert.match(prompt, /Evidence source catalog/);
+  assert.match(prompt, /omit unsupported duration and geometry/);
+  assert.doesNotMatch(prompt, /Use \$interactive-trip-planner/);
+  const itinerary = await adapter.generateSkillItinerary({ ...input, research: { ...research, status: "completed" } });
+  assert.equal(itinerary.days[0]?.kind, "rest");
+  assert.match(prompts[2]!, /Landi Trip Blueprint generation policy/);
+  await adapter.generateSkillItinerary({ ...input, research: { ...research, status: "completed", skillLineage: LEGACY_BLUEPRINT_SKILL } });
+  assert.match(prompts[3]!, /Use \$interactive-trip-planner/);
+  assert.throws(() => buildSkillItineraryPrompt({ ...input, research: { ...research, status: "completed", skillLineage: { ...LANDI_BLUEPRINT_SKILL, skillVersion: "99.0.0" } } }), /Unsupported Blueprint generation policy/);
+});
+
+test("runtime checks are bounded so live validation cannot hang before generation", async () => {
+  const codexOptions: Array<Parameters<RuntimeProcess>[2]> = [];
+  const codex = new CodexRuntimeAdapter({ run: async (_command, args, options) => {
+    codexOptions.push(options);
+    if (args[0] === "--version") return { code: 0, stdout: "codex 1.0\n", stderr: "" };
+    return { code: 0, stdout: "Logged in", stderr: "" };
+  } });
+  assert.equal((await codex.check()).authenticated, true);
+  assert.deepEqual(codexOptions.map((options) => options?.timeoutMs), [30_000, 30_000]);
+
+  const hungCodex = new CodexRuntimeAdapter({ run: async (_command, args) => args[0] === "--version"
+    ? { code: 0, stdout: "codex 1.0\n", stderr: "" }
+    : { code: 0, stdout: "", stderr: "", timedOut: true } });
+  const hungStatus = await hungCodex.check();
+  assert.equal(hungStatus.installed, true);
+  assert.equal(hungStatus.authenticated, false);
+  assert.match(hungStatus.message ?? "", /login status did not respond/i);
 });
 
 test("Skill research batch keeps rich place content and namespaces local identities", () => {
@@ -633,7 +697,7 @@ test("Codex preserves travel-plan richness through an unverified fallback when i
   assert.equal(draft.location, "Paris, France");
   assert.equal(generationRuns, 1);
   assert.equal(calls.length, 4);
-  assert.deepEqual(timeouts, [1_080_000, 1_800_000]);
+  assert.deepEqual(timeouts, [30_000, 30_000, 1_080_000, 1_800_000]);
   assert.match(calls.at(-1)?.at(-1) ?? "", /do not repeat web research/i);
   assert.match(calls.at(-1)?.at(-1) ?? "", /Do not return a non-spatial timeline or an empty places array/i);
 });

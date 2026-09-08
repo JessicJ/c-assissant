@@ -228,9 +228,18 @@ test("presentation route refresh endpoint saves only requested route legs in one
     assert.deepEqual(new Set(payload.routeRefresh.refreshedSegmentIds), new Set(["route-1", "route-2"]));
     assert.deepEqual(new Set(routeCalls), new Set(["route-1", "route-2"]));
     const segments = payload.workspace.activePlan.presentation.routeSegments;
-    assert.equal(segments.find((segment: { id: string }) => segment.id === "route-1").verification, "verified");
-    assert.equal(segments.find((segment: { id: string }) => segment.id === "route-2").verification, "verified");
-    assert.equal(segments.find((segment: { id: string }) => segment.id === "route-3").verification, "needs_verification");
+    const route1 = segments.find((segment: { id: string }) => segment.id === "route-1");
+    const route2 = segments.find((segment: { id: string }) => segment.id === "route-2");
+    const route3 = segments.find((segment: { id: string }) => segment.id === "route-3");
+    assert.equal(route1.verification, "verified");
+    assert.equal(route1.label, "9 min walk");
+    assert.equal(route1.detail, "Walk from Fukagawa Edo Museum to Kiyosumi Gardens; allow about 9 minutes, about 700 m.");
+    assert.equal(route1.display.mapLineState, "formal");
+    assert.equal(route1.display.refreshReason, undefined);
+    assert.equal(/Google Maps|route refresh|before execution/i.test(route1.detail), false);
+    assert.equal(route2.verification, "verified");
+    assert.equal(route2.label, "13 min walk");
+    assert.equal(route3.verification, "needs_verification");
   } finally {
     await server.close();
     store.close();
@@ -334,6 +343,10 @@ test("presentation route refresh endpoint writes route facts back to the Trip Bl
     assert.equal(payload.workspace.activePlan.version, plan.version + 1);
     assert.equal(payload.workspace.activeBlueprint.version, 3);
     assert.deepEqual(payload.workspace.activeBlueprint.movements.map((movement: { id: string; status: string; durationMinutes?: number; distanceMeters?: number }) => [movement.id, movement.status, movement.durationMinutes, movement.distanceMeters]), [["movement-d1-1", "verified", 9, 700], ["movement-d1-2", "recheck", undefined, undefined]]);
+    assert.deepEqual(payload.workspace.activeBlueprint.movements.map((movement: { id: string; label?: string; detail?: string }) => [movement.id, movement.label, movement.detail]), [
+      ["movement-d1-1", "9 min walk", "Walk from a to c; allow about 9 minutes, about 700 m."],
+      ["movement-d1-2", "Route needs refresh", "This day was edited directly. Refresh routing, timing, meals, and opening constraints before execution."]
+    ]);
     assert.deepEqual(payload.workspace.activeBlueprint.movements.map((movement: { id: string; display?: { mapLineState?: string; refreshReason?: string } }) => [movement.id, movement.display?.mapLineState, movement.display?.refreshReason ?? ""]), [
       ["movement-d1-1", "formal", ""],
       ["movement-d1-2", "needs_refresh", "Refresh this route leg after direct itinerary edits."]
@@ -398,10 +411,15 @@ test("single presentation route refresh endpoint writes route facts back to the 
     assert.equal(payload.workspace.activeBlueprint.version, 3);
     assert.equal(payload.workspace.activeBlueprint.movements[0].status, "verified");
     assert.equal(payload.workspace.activeBlueprint.movements[0].durationMinutes, 9);
+    assert.equal(payload.workspace.activeBlueprint.movements[0].label, "9 min walk");
+    assert.equal(payload.workspace.activeBlueprint.movements[0].detail, "Walk from a to c; allow about 9 minutes, about 700 m.");
     assert.equal(payload.workspace.activeBlueprint.movements[0].display.mapLineState, "formal");
     assert.equal(payload.workspace.activePlan.presentation.routeSegments[0].verification, "verified");
+    assert.equal(payload.workspace.activePlan.presentation.routeSegments[0].label, "9 min walk");
+    assert.equal(payload.workspace.activePlan.presentation.routeSegments[0].detail, "Walk from a to c; allow about 9 minutes, about 700 m.");
     assert.equal(payload.workspace.activePlan.presentation.routeSegments[0].display.mapLineState, "formal");
     assert.equal(payload.segment.verification, "verified");
+    assert.equal(payload.segment.label, "9 min walk");
     assert.equal(payload.segment.display.mapLineState, "formal");
     assert.equal(store.getPlanBlueprintLineage(plan.id)?.blueprintVersion, 3);
   } finally {
@@ -410,7 +428,7 @@ test("single presentation route refresh endpoint writes route facts back to the 
   }
 });
 
-test("presentation route refresh endpoint preserves the Plan when any requested leg fails", async () => {
+test("presentation route refresh endpoint saves successful legs when only part of the batch fails", async () => {
   const server = Fastify({ logger: false });
   const store = new SqliteWorkspaceStore(":memory:");
   const { maps } = routeMaps(new Set(["route-2"]));
@@ -424,8 +442,40 @@ test("presentation route refresh endpoint preserves the Plan when any requested 
       payload: { expectedVersion: plan.version, segmentIds: ["route-1", "route-2"] }
     });
 
+    assert.equal(response.statusCode, 200, response.body);
+    const payload = response.json();
+    assert.deepEqual(payload.routeRefresh.segmentIds, ["route-1", "route-2"]);
+    assert.deepEqual(payload.routeRefresh.refreshedSegmentIds, ["route-1"]);
+    assert.deepEqual(payload.routeRefresh.failedSegmentIds, ["route-2"]);
+    assert.equal(payload.workspace.activePlan.version, plan.version + 1);
+    const current = payload.workspace.activePlan;
+    assert.deepEqual(current.presentation?.routeSegments.map((segment: { id: string; verification: string; display?: { mapLineState?: string } }) => [segment.id, segment.verification, segment.display?.mapLineState ?? ""]), [
+      ["route-1", "verified", "formal"],
+      ["route-2", "needs_verification", ""],
+      ["route-3", "needs_verification", ""]
+    ]);
+  } finally {
+    await server.close();
+    store.close();
+  }
+});
+
+test("presentation route refresh endpoint preserves the Plan when every requested leg fails", async () => {
+  const server = Fastify({ logger: false });
+  const store = new SqliteWorkspaceStore(":memory:");
+  const { maps } = routeMaps(new Set(["route-1", "route-2"]));
+  try {
+    registerPlanPresentationRoutes(server, { store, getMaps: () => maps });
+    const plan = routeRefreshPlan(store);
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/plans/${plan.id}/presentation/routes/refresh`,
+      payload: { expectedVersion: plan.version, segmentIds: ["route-1", "route-2"] }
+    });
+
     assert.equal(response.statusCode, 424, response.body);
-    assert.deepEqual(response.json().failedSegmentIds, ["route-2"]);
+    assert.deepEqual(response.json().failedSegmentIds, ["route-1", "route-2"]);
     const current = store.getWorkspace().activePlan;
     assert.equal(current.version, plan.version);
     assert.deepEqual(current.presentation?.routeSegments.map((segment) => segment.verification), ["needs_verification", "needs_verification", "needs_verification"]);

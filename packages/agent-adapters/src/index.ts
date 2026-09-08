@@ -2,11 +2,14 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { planPresentationIntegrityIssues, type GeneratedPlanDraft, type ImmigrationStatus, type PlanningSession, type PlanPresentation, type ProfileGender, type ResearchSet, type SkillItineraryArtifact, type SkillResearchBatchArtifact } from "@c-assistant/core";
+import { planPresentationIntegrityIssues, type GeneratedPlanDraft, type ImmigrationStatus, type PlanningSession, type PlanPresentation, type ProfileGender, type ResearchSet, type SkillItineraryArtifact, type SkillResearchBatchArtifact, type SkillLineage } from "@c-assistant/core";
+import { blueprintPolicyKind, LANDI_BLUEPRINT_GENERATION_RULES, LANDI_BLUEPRINT_SKILL, LANDI_BLUEPRINT_SOURCE_RULES } from "./landi-blueprint-policy.js";
+export { blueprintPolicyKind, LANDI_BLUEPRINT_SKILL, LEGACY_BLUEPRINT_SKILL } from "./landi-blueprint-policy.js";
 
 export type RuntimeKind = "codex" | "claude-code";
 
 const CODEX_PLAN_TOTAL_TIMEOUT_MS = 70 * 60_000;
+const RUNTIME_CHECK_TIMEOUT_MS = 30_000;
 const CODEX_RESEARCH_TIMEOUT_MS = 18 * 60_000;
 const CODEX_DRAFT_TIMEOUT_MS = 30 * 60_000;
 const CODEX_REPAIR_TIMEOUT_MS = 20 * 60_000;
@@ -55,6 +58,7 @@ export interface PlanningConversationTurn {
 export interface SkillResearchBatchRequest extends CodexPlanRequest {
   batch: { id: string; scopeLabel: string };
   completedAt?: string;
+  skillLineage?: SkillLineage;
 }
 
 export interface SkillItineraryRequest extends CodexPlanRequest {
@@ -121,10 +125,12 @@ export class CodexRuntimeAdapter {
   }
 
   async check(): Promise<RuntimeCheck> {
-    const version = await this.run("codex", ["--version"]);
+    const version = await this.run("codex", ["--version"], { timeoutMs: RUNTIME_CHECK_TIMEOUT_MS });
+    if (version.timedOut) return { kind: "codex", installed: true, authenticated: false, message: "Codex CLI did not respond during the runtime check." };
     if (version.code !== 0) return { kind: "codex", installed: false, authenticated: false, message: "Codex CLI is not available on this machine." };
 
-    const login = await this.run("codex", ["login", "status"]);
+    const login = await this.run("codex", ["login", "status"], { timeoutMs: RUNTIME_CHECK_TIMEOUT_MS });
+    if (login.timedOut) return { kind: "codex", installed: true, authenticated: false, version: version.stdout.trim() || undefined, message: "Codex login status did not respond during the runtime check." };
     return {
       kind: "codex",
       installed: true,
@@ -156,6 +162,7 @@ export class CodexRuntimeAdapter {
 
   async generateSkillResearchBatch(input: SkillResearchBatchRequest): Promise<SkillResearchBatchArtifact> {
     if (!input.request.trim() || !input.batch.id.trim() || !input.batch.scopeLabel.trim()) throw new RuntimeAdapterError("invalid_request", "A research batch needs a confirmed request and geographic scope.");
+    const prompt = buildSkillResearchBatchPrompt(input);
     const health = await this.check();
     if (!health.installed) throw new RuntimeAdapterError("not_installed", health.message ?? "Codex CLI is not available.");
     if (!health.authenticated) throw new RuntimeAdapterError("not_authenticated", health.message ?? "Codex login is required.");
@@ -165,7 +172,7 @@ export class CodexRuntimeAdapter {
     try {
       await writeFile(schemaPath, JSON.stringify(codexStrictOutputSchema(skillResearchBatchSchema)), "utf8");
       input.onStage?.("researching");
-      const command = await this.run("codex", ["--search", "exec", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "--output-schema", schemaPath, "--output-last-message", outputPath, buildSkillResearchBatchPrompt(input)], {
+      const command = await this.run("codex", ["--search", "exec", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "--output-schema", schemaPath, "--output-last-message", outputPath, prompt], {
         cwd: runDirectory,
         env: scrubbedEnvironment(this.environment),
         timeoutMs: CODEX_RESEARCH_TIMEOUT_MS,
@@ -182,6 +189,7 @@ export class CodexRuntimeAdapter {
 
   async generateSkillItinerary(input: SkillItineraryRequest): Promise<SkillItineraryArtifact> {
     if (!input.request.trim() || input.research.status !== "completed") throw new RuntimeAdapterError("invalid_request", "Itinerary generation needs a completed Research Set.");
+    const prompt = buildSkillItineraryPrompt(input);
     const health = await this.check();
     if (!health.installed) throw new RuntimeAdapterError("not_installed", health.message ?? "Codex CLI is not available.");
     if (!health.authenticated) throw new RuntimeAdapterError("not_authenticated", health.message ?? "Codex login is required.");
@@ -191,7 +199,7 @@ export class CodexRuntimeAdapter {
     try {
       await writeFile(schemaPath, JSON.stringify(codexStrictOutputSchema(skillItinerarySchema)), "utf8");
       input.onStage?.("drafting");
-      const command = await this.run("codex", ["exec", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "--output-schema", schemaPath, "--output-last-message", outputPath, buildSkillItineraryPrompt(input)], {
+      const command = await this.run("codex", ["exec", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "--output-schema", schemaPath, "--output-last-message", outputPath, prompt], {
         cwd: runDirectory,
         env: scrubbedEnvironment(this.environment),
         timeoutMs: CODEX_DRAFT_TIMEOUT_MS,
@@ -338,10 +346,12 @@ export class ClaudeCodeRuntimeAdapter {
   }
 
   async check(): Promise<RuntimeCheck> {
-    const version = await this.run("claude", ["--version"]);
+    const version = await this.run("claude", ["--version"], { timeoutMs: RUNTIME_CHECK_TIMEOUT_MS });
+    if (version.timedOut) return { kind: "claude-code", installed: true, authenticated: false, message: "Claude Code CLI did not respond during the runtime check." };
     if (version.code !== 0) return { kind: "claude-code", installed: false, authenticated: false, message: "Claude Code CLI is not available on this machine." };
 
-    const login = await this.run("claude", ["auth", "status"]);
+    const login = await this.run("claude", ["auth", "status"], { timeoutMs: RUNTIME_CHECK_TIMEOUT_MS });
+    if (login.timedOut) return { kind: "claude-code", installed: true, authenticated: false, version: version.stdout.trim() || undefined, message: "Claude Code auth status did not respond during the runtime check." };
     const authenticated = claudeAuthStatusIsLoggedIn(login);
     return {
       kind: "claude-code",
@@ -1521,7 +1531,8 @@ function schemaAllowsNull(value: unknown): boolean {
 }
 
 export function buildSkillResearchBatchPrompt(input: SkillResearchBatchRequest): string {
-  return `Use $interactive-trip-planner to execute its place-research stage for one confirmed Landi trip. Return only JSON matching the supplied rich Research Batch schema.
+  const legacy = blueprintPolicyKind(input.skillLineage ?? LANDI_BLUEPRINT_SKILL) === "legacy";
+  return `${legacy ? "Use $interactive-trip-planner to execute its place-research stage for one confirmed Landi trip." : `${LANDI_BLUEPRINT_GENERATION_RULES}\n\nExecute the place-research stage for one confirmed Landi trip.`} Return only JSON matching the supplied rich Research Batch schema.
 
 Confirmed request: ${input.request.trim()}
 Profile context: ${JSON.stringify(input.profile)}
@@ -1530,7 +1541,7 @@ Batch id: ${input.batch.id}
 Geographic scope: ${input.batch.scopeLabel}
 
 Batch rules:
-- Follow the Skill's source-verification and applicable Regional Source Pack rules, including multilingual discovery followed by source verification.
+${legacy ? "- Follow the Skill's source-verification and applicable Regional Source Pack rules, including multilingual discovery followed by source verification." : LANDI_BLUEPRINT_SOURCE_RULES}
 - Research this geographic scope deeply enough to preserve useful scheduled, replacement, food/rest, evening, rain, closure, and low-energy choices.
 - Do not import from Xiaohongshu and do not ask the traveler for links or notes from it.
 - Do not reduce or cap valid distinct places because of output length. Coverage targets are guidance, never a validity quota.
@@ -1548,8 +1559,9 @@ Batch rules:
 }
 
 export function buildSkillItineraryPrompt(input: SkillItineraryRequest): string {
+  const legacy = blueprintPolicyKind(input.research.skillLineage) === "legacy";
   const compactPlaces = input.research.places.map((place) => ({ id: place.id, name: place.name, localizedName: place.localizedName, city: place.city, area: place.area, category: place.category, display: place.display, priority: place.priority, contentTier: place.contentTier, visitRole: place.visitRole, durationMinutes: place.durationMinutes, whyWorthIt: place.whyWorthIt, plan: place.plan, tip: place.tip }));
-  return `Use $interactive-trip-planner to perform itinerary design for one confirmed Landi trip. Return only JSON matching the supplied itinerary artifact schema.
+  return `${legacy ? "Use $interactive-trip-planner to perform itinerary design for one confirmed Landi trip." : `${LANDI_BLUEPRINT_GENERATION_RULES}\n\nPerform itinerary design for one confirmed Landi trip.`} Return only JSON matching the supplied itinerary artifact schema.
 
 Confirmed request: ${input.request.trim()}
 Profile context: ${JSON.stringify(input.profile)}
@@ -1557,6 +1569,7 @@ Research Set identity: ${input.research.id}
 Destinations and places: ${JSON.stringify(compactPlaces)}
 Material events: ${JSON.stringify(input.research.events)}
 Action requirements that may constrain timing: ${JSON.stringify(input.research.actionRequirements)}
+${legacy ? "" : `Scheduling eligibility: ${JSON.stringify(input.research.places.map((place) => ({ id: place.id, schedulingEligibility: place.schedulingEligibility })))}\nEvidence source catalog: ${JSON.stringify(input.research.sources)}\nPlace claim evidence: ${JSON.stringify(input.research.places.map((place) => ({ id: place.id, evidence: place.evidence, fieldEvidence: place.fieldEvidence })))}`}
 
 Rules:
 - The host completed Skill intake and place research. Execute itinerary clustering and day-by-day design now; do not restart intake or research.
@@ -1569,7 +1582,7 @@ Rules:
 - Stops use contiguous order starting at 1 and only represent concrete places scheduled into the formal route. Times are optional planning advice, not claimed opening times. Give realistic buffers for meals, rest, hotel returns, luggage handling, and transfers when those shape the day.
 - Every day must include typed day.blocks for the visible Web workspace day sequence. Use stop for scheduled stop places, meal for meals and cafe breaks, rest for recovery or hotel pauses, transfer for station/airport/cross-area movement, lodging for hotel base/return moments, flexible for open windows or same-direction backups, and event only for supplied Research Set events. Do not hide meals, rest, hotel returns, luggage handling, or flexible windows only in the day summary.
 - A stop block with placeId must correspond to a same-day stop; non-stop blocks may reference an existing place when useful, or use title/summary when the block is contextual. Event blocks must reference an existing eventId. Preserve traveler-facing title, summary, startTime, endTime, durationMinutes, and role when they help the left-column itinerary.
-- Every adjacent pair of scheduled stops needs exactly one movement. A route may use mode unknown and status recheck when reliable details are unavailable; do not invent verified duration or geometry. If exact routing is unavailable, include a conservative planned duration and detail that live routing must be refreshed before execution.
+${legacy ? "- Every adjacent pair of scheduled stops needs exactly one movement. A route may use mode unknown and status recheck when reliable details are unavailable; do not invent verified duration or geometry. If exact routing is unavailable, include a conservative planned duration and detail that live routing must be refreshed before execution." : "- Every adjacent pair of scheduled stops needs exactly one movement. This stage has no live routing tool: use supplied verified route facts only when they support the exact leg, otherwise retain unknown mode or recheck status and omit unsupported duration and geometry. Explain that travel time remains to be checked. Cite supplied source identities only where they support the specific claim; do not promote discovery evidence into verified routing."}
 - Evidence gaps do not collapse the itinerary. Keep the relationship and mark it recheck.
 - Do not return place records, sources, Plan Stages, Tasks, Reminders, map HTML, or Landi persistence fields.
 - Do not compress, replace, or delete the Research Set. Landi attaches it unchanged after this stage.`;

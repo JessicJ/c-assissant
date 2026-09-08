@@ -63,6 +63,65 @@ test("Blueprint presentation preserves explicit empty tips and preparation check
   assert.deepEqual(presentation.preparationChecklist, []);
 });
 
+test("Blueprint presentation keeps movement evidence for route read surfaces", () => {
+  const blueprint: TripBlueprint = {
+    schemaVersion: 1,
+    id: "blueprint-route-evidence",
+    version: 1,
+    generationKey: "generation-route-evidence",
+    proposalRef: { sessionId: "session-route-evidence", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+    researchSetId: "research-route-evidence",
+    title: "Tokyo",
+    summary: "Neighborhood route.",
+    language: "en",
+    destinations: ["Tokyo"],
+    startDate: "2026-10-12",
+    endDate: "2026-10-12",
+    sources: [{ id: "route-source", title: "Tokyo route note", authority: "Transit guide", url: "https://example.com/route", retrievedAt: "2026-08-26", status: "verified" }],
+    places: [
+      { id: "a", name: "A", locationLabel: "Tokyo", city: "Tokyo", category: "museum", priority: "must", coordinates: [35.68, 139.76], whyWorthIt: "A", plan: "Visit A", evidence: [] },
+      { id: "b", name: "B", locationLabel: "Tokyo", city: "Tokyo", category: "garden", priority: "preferred", coordinates: [35.69, 139.77], whyWorthIt: "B", plan: "Visit B", evidence: [] }
+    ],
+    events: [],
+    days: [{ id: "day-1", date: "2026-10-12", kind: "scheduled", city: "Tokyo", title: "Day", summary: "Flow", stops: [{ placeId: "a", order: 1 }, { placeId: "b", order: 2 }], candidatePlaceIds: [] }],
+    movements: [{ id: "route-1", dayId: "day-1", originPlaceId: "a", destinationPlaceId: "b", mode: "walking", status: "verified", evidence: [{ sourceId: "route-source", status: "verified", supports: ["walking time"], checkedAt: "2026-08-26" }] }],
+    actionRequirements: [],
+    createdAt: "2026-08-26T00:00:00.000Z"
+  };
+  const presentation = blueprintPresentation(blueprint);
+  assert.deepEqual(presentation.routeSegments[0]?.sourceRefs, ["https://example.com/route"]);
+  assert.deepEqual(presentation.routeSegments[0]?.evidence, [{ sourceId: "route-source", status: "verified", supports: ["walking time"], checkedAt: "2026-08-26" }]);
+});
+
+test("Blueprint presentation keeps event evidence for event read surfaces", () => {
+  const blueprint: TripBlueprint = {
+    schemaVersion: 1,
+    id: "blueprint-event-evidence",
+    version: 1,
+    generationKey: "generation-event-evidence",
+    proposalRef: { sessionId: "session-event-evidence", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+    researchSetId: "research-event-evidence",
+    title: "Kyoto",
+    summary: "Festival route.",
+    language: "en",
+    destinations: ["Kyoto"],
+    startDate: "2026-10-12",
+    endDate: "2026-10-12",
+    sources: [{ id: "event-source", title: "Kyoto festival calendar", authority: "City events", url: "https://example.com/event", retrievedAt: "2026-08-26", status: "verified" }],
+    places: [{ id: "temple", name: "Temple", locationLabel: "Kyoto", city: "Kyoto", category: "temple", priority: "must", coordinates: [35.01, 135.76], whyWorthIt: "Temple context.", plan: "Visit before the evening event.", evidence: [] }],
+    events: [{ id: "event-1", title: "Evening light-up", description: "Nearby evening crowds.", startDate: "2026-10-12", placeId: "temple", evidence: [{ sourceId: "event-source", status: "verified", supports: ["event timing"], checkedAt: "2026-08-26" }] }],
+    days: [{ id: "day-1", date: "2026-10-12", kind: "scheduled", city: "Kyoto", title: "Day", summary: "Flow", stops: [{ placeId: "temple", order: 1 }], candidatePlaceIds: [] }],
+    movements: [],
+    actionRequirements: [],
+    createdAt: "2026-08-26T00:00:00.000Z"
+  };
+  const presentation = blueprintPresentation(blueprint);
+  assert.deepEqual(presentation.events?.[0]?.sourceRefs, ["https://example.com/event"]);
+  assert.deepEqual(presentation.events?.[0]?.evidence, [{ sourceId: "event-source", status: "verified", supports: ["event timing"], checkedAt: "2026-08-26" }]);
+});
+
 const multiCityPresentation: PlanPresentation = {
   kind: "itinerary",
   summary: "Paris followed by London.",

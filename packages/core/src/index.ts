@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PlanCompilationOrigin } from "./plan-compiler.js";
 import type { DestinationArrivalEvent } from "./current-destination.js";
-import type { BlueprintExperienceTheme, BlueprintFieldEvidence, BlueprintGuideRelationshipGraph, BlueprintGuideTheme, BlueprintItineraryBlock, BlueprintLocalFood, BlueprintLocalProduct, BlueprintModuleIdentity, BlueprintMovementDisplayIntent, BlueprintPlaceDisplayIntent, BlueprintPlaceGuideDisplay, BlueprintPreparationChecklistItem, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelTip, TripBlueprint } from "./trip-blueprint.js";
+import type { BlueprintActionRequirement, BlueprintBookingConstraint, BlueprintEvidenceRef, BlueprintExperienceTheme, BlueprintFieldEvidence, BlueprintGuideRelationshipGraph, BlueprintGuideTheme, BlueprintItineraryBlock, BlueprintLocalFood, BlueprintLocalProduct, BlueprintModuleIdentity, BlueprintMovementDisplayIntent, BlueprintPlaceDisplayIntent, BlueprintPlaceGuideDisplay, BlueprintPreparationChecklistItem, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelTip, TripBlueprint } from "./trip-blueprint.js";
 
 export { recommendPlanTransport, type TransportMode, type TransportRecommendation, type TransportRouteFact } from "./transport.js";
 export { assessPolicyPreparation, type PolicyPreparationAssessment, type PolicyPreparationItem, type PolicyPreparationStatus } from "./policy-applicability.js";
@@ -315,6 +315,7 @@ export interface PlanPresentationEvent {
   locationLabel?: string;
   placeId?: string;
   sourceRefs: string[];
+  evidence?: BlueprintEvidenceRef[];
 }
 
 export interface PlanRouteSegment {
@@ -327,6 +328,7 @@ export interface PlanRouteSegment {
   distanceMeters?: number;
   checkedAt?: string;
   sourceRefs: string[];
+  evidence?: BlueprintEvidenceRef[];
   dayId?: string;
   label?: string;
   detail?: string;
@@ -351,11 +353,13 @@ export interface PlanPresentation {
   days: ItineraryDay[];
   places: PlanPlace[];
   events?: PlanPresentationEvent[];
+  bookingConstraints?: BlueprintBookingConstraint[];
   localFoods?: BlueprintLocalFood[];
   localProducts?: BlueprintLocalProduct[];
   experienceThemes?: BlueprintExperienceTheme[];
   travelTips?: BlueprintTravelTip[];
   preparationChecklist?: BlueprintPreparationChecklistItem[];
+  actionRequirements?: BlueprintActionRequirement[];
   routeSegments: PlanRouteSegment[];
 }
 
@@ -409,6 +413,7 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
       ...(movement?.durationMinutes ? { durationMinutes: movement.durationMinutes } : {}),
       ...(movement?.distanceMeters ? { distanceMeters: movement.distanceMeters } : {}),
       sourceRefs: movement?.evidence.flatMap((ref) => sources.get(ref.sourceId)?.url ?? []) ?? [],
+      ...(movement?.evidence.length ? { evidence: structuredClone(movement.evidence) } : {}),
       dayId: day.id,
       label: movement?.label ?? "Route needs verification",
       detail: movement?.detail ?? "This adjacent movement is reconstructed from the itinerary order and needs route verification before execution.",
@@ -427,6 +432,7 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
     ...(blueprint.guideRelationshipGraph ? { guideRelationshipGraph: structuredClone(blueprint.guideRelationshipGraph) } : {}),
     ...(blueprint.fieldEvidence ? { fieldEvidence: structuredClone(blueprint.fieldEvidence) } : {}),
     ...(blueprint.sources.length ? { sourceCatalog: structuredClone(blueprint.sources) } : {}),
+    ...(blueprint.bookingConstraints?.length ? { bookingConstraints: structuredClone(blueprint.bookingConstraints) } : {}),
     ...(blueprint.localFoods?.length ? { localFoods: structuredClone(blueprint.localFoods) } : {}),
     ...(blueprint.localProducts?.length ? { localProducts: structuredClone(blueprint.localProducts) } : {}),
     ...(blueprint.experienceThemes?.length ? { experienceThemes: structuredClone(blueprint.experienceThemes) } : {}),
@@ -481,10 +487,12 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
       ...(event.endDate ? { endDate: event.endDate } : {}),
       ...(event.locationLabel ? { locationLabel: event.locationLabel } : {}),
       ...(event.placeId ? { placeId: event.placeId } : {}),
-      sourceRefs: event.evidence.flatMap((ref) => sources.get(ref.sourceId)?.url ?? [])
+      sourceRefs: event.evidence.flatMap((ref) => sources.get(ref.sourceId)?.url ?? []),
+      ...(event.evidence.length ? { evidence: structuredClone(event.evidence) } : {})
     })),
     ...(blueprint.travelTips ? { travelTips: structuredClone(blueprint.travelTips) } : {}),
     ...(blueprint.preparationChecklist ? { preparationChecklist: structuredClone(blueprint.preparationChecklist) } : {}),
+    ...(blueprint.actionRequirements.length ? { actionRequirements: structuredClone(blueprint.actionRequirements) } : {}),
     days,
     routeSegments
   };

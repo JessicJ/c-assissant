@@ -52,7 +52,7 @@ export function registerPlanPresentationRoutes(server: FastifyInstance, dependen
       const refreshed = await refreshGeneratedPlanRoutes(plan, routeRefreshMaps(getMaps()), { segmentIds });
       const refreshedIds = new Set(refreshed.refreshed.map((route) => route.segmentId));
       const failedSegmentIds = [...new Set([...refreshed.failedSegmentIds, ...segmentIds.filter((segmentId) => !refreshedIds.has(segmentId))])];
-      if (failedSegmentIds.length) {
+      if (failedSegmentIds.length && !refreshed.refreshed.length) {
         return reply.code(424).send({ error: "Some route legs could not be refreshed. The itinerary was not changed.", failedSegmentIds });
       }
       const saved = store.saveGeneratedPlanRouteRefresh({ planId: request.params.planId, expectedVersion, ...(expectedBlueprintVersion !== undefined ? { expectedBlueprintVersion } : {}), provider: "google_maps", routes: refreshed.refreshed });
@@ -61,7 +61,8 @@ export function registerPlanPresentationRoutes(server: FastifyInstance, dependen
         routeRefresh: {
           segmentIds,
           refreshedSegmentIds: refreshed.refreshed.map((route) => route.segmentId),
-          scheduleConflictDayIds: saved.scheduleConflictDayIds
+          scheduleConflictDayIds: saved.scheduleConflictDayIds,
+          ...(failedSegmentIds.length ? { failedSegmentIds } : {})
         }
       };
     } catch (error) {

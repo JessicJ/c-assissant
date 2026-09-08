@@ -8,6 +8,7 @@ import { PlanChangeNotice, PlanCommandCenter, PlanDecisionBoard, PlanGrounding, 
 import { PlanRemindersView, PlanSourcesView, WorkspaceEmpty } from "./PlanSupportingViews.js";
 import { FeaturedChecklist, FeaturedTimeline, PlanContentSection } from "./PlanTaskSections.js";
 import { currentPlanReadModel } from "./current-plan-read-model.js";
+import { automaticRouteRefreshRequestForRevision, routeRefreshCompletedStatus, routeRefreshSavedButUncheckedStatus, routeRefreshUncheckedStatus, routeRefreshWorkingStatus } from "./current-plan-route-refresh.js";
 import { appliedItineraryRevisionSummary, compactPendingItineraryEdits, type ItineraryRouteRefreshDisplay, type PendingItineraryEditDisplay } from "./landi-blueprint-workspace-display.js";
 import { planRefinementQuestion } from "./plan-display.js";
 import { visibleDocumentPolicySources } from "./plan-external-display.js";
@@ -139,8 +140,22 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
         ...planReadModel.mutationVersion,
         revisions
       });
-      await onWorkspace(payload.workspace);
-      onStatus({ tone: "success", text: itineraryRevisionImpactStatus(payload.revision, presentation) });
+      const refreshRequest = automaticRouteRefreshRequestForRevision(payload.workspace, payload.revision);
+      if (!refreshRequest) {
+        await onWorkspace(payload.workspace);
+        onStatus({ tone: "success", text: itineraryRevisionImpactStatus(payload.revision, presentation) });
+        return;
+      }
+      setRefreshingRoutes(true);
+      onStatus(routeRefreshWorkingStatus(refreshRequest.dayLabel));
+      try {
+        const refreshed = await refreshPlanRoutes(refreshRequest.planId, refreshRequest.body);
+        await onWorkspace(refreshed.workspace);
+        onStatus(routeRefreshCompletedStatus(refreshRequest.dayLabel, refreshed));
+      } catch {
+        await onWorkspace(payload.workspace);
+        onStatus(routeRefreshSavedButUncheckedStatus(refreshRequest.dayLabel));
+      }
     } catch (caught) {
       const replanRequirement = directReplanRequirementFromError(caught);
       let messageText = replanRequirement
@@ -175,6 +190,7 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
       throw caught;
     } finally {
       setApplyingItineraryEdits(false);
+      setRefreshingRoutes(false);
       onOperationBusy(false);
     }
   }
@@ -183,7 +199,7 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
     setRefreshingRoutes(true);
     onOperationBusy(true);
     onError("");
-    onStatus({ tone: "working", text: `Refreshing routes for ${refresh.dayLabel}...` });
+    onStatus(routeRefreshWorkingStatus(refresh.dayLabel));
     try {
       if (!refresh.segmentIds.length) throw new Error("There were no route legs to refresh.");
       const payload = await refreshPlanRoutes(plan.id, {
@@ -191,18 +207,9 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
         segmentIds: refresh.segmentIds
       });
       await onWorkspace(payload.workspace);
-      const refreshedCount = payload.routeRefresh.refreshedSegmentIds.length;
-      const conflictCount = payload.routeRefresh.scheduleConflictDayIds.length;
-      onStatus({
-        tone: "success",
-        text: conflictCount
-          ? `Routes refreshed for ${refresh.dayLabel}, but timing still needs review.`
-          : `Routes refreshed for ${refresh.dayLabel}${refreshedCount ? ` (${refreshedCount} legs)` : ""}.`
-      });
-    } catch (caught) {
-      const messageText = caught instanceof Error ? caught.message : "Landi could not refresh these routes.";
-      onError(messageText);
-      onStatus({ tone: "error", text: messageText });
+      onStatus(routeRefreshCompletedStatus(refresh.dayLabel, payload));
+    } catch {
+      onStatus(routeRefreshUncheckedStatus(refresh.dayLabel));
     } finally {
       setRefreshingRoutes(false);
       onOperationBusy(false);
