@@ -56,7 +56,15 @@ pnpm install
 pnpm dev
 ```
 
-打开 Vite 输出的本地地址即可查看 Web 工作台。根目录 `pnpm dev` 使用 `http://127.0.0.1:8877/health` 作为开发健康检查，避免与默认运行在 `8787` 的常驻生产服务冲突。
+根目录 `pnpm dev` 会同时启动 Core 服务和 Vite Web 工作台。开发 Core 服务绑定到 `http://127.0.0.1:8877/`，Vite 工作台打开在 `http://127.0.0.1:5173/`；Vite 会把 `/api` 和 `/health` 代理到同一个 Core 端口。如果只单独运行 `pnpm --filter @c-assistant/web dev`，Web 代理会读取环境变量或 `.env` 中的 `C_ASSISTANT_PORT`，未设置时回退到默认 Core 端口 `8787`。如果 Web 工作台先于 Core 服务打开，它会显示可恢复的启动提示、短暂自动重试状态，并保留手动重试按钮。
+
+如果 Web 工作台已经打开，但无法加载 Plan 数据，可以运行：
+
+```bash
+pnpm check:workspace
+```
+
+这个检查会验证 Vite 工作台、Core 服务健康状态、Web 代理健康端点和 `/api/workspace`。输出会说明更可能是前端、后端、代理端口，还是 workspace 数据本身的问题。需要检查非默认环境时，可以传入 `--web-url`、`--core-url`、`--core-port` 或 `--timeout-ms`。
 
 长期运行时先构建，再只启动一个 Landi 服务进程：
 
@@ -75,6 +83,8 @@ pnpm run service:install:macos
 ```
 
 安装后，Landi 会在当前用户登录时启动，并在异常退出后自动拉起。安装文件不包含 Connector 或 Agent 凭据，服务继续从项目根目录的本地 `.env` 和各运行底座自己的登录状态读取配置。卸载常驻服务使用 `pnpm run service:remove:macos`；该操作保留 Profile、Plans、数据库、`.env` 和日志。
+
+浏览器测试使用隔离的临时 Core 服务端口 `8765`。这个端口只用于测试，不应作为日常手动打开工作台的地址。
 
 可使用下列命令验证：
 
