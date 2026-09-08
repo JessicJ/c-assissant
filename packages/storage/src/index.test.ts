@@ -742,7 +742,11 @@ test("SQLite saves generated route facts and complete daily road geometry in one
   assert.equal(updated.activePlan.presentation?.days[0]?.routeGeometryMode, "walking");
   assert.equal(updated.activePlan.presentation?.days[0]?.routeReview?.routingMethod, "Google Maps Routes");
   assert.equal(updated.activePlan.presentation?.routeSegments[0]?.durationMinutes, 15);
-  assert.match(updated.activePlan.presentation?.routeSegments[0]?.detail ?? "", /1\.2 km/);
+  assert.equal(updated.activePlan.presentation?.routeSegments[0]?.label, "15 min walk");
+  assert.equal(updated.activePlan.presentation?.routeSegments[0]?.detail, "Walk from A to B; allow about 15 minutes, about 1.2 km.");
+  assert.equal(updated.activePlan.presentation?.routeSegments[0]?.display?.mapLineState, "formal");
+  assert.equal(updated.activePlan.presentation?.routeSegments[0]?.display?.refreshReason, undefined);
+  assert.equal(/Google Maps|route refresh|before execution/i.test(updated.activePlan.presentation?.routeSegments[0]?.detail ?? ""), false);
   assert.deepEqual(updated.activePlan.presentation?.places.map((place) => place.coordinates), [[48.86, 2.33], [48.865, 2.34]]);
   const shifted = store.saveGeneratedPlanRouteRefresh({ planId: plan.id, expectedVersion: updated.activePlan.version, provider: "google_maps", routes: [{ segmentId: "r1", observedAt: "2026-08-18T08:10:00.000Z", distanceMeters: 4_500, durationSeconds: 5_400, originCoordinates: [2.33, 48.86], destinationCoordinates: [2.34, 48.865] }] });
   assert.deepEqual(shifted.scheduleConflictDayIds, []);

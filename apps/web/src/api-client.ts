@@ -93,6 +93,7 @@ export type PlanRouteRefreshResponse = {
     segmentIds: string[];
     refreshedSegmentIds: string[];
     scheduleConflictDayIds: string[];
+    failedSegmentIds?: string[];
   };
   error?: string;
 };
@@ -147,6 +148,14 @@ export type ConnectorTestResponse = {
 
 export type RuntimeTestResponse = { ok?: boolean; message?: string; error?: string };
 
+function payloadErrorMessage(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const candidate = payload as { error?: unknown; message?: unknown };
+  if (typeof candidate.error === "string" && candidate.error.trim()) return candidate.error;
+  if (typeof candidate.message === "string" && candidate.message.trim()) return candidate.message;
+  return undefined;
+}
+
 async function readJson<T>(response: Response): Promise<T> {
   const text = await response.text();
   if (!text.trim()) return {} as T;
@@ -172,15 +181,19 @@ export class ApiRequestError extends Error {
 
 async function requestJson<T>(path: string, init: RequestInit | undefined, defaultError: string): Promise<T> {
   const response = await fetch(path, init);
-  const payload = await readJson<T & { error?: string }>(response);
-  if (!response.ok) throw new ApiRequestError(payload.error ?? defaultError, response.status, payload);
+  const payload = await readJson<T & { error?: string; message?: string }>(response);
+  if (!response.ok) throw new ApiRequestError(payloadErrorMessage(payload) ?? defaultError, response.status, payload);
   return payload;
 }
 
 async function optionalJson<T>(path: string, init?: RequestInit): Promise<T | undefined> {
-  const response = await fetch(path, init);
-  if (!response.ok) return undefined;
-  return await readJson<T>(response);
+  try {
+    const response = await fetch(path, init);
+    if (!response.ok) return undefined;
+    return await readJson<T>(response);
+  } catch {
+    return undefined;
+  }
 }
 
 function jsonRequest(method: "POST" | "PUT" | "PATCH", body?: unknown): RequestInit {
@@ -198,7 +211,11 @@ function bookingBasePath(scope: BookingScope): string {
 }
 
 export async function getWorkspace(init?: RequestInit): Promise<WorkspaceSnapshot> {
-  return await requestJson<WorkspaceSnapshot>("/api/workspace", init, "The core service did not return workspace data.");
+  const workspace = await requestJson<WorkspaceSnapshot>("/api/workspace", init, "Landi could not load the workspace from the core service.");
+  if (!workspace || typeof workspace !== "object" || !("profile" in workspace) || !("runtime" in workspace) || !("activePlan" in workspace)) {
+    throw new Error("The core service responded, but the workspace data was incomplete.");
+  }
+  return workspace;
 }
 
 export async function listPlanHistory(): Promise<Plan[] | undefined> {

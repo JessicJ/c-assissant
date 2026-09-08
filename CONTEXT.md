@@ -185,7 +185,7 @@ The complete set of valid, distinct places retained in a Trip Blueprint, includi
 _Avoid_: Scheduled stops, map viewport results
 
 **Guide Catalog**:
-The shared set of user-facing attraction, shopping, dining, and local-experience content in a Trip Blueprint. It belongs under the Itinerary workspace as schedulable planning material rather than as separate top-level Plan workspace modules.
+The shared set of user-facing attraction, shopping, dining, and local-experience content in a Trip Blueprint. It belongs under the Itinerary workspace as schedulable or informational planning material rather than as separate top-level Plan workspace modules.
 _Avoid_: Separate guide lists, static articles, top-level plan modules
 
 **Blueprint Module Identity**:
@@ -237,7 +237,7 @@ A user-facing image-and-text travel content item shown in the Itinerary workspac
 _Avoid_: Static article, Plan Task, one-line place recommendation
 
 **Guide Card**:
-The Web presentation of a Guide Item in browsing lists. Its default anatomy includes title or local name, Guide Card Summary, optional image, concrete place or related place when applicable, compact Source Marker, and a state-aware primary action. It should not show default day, time, replacement-type label, scheduling rationale, or full Guide Value Explanation while the Guide Item remains unscheduled. Informational Guide Items remain searchable and filterable, can open detail, and simply do not show an add action.
+The Web presentation of a Guide Item in browsing lists. Its default anatomy includes title or local name, Guide Card Summary, optional image or compact text teaser, concrete place or related place when applicable, and a state-aware primary action. It should not show default day, time, replacement-type label, scheduling rationale, text-only source markers, or full Guide Value Explanation while the Guide Item remains unscheduled. Informational Guide Items remain browsable and filterable, can open detail, and simply do not show an add action.
 _Avoid_: Itinerary Block, source list, recommendation rationale panel
 
 **Guide Card Summary**:
@@ -253,11 +253,11 @@ The explicit Blueprint Contract relationships between guide-level concepts and c
 _Avoid_: Inferred category match, prose-only relationship, Web-owned data repair
 
 **Itinerary Explore Panel**:
-The unified Web workspace surface for browsing Guide Cards inside the Itinerary area, including both material already used in the Recommended Itinerary and available alternatives. It includes an All view for complete guide browsing and lets travelers filter by theme, type, area, and itinerary state. Scheduled cards locate the relevant timeline block; unscheduled cards start itinerary edits.
+The unified Web workspace surface for browsing Guide Cards inside the Itinerary area, including both material already used in the Recommended Itinerary and available alternatives. It opens in an unfiltered browsing state and may offer lightweight type or state filters without requiring a visible All control. Scheduled cards locate the relevant timeline block; schedulable unscheduled cards start itinerary edits; informational cards open detail only.
 _Avoid_: Top-level guide page, day-owned candidate list, separate attraction/dining/shopping module
 
 **Guide Relevance Order**:
-The default ordering of Guide Cards in the Itinerary Explore Panel, including its All view. It prioritizes relationship to the current trip, current day, or selected Itinerary Block before secondary popularity, distance, rating, or source-richness signals.
+The default ordering of Guide Cards in the Itinerary Explore Panel's unfiltered browsing state. It prioritizes relationship to the current trip, current day, or selected Itinerary Block before secondary popularity, distance, rating, or source-richness signals.
 _Avoid_: Global ranking, popularity-only list, source-volume score
 
 **Per-block Arrangement Rationale**:
@@ -373,7 +373,7 @@ A concrete object that can appear in an Itinerary Block because it answers where
 _Avoid_: Theme-only block, product-only block, dish-only block
 
 **Informational Guide Item**:
-A Guide Item that is useful for understanding local food, shopping, culture, or customs but lacks a related Schedulable Itinerary Object in the imported Blueprint. The Skill Importer preserves it as guide content and marks it unavailable for timeline placement. Web can show it in explore, search, filter, and detail surfaces, but should not show an add-to-itinerary action. Landi does not design a separate post-import enrichment path for turning these items into schedulable content.
+A Guide Item that is useful for understanding local food, shopping, culture, or customs but lacks a related Schedulable Itinerary Object in the imported Blueprint. The Skill Importer preserves it as guide content and marks it unavailable for timeline placement. Web can show it in explore, filter, and detail surfaces, but should not show an add-to-itinerary action. Landi does not design a separate post-import enrichment path for turning these items into schedulable content.
 _Avoid_: Invalid content, schedulable block, discarded theme
 
 **Guide Content Selectivity**:
@@ -389,7 +389,7 @@ A traveler action that adds a Guide Item or Candidate Place into a compatible It
 _Avoid_: Bookmark, filter choice, execution task
 
 **Placement Selection State**:
-The lightweight Web state opened by an unscheduled Guide Card's add action. The traveler chooses the target day, placement position, and whether the item is scheduled or optional before Landi creates a Pending Itinerary Edit.
+The lightweight Web state opened by a schedulable unscheduled Guide Card's add action. The traveler chooses the target day and placement position before Landi creates a Pending Itinerary Edit.
 _Avoid_: Immediate insertion, default schedule recommendation, hidden auto-placement
 
 **Placement Advisory**:
@@ -701,8 +701,12 @@ The immutable association from a Draft Plan to its source Trip Blueprint identit
 _Avoid_: Generation log, Plan history
 
 **Skill Lineage**:
-The immutable Skill identity and version recorded on the Research Set and Trip Blueprint Version it helped produce.
+The immutable Skill identity and version recorded on the Research Set and Trip Blueprint Version it helped produce. A resumed generation retains its recorded identity rather than inheriting the currently preferred Skill.
 _Avoid_: Current installed Skill, Agent model name
+
+**Landi Blueprint Generation Policy**:
+The Landi-owned, versioned planning rules for producing structured travel content, selecting sources by their evidentiary capability, and preserving the boundary between travel advice and executable work. The policy does not own workspace layout or represent the Agent runtime itself.
+_Avoid_: Map template, Agent model, installed travel Skill
 
 **Skill Output Acceptance Criteria**:
 The checklist used to judge whether a Landi-native planning Skill artifact is usable before or during Skill Importer normalization. It focuses on contract shape, content relevance, schedulable relationships, source handling, image optionality, writing style, and Web presentation readiness, not on Plan execution behavior.
@@ -746,8 +750,8 @@ _Avoid_: Run ID, retry ID
 
 ## Current implementation boundary
 
-The Web planning-session generation path now invokes `interactive-trip-planner@0.2.0` explicitly, persists geographic Research Set checkpoints and Generation Events, publishes a Trip Blueprint, and uses the deterministic Plan Compiler. The current Plan Workspace reads its travel content from the linked Trip Blueprint through a read-only view adapter. Existing execution, Country Pack, reminder, and Connector capabilities remain in place.
+New Web planning-session generations use the repository-owned `landi-trip-blueprint@1.0.0` policy, persist geographic Research Set checkpoints and Generation Events, publish a Trip Blueprint, and use the deterministic Plan Compiler. Existing generations retain their original policy, including supported `interactive-trip-planner@0.2.0` checkpoint continuation. The current Plan Workspace reads its travel content from the linked Trip Blueprint through a read-only view adapter, including block evidence, guide catalog relationships, informational guide items, and privacy-minimized booking constraints. Existing execution, Country Pack, reminder, and Connector capabilities remain in place. Current-policy live acceptance has not yet produced a completed pass and is tracked separately from the historical run below.
 
-No new Plan path can invoke the legacy monolithic generator: Web generation uses Blueprint Generation, while Telegram and WhatsApp direct users to the Web workbench instead of creating a one-shot Plan or local-template fallback. Legacy monolithic generation remains temporarily available only for revisions of Plans that have no Blueprint Lineage. Revisions of Blueprint-backed Plans fail closed and preserve the current Blueprint until Assisted Replanning is implemented.
+No new Plan path can invoke the legacy monolithic generator: Web generation uses Blueprint Generation, while Telegram and WhatsApp direct users to the Web workbench instead of creating a one-shot Plan or local-template fallback. Legacy monolithic generation remains temporarily available only for revisions of Plans that have no Blueprint Lineage. Blueprint-backed workspace edits use version-aware Direct Blueprint Revisions and the existing Assisted Replanning path when required.
 
 Live Skill acceptance completed on 2026-08-26 with `interactive-trip-planner@0.2.0`: 19 Research Set places, 20 sources, one complete Itinerary Day, six Movement Plans, and six Action Requirements imported into a Trip Blueprint with the exact Place Identity set preserved. The deterministic Plan Compiler produced five Stages, confirming that Stage count is derived from work rather than fixed at six.

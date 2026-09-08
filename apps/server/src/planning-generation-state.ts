@@ -1,10 +1,8 @@
-import { RuntimeAdapterError } from "@c-assistant/agent-adapters";
+import { LANDI_BLUEPRINT_SKILL, LEGACY_BLUEPRINT_SKILL, RuntimeAdapterError } from "@c-assistant/agent-adapters";
 import type {
   BlueprintGeneration,
   BlueprintGenerationStage
 } from "@c-assistant/core";
-
-export const INTERACTIVE_TRIP_PLANNER_SKILL = { skillId: "interactive-trip-planner", skillVersion: "0.2.0" } as const;
 
 export type PlanGenerationJob = {
   runId: string;
@@ -44,7 +42,14 @@ export function updateGenerationJob(job: PlanGenerationJob, update: Partial<Pick
 }
 
 export function blueprintGenerationKey(sessionId: string, proposalVersion: number): string {
-  return `${sessionId}:${proposalVersion}:${INTERACTIVE_TRIP_PLANNER_SKILL.skillId}@${INTERACTIVE_TRIP_PLANNER_SKILL.skillVersion}`;
+  return `${sessionId}:${proposalVersion}:${LANDI_BLUEPRINT_SKILL.skillId}@${LANDI_BLUEPRINT_SKILL.skillVersion}`;
+}
+
+export function savedBlueprintGenerationKey(sessionId: string, proposalVersion: number, lookup: (key: string) => BlueprintGeneration | undefined): string {
+  const currentKey = blueprintGenerationKey(sessionId, proposalVersion);
+  if (lookup(currentKey)) return currentKey;
+  const legacyKey = `${sessionId}:${proposalVersion}:${LEGACY_BLUEPRINT_SKILL.skillId}@${LEGACY_BLUEPRINT_SKILL.skillVersion}`;
+  return lookup(legacyKey) ? legacyKey : currentKey;
 }
 
 export function generationFailurePath(error: unknown, stage: BlueprintGenerationStage): string {

@@ -1043,16 +1043,31 @@ export class SqliteWorkspaceStore {
     if (!origin || !destination) throw new Error("The Plan route segment references a missing place.");
     origin.coordinates = providerCoordinatesToPlanCoordinates(input.originCoordinates);
     destination.coordinates = providerCoordinatesToPlanCoordinates(input.destinationCoordinates);
-    const { distanceMeters: _oldDistance, checkedAt: _oldCheckedAt, sourceRefs: _oldSourceRefs, ...stableSegment } = segment;
+    const { distanceMeters: _oldDistance, checkedAt: _oldCheckedAt, sourceRefs: _oldSourceRefs, display: _oldDisplay, ...stableSegment } = segment;
+    const durationMinutes = input.durationSeconds !== undefined
+      ? Math.max(1, Math.round(input.durationSeconds / 60))
+      : segment.durationMinutes;
+    const routeText = refreshedRouteText({
+      mode: segment.mode,
+      originName: origin.name,
+      destinationName: destination.name,
+      ...(durationMinutes ? { durationMinutes } : {}),
+      distanceMeters: input.distanceMeters
+    });
     const refreshed: PlanRouteSegment = {
       ...stableSegment,
       verification: "verified",
       distanceMeters: input.distanceMeters,
-      ...(input.durationSeconds !== undefined
-        ? { durationMinutes: Math.max(1, Math.round(input.durationSeconds / 60)) }
-        : segment.durationMinutes !== undefined ? { durationMinutes: segment.durationMinutes } : {}),
+      ...(durationMinutes !== undefined ? { durationMinutes } : {}),
       checkedAt: input.observedAt,
-      sourceRefs: [input.provider]
+      sourceRefs: [input.provider],
+      label: routeText.label,
+      detail: routeText.detail,
+      display: {
+        routeLabel: routeText.label,
+        showAsFormalRoute: segment.display?.showAsFormalRoute ?? true,
+        mapLineState: "formal"
+      }
     };
     presentation.routeSegments = presentation.routeSegments.map((candidate) => candidate.id === input.segmentId ? refreshed : candidate);
     if (workspace.activeBlueprint) {
@@ -1099,16 +1114,28 @@ export class SqliteWorkspaceStore {
       if (!origin || !destination) throw new Error("A generated route references a missing place.");
       origin.coordinates = providerCoordinatesToPlanCoordinates(route.originCoordinates);
       destination.coordinates = providerCoordinatesToPlanCoordinates(route.destinationCoordinates);
+      const durationMinutes = route.durationSeconds !== undefined ? Math.max(1, Math.round(route.durationSeconds / 60)) : segment.durationMinutes;
+      const routeText = refreshedRouteText({
+        mode: segment.mode,
+        originName: origin.name,
+        destinationName: destination.name,
+        ...(durationMinutes ? { durationMinutes } : {}),
+        distanceMeters: route.distanceMeters
+      });
       return [segment.id, {
         ...segment,
         verification: "verified",
         distanceMeters: route.distanceMeters,
-        ...(route.durationSeconds !== undefined ? { durationMinutes: Math.max(1, Math.round(route.durationSeconds / 60)) } : {}),
+        ...(durationMinutes ? { durationMinutes } : {}),
         checkedAt: route.observedAt,
         sourceRefs: [input.provider],
-        detail: route.durationSeconds !== undefined
-          ? `Google Maps checked this ${segment.mode} segment at ${Math.max(1, Math.round(route.durationSeconds / 60))} minutes over ${(route.distanceMeters / 1000).toFixed(1)} km.`
-          : `Google Maps checked this ${segment.mode} segment over ${(route.distanceMeters / 1000).toFixed(1)} km.`
+        label: routeText.label,
+        detail: routeText.detail,
+        display: {
+          routeLabel: routeText.label,
+          showAsFormalRoute: segment.display?.showAsFormalRoute ?? true,
+          mapLineState: "formal"
+        }
       } satisfies PlanRouteSegment] as const;
     }));
     const scheduleConflictDayIds = new Set<string>();
@@ -3703,6 +3730,54 @@ function routeRefreshProviderSource(provider: "google_maps", observedAt: string)
     retrievedAt: observedAt,
     status: "verified"
   };
+}
+
+function refreshedRouteText(input: { mode: PlanRouteSegment["mode"]; originName: string; destinationName: string; durationMinutes?: number; distanceMeters: number }): { label: string; detail: string } {
+  const distance = routeDistanceLabel(input.distanceMeters);
+  const origin = input.originName.trim() || "the previous stop";
+  const destination = input.destinationName.trim() || "the next stop";
+  if (input.mode === "walking") {
+    return {
+      label: input.durationMinutes ? `${input.durationMinutes} min walk` : distance ? `${distance} walk` : "Walk between stops",
+      detail: routeDetail(`Walk from ${origin} to ${destination}`, input.durationMinutes, distance)
+    };
+  }
+  if (input.mode === "transit") {
+    return {
+      label: input.durationMinutes ? transitRouteLabel(input.durationMinutes) : "Transit between stops",
+      detail: routeDetail(`Take transit from ${origin} to ${destination}`, input.durationMinutes, distance)
+    };
+  }
+  if (input.mode === "driving") {
+    return {
+      label: input.durationMinutes ? `${input.durationMinutes} min by car` : "Go by car",
+      detail: routeDetail(`Go from ${origin} to ${destination} by car or taxi`, input.durationMinutes, distance)
+    };
+  }
+  return {
+    label: input.durationMinutes ? `${input.durationMinutes} min journey` : "Move between stops",
+    detail: routeDetail(`Travel from ${origin} to ${destination}`, input.durationMinutes, distance)
+  };
+}
+
+function transitRouteLabel(durationMinutes: number): string {
+  if (durationMinutes <= 20) return "Short transit ride";
+  if (durationMinutes <= 45) return `${durationMinutes} min by transit`;
+  return `${durationMinutes} min transit transfer`;
+}
+
+function routeDetail(prefix: string, durationMinutes: number | undefined, distance: string | undefined): string {
+  const facts = [
+    durationMinutes ? `allow about ${durationMinutes} minutes` : undefined,
+    distance ? `about ${distance}` : undefined
+  ].filter(Boolean);
+  return facts.length ? `${prefix}; ${facts.join(", ")}.` : `${prefix}.`;
+}
+
+function routeDistanceLabel(distanceMeters: number): string | undefined {
+  if (!Number.isInteger(distanceMeters) || distanceMeters <= 0) return undefined;
+  if (distanceMeters < 1000) return `${distanceMeters} m`;
+  return `${(distanceMeters / 1000).toFixed(1)} km`;
 }
 
 function refreshedBlueprintMovementDisplay(movement: BlueprintMovement, segment: PlanRouteSegment): NonNullable<BlueprintMovement["display"]> {

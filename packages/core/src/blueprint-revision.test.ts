@@ -486,6 +486,76 @@ test("Direct Blueprint Revision moves timed labels and rejects reserved stop mov
   }), /booking/i);
 });
 
+test("Direct Blueprint Revision routes standalone fixed bookings through assisted replanning", () => {
+  const booked = blueprint();
+  booked.places = [
+    place("a"),
+    { ...place("b"), name: "Fado night", category: "event", locationLabel: "Fado hall, Tokyo" },
+    place("c")
+  ];
+  booked.bookingConstraints = [{
+    id: "booking-fado",
+    type: "event",
+    title: "Fado night",
+    status: "confirmed",
+    sourceLabel: "Email",
+    importedAt: "2026-08-26T00:00:00.000Z",
+    constraintStrength: "hard",
+    segments: [{
+      id: "segment-fado",
+      segmentType: "event_window",
+      title: "Fado night",
+      startAtLocal: "2026-09-01T20:00",
+      startTimeZone: "Asia/Tokyo",
+      location: "Fado hall, Tokyo",
+      constraintStrength: "hard",
+      fixedCommitment: true,
+      needsReviewReasons: []
+    }]
+  }];
+
+  assert.throws(() => applyDirectBlueprintRevision(booked, {
+    kind: "move_place_within_day",
+    placeId: "b",
+    dayId: "d1",
+    position: { kind: "start" },
+    createdAt: "2026-08-27T00:00:00.000Z"
+  }), (error) => error instanceof DirectBlueprintReplanRequirementError && error.replanRequirement.reasonCode === "fixed_booking");
+  assert.throws(() => applyDirectBlueprintRevision(booked, {
+    kind: "remove_place_from_day",
+    placeId: "b",
+    dayId: "d1",
+    createdAt: "2026-08-27T00:00:00.000Z"
+  }), /booking/i);
+
+  const unscheduled = structuredClone(booked);
+  unscheduled.days[0] = { ...unscheduled.days[0]!, stops: [{ placeId: "a", order: 1 }], candidatePlaceIds: ["b", "c"] };
+  unscheduled.movements = [];
+  assert.throws(() => applyDirectBlueprintRevision(unscheduled, {
+    kind: "add_place_to_day",
+    placeId: "b",
+    dayId: "d1",
+    position: { kind: "end" },
+    createdAt: "2026-08-27T00:00:00.000Z"
+  }), /fixed booking/i);
+
+  const broadHotel = structuredClone(booked);
+  broadHotel.bookingConstraints = [{
+    ...booked.bookingConstraints[0]!,
+    id: "booking-hotel",
+    type: "accommodation",
+    title: "Tokyo stay",
+    segments: [{ ...booked.bookingConstraints[0]!.segments[0]!, id: "segment-hotel", title: "Hotel stay", segmentType: "hotel_stay", location: "Tokyo" }]
+  }];
+  assert.doesNotThrow(() => applyDirectBlueprintRevision(broadHotel, {
+    kind: "move_place_within_day",
+    placeId: "b",
+    dayId: "d1",
+    position: { kind: "start" },
+    createdAt: "2026-08-27T00:00:00.000Z"
+  }));
+});
+
 test("Direct Blueprint Revision inserts route blocks without flattening contextual blocks", () => {
   const original = blueprint();
   original.days[0] = {

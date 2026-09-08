@@ -1,5 +1,53 @@
 import { expect, test } from "@playwright/test";
 
+test("current workspace opens when auxiliary workspace details fail to refresh", async ({ page }) => {
+  const starter = {
+    id: "incomplete-trip", version: 1, title: "Paris proposal trip", location: "Paris", dates: "2026-10-06 to 2026-10-17", status: "draft",
+    knownInformation: ["Dates and flights confirmed"], assumptions: [], nextAction: "Generate the itinerary.", createdAt: "2026-08-19T00:00:00.000Z",
+    configuration: { accommodation: { status: "not_set" }, arrival: {}, transport: { preference: "taxi" }, travelContext: { partySize: 2 } },
+    stages: [{ id: "trip", title: "Trip", description: "Paris trip", status: "not_started", presentationKind: "itinerary", tasks: [] }], sources: [],
+    presentation: { kind: "timeline", summary: "Paris trip", items: [] }
+  };
+  const workspace = { profile: { status: "ready", displayName: "Tester", preferredLanguage: "English", nationality: "United States", gender: "prefer_not_to_say", immigrationStatus: "short_term_visitor" }, runtime: { selectedKind: "codex" }, inbox: [], destinationArrivals: [], activePlan: starter };
+  await page.route("**/api/workspace", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(workspace) }));
+  await page.route("**/api/plans/history", (route) => route.abort("failed"));
+  await page.route("**/api/configuration", (route) => route.abort("failed"));
+  await page.route("**/api/runtimes", (route) => route.abort("failed"));
+
+  await page.goto("/");
+
+  await expect(page.getByRole("button", { name: "Create mapped itinerary" })).toBeVisible();
+  await expect(page.locator(".loading-screen.error-screen")).toHaveCount(0);
+  await expect(page.locator(".inline-alert")).toHaveCount(0);
+});
+
+test("workspace load can recover from a temporary core service failure", async ({ page }) => {
+  const starter = {
+    id: "incomplete-trip", version: 1, title: "Paris proposal trip", location: "Paris", dates: "2026-10-06 to 2026-10-17", status: "draft",
+    knownInformation: ["Dates and flights confirmed"], assumptions: [], nextAction: "Generate the itinerary.", createdAt: "2026-08-19T00:00:00.000Z",
+    configuration: { accommodation: { status: "not_set" }, arrival: {}, transport: { preference: "taxi" }, travelContext: { partySize: 2 } },
+    stages: [{ id: "trip", title: "Trip", description: "Paris trip", status: "not_started", presentationKind: "itinerary", tasks: [] }], sources: [],
+    presentation: { kind: "timeline", summary: "Paris trip", items: [] }
+  };
+  const workspace = { profile: { status: "ready", displayName: "Tester", preferredLanguage: "English", nationality: "United States", gender: "prefer_not_to_say", immigrationStatus: "short_term_visitor" }, runtime: { selectedKind: "codex" }, inbox: [], destinationArrivals: [], activePlan: starter };
+  let workspaceRequests = 0;
+  await page.route("**/api/workspace", (route) => {
+    workspaceRequests += 1;
+    if (workspaceRequests === 1) return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ message: "The local workspace is not initialized." }) });
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(workspace) });
+  });
+  await page.route("**/api/plans/history", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/api/configuration", (route) => route.fulfill({ contentType: "application/json", body: "{}" }));
+  await page.route("**/api/runtimes", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+
+  await page.goto("/");
+
+  await expect(page.locator(".loading-screen.error-screen")).toContainText("The local workspace is not initialized.");
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.getByRole("button", { name: "Create mapped itinerary" })).toBeVisible();
+  await expect(page.locator(".loading-screen.error-screen")).toHaveCount(0);
+});
+
 test("an incomplete travel draft has direct retry and inline discard recovery", async ({ page }) => {
   const starter = {
     id: "incomplete-trip", version: 1, title: "Paris proposal trip", location: "Paris", dates: "2026-10-06 to 2026-10-17", status: "draft",
@@ -124,6 +172,100 @@ test("current itinerary renders the linked Trip Blueprint over a stale Plan pres
   await expect(page.locator(".blueprint-map-bubble").filter({ hasText: "Blueprint Museum" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh routes" })).toBeVisible();
   expect(pageErrors).toEqual([]);
+});
+
+test("Blueprint workspace renders unlinked themes and fixed booking constraints deterministically", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  const presentation = {
+    kind: "itinerary",
+    summary: "Kyoto trip",
+    language: "en",
+    startDate: "2026-10-01",
+    endDate: "2026-10-01",
+    sourceCatalog: [{ id: "guide", title: "Kyoto guide", authority: "Visitor bureau", url: "https://guide.example", retrievedAt: "2026-09-01", status: "verified" }],
+    places: [
+      { id: "temple", name: "Morning Temple", locationLabel: "Kyoto", city: "Kyoto", category: "temple", priority: "must", coordinates: [35.01, 135.77], whyWorthIt: "A calm architectural anchor.", plan: "Visit in the morning.", detailSections: [], sourceRefs: [] },
+      { id: "fado", name: "Fado night", locationLabel: "Fado hall, Kyoto", city: "Kyoto", category: "evening experience", priority: "preferred", coordinates: [35.02, 135.78], whyWorthIt: "A booked evening cultural stop.", plan: "Use the fixed booking time.", detailSections: [], sourceRefs: [] }
+    ],
+    days: [{
+      id: "day-1",
+      label: "October 1",
+      date: "2026-10-01",
+      shortLabel: "10/01",
+      city: "Kyoto",
+      title: "Kyoto day",
+      summary: "Morning temple and evening event.",
+      placeIds: ["temple", "fado"],
+      stops: [{ placeId: "temple", order: 1, time: "09:00" }, { placeId: "fado", order: 2, time: "20:00" }],
+      blocks: [
+        { id: "block-temple", kind: "stop", order: 1, placeId: "temple", startTime: "09:00", title: "Morning temple", evidence: [{ sourceId: "guide", status: "verified", supports: ["morning order"] }] },
+        { id: "block-fado", kind: "event", order: 2, placeId: "fado", startTime: "20:00", title: "Fado night", evidence: [] }
+      ]
+    }],
+    bookingConstraints: [{
+      id: "booking-fado",
+      type: "event",
+      title: "Fado night",
+      status: "confirmed",
+      sourceLabel: "Email",
+      importedAt: "2026-09-01T00:00:00.000Z",
+      constraintStrength: "hard",
+      segments: [{ id: "segment-fado", segmentType: "event_window", title: "Fado night", startAtLocal: "2026-10-01T20:00", startTimeZone: "Asia/Tokyo", location: "Fado hall, Kyoto", constraintStrength: "hard", fixedCommitment: true, needsReviewReasons: [] }]
+    }],
+    localFoods: [{ id: "food-seasonal", title: "Seasonal sweets", description: "Look for small seasonal sweets in neighborhood cafes.", context: "Use this as food background rather than a destination.", diningPlaceIds: [], evidence: [{ sourceId: "guide", status: "verified", supports: ["seasonal sweets"] }] }],
+    localProducts: [],
+    experienceThemes: [{ id: "experience-tea", title: "Tea practice", description: "Tea practice is worth understanding before choosing a concrete venue.", context: "Add a venue only after Landi has a specific place.", offeringPlaceIds: [], evidence: [] }],
+    routeSegments: []
+  };
+  const workspace = {
+    profile: { status: "ready", displayName: "Trip tester", preferredLanguage: "English", nationality: "Singapore", gender: "prefer_not_to_say", immigrationStatus: "short_term_visitor" },
+    runtime: { selectedKind: "codex" },
+    inbox: [],
+    destinationArrivals: [],
+    activePlan: {
+      id: "blueprint-topics",
+      version: 1,
+      title: "Kyoto Blueprint",
+      location: "Kyoto",
+      dates: "2026-10-01",
+      status: "draft",
+      knownInformation: [],
+      assumptions: [],
+      nextAction: "Review.",
+      createdAt: "2026-09-01T00:00:00.000Z",
+      configuration: { accommodation: { status: "not_set" }, arrival: {}, transport: { preference: "plan_recommended" }, travelContext: { partySize: 2, luggage: "light" } },
+      stages: [],
+      sources: [],
+      presentation
+    }
+  };
+  await page.route("**/api/workspace", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(workspace) }));
+  await page.route("**/api/plans/history", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/api/configuration", (route) => route.fulfill({ contentType: "application/json", body: "{}" }));
+  await page.route("**/api/runtimes", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+
+  await page.goto("/");
+  const sidePanel = page.getByLabel("Itinerary side panel");
+  await expect(page.getByLabel("Landi Blueprint workspace")).toBeVisible();
+  await sidePanel.getByRole("button", { name: "Dining" }).click();
+  const seasonalCard = sidePanel.locator(".blueprint-guide-card").filter({ hasText: "Seasonal sweets" });
+  await expect(seasonalCard).toBeVisible();
+  await expect(seasonalCard).toContainText("Background");
+  await expect(seasonalCard.getByRole("button", { name: "Add" })).toHaveCount(0);
+  await expect(page.locator(".blueprint-map-bubble").filter({ hasText: "Seasonal sweets" })).toHaveCount(0);
+  await seasonalCard.getByRole("button", { name: /Seasonal sweets/ }).click();
+  await expect(sidePanel.getByRole("heading", { name: "Seasonal sweets" })).toBeVisible();
+  await expect(sidePanel.getByText("Background note", { exact: true })).toBeVisible();
+  await expect(sidePanel.getByRole("button", { name: "Add to itinerary" })).toHaveCount(0);
+  await expect(sidePanel.getByText("Kyoto guide")).toBeVisible();
+
+  await sidePanel.getByRole("button", { name: "Back to explore" }).click();
+  await sidePanel.getByRole("button", { name: "Dining" }).click();
+  await page.locator(".blueprint-timeline-list .blueprint-itinerary-card-main").filter({ hasText: "Fado night" }).click();
+  const fixedRemove = sidePanel.getByRole("button", { name: "Fixed booking" });
+  await expect(fixedRemove).toBeDisabled();
+  await expect(pageErrors).toEqual([]);
 });
 
 test("a new Plan confirms direction before collecting generation-critical facts", async ({ page }) => {

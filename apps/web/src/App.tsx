@@ -30,8 +30,23 @@ export default function App() {
   const [confirmingPlan, setConfirmingPlan] = useState(false);
   const [planOperationBusy, setPlanOperationBusy] = useState(false);
 
-  async function loadWorkspace() {
-    setWorkspace(await getWorkspace());
+  async function initializeWorkspace() {
+    setLoading(true);
+    setError(null);
+    try {
+      const workspaceSnapshot = await getWorkspace();
+      setWorkspace(workspaceSnapshot);
+      const [historyResult, settingsResult] = await Promise.allSettled([listPlanHistory(), getSettingsSnapshot()]);
+      if (historyResult.status === "fulfilled" && historyResult.value) setHistory(historyResult.value);
+      if (settingsResult.status === "fulfilled") {
+        if (settingsResult.value.configuration) setConfiguration(settingsResult.value.configuration);
+        if (settingsResult.value.runtimeChecks) setRuntimeChecks(settingsResult.value.runtimeChecks);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to load the workspace.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function loadHistory() {
@@ -39,16 +54,32 @@ export default function App() {
     if (plans) setHistory(plans);
   }
 
-  async function loadSettings() {
-    const snapshot = await getSettingsSnapshot();
-    if (snapshot.configuration) setConfiguration(snapshot.configuration);
-    if (snapshot.runtimeChecks) setRuntimeChecks(snapshot.runtimeChecks);
-  }
-
   useEffect(() => {
-    void Promise.all([loadWorkspace(), loadHistory(), loadSettings()])
-      .catch((caught) => setError(caught instanceof Error ? caught.message : "Unable to load the workspace."))
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    const initialize = async () => {
+      try {
+        setError(null);
+        const workspaceSnapshot = await getWorkspace();
+        if (cancelled) return;
+        setWorkspace(workspaceSnapshot);
+        const [historyResult, settingsResult] = await Promise.allSettled([listPlanHistory(), getSettingsSnapshot()]);
+        if (cancelled) return;
+        if (historyResult.status === "fulfilled" && historyResult.value) setHistory(historyResult.value);
+        if (settingsResult.status === "fulfilled") {
+          if (settingsResult.value.configuration) setConfiguration(settingsResult.value.configuration);
+          if (settingsResult.value.runtimeChecks) setRuntimeChecks(settingsResult.value.runtimeChecks);
+        }
+        if (historyResult.status === "rejected" || settingsResult.status === "rejected") {
+          setError("Landi loaded the current plan, but some workspace details could not be refreshed.");
+        }
+      } catch (caught) {
+        if (!cancelled) setError(caught instanceof Error ? caught.message : "Unable to load the workspace.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    void initialize();
+    return () => { cancelled = true; };
   }, []);
 
   const generatingSessionId = workspace?.planningSession?.status === "generating" ? workspace.planningSession.id : undefined;
@@ -132,7 +163,7 @@ export default function App() {
   }
 
   if (loading) return <main className="loading-screen"><span />Loading Landi…</main>;
-  if (!workspace) return <main className="loading-screen error-screen">{error ?? "The workspace is temporarily unavailable."}</main>;
+  if (!workspace) return <main className="loading-screen error-screen"><span>{error ?? "The workspace is temporarily unavailable."}</span><button type="button" onClick={() => void initializeWorkspace()}>Try again</button></main>;
 
   const currentPlan = isStarterPlan(workspace.activePlan) ? null : workspace.activePlan;
   const resumablePlanningSession = workspace.planningSession && ["collecting", "proposal_ready", "proposal_confirmed", "generating"].includes(workspace.planningSession.status)

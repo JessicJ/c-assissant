@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { RuntimeAdapterError, type CodexRuntimeAdapter } from "@c-assistant/agent-adapters";
+import { blueprintPolicyKind, LANDI_BLUEPRINT_SKILL, RuntimeAdapterError, type CodexRuntimeAdapter } from "@c-assistant/agent-adapters";
 import {
   compileTripBlueprint,
   importSkillItinerary,
@@ -16,8 +16,7 @@ import type { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { blueprintBookingConstraintsFromTravelBookings } from "./booking-plan-sync.js";
 import type { PlanningGenerationService } from "./planning-generation-service.js";
 import {
-  INTERACTIVE_TRIP_PLANNER_SKILL,
-  blueprintGenerationKey,
+  savedBlueprintGenerationKey,
   errorDiagnostic,
   generationFailurePath,
   planGenerationFailureCode,
@@ -42,6 +41,7 @@ export function createPlanningGenerationService(dependencies: {
 }): PlanningGenerationService {
   const { store, codex, setGeneratingPlan, logGenerationFailure } = dependencies;
   const jobs = new Map<string, PlanGenerationJob>();
+  const blueprintGenerationKey = (sessionId: string, proposalVersion: number) => savedBlueprintGenerationKey(sessionId, proposalVersion, (key) => store.getBlueprintGeneration(key));
 
   function enqueuePlanningSessionGeneration(session: PlanningSession, workspace: WorkspaceSnapshot): PlanGenerationJob {
     if (!session.confirmedProposalVersion) throw new Error("A confirmed Proposal version is required before Blueprint generation.");
@@ -55,7 +55,7 @@ export function createPlanningGenerationService(dependencies: {
     const generation = store.saveBlueprintGeneration({
       generationKey,
       proposalRef: { sessionId: session.id, proposalVersion: session.confirmedProposalVersion },
-      skillLineage: INTERACTIVE_TRIP_PLANNER_SKILL,
+      skillLineage: persisted?.skillLineage ?? LANDI_BLUEPRINT_SKILL,
       status: "running",
       stage: persisted?.stage === "ready" ? "compile" : persisted?.stage ?? "queued",
       ...(persisted?.researchSetId ? { researchSetId: persisted.researchSetId } : {}),
@@ -78,7 +78,11 @@ export function createPlanningGenerationService(dependencies: {
 
   async function executePlanningSessionGeneration(job: PlanGenerationJob, session: PlanningSession, workspace: WorkspaceSnapshot) {
     try {
-      if (workspace.runtime.selectedKind !== "codex") throw new RuntimeAdapterError("skill_unavailable", "The Interactive Trip Planner Skill is required for this generation path. Select Codex and try again; Landi will not fall back to the generic Plan Agent.");
+      if (workspace.runtime.selectedKind !== "codex") throw new RuntimeAdapterError("skill_unavailable", "Landi Blueprint generation requires the Codex runtime. Select Codex and try again.");
+      const generation = store.getBlueprintGeneration(job.generationKey);
+      if (!generation) throw new Error("Blueprint Generation checkpoint is missing.");
+      const skillLineage = generation.skillLineage;
+      blueprintPolicyKind(skillLineage);
       const sessionBookings = store.listTravelBookingsForPlanningSession(session.id);
       const bookingConstraints = blueprintBookingConstraintsFromTravelBookings(sessionBookings);
       const request = planningRequestForGenerationWithBookings(session, sessionBookings);
@@ -90,6 +94,7 @@ export function createPlanningGenerationService(dependencies: {
       };
       const scopes = planningResearchScopes(session);
       let research = store.getResearchSetByGenerationKey(job.generationKey);
+      if (research && (research.skillLineage.skillId !== skillLineage.skillId || research.skillLineage.skillVersion !== skillLineage.skillVersion)) throw new Error("Research checkpoint policy does not match this Blueprint Generation.");
       const completedScopes = new Set(research?.batches.filter((batch) => batch.status === "completed").map((batch) => batch.scopeLabel) ?? []);
       for (const [index, scopeLabel] of scopes.entries()) {
         if (completedScopes.has(scopeLabel)) continue;
@@ -102,7 +107,7 @@ export function createPlanningGenerationService(dependencies: {
           nextAction: "Save this geographic batch before continuing."
         });
         const artifact = await withSingleTransientRetry(
-          () => codex.generateSkillResearchBatch({ request, batch: { id: `scope-${index + 1}`, scopeLabel }, signal: job.controller.signal, profile }),
+          () => codex.generateSkillResearchBatch({ request, batch: { id: `scope-${index + 1}`, scopeLabel }, signal: job.controller.signal, profile, skillLineage }),
           () => appendGenerationEvent(job.generationKey, "research", "running", `Transient research failure for ${scopeLabel}; retrying this batch once.`, { scopeLabel, savedPlaceCount: research?.places.length ?? 0 })
         );
         assertGenerationNotCancelled(job, session);
@@ -111,7 +116,7 @@ export function createPlanningGenerationService(dependencies: {
           researchSetId: research?.id ?? `research-${randomUUID()}`,
           generationKey: job.generationKey,
           proposalRef: { sessionId: session.id, proposalVersion: session.confirmedProposalVersion! },
-          skillLineage: INTERACTIVE_TRIP_PLANNER_SKILL,
+          skillLineage,
           createdAt: research?.createdAt ?? checkpointTime,
           updatedAt: checkpointTime
         });
