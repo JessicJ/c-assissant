@@ -179,8 +179,18 @@ export class ApiRequestError extends Error {
   }
 }
 
+function requestNetworkFailureMessage(path: string, defaultError: string): string {
+  if (path === "/api/workspace") return "Landi could not reach the core service. Start or restart the backend, then try again.";
+  return defaultError;
+}
+
 async function requestJson<T>(path: string, init: RequestInit | undefined, defaultError: string): Promise<T> {
-  const response = await fetch(path, init);
+  let response: Response;
+  try {
+    response = await fetch(path, init);
+  } catch {
+    throw new Error(requestNetworkFailureMessage(path, defaultError));
+  }
   const payload = await readJson<T & { error?: string; message?: string }>(response);
   if (!response.ok) throw new ApiRequestError(payloadErrorMessage(payload) ?? defaultError, response.status, payload);
   return payload;

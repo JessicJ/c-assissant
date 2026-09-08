@@ -20,11 +20,12 @@
     "service:install:macos": "pnpm build && node scripts/macos-service.mjs install",
     "service:remove:macos": "node scripts/macos-service.mjs uninstall",
     "service:preview:macos": "node scripts/macos-service.mjs install --dry-run",
+    "check:workspace": "node scripts/check-workspace.mjs",
     "configure:google": "node scripts/configure-google.mjs",
     "configure:whatsapp": "node scripts/configure-whatsapp.mjs",
     "build": "pnpm --filter @c-assistant/core build && pnpm --filter @c-assistant/agent-adapters build && pnpm --filter @c-assistant/connectors build && pnpm --filter @c-assistant/skill-runtime build && pnpm --filter @c-assistant/china-country-pack build && pnpm --filter @c-assistant/japan-country-pack build && pnpm --filter @c-assistant/storage build && pnpm --filter @c-assistant/server build && pnpm --filter @c-assistant/web build",
     "typecheck": "pnpm --filter @c-assistant/core typecheck && pnpm --filter @c-assistant/agent-adapters typecheck && pnpm --filter @c-assistant/connectors typecheck && pnpm --filter @c-assistant/skill-runtime typecheck && pnpm --filter @c-assistant/china-country-pack typecheck && pnpm --filter @c-assistant/japan-country-pack typecheck && pnpm --filter @c-assistant/storage typecheck && pnpm --filter @c-assistant/server typecheck && pnpm --filter @c-assistant/web typecheck",
-    "test": "pnpm --filter @c-assistant/core test && pnpm --filter @c-assistant/agent-adapters test && pnpm --filter @c-assistant/connectors test && pnpm --filter @c-assistant/skill-runtime test && pnpm --filter @c-assistant/china-country-pack test && pnpm --filter @c-assistant/japan-country-pack test && pnpm --filter @c-assistant/storage test && pnpm --filter @c-assistant/server test && node --test scripts/macos-service.test.mjs scripts/configure-google.test.mjs scripts/configure-whatsapp.test.mjs",
+    "test": "pnpm --filter @c-assistant/core test && pnpm --filter @c-assistant/agent-adapters test && pnpm --filter @c-assistant/connectors test && pnpm --filter @c-assistant/skill-runtime test && pnpm --filter @c-assistant/china-country-pack test && pnpm --filter @c-assistant/japan-country-pack test && pnpm --filter @c-assistant/storage test && pnpm --filter @c-assistant/server test && node --test scripts/macos-service.test.mjs scripts/configure-google.test.mjs scripts/configure-whatsapp.test.mjs scripts/check-workspace.test.mjs",
     "test:browser": "pnpm build && playwright test",
     "test:browser:ci": "playwright test",
     "release:check": "node scripts/release-check.mjs && pnpm build && pnpm typecheck && pnpm test"

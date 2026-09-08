@@ -156,6 +156,9 @@ At this checkpoint, A1-A3, B1-B2, C1, C2, and D1 are complete. The remaining ite
 - Kept `/api/workspace` as the only blocking initial Web load dependency. Plan history, configuration, and runtime checks now degrade quietly if they cannot refresh during startup.
 - Added explicit workspace response validation so an HTTP success with missing `profile`, `runtime`, or `activePlan` is reported as incomplete workspace data.
 - Preserved server diagnostics from `message` as well as `error`, so Fastify/Core startup failures no longer collapse into the generic workspace-data message.
+- Converted `/api/workspace` network failures into a recoverable Core-service message instead of exposing the browser's raw fetch failure.
 - Added a retry button on the initial workspace error screen for temporary service-startup failures.
-- Added API-client tests for diagnostic propagation, incomplete workspace payloads, and optional request degradation.
-- Added browser coverage for current-plan rendering when auxiliary details fail, and for recovery after a temporary `/api/workspace` failure.
+- Added bounded automatic retry and visible retry status for initial workspace startup so the Web workspace can recover when Core becomes ready moments after the browser opens.
+- Added `pnpm check:workspace` to diagnose local Web/Core/proxy/workspace startup mismatches without reading or changing travel data.
+- Added API-client tests for diagnostic propagation, unreachable Core service handling, incomplete workspace payloads, and optional request degradation.
+- Added browser coverage for current-plan rendering when auxiliary details fail, manual recovery after temporary or unreachable `/api/workspace` failures, automatic recovery after a short Core startup delay, and bounded retry exhaustion.
