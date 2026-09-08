@@ -13,6 +13,12 @@ import "./styles.css";
 import "./editorial.css";
 
 type View = "plans" | "settings";
+type InitializeWorkspaceOptions = {
+  resetAutoRetry?: boolean;
+  cancelled?: () => boolean;
+};
+
+const WORKSPACE_AUTO_RETRY_DELAYS_MS = [800, 1_600, 3_200];
 
 export default function App() {
   const [view, setView] = useState<View>("plans");
@@ -23,6 +29,7 @@ export default function App() {
   const [runtimeChecks, setRuntimeChecks] = useState<RuntimeCheck[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [workspaceLoadRetry, setWorkspaceLoadRetry] = useState(0);
   const [composerMode, setComposerMode] = useState<ComposerMode>("new_plan");
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerPrefill, setComposerPrefill] = useState("");
@@ -30,22 +37,30 @@ export default function App() {
   const [confirmingPlan, setConfirmingPlan] = useState(false);
   const [planOperationBusy, setPlanOperationBusy] = useState(false);
 
-  async function initializeWorkspace() {
+  async function initializeWorkspace(options: InitializeWorkspaceOptions = {}) {
+    const { resetAutoRetry = true, cancelled = () => false } = options;
+    if (resetAutoRetry) setWorkspaceLoadRetry(0);
     setLoading(true);
     setError(null);
     try {
       const workspaceSnapshot = await getWorkspace();
+      if (cancelled()) return;
       setWorkspace(workspaceSnapshot);
       const [historyResult, settingsResult] = await Promise.allSettled([listPlanHistory(), getSettingsSnapshot()]);
+      if (cancelled()) return;
       if (historyResult.status === "fulfilled" && historyResult.value) setHistory(historyResult.value);
       if (settingsResult.status === "fulfilled") {
         if (settingsResult.value.configuration) setConfiguration(settingsResult.value.configuration);
         if (settingsResult.value.runtimeChecks) setRuntimeChecks(settingsResult.value.runtimeChecks);
       }
+      if (historyResult.status === "rejected" || settingsResult.status === "rejected") {
+        setError("Landi loaded the current plan, but some workspace details could not be refreshed.");
+      }
+      setWorkspaceLoadRetry(WORKSPACE_AUTO_RETRY_DELAYS_MS.length);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Unable to load the workspace.");
+      if (!cancelled()) setError(caught instanceof Error ? caught.message : "Unable to load the workspace.");
     } finally {
-      setLoading(false);
+      if (!cancelled()) setLoading(false);
     }
   }
 
@@ -56,31 +71,20 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    const initialize = async () => {
-      try {
-        setError(null);
-        const workspaceSnapshot = await getWorkspace();
-        if (cancelled) return;
-        setWorkspace(workspaceSnapshot);
-        const [historyResult, settingsResult] = await Promise.allSettled([listPlanHistory(), getSettingsSnapshot()]);
-        if (cancelled) return;
-        if (historyResult.status === "fulfilled" && historyResult.value) setHistory(historyResult.value);
-        if (settingsResult.status === "fulfilled") {
-          if (settingsResult.value.configuration) setConfiguration(settingsResult.value.configuration);
-          if (settingsResult.value.runtimeChecks) setRuntimeChecks(settingsResult.value.runtimeChecks);
-        }
-        if (historyResult.status === "rejected" || settingsResult.status === "rejected") {
-          setError("Landi loaded the current plan, but some workspace details could not be refreshed.");
-        }
-      } catch (caught) {
-        if (!cancelled) setError(caught instanceof Error ? caught.message : "Unable to load the workspace.");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-    void initialize();
+    void initializeWorkspace({ resetAutoRetry: false, cancelled: () => cancelled });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (workspace || loading || !error) return;
+    const delay = WORKSPACE_AUTO_RETRY_DELAYS_MS[workspaceLoadRetry];
+    if (delay === undefined) return;
+    const timer = window.setTimeout(() => {
+      setWorkspaceLoadRetry((current) => current + 1);
+      void initializeWorkspace({ resetAutoRetry: false });
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [error, loading, workspace, workspaceLoadRetry]);
 
   const generatingSessionId = workspace?.planningSession?.status === "generating" ? workspace.planningSession.id : undefined;
   useEffect(() => {
@@ -162,8 +166,16 @@ export default function App() {
     }
   }
 
-  if (loading) return <main className="loading-screen"><span />Loading Landi…</main>;
-  if (!workspace) return <main className="loading-screen error-screen"><span>{error ?? "The workspace is temporarily unavailable."}</span><button type="button" onClick={() => void initializeWorkspace()}>Try again</button></main>;
+  const workspaceRetryPending = !workspace && Boolean(error) && WORKSPACE_AUTO_RETRY_DELAYS_MS[workspaceLoadRetry] !== undefined;
+
+  if (loading) return <main className="loading-screen"><span className="loading-spinner" />Loading Landi…</main>;
+  if (!workspace) return <main className="loading-screen error-screen">
+    <div className="startup-error-copy">
+      <strong>{error ?? "The workspace is temporarily unavailable."}</strong>
+      <small role={workspaceRetryPending ? "status" : undefined}>{workspaceRetryPending ? "Retrying automatically…" : "Automatic retry paused. Try again when Landi is ready."}</small>
+    </div>
+    <button type="button" onClick={() => void initializeWorkspace()}>Try again</button>
+  </main>;
 
   const currentPlan = isStarterPlan(workspace.activePlan) ? null : workspace.activePlan;
   const resumablePlanningSession = workspace.planningSession && ["collecting", "proposal_ready", "proposal_confirmed", "generating"].includes(workspace.planningSession.status)

@@ -23,6 +23,16 @@ pnpm install
 pnpm dev
 ```
 
+Root-level `pnpm dev` starts both the Core service and the Vite Web workspace. It binds the development Core service to `http://127.0.0.1:8877/` and opens the Vite workspace at `http://127.0.0.1:5173/`; Vite proxies `/api` and `/health` to that same Core port. If you run `pnpm --filter @c-assistant/web dev` by itself, the Web proxy uses `C_ASSISTANT_PORT` from the environment or `.env`, falling back to the default Core port `8787`. If the Web workspace opens before the Core service is ready, it shows a recoverable startup message, reports brief automatic retry status, and keeps a manual retry button available.
+
+If the Web workspace is open but cannot load plan data, run:
+
+```bash
+pnpm check:workspace
+```
+
+The check verifies the Vite workspace, Core service health, the Web proxy health endpoint, and `/api/workspace`. It reports whether the frontend, backend, proxy target, or workspace payload is the likely problem. Pass `--web-url`, `--core-url`, `--core-port`, or `--timeout-ms` to inspect a non-default setup.
+
 For a long-running local instance, build once and run the single production process:
 
 ```bash
@@ -41,7 +51,7 @@ pnpm run service:install:macos
 
 The LaunchAgent starts at login and restarts after an unexpected exit. Its plist contains no Connector or Agent credentials. `pnpm run service:remove:macos` removes only the service registration and keeps local data, `.env`, and logs.
 
-Open the local URL printed by Vite. Root-level `pnpm dev` uses `http://127.0.0.1:8877/health` for development so it can run alongside the production service on `8787`.
+Browser tests use an isolated temporary Core service on `8765`. That port is test-only and should not be used as the normal manual workspace URL.
 
 Useful verification commands:
 

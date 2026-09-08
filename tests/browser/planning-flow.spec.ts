@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+const WORKSPACE_STARTUP_REQUESTS = 4;
+
 test("current workspace opens when auxiliary workspace details fail to refresh", async ({ page }) => {
   const starter = {
     id: "incomplete-trip", version: 1, title: "Paris proposal trip", location: "Paris", dates: "2026-10-06 to 2026-10-17", status: "draft",
@@ -46,6 +48,77 @@ test("workspace load can recover from a temporary core service failure", async (
   await page.getByRole("button", { name: "Try again" }).click();
   await expect(page.getByRole("button", { name: "Create mapped itinerary" })).toBeVisible();
   await expect(page.locator(".loading-screen.error-screen")).toHaveCount(0);
+});
+
+test("workspace load explains and recovers when the core service is unreachable", async ({ page }) => {
+  const starter = {
+    id: "incomplete-trip", version: 1, title: "Paris proposal trip", location: "Paris", dates: "2026-10-06 to 2026-10-17", status: "draft",
+    knownInformation: ["Dates and flights confirmed"], assumptions: [], nextAction: "Generate the itinerary.", createdAt: "2026-08-19T00:00:00.000Z",
+    configuration: { accommodation: { status: "not_set" }, arrival: {}, transport: { preference: "taxi" }, travelContext: { partySize: 2 } },
+    stages: [{ id: "trip", title: "Trip", description: "Paris trip", status: "not_started", presentationKind: "itinerary", tasks: [] }], sources: [],
+    presentation: { kind: "timeline", summary: "Paris trip", items: [] }
+  };
+  const workspace = { profile: { status: "ready", displayName: "Tester", preferredLanguage: "English", nationality: "United States", gender: "prefer_not_to_say", immigrationStatus: "short_term_visitor" }, runtime: { selectedKind: "codex" }, inbox: [], destinationArrivals: [], activePlan: starter };
+  let workspaceRequests = 0;
+  await page.route("**/api/workspace", (route) => {
+    workspaceRequests += 1;
+    if (workspaceRequests === 1) return route.abort("failed");
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(workspace) });
+  });
+  await page.route("**/api/plans/history", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/api/configuration", (route) => route.fulfill({ contentType: "application/json", body: "{}" }));
+  await page.route("**/api/runtimes", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+
+  await page.goto("/");
+
+  await expect(page.locator(".loading-screen.error-screen")).toContainText("Landi could not reach the core service.");
+  await expect(page.locator(".loading-screen.error-screen")).toContainText("Start or restart the backend, then try again.");
+  await expect(page.locator(".loading-screen.error-screen")).toContainText("Retrying automatically…");
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.getByRole("button", { name: "Create mapped itinerary" })).toBeVisible();
+  await expect(page.locator(".loading-screen.error-screen")).toHaveCount(0);
+});
+
+test("workspace load automatically recovers after a short core service startup delay", async ({ page }) => {
+  const starter = {
+    id: "incomplete-trip", version: 1, title: "Paris proposal trip", location: "Paris", dates: "2026-10-06 to 2026-10-17", status: "draft",
+    knownInformation: ["Dates and flights confirmed"], assumptions: [], nextAction: "Generate the itinerary.", createdAt: "2026-08-19T00:00:00.000Z",
+    configuration: { accommodation: { status: "not_set" }, arrival: {}, transport: { preference: "taxi" }, travelContext: { partySize: 2 } },
+    stages: [{ id: "trip", title: "Trip", description: "Paris trip", status: "not_started", presentationKind: "itinerary", tasks: [] }], sources: [],
+    presentation: { kind: "timeline", summary: "Paris trip", items: [] }
+  };
+  const workspace = { profile: { status: "ready", displayName: "Tester", preferredLanguage: "English", nationality: "United States", gender: "prefer_not_to_say", immigrationStatus: "short_term_visitor" }, runtime: { selectedKind: "codex" }, inbox: [], destinationArrivals: [], activePlan: starter };
+  let workspaceRequests = 0;
+  await page.route("**/api/workspace", (route) => {
+    workspaceRequests += 1;
+    if (workspaceRequests === 1) return route.abort("failed");
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(workspace) });
+  });
+  await page.route("**/api/plans/history", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/api/configuration", (route) => route.fulfill({ contentType: "application/json", body: "{}" }));
+  await page.route("**/api/runtimes", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+
+  await page.goto("/");
+
+  await expect(page.locator(".loading-screen.error-screen")).toContainText("Landi could not reach the core service.");
+  await expect(page.locator(".loading-screen.error-screen")).toContainText("Retrying automatically…");
+  await expect(page.getByRole("button", { name: "Create mapped itinerary" })).toBeVisible();
+  expect(workspaceRequests).toBeGreaterThan(1);
+});
+
+test("workspace load stops automatic startup retries after a bounded window", async ({ page }) => {
+  let workspaceRequests = 0;
+  await page.route("**/api/workspace", (route) => {
+    workspaceRequests += 1;
+    return route.abort("failed");
+  });
+
+  await page.goto("/");
+
+  await expect(page.locator(".loading-screen.error-screen")).toContainText("Retrying automatically…");
+  await expect(page.locator(".loading-screen.error-screen")).toContainText("Automatic retry paused.", { timeout: 8_000 });
+  await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+  expect(workspaceRequests).toBe(WORKSPACE_STARTUP_REQUESTS);
 });
 
 test("an incomplete travel draft has direct retry and inline discard recovery", async ({ page }) => {

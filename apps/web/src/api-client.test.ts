@@ -52,6 +52,20 @@ test("getWorkspace surfaces the core service diagnostic message", async () => {
   }
 });
 
+test("getWorkspace explains when the core service cannot be reached", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => { throw new TypeError("Failed to fetch"); }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      () => getWorkspace(),
+      /could not reach the core service/i
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("getWorkspace rejects incomplete workspace payloads explicitly", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () => new Response(JSON.stringify({ profile: { status: "ready" } }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
