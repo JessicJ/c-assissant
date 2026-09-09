@@ -30,7 +30,7 @@ import {
   type PendingItineraryEditDisplay
 } from "./landi-blueprint-workspace-display.js";
 import { fallbackRouteLineState, routeLineRenderState, routeLinesForMap, type MapRouteLineRenderState } from "./blueprint-map-route-lines.js";
-import { automaticRouteRefreshGate, mapRouteRefreshHeaderText } from "./current-plan-route-refresh.js";
+import { automaticRouteRefreshGate } from "./current-plan-route-refresh.js";
 
 type BlueprintPanelMode = "explore" | "detail" | "placement";
 type GoogleMapInstance = {
@@ -327,7 +327,7 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
             : <Fragment key={item.key}>
               {item.reorderable ? <ItineraryDropZone dropId={`before-${item.key}`} active={dragOverDropId === `before-${item.key}`} /> : null}
               <ItineraryBlockCard item={item} dragging={Boolean(item.placeId) && draggedPlaceId === item.placeId} selected={Boolean(item.placeId) && selectedPlaceId === item.placeId} onSelect={() => item.placeId ? selectPlace(item.placeId) : undefined} onUndoDraft={() => undoPendingEdit(item.placeId)} onDragStart={(event) => startItineraryCardDrag(event, item)} onDragMove={moveItineraryCardDrag} onDragEnd={endItineraryCardDrag} onDragCancel={cancelItineraryCardDrag} />
-              {item.routeAfterLabel || item.routeAfterStatusLabel ? <ItineraryRouteReadout label={routeReadoutLabel(item, routeRefreshBusy)} state={routeReadoutState(item, routeRefreshBusy)} /> : null}
+              {item.routeAfterLabel || (routeRefreshBusy && item.routeAfterStatusLabel) ? <ItineraryRouteReadout label={routeReadoutLabel(item, routeRefreshBusy)} state={routeReadoutState(item, routeRefreshBusy)} /> : null}
             </Fragment>)}
           {itinerary.items.some((item) => item.reorderable) ? <ItineraryDropZone dropId="end" active={dragOverDropId === "end"} /> : null}
           {!itinerary.items.length ? <p className="blueprint-empty-note">No itinerary blocks are available for this day.</p> : null}
@@ -339,7 +339,7 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
       <aside className="blueprint-side-panel" aria-label="Itinerary side panel">
         <div className="blueprint-panel-body">
           <ExplorePanel filters={workspace.guideFilters} cards={guideCards} filter={guideFilter} hidden={panelMode !== "explore"} onFilter={setGuideFilter} onSelect={selectPlace} onAdd={openPlacement} onUndoDraft={undoPendingEdit} />
-          {selectedDetail ? <DetailPanel detail={selectedDetail} hidden={panelMode !== "detail"} onBack={() => setPanelMode("explore")} onSelect={selectPlace} onAdd={openPlacement} onRemove={stageRemoveFromDay} onUndoDraft={undoPendingEdit} onPriorityChange={onUpdatePlacePriority} priorityBusy={priorityUpdateBusyPlaceId === selectedDetail.placeId} /> : <p className="blueprint-empty-note" hidden={panelMode !== "detail"}>Select an itinerary block or guide card to open details.</p>}
+          {selectedDetail ? <DetailPanel detail={selectedDetail} hidden={panelMode !== "detail"} onBack={() => setPanelMode("explore")} onSelect={selectPlace} onAdd={openPlacement} onRemove={stageRemoveFromDay} onUndoDraft={undoPendingEdit} /> : <p className="blueprint-empty-note" hidden={panelMode !== "detail"}>Select an itinerary block or guide card to open details.</p>}
           {placementPlaceId ? <PlacementPanel key={placementPlaceId} workspace={workspace} place={workspace.places.find((place) => place.id === placementPlaceId)} hidden={panelMode !== "placement"} selectedDayId={selectedDay?.id} onBack={() => setPanelMode("explore")} onPreview={stagePendingEdit} /> : null}
         </div>
       </aside>
@@ -586,8 +586,7 @@ function GoogleBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers,
     lastFitKeyRef.current = fitKey;
   }, [fallbackLineState, fitKey, fitLatLngs, mapReady, onSelectPlace, points, routeLatLngs, routeLines, routeRefreshBusy, selectedPlaceId]);
 
-  return <section className={routeRefresh ? "blueprint-map needs-refresh" : "blueprint-map"} aria-label="Itinerary map context">
-    <MapRouteRefreshHeader routeRefresh={routeRefresh} routeRefreshBusy={Boolean(routeRefreshBusy)} />
+  return <section className="blueprint-map" aria-label="Itinerary map context">
     <div className="blueprint-map-stage blueprint-google-map" ref={hostRef} />
   </section>;
 }
@@ -683,25 +682,9 @@ function LeafletBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers
     lastFitKeyRef.current = fitKey;
   }, [fallbackLineState, fitKey, fitLatLngs, onSelectPlace, points, routeLatLngs, routeLines, routeRefreshBusy, selectedPlaceId]);
 
-  return <section className={routeRefresh ? "blueprint-map needs-refresh" : "blueprint-map"} aria-label="Itinerary map context">
-    <MapRouteRefreshHeader routeRefresh={routeRefresh} routeRefreshBusy={Boolean(routeRefreshBusy)} />
+  return <section className="blueprint-map" aria-label="Itinerary map context">
     <div className="blueprint-map-stage" ref={hostRef} />
   </section>;
-}
-
-function MapRouteRefreshHeader({ routeRefresh, routeRefreshBusy = false }: { routeRefresh?: ItineraryRouteRefreshDisplay | undefined; routeRefreshBusy?: boolean }) {
-  if (!routeRefresh) return null;
-  const { title, actionLabel } = mapRouteRefreshHeaderText(routeRefresh, routeRefreshBusy);
-  return <header className="blueprint-map-status">
-    <div>
-      <h3>{title}</h3>
-      <p>{routeRefresh.summary}</p>
-      {routeRefresh.impactNotes?.length ? <ul className="blueprint-map-impact-notes">{routeRefresh.impactNotes.map((note) => <li key={note}>{note}</li>)}</ul> : null}
-    </div>
-    <div className="blueprint-map-status-actions">
-      <span>{actionLabel}</span>
-    </div>
-  </header>;
 }
 
 function ExplorePanel({ filters, cards, filter, hidden, onFilter, onSelect, onAdd, onUndoDraft }: { filters: readonly Exclude<GuideFilter, "all">[]; cards: GuideCardDisplay[]; filter: GuideFilter; hidden: boolean; onFilter: (filter: GuideFilter) => void; onSelect: (placeId: string) => void; onAdd: (placeId: string) => void; onUndoDraft: (placeId: string) => void }) {
@@ -723,21 +706,13 @@ function ExplorePanel({ filters, cards, filter, hidden, onFilter, onSelect, onAd
   </div>;
 }
 
-function DetailPanel({ detail, hidden, onBack, onSelect, onAdd, onRemove, onUndoDraft, onPriorityChange, priorityBusy = false }: { detail: DetailPlaceDisplay; hidden: boolean; onBack: () => void; onSelect: (placeId: string) => void; onAdd: (placeId: string) => void; onRemove: (placeId: string) => void; onUndoDraft: (placeId: string) => void; onPriorityChange?: ((placeId: string, priority: PlanPlacePriority) => Promise<void>) | undefined; priorityBusy?: boolean }) {
+function DetailPanel({ detail, hidden, onBack, onSelect, onAdd, onRemove, onUndoDraft }: { detail: DetailPlaceDisplay; hidden: boolean; onBack: () => void; onSelect: (placeId: string) => void; onAdd: (placeId: string) => void; onRemove: (placeId: string) => void; onUndoDraft: (placeId: string) => void }) {
   return <div className="blueprint-detail-panel blueprint-panel-view" hidden={hidden}>
     <header>
       <button type="button" className="blueprint-detail-back" aria-label="Back to explore" onClick={onBack}><span aria-hidden="true" /></button>
       <div><h3>{detail.title}</h3></div>
     </header>
-    <section className="blueprint-place-status" aria-label="Place status">
-      <header><h4>Place status</h4><span>{priorityBusy ? "Saving..." : detail.priorityLabel}</span></header>
-      <div>{detail.priorityActions.map((action) => <button type="button" aria-pressed={action.active} disabled={priorityBusy || action.disabled || !onPriorityChange} title={action.disabledReason} onClick={() => {
-        if (action.active) return;
-        void onPriorityChange?.(detail.placeId, action.priority);
-      }} key={action.priority}>{action.label}</button>)}</div>
-      {detail.itineraryDraftNote ? <p>{detail.itineraryDraftNote}</p> : null}
-      {detail.priorityBlockedNote ? <p>{detail.priorityBlockedNote}</p> : null}
-    </section>
+    {detail.itineraryDraftNote ? <p className="blueprint-detail-draft-note">{detail.itineraryDraftNote}</p> : null}
     <section><h4>{detail.leadTitle}</h4><p>{detail.leadBody}</p></section>
     {detail.planTitle && detail.planBody ? <section><h4>{detail.planTitle}</h4><p>{detail.planBody}</p></section> : null}
     {detail.reservationNote ? <section><h4>Reservation</h4><p>{detail.reservationNote}</p></section> : null}
@@ -783,13 +758,14 @@ function PlacementPanel({ workspace, place, hidden, selectedDayId, onBack, onPre
   if (!place || !day) return <div className="blueprint-placement-panel blueprint-panel-view" hidden={hidden}><p className="blueprint-empty-note">Select a guide card before choosing placement.</p></div>;
   const positionOptions = itinerary?.placementOptions ?? [];
   const selectedPosition = positionOptions.find((option) => option.id === position) ?? positionOptions[positionOptions.length - 1];
+  const pendingPreview = buildPendingItineraryEditForWorkspace(workspace, place.id, { dayId: day.id, positionId: selectedPosition?.id ?? "end" });
   function previewPlacement() {
-    onPreview(buildPendingItineraryEditForWorkspace(workspace, place!.id, { dayId: day!.id, positionId: selectedPosition?.id ?? "end" }));
+    onPreview(pendingPreview);
   }
   return <div className="blueprint-placement-panel blueprint-panel-view" hidden={hidden}>
     <header>
       <button type="button" className="blueprint-detail-back" aria-label="Back to explore" onClick={onBack}><span aria-hidden="true" /></button>
-      <div><span>Placement</span><h3>{place.title}</h3><p>Choose where this should enter the itinerary before Landi prepares the edit.</p></div>
+      <div><span>Placement</span><h3>{place.title}</h3></div>
     </header>
     <section>
       <h4>Day</h4>
@@ -802,6 +778,10 @@ function PlacementPanel({ workspace, place, hidden, selectedDayId, onBack, onPre
       <h4>Position</h4>
       <div className="blueprint-placement-options">{positionOptions.map((option) => <button type="button" className={option.id === selectedPosition?.id ? "active" : ""} key={option.id} onClick={() => setPosition(option.id)}>{option.label}</button>)}</div>
     </section>
+    {pendingPreview.advisories.length ? <section className="blueprint-placement-advisory-panel">
+      <h4>Before adding</h4>
+      <ul className="blueprint-placement-advisories">{pendingPreview.advisories.map((advisory) => <li className={advisory.tone} key={advisory.text}>{advisory.text}</li>)}</ul>
+    </section> : null}
     <section className="blueprint-detail-actions"><button type="button" onClick={previewPlacement}>Add to draft</button></section>
   </div>;
 }

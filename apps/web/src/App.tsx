@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import type { RuntimeCheck } from "@c-assistant/agent-adapters";
 import type { Plan, WorkspaceSnapshot } from "@c-assistant/core";
-import landiLogoUrl from "../../../assets/branding/landi-round-otter-earth-icon-final.png";
 import { InlineComposerWorkspace, type ComposerMode } from "./PlanComposer.js";
 import { PlansWorkspace, type PlanTab } from "./PlansWorkspace.js";
 import { ProfileOnboardingDialog } from "./ProfileOnboardingDialog.js";
@@ -19,6 +18,7 @@ type InitializeWorkspaceOptions = {
 };
 
 const WORKSPACE_AUTO_RETRY_DELAYS_MS = [800, 1_600, 3_200];
+const ignoreAgentStatus = (_status: AgentStatus) => {};
 
 export default function App() {
   const [view, setView] = useState<View>("plans");
@@ -33,7 +33,6 @@ export default function App() {
   const [composerMode, setComposerMode] = useState<ComposerMode>("new_plan");
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerPrefill, setComposerPrefill] = useState("");
-  const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const [confirmingPlan, setConfirmingPlan] = useState(false);
   const [planOperationBusy, setPlanOperationBusy] = useState(false);
 
@@ -105,7 +104,6 @@ export default function App() {
 
   function openComposer(mode: ComposerMode, prefill = "") {
     if (workspace?.profile.status !== "ready" || planOperationBusy) return;
-    setAgentStatus(null);
     setView("plans");
     setPlanTab("current");
     setComposerMode(mode);
@@ -142,16 +140,16 @@ export default function App() {
     if (!workspace || workspace.activePlan.id !== planId) return;
     try {
       const payload = await reorderPlanTaskRequest(planId, taskId, direction, workspace.activePlan.version);
-      setWorkspace(payload.workspace); setAgentStatus({ tone: "success", text: "The new order is saved. Review affected transfer times before confirmation." });
-    } catch (caught) { const message = caught instanceof Error ? caught.message : "Unable to reorder the itinerary."; setError(message); setAgentStatus({ tone: "error", text: message }); }
+      setWorkspace(payload.workspace);
+    } catch (caught) { const message = caught instanceof Error ? caught.message : "Unable to reorder the itinerary."; setError(message); }
   }
 
   async function undoPlanChange(planId: string, changeId: string) {
     if (!workspace || workspace.activePlan.id !== planId) return;
     try {
       const payload = await undoPlanChangeRequest(planId, changeId, workspace.activePlan.version);
-      setWorkspace(payload); setAgentStatus({ tone: "success", text: "The itinerary reorder was undone." });
-    } catch (caught) { const message = caught instanceof Error ? caught.message : "Unable to undo the change."; setError(message); setAgentStatus({ tone: "error", text: message }); }
+      setWorkspace(payload);
+    } catch (caught) { const message = caught instanceof Error ? caught.message : "Unable to undo the change."; setError(message); }
   }
 
   async function confirmCurrentPlan(planId: string) {
@@ -200,10 +198,9 @@ export default function App() {
         </div>
       </header>
       {error ? <div className="inline-alert">{error}<button onClick={() => setError(null)}>Close</button></div> : null}
-      {view === "plans" ? composerOpen && planTab === "current" && workspace.profile.status === "ready" ? <InlineComposerWorkspace mode={composerMode} currentPlan={currentPlan} planningSession={composerMode === "new_plan" ? resumablePlanningSession : undefined} initialMessage={composerPrefill} onClose={() => { setComposerOpen(false); setComposerPrefill(""); }} onPlanCreated={handlePlanCreated} onStatus={setAgentStatus} onError={setError} /> : <PlansWorkspace currentPlan={currentPlan} activeBlueprint={workspace.activeBlueprint} planningSession={resumablePlanningSession} hidePlanningSession={Boolean(currentPlan)} latestPlanChange={workspace.latestPlanChange} latestPlanReplacement={workspace.latestPlanReplacement} executionPlan={workspace.executionPlan ?? null} destinationArrivals={workspace.destinationArrivals} history={visibleHistory} tab={planTab} confirming={confirmingPlan} onTab={setPlanTab} onCreate={() => openComposer("new_plan")} onRevise={(message) => openComposer("revise_plan", message)} onDelete={deleteHistoricalPlan} onTaskToggle={togglePlanTask} onTaskReorder={reorderPlanTask} onUndoChange={undoPlanChange} onConfirm={confirmCurrentPlan} onPlanCreated={handlePlanCreated} onStatus={setAgentStatus} onError={setError} onOperationBusy={setPlanOperationBusy} /> : null}
+      {view === "plans" ? composerOpen && planTab === "current" && workspace.profile.status === "ready" ? <InlineComposerWorkspace mode={composerMode} currentPlan={currentPlan} planningSession={composerMode === "new_plan" ? resumablePlanningSession : undefined} initialMessage={composerPrefill} onClose={() => { setComposerOpen(false); setComposerPrefill(""); }} onPlanCreated={handlePlanCreated} onStatus={ignoreAgentStatus} onError={setError} /> : <PlansWorkspace currentPlan={currentPlan} activeBlueprint={workspace.activeBlueprint} planningSession={resumablePlanningSession} hidePlanningSession={Boolean(currentPlan)} latestPlanChange={workspace.latestPlanChange} latestPlanReplacement={workspace.latestPlanReplacement} executionPlan={workspace.executionPlan ?? null} destinationArrivals={workspace.destinationArrivals} history={visibleHistory} tab={planTab} confirming={confirmingPlan} onTab={setPlanTab} onCreate={() => openComposer("new_plan")} onRevise={(message) => openComposer("revise_plan", message)} onDelete={deleteHistoricalPlan} onTaskToggle={togglePlanTask} onTaskReorder={reorderPlanTask} onUndoChange={undoPlanChange} onConfirm={confirmCurrentPlan} onPlanCreated={handlePlanCreated} onStatus={ignoreAgentStatus} onError={setError} onOperationBusy={setPlanOperationBusy} /> : null}
       {view === "settings" ? <SettingsWorkspace workspace={workspace} configuration={configuration} checks={runtimeChecks} onWorkspace={setWorkspace} onConfiguration={setConfiguration} onChecks={setRuntimeChecks} onError={setError} /> : null}
     </section>
     {workspace.profile.status !== "ready" ? <ProfileOnboardingDialog profile={workspace.profile} onSaved={setWorkspace} onError={setError} /> : null}
-    {agentStatus ? <aside className={`agent-status-float ${agentStatus.tone}`} role="status" aria-live="polite"><img src={landiLogoUrl} alt="" /><div><strong>{agentStatus.tone === "error" ? "Needs attention" : agentStatus.tone === "working" ? "Landi is checking" : "Saved"}</strong><span>{agentStatus.text}</span></div><button type="button" onClick={() => setAgentStatus(null)} aria-label="Dismiss status">×</button></aside> : null}
   </main>;
 }

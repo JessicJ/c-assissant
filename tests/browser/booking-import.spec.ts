@@ -288,7 +288,7 @@ test("Plan Bookings tab imports a later hotel confirmation", async ({ page }) =>
   await expect(panel.getByLabel("Location")).toHaveValue("3-12-8 Shinjuku, Tokyo");
   await panel.getByRole("button", { name: "Accept booking" }).click();
   await expect(panel.getByText("Shinjuku Garden Hotel Accommodation booking")).toBeVisible();
-  await expect(page.locator(".agent-status-float")).toContainText("Booking saved. Structural timing may need a replacement draft");
+  await expect(page.locator(".agent-status-float")).toHaveCount(0);
   expect(confirmPayload?.expectedVersion).toBe(3);
   expect(confirmPayload?.sourceContent).toContain("Reservation ID: HTL-998877");
 });
