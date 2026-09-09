@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { DestinationArrivalEvent, Plan, PlanChangeSet, PlanReplacementAudit, PlanningSession, TripBlueprint, WorkspaceSnapshot } from "@c-assistant/core";
 import { cancelPlanningGeneration, deletePlanningSession, getWorkspace } from "./api-client.js";
 import { BookingImportPanel } from "./BookingImportPanel.js";
@@ -43,8 +43,38 @@ function PlanningSessionPanel({ session, onPlanCreated, onStatus, onError }: { s
   return <section className="planning-session-panel"><header><div><h2>Plan your trip with Landi</h2></div><div className="planning-session-controls">{session.status === "generating" ? <button type="button" onClick={() => void cancelGeneration()} disabled={cancelling}>{cancelling ? "Cancelling…" : "Cancel generation"}</button> : confirmingAbandon ? <><button type="button" onClick={() => setConfirmingAbandon(false)} disabled={abandoning}>Keep planning</button><button type="button" className="danger" onClick={() => void abandon()} disabled={abandoning}>{abandoning ? "Abandoning…" : "Confirm"}</button></> : <button type="button" onClick={() => setConfirmingAbandon(true)} disabled={abandoning}>Abandon session</button>}</div></header><PlanComposer key={session.id} mode="new_plan" currentPlan={null} planningSession={session} onPlanCreated={onPlanCreated} onStatus={onStatus} onComplete={() => undefined} onError={onError} /></section>;
 }
 
+function executionPlanNoticeKey(plan: Plan): string {
+  return `landi:execution-plan-notice:dismissed:${plan.id}:${plan.version}`;
+}
+
+function isExecutionPlanNoticeDismissed(key: string): boolean {
+  if (typeof localStorage === "undefined") return false;
+  try {
+    return localStorage.getItem(key) === "true";
+  } catch {
+    return false;
+  }
+}
+
 function ExecutionPlanNotice({ plan }: { plan: Plan }) {
-  return <section className="execution-plan-notice"><div><span>Active plan</span><strong>{plan.title}</strong><p>Reminders and the itinerary timeline still follow this plan. Landi will switch only after you confirm the complete replacement draft below.</p></div><em>Active</em></section>;
+  const dismissalKey = executionPlanNoticeKey(plan);
+  const [dismissed, setDismissed] = useState(() => isExecutionPlanNoticeDismissed(dismissalKey));
+
+  useEffect(() => {
+    setDismissed(isExecutionPlanNoticeDismissed(dismissalKey));
+  }, [dismissalKey]);
+
+  function dismiss() {
+    try {
+      localStorage.setItem(dismissalKey, "true");
+    } catch {
+      // The notice can still close for this session if storage is unavailable.
+    }
+    setDismissed(true);
+  }
+
+  if (dismissed) return null;
+  return <section className="execution-plan-notice"><div><span>Active plan</span><strong>{plan.title}</strong><p>Reminders and the itinerary timeline still follow this plan. Landi will switch only after you confirm the complete replacement draft below.</p></div><em>Active</em><button type="button" className="execution-plan-notice-close" aria-label="Close active plan notice" onClick={dismiss}><span aria-hidden="true" /></button></section>;
 }
 
 function EmptyPlan({ onCreate, onPlanCreated, onStatus, onError }: { onCreate: () => void; onPlanCreated: (workspace: WorkspaceSnapshot) => Promise<void>; onStatus: (status: AgentStatus) => void; onError: (message: string) => void }) {

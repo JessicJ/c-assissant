@@ -53,6 +53,7 @@ export type BlueprintPlaceDisplay = {
     needsRecheck: boolean;
     longStop: boolean;
   };
+  placementNote?: string;
   contextualTip?: string;
 };
 
@@ -451,6 +452,7 @@ export function buildBlueprintWorkspaceDisplay(plan: Plan, presentation: PlanPre
 function placeDisplayForPlace(place: PlanPlace, travelTips: PlanPresentation["travelTips"] = [], requirements: BlueprintActionRequirement[] = [], bookingConstraints: BlueprintBookingConstraint[] | undefined = []): BlueprintPlaceDisplay {
   const signals = workspaceSignalsForPlace(place, requirements, bookingConstraints);
   const contextualTip = contextualTipForPlace(place, travelTips, {}, requirements);
+  const placementNote = placementNoteForPlace(place, requirements);
   return {
     id: place.id,
     title: displayPlaceName(place),
@@ -464,6 +466,7 @@ function placeDisplayForPlace(place: PlanPlace, travelTips: PlanPresentation["tr
     priorityLabel: placePriorityLabel(place.priority),
     ...(place.schedulingEligibility ? { schedulingEligibility: place.schedulingEligibility } : {}),
     placementSignals: signals,
+    ...(placementNote ? { placementNote } : {}),
     ...(contextualTip ? { contextualTip } : {})
   };
 }
@@ -1793,11 +1796,9 @@ function guideTags(presentation: PlanPresentation, place: PlanPlace, requirement
 
 function guideCardAction(place: PlanPlace, state: GuideState, timeline: GuideCardDisplay["timeline"], requirements: BlueprintActionRequirement[] = []): Pick<GuideCardDisplay, "canAdd" | "actionLabel" | "footerNote" | "addBlockedReason"> {
   if (state === "unscheduled" && directAddAllowed(place)) {
-    const footerNote = travelerFacingDefaultText(place.guideDisplay?.footerNote) || requirementCardNote(requirements);
     return {
       canAdd: true,
-      actionLabel: travelerFacingLabel(place.guideDisplay?.addActionLabel ?? place.guideDisplay?.primaryActionLabel, "Add"),
-      ...(footerNote ? { footerNote } : {})
+      actionLabel: travelerFacingLabel(place.guideDisplay?.addActionLabel ?? place.guideDisplay?.primaryActionLabel, "Add")
     };
   }
   if (state === "unscheduled") {
@@ -1934,6 +1935,9 @@ function addBlockedLabel(place: Pick<PlanPlace, "schedulingEligibility">): strin
 
 function placementAdvisoriesForWorkspace(workspace: BlueprintWorkspaceDisplay, place: BlueprintPlaceDisplay, itinerary: ItineraryDayDisplay | undefined, position: ItineraryPlacementOption | undefined): PlacementAdvisory[] {
   const advisories: PlacementAdvisory[] = [];
+  if (place.placementNote) {
+    advisories.push({ tone: "attention", text: place.placementNote });
+  }
   if (itinerary?.day.city && place.city && !sameText(itinerary.day.city, place.city)) {
     advisories.push({ tone: "attention", text: `This is in ${place.city}, while the selected day is centered on ${itinerary.day.city}.` });
   }
@@ -1954,6 +1958,10 @@ function placementAdvisoriesForWorkspace(workspace: BlueprintWorkspaceDisplay, p
   }
   if (!advisories.length && workspace.days.length) advisories.push({ tone: "neutral", text: "Landi will check route fit and timing before saving this edit." });
   return advisories;
+}
+
+function placementNoteForPlace(place: PlanPlace, requirements: BlueprintActionRequirement[] = []): string | undefined {
+  return travelerFacingDefaultText(place.guideDisplay?.footerNote) || requirementCardNote(requirements);
 }
 
 function sameText(left: string, right: string): boolean {

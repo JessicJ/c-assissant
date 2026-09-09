@@ -28,7 +28,7 @@ The audit ran 86 focused Web read-model, display, automatic-route-refresh, and r
 
 There were 14 modified tracked files and five untracked files at the audit checkpoint. Preserve and account for those existing changes; do not reset them or attribute all of them to this plan.
 
-Confirmed gaps:
+Historical starting gaps from that audit:
 
 - Research and itinerary prompts still invoke `interactive-trip-planner`; research still requires Regional Source Pack rules.
 - Generation identity and keys are tied to `interactive-trip-planner@0.2.0`.
@@ -36,6 +36,8 @@ Confirmed gaps:
 - Standalone booking constraints are not exposed in the Web presentation adapter; direct revision guards need verification against those records, beyond place priority and action requirements.
 - Local food, product, and experience themes are mainly reached through linked place details; useful records with no linked place need a browse path.
 - Current documentation and live acceptance evidence lag behind recent implementations.
+
+These bullets describe the audit starting point, not current remaining work. Later milestones below record which gaps were closed and what remains outside this delivery boundary.
 
 ## Work Queue
 
@@ -162,3 +164,12 @@ At this checkpoint, A1-A3, B1-B2, C1, C2, and D1 are complete. The remaining ite
 - Added `pnpm check:workspace` to diagnose local Web/Core/proxy/workspace startup mismatches without reading or changing travel data.
 - Added API-client tests for diagnostic propagation, unreachable Core service handling, incomplete workspace payloads, and optional request degradation.
 - Added browser coverage for current-plan rendering when auxiliary details fail, manual recovery after temporary or unreachable `/api/workspace` failures, automatic recovery after a short Core startup delay, and bounded retry exhaustion.
+
+## Post-Completion Follow-up Queue
+
+These items are not blockers for the completed text-first Blueprint workspace. Each one should become a separate confirmed plan before implementation.
+
+- Image system v1: render existing Blueprint image metadata in Guide Cards and Detail, show Source Markers only on real images, keep text-only cards polished with no placeholders, and test image/no-image behavior. Do not start automatic image search, generation, or UGC ingestion in this first slice.
+- Google Maps success acceptance: when a working Google Maps key is available, run browser acceptance for the Google-success path separately from Leaflet fallback, including English map language, correct-day markers, selected-place pale-blue glow, and route line behavior.
+- Public readiness scope: track overseas Regional Source Packs, taste-model unseen-city evaluation, and stronger representative evidence outside this completion plan before claiming public V1 readiness.
+- Broader travel assistant roadmap: monitoring, in-trip assistance, external booking execution, and mobile execution surfaces remain roadmap work, not completion-plan debt.

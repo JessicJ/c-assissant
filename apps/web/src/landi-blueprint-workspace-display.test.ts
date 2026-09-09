@@ -287,8 +287,10 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.deepEqual(workspace.guideCards.map((card) => card.placeId), ["anchor", "tea", "context"]);
     assert.equal(cardById.get("tea")?.summary, "Blueprint-authored short card copy.");
     assert.deepEqual(cardById.get("tea")?.tags, ["75 min", "Quiet"]);
-    assert.equal(cardById.get("tea")?.footerNote, "Good after the garden.");
+    assert.equal(cardById.get("tea")?.footerNote, undefined);
     assert.equal(cardById.get("tea")?.actionLabel, "Add tea");
+    assert.equal(workspace.places.find((item) => item.id === "tea")?.placementNote, "Good after the garden.");
+    assert.deepEqual(buildPendingItineraryEditForWorkspace(workspace, "tea", { dayId: "day-1", positionId: "end" }).advisories[0], { tone: "attention", text: "Good after the garden." });
     assert.equal(cardById.get("context")?.state, "informational");
     assert.equal(cardById.get("context")?.footerNote, "Use as background only.");
     const detail = detailDisplayForWorkspacePlace(workspace, "tea")!;
