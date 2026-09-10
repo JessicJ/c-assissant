@@ -54,6 +54,7 @@ export function planningRequestForGenerationWithBookings(session: PlanningSessio
     "Generate the complete Landi Plan from this user-approved planning proposal.",
     "Do not change the approved objective or scope. Make reasonable assumptions explicit in the Plan.",
     "Treat accepted hard booking constraints as fixed real-world commitments that outrank natural-language preferences. Soft booking constraints are review context only. Never include confirmation codes, traveler names, payment details, or original email bodies in the Plan.",
+    "Accommodation continuity rule: when accepted accommodation bookings include hotel_stay dates and a location or destination, each morning's route should depart from the hotel or lodging where the traveler slept the previous night. If no accommodation has been imported, ignore this rule and do not ask for hotel details just to satisfy it.",
     `Objective: ${proposal.objective}`,
     `Theme: ${proposal.theme}`,
     `Known facts:\n${facts}`,

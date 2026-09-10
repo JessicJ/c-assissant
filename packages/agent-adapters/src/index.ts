@@ -541,7 +541,7 @@ Rules:
 - Preserve the user's confirmed scope, dates, party context, preferences, and all valid content.
 - For an itinerary, every day needs an ISO date, destination city, traveler-facing title, planning rationale, ordered stops with local HH:mm times, realistic visit durations, and complete adjacent route segments with mode, duration, label, and detail. Ensure each next start time leaves enough room for the previous visit plus movement.
 - Preserve every researched candidate with coordinates and every allowed source URL. For every full day retain 4-6 scheduled places and at least 12 unique choices across scheduled places and candidates. Do not invent or replace evidence.
-- Keep flexible time in the schedule, but represent it around concrete timed anchors rather than omitting the entire day's timeline.
+- Keep only flexible or buffer windows that materially affect execution, such as a required wait between fixed commitments or a user-requested free window. Do not add flexible time to make the timeline look complete.
 - Do not add claims that Landi booked, paid, hailed a ride, or completed an external action.
 - This is the only repair attempt. Produce the complete corrected Plan, not a patch or commentary.`;
 }
@@ -996,6 +996,7 @@ function normalizeSkillItineraryBlocks(values: unknown[], knownPlaceIds: Set<str
     .filter((block) => String(block.kind) !== "stop" || (isString(block.placeId) && scheduledPlaceIds.has(block.placeId)))
     .filter((block) => !isString(block.eventId) || knownEventIds.has(block.eventId))
     .filter((block) => String(block.kind) !== "event" || isString(block.eventId))
+    .filter((block) => !lowValueVisibleItineraryBlock(block))
     .sort((left, right) => Number(left.order) - Number(right.order))
     .map((block, index) => ({
       id: (block.id as string).trim(),
@@ -1005,12 +1006,42 @@ function normalizeSkillItineraryBlocks(values: unknown[], knownPlaceIds: Set<str
       ...(isString(block.eventId) && block.eventId.trim() ? { eventId: block.eventId.trim() } : {}),
       ...(isString(block.startTime) && block.startTime.trim() ? { startTime: block.startTime.trim() } : {}),
       ...(isString(block.endTime) && block.endTime.trim() ? { endTime: block.endTime.trim() } : {}),
-      ...(isString(block.title) && block.title.trim() ? { title: block.title.trim() } : {}),
-      ...(isString(block.summary) && block.summary.trim() ? { summary: block.summary.trim() } : {}),
+      ...(isString(block.title) && block.title.trim() && !placeholderItineraryText(block.title) ? { title: block.title.trim() } : {}),
+      ...(isString(block.summary) && block.summary.trim() && !placeholderItineraryText(block.summary) ? { summary: block.summary.trim() } : {}),
       ...(Number.isInteger(block.durationMinutes) && Number(block.durationMinutes) > 0 ? { durationMinutes: Number(block.durationMinutes) } : {}),
       ...(isString(block.role) && block.role.trim() ? { role: block.role.trim() } : {}),
       evidence: Array.isArray(block.evidence) ? block.evidence.filter((ref): ref is NonNullable<SkillItineraryArtifact["days"][number]["blocks"]>[number]["evidence"][number] => isRecord(ref) && isString(ref.sourceId) && knownSourceIds.has(ref.sourceId) && ["verified", "recheck", "stale"].includes(String(ref.status))).map((ref) => ({ sourceId: ref.sourceId, status: ref.status, ...(isString(ref.checkedAt) ? { checkedAt: ref.checkedAt } : {}), ...(Array.isArray(ref.supports) && ref.supports.every(isString) ? { supports: ref.supports } : {}) })) : []
     }));
+}
+
+function lowValueVisibleItineraryBlock(block: Record<string, unknown>): boolean {
+  const kind = String(block.kind);
+  if (!["rest", "flexible"].includes(kind)) return false;
+  if (isString(block.placeId) || isString(block.eventId)) return false;
+  const text = `${isString(block.title) ? block.title : ""} ${isString(block.summary) ? block.summary : ""} ${isString(block.role) ? block.role : ""}`.toLocaleLowerCase();
+  if (!text.trim()) return false;
+  if (actionableItineraryUnknown(text) || routeCriticalItineraryBuffer(text)) return false;
+  return /\b(slow|easy|quiet|free|flexible|optional|neighborhood|hotel rest|afternoon rest|relax|take it easy|jet-?lag|unhurried|leisure|early night|open window)\b/.test(text)
+    || /自由活动|轻松|休息|慢节奏|早睡|随意/.test(text);
+}
+
+function routeCriticalItineraryBuffer(text: string): boolean {
+  return /\b(buffer|wait|waiting|between|fixed|appointment|reservation|booking|timed entry|showtime|departure|arrival|flight|train|rail|airport|station|luggage|bag(?:gage)?|customs|immigration|check[ -]?in|check[ -]?out|hotel return|return to hotel|long-?haul|overnight)\b/.test(text)
+    || /行李|预约|预订|固定|航班|火车|车站|机场|入境|海关|入住|退房|返回酒店/.test(text);
+}
+
+function actionableItineraryUnknown(text: string): boolean {
+  return /\b(not selected|not confirmed|unconfirmed|needs? recheck|requires? recheck|reservation required|ticket not purchased|pickup point|meeting point|action required|pending)\b/.test(text)
+    || /未选择|未确认|需复核|需要复核|需要预订|未购票|集合点|待处理/.test(text);
+}
+
+function placeholderItineraryText(value: string): boolean {
+  const text = value.trim().toLocaleLowerCase();
+  if (!text) return false;
+  if (actionableItineraryUnknown(text)) return false;
+  return /^(?:time|duration|distance|address|image|opening hours?|restaurant|hotel|route)\s+(?:tbd|to be determined|unknown|unavailable)$/i.test(value.trim())
+    || /\b(?:duration|distance|address|image|opening hours?|restaurant|hotel|route)\s+(?:tbd|to be determined|unknown|unavailable)\b/i.test(value)
+    || /\b(?:tbd|to be determined)\b/i.test(value);
 }
 
 function normalizeSkillItineraryMovements(values: unknown[], days: SkillItineraryArtifact["days"], knownPlaceIds: Set<string>, knownSourceIds: Set<string>): SkillItineraryArtifact["movements"] {
@@ -1836,8 +1867,14 @@ Rules:
 - Optimize for a reasonable trip a traveler could actually follow, not for maximum daily density. Use 1-3 anchors and usually 3-5 scheduled stops on a full sightseeing day; keep arrival, departure, jet-lag, luggage, and city-transfer days deliberately lighter.
 - Schedule a practical subset; every unscheduled Research Set place remains in the Blueprint automatically and does not need to be repeated in every day's candidates.
 - Candidate IDs are alternatives for that day and cannot also be scheduled stops. Use them as direct replacements, meal/café/rest stops, rainy-day options, low-energy options, or nearby extensions, not as extra obligations.
-- Stops use contiguous order starting at 1 and only represent concrete places scheduled into the formal route. Times are optional planning advice, not claimed opening times. Give realistic buffers for meals, rest, hotel returns, luggage handling, and transfers when those shape the day.
-- Every day must include typed day.blocks for the visible Web workspace day sequence. Use stop for scheduled stop places, meal for meals and cafe breaks, rest for recovery or hotel pauses, transfer for station/airport/cross-area movement, lodging for hotel base/return moments, flexible for open windows or same-direction backups, and event only for supplied Research Set events. Do not hide meals, rest, hotel returns, luggage handling, or flexible windows only in the day summary.
+- Stops use contiguous order starting at 1 and only represent concrete places scheduled into the formal route. Times are optional planning advice, not claimed opening times. Give realistic buffers for meals, rest, hotel returns, luggage handling, and transfers only when those buffers shape routing, constraints, or later commitments.
+- Every day must include typed day.blocks for the visible Web workspace day sequence, but the sequence should be concise and may contain large unscheduled gaps. Use stop only for scheduled concrete places, meal only for a concrete dining place or a necessary unspecific meal, rest only for actionable recovery/buffer/hotel-return windows, transfer only for real movement between plan nodes, lodging only for a concrete base/return or actionable lodging status, flexible only for a user-requested or constraint-driven open window, and event only for supplied Research Set events.
+- Do not create filler blocks merely to fill blank time, express a relaxed pace, or complete morning/afternoon/evening structure. Omit standalone blocks titled or summarized like Slow morning, Easy morning, Early night, Quiet evening, Free time, Flexible time, Flexible afternoon, Optional neighborhood time, Hotel rest, Afternoon rest, Relax at hotel, Take it easy, Jet-lag recovery, Unhurried time, or Leisure time unless the block carries a material constraint or next action.
+- Before emitting any visible day.block, apply this test: it must represent a concrete place, a real movement, a user-executable activity, a fixed constraint, an actionable pending/warning state, or a route-critical buffer. If deleting the block would not reduce the traveler's ability to understand or execute the day, omit it.
+- When a concrete place exists, make that place the center of the block. Prefer a restaurant, hotel, airport, station, attraction, cafe, shop, pier, venue, or meeting point over generic titles like Arrive, Check in, Visit temple, Lunch, or Dinner.
+- For meals without a selected restaurant, use simple labels only when the meal needs to appear in the plan: Lunch, Dinner, Lunch near hotel, or Dinner near venue. Do not use decorative titles like Flexible central-Ubud lunch, Simple dinner near lodging, Easy local lunch, or Relaxed dinner.
+- Omit optional unknown or unsupported fields. Do not output Time TBD, Duration TBD, Distance TBD, Address TBD, Image unavailable, Opening hours unknown, Restaurant TBD, Hotel TBD, Route TBD, Duration unknown, or similar placeholders. Use concise actionable statuses only when the unknown affects execution, such as Hotel not selected, Reservation required, Pickup point not confirmed, or Route needs recheck.
+- When accepted accommodation bookingConstraints include hotel_stay dates and a location or destination, make each covered morning depart from the accommodation occupied the previous night: if the traveler sleeps at Hotel A tonight, tomorrow morning's first route origin must be Hotel A. Add a lodging block or same-day stop for that accommodation when needed to make the origin visible, and route from it to the first scheduled place. If no accommodation is imported or the hotel date/location is missing, skip this rule without asking for hotel details.
 - A stop block with placeId must correspond to a same-day stop; non-stop blocks may reference an existing place when useful, or use title/summary when the block is contextual. Event blocks must reference an existing eventId. Preserve traveler-facing title, summary, startTime, endTime, durationMinutes, and role when they help the left-column itinerary.
 ${legacy ? "- Every adjacent pair of scheduled stops needs exactly one movement. A route may use mode unknown and status recheck when reliable details are unavailable; do not invent verified duration or geometry. If exact routing is unavailable, include a conservative planned duration and detail that live routing must be refreshed before execution." : "- Every adjacent pair of scheduled stops needs exactly one movement. This stage has no live routing tool: use supplied verified route facts only when they support the exact leg, otherwise retain unknown mode or recheck status and omit unsupported duration and geometry. Explain that travel time remains to be checked. Cite supplied source identities only where they support the specific claim; do not promote discovery evidence into verified routing."}
 - Evidence gaps do not collapse the itinerary. Keep the relationship and mark it recheck.

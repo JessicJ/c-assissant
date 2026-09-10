@@ -511,13 +511,17 @@
         const order = poi.category === "hotel" ? "H" : nonHotelOrder(dayId, poiId);
         const transit = index > 0 ? transitInfo(day, ordered[index - 1], poiId) : null;
         const canMove = poi.category !== "hotel";
+        const thumbnail = poi.thumbnail?.url
+          ? `<img class="place-thumbnail" src="${escapeHtml(poi.thumbnail.url)}" alt="${escapeHtml(poi.thumbnail.alt || displayName(poi))}" loading="lazy" referrerpolicy="no-referrer">`
+          : `<span class="place-thumbnail placeholder" aria-hidden="true">${escapeHtml(displayName(poi).slice(0, 1).toLocaleUpperCase())}</span>`;
         return `<div class="place-row-wrap" ${canMove ? `data-sortable-poi="${escapeHtml(poiId)}"` : ""}>
           ${transit ? `<details class="place-transit"><summary><span>${escapeHtml(transitLabel(transit))}</span><small>${escapeHtml(transitModeLabel(transit.mode))} · View details</small></summary><div class="place-transit-detail">${escapeHtml(transit.detail || "Recheck the exact route and live travel time before departure.")}</div></details>` : ""}
           <div class="place-row ${state.view.selectedPoiId === poiId ? "is-selected" : ""}">
             ${canMove ? `<button class="place-drag-handle" type="button" data-drag-poi="${escapeHtml(poiId)}" aria-label="Drag to reorder ${escapeHtml(displayName(poi))}" title="Drag to reorder">⠿</button>` : '<span class="place-drag-spacer" aria-hidden="true"></span>'}
             <button class="place-main" type="button" data-open-place="${escapeHtml(poiId)}">
-              <span class="place-order ${poi.category === "hotel" ? "hotel" : ""}">${escapeHtml(order)}</span>
-              <span><span class="place-name">${escapeHtml(displayName(poi))}</span><span class="place-meta">${escapeHtml(routeStop(day, poiId)?.time || "Time TBD")} · ${escapeHtml(categoryLabel(poi))}</span></span>
+              ${thumbnail}
+              <span class="place-order ${poi.category === "hotel" ? "hotel" : ""}" hidden>${escapeHtml(order)}</span>
+              <span><span class="place-name">${escapeHtml(displayName(poi))}</span><span class="place-meta">${escapeHtml(routeStop(day, poiId)?.time || "Time TBD")}</span></span>
             </button>
             <span class="place-actions">
               <button type="button" title="Remove from day" aria-label="Remove ${escapeHtml(displayName(poi))} from ${escapeHtml(shortDate(day.date))}" data-action="remove-day" data-poi-id="${escapeHtml(poiId)}" ${canMove ? "" : "disabled"}>−</button>

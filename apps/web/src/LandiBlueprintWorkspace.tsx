@@ -331,8 +331,10 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
             const displayItem = canReorderSelectedDay ? item : { ...item, reorderable: false };
             return <Fragment key={item.key}>
               {displayItem.reorderable ? <ItineraryDropZone dropId={`before-${displayItem.key}`} active={dragOverDropId === `before-${displayItem.key}`} /> : null}
-              <ItineraryBlockCard item={displayItem} dragging={Boolean(displayItem.placeId) && draggedPlaceId === displayItem.placeId} selected={Boolean(displayItem.placeId) && selectedPlaceId === displayItem.placeId} onSelect={() => displayItem.placeId ? selectPlace(displayItem.placeId) : undefined} onUndoDraft={() => undoPendingEdit(displayItem.placeId)} onDragStart={(event) => startItineraryCardDrag(event, displayItem)} onDragMove={moveItineraryCardDrag} onDragEnd={endItineraryCardDrag} onDragCancel={cancelItineraryCardDrag} />
-              {item.routeAfterLabel || (routeRefreshBusy && item.routeAfterStatusLabel) ? <ItineraryRouteReadout label={routeReadoutLabel(item, routeRefreshBusy)} state={routeReadoutState(item, routeRefreshBusy)} /> : null}
+              {displayItem.timelineRole === "transport"
+                ? <TransportConnector item={displayItem} />
+                : <ItineraryBlockCard item={displayItem} dragging={Boolean(displayItem.placeId) && draggedPlaceId === displayItem.placeId} selected={Boolean(displayItem.placeId) && selectedPlaceId === displayItem.placeId} onSelect={() => displayItem.placeId ? selectPlace(displayItem.placeId) : undefined} onUndoDraft={() => undoPendingEdit(displayItem.placeId)} onDragStart={(event) => startItineraryCardDrag(event, displayItem)} onDragMove={moveItineraryCardDrag} onDragEnd={endItineraryCardDrag} onDragCancel={cancelItineraryCardDrag} />}
+              {item.routeAfterLabel || (routeRefreshBusy && item.routeAfterStatusLabel) ? <ItineraryRouteReadout item={item} label={routeReadoutLabel(item, routeRefreshBusy)} state={routeReadoutState(item, routeRefreshBusy)} /> : null}
             </Fragment>;
           })}
           {canReorderSelectedDay ? <ItineraryDropZone dropId="end" active={dragOverDropId === "end"} /> : null}
@@ -427,10 +429,29 @@ function routeReadoutState(item: ItineraryCardDisplay, routeRefreshBusy: boolean
   return item.routeAfterStatusLabel ? "pending" : "confirmed";
 }
 
-function ItineraryRouteReadout({ label, state }: { label: string; state: "confirmed" | "pending" | "checking" }) {
+function ItineraryRouteReadout({ item, label, state }: { item: ItineraryCardDisplay; label: string; state: "confirmed" | "pending" | "checking" }) {
   return <div className={`blueprint-itinerary-route-readout ${state}`} aria-label={`Next route: ${label}`}>
-    <span />
-    <strong>{label}</strong>
+    <span className="blueprint-itinerary-transport-rail" aria-hidden="true" />
+    <TransportConnectorContent title={label} mode={item.routeAfterMode} durationLabel={item.routeAfterDurationLabel} detail={item.routeAfterDetail} statusLabel={state === "confirmed" ? undefined : "Needs check"} />
+  </div>;
+}
+
+function TransportConnector({ item }: { item: ItineraryCardDisplay }) {
+  return <article className="blueprint-itinerary-transport">
+    {item.timeLabel ? <time className="blueprint-itinerary-time blueprint-itinerary-time-secondary">{item.timeLabel}</time> : <span className="blueprint-itinerary-time blueprint-itinerary-time-empty" aria-hidden="true" />}
+    <span className="blueprint-itinerary-transport-rail" aria-hidden="true" />
+    <TransportConnectorContent title={item.title} mode={item.routeAfterMode} detail={item.meta} statusLabel={item.statusLabel} />
+  </article>;
+}
+
+function TransportConnectorContent({ title, mode, durationLabel, detail, statusLabel }: { title: string; mode?: ItineraryCardDisplay["routeAfterMode"]; durationLabel?: string | undefined; detail?: string | undefined; statusLabel?: string | undefined }) {
+  return <div className="blueprint-itinerary-transport-content">
+    <span className="blueprint-itinerary-transport-icon" aria-hidden="true">{transportModeIcon(mode)}</span>
+    <div className="blueprint-itinerary-transport-copy">
+      <strong>{title}</strong>
+      {durationLabel || statusLabel ? <span className="blueprint-itinerary-transport-meta">{clockIcon()}{durationLabel ? <span>{durationLabel}</span> : null}{statusLabel ? <em>{statusLabel}</em> : null}</span> : null}
+      {detail ? <p>{detail}</p> : null}
+    </div>
   </div>;
 }
 
@@ -440,36 +461,76 @@ function ItineraryBlockCard({ item, selected, dragging, onSelect, onUndoDraft, o
     item.reorderable ? "reorderable" : "static",
     selected ? "selected" : "",
     dragging ? "dragging" : "",
-    item.editState === "moved" ? "moved" : ""
+    item.editState === "moved" ? "moved" : "",
+    item.image ? "featured" : "compact",
+    `role-${item.timelineRole}`,
+    `type-${item.type}`
   ].filter(Boolean).join(" ");
   return <article className={className}>
-    {item.reorderable ? <button type="button" className="blueprint-itinerary-drag-handle" aria-label={`Move ${item.title}`} onPointerDown={onDragStart} onPointerMove={onDragMove} onPointerUp={onDragEnd} onPointerCancel={onDragCancel}>↕</button> : null}
+    {item.timeLabel ? <time className="blueprint-itinerary-time">{item.timeLabel}</time> : <span className="blueprint-itinerary-time blueprint-itinerary-time-empty" aria-hidden="true" />}
+    <span className="blueprint-itinerary-rail" aria-hidden="true" />
+    {item.reorderable ? <button type="button" className="blueprint-itinerary-drag-handle" aria-label={`Move ${item.title}`} onPointerDown={onDragStart} onPointerMove={onDragMove} onPointerUp={onDragEnd} onPointerCancel={onDragCancel}>⠿</button> : null}
     <button type="button" className="blueprint-itinerary-card-main" onClick={onSelect}>
-      <span>{item.timeLabel}</span>
-      <div>
-        <strong>{item.title}</strong>
-        {item.meta ? <small>{item.meta}</small> : null}
-        {item.contextualTip ? <p className="blueprint-itinerary-context-tip">{item.contextualTip}</p> : null}
-        {item.statusLabel ? <em>{item.statusLabel}</em> : null}
+      {item.image ? <img className="blueprint-itinerary-thumbnail" src={item.image.url} alt={item.image.alt} loading="lazy" referrerPolicy="no-referrer" /> : null}
+      <div className="blueprint-itinerary-card-heading">
+        <span className="blueprint-itinerary-icon" aria-hidden="true">{itineraryItemIcon(item)}</span>
+        <div className="blueprint-itinerary-card-copy">
+          <strong>{item.title}</strong>
+          {item.meta ? <small>{item.meta}</small> : null}
+        </div>
       </div>
+      {item.statusLabel ? <em>{item.statusLabel}</em> : null}
     </button>
     {item.draftActionLabel ? <button type="button" className="blueprint-itinerary-draft-action" onClick={onUndoDraft}>{item.draftActionLabel}</button> : null}
   </article>;
 }
 
 function PendingItineraryCard({ item, selected, onSelect, onUndoDraft }: { item: ItineraryCardDisplay; selected: boolean; onSelect: () => void; onUndoDraft: () => void }) {
-  return <article className={`blueprint-itinerary-block blueprint-itinerary-block-pending${selected ? " selected" : ""}`}>
+  return <article className={`blueprint-itinerary-block blueprint-itinerary-block-pending ${item.image ? "featured" : "compact"} role-${item.timelineRole} type-${item.type}${selected ? " selected" : ""}`}>
+    <time className="blueprint-itinerary-time">{item.timeLabel}</time>
+    <span className="blueprint-itinerary-rail" aria-hidden="true" />
     <button type="button" className="blueprint-itinerary-card-main" aria-label={`Pending itinerary edit for ${item.title}`} onClick={onSelect}>
-      <span>{item.timeLabel}</span>
-      <div>
-        <strong>{item.title}</strong>
-        {item.meta ? <small>{item.meta}</small> : null}
-        {item.contextualTip ? <p className="blueprint-itinerary-context-tip">{item.contextualTip}</p> : null}
-        {item.statusLabel ? <em>{item.statusLabel}</em> : null}
+      {item.image ? <img className="blueprint-itinerary-thumbnail" src={item.image.url} alt={item.image.alt} loading="lazy" referrerPolicy="no-referrer" /> : null}
+      <div className="blueprint-itinerary-card-heading">
+        <span className="blueprint-itinerary-icon" aria-hidden="true">{itineraryItemIcon(item)}</span>
+        <div className="blueprint-itinerary-card-copy">
+          <strong>{item.title}</strong>
+          {item.meta ? <small>{item.meta}</small> : null}
+        </div>
       </div>
+      {item.statusLabel ? <em>{item.statusLabel}</em> : null}
     </button>
     {item.draftActionLabel ? <button type="button" className="blueprint-itinerary-draft-action" onClick={onUndoDraft}>{item.draftActionLabel}</button> : null}
   </article>;
+}
+
+function itineraryItemIcon(item: ItineraryCardDisplay) {
+  if (item.timelineRole === "pending_place") return item.type === "stay" ? itineraryTypeIcon("stay") : itineraryTypeIcon(item.type);
+  if (item.timelineRole === "rest") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v6l3 2" /><path d="M4 12a8 8 0 1 0 8-8" /></svg>;
+  if (item.timelineRole === "activity") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v6l4 2" /><path d="M21 12a9 9 0 1 1-9-9" /><path d="M16 3h5v5" /></svg>;
+  return itineraryTypeIcon(item.type);
+}
+
+function itineraryTypeIcon(type: ItineraryCardDisplay["type"]) {
+  if (type === "dining") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v8M11 3v8M7 7h4M9 11v10M17 3c1.7 1.7 2.5 3.7 2.5 6v3H16v9" /></svg>;
+  if (type === "shopping") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8h12l-1 13H7L6 8Z" /><path d="M9 8a3 3 0 0 1 6 0" /></svg>;
+  if (type === "experience") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z" /><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15Z" /></svg>;
+  if (type === "transport") return transportModeIcon("transit");
+  if (type === "stay") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11V5" /><path d="M20 19v-7a3 3 0 0 0-3-3H9v10" /><path d="M4 19v-8h5" /><path d="M4 15h16" /></svg>;
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-5.1 7-11a7 7 0 0 0-14 0c0 5.9 7 11 7 11Z" /><path d="M12 10.5h.01" /></svg>;
+}
+
+function transportModeIcon(mode: ItineraryCardDisplay["routeAfterMode"] | undefined) {
+  if (mode === "walking") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 4.5a1.7 1.7 0 1 1 3.4 0 1.7 1.7 0 0 1-3.4 0Z" /><path d="M12.5 8.5 10 12l3 2 1.5 6" /><path d="M14 9l2.5 3H20" /><path d="M10 12l-2 8" /></svg>;
+  if (mode === "driving") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l1.5-4.5h11L19 12" /><path d="M4 12h16v6H4v-6Z" /><path d="M7 18v2M17 18v2" /><path d="M7 15h.01M17 15h.01" /></svg>;
+  if (mode === "transit") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z" /><path d="M4 10h16M8 18l-2 3M16 18l2 3" /><path d="M8 14h.01M16 14h.01" /></svg>;
+  if (mode === "rail") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h10a3 3 0 0 1 3 3v9a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V6a3 3 0 0 1 3-3Z" /><path d="M4 10h16M8 19l-2 3M16 19l2 3" /><path d="M8 15h.01M16 15h.01" /></svg>;
+  if (mode === "flight") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l18-7-7 18-3-8-8-3Z" /><path d="M11 14l10-10" /></svg>;
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14" /><path d="m13 6 6 6-6 6" /></svg>;
+}
+
+function clockIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5l3 2" /><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>;
 }
 
 function BlueprintMap(props: { routePlaces: BlueprintMapPointDisplay[]; routeSegments: BlueprintRouteSegmentDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; fallbackViewport: BlueprintMapViewportDisplay; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; routeRefreshBusy?: boolean }) {
@@ -708,15 +769,24 @@ function ExplorePanel({ filters, cards, filter, hidden, onFilter, onSelect, onAd
     <div className="blueprint-guide-list">
       {visibleCards.map((card) => <article className="blueprint-guide-card" key={card.placeId}>
         <button type="button" className="blueprint-guide-card-main" onClick={() => onSelect(card.placeId)}>
-          <header><div><strong>{card.title}</strong></div><span className="blueprint-priority-pill">{card.priorityLabel}</span></header>
+          <header><div><strong>{card.title}</strong><small>{card.locationLabel}</small></div><span className="blueprint-priority-pill">{card.priorityLabel}</span></header>
           <p>{card.summary}</p>
-          {card.image ? <img className="blueprint-guide-card-image" src={card.image.url} alt={card.image.alt} loading="lazy" referrerPolicy="no-referrer" /> : null}
+          {card.image ? <img className="blueprint-guide-card-image" src={card.image.url} alt={card.image.alt} loading="lazy" referrerPolicy="no-referrer" /> : nodeCardVisual(card)}
           {card.tags.length ? <div className="blueprint-guide-tags">{card.tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
         </button>
         {(card.footerNote || card.canAdd || card.draftActionLabel) ? <footer>{card.footerNote ? <span>{card.footerNote}</span> : <span />}{card.canAdd && card.actionLabel ? <button type="button" onClick={() => onAdd(card.placeId)}>{card.actionLabel}</button> : null}{card.draftActionLabel ? <button type="button" className="secondary" onClick={() => onUndoDraft(card.placeId)}>{card.draftActionLabel}</button> : null}</footer> : null}
       </article>)}
       {!visibleCards.length ? <p className="blueprint-empty-note">No guide cards match these filters.</p> : null}
     </div>
+  </div>;
+}
+
+function nodeCardVisual(card: GuideCardDisplay) {
+  if (card.type !== "stay" && card.type !== "transport") return null;
+  return <div className={`blueprint-guide-card-visual visual-${card.type}`} aria-label={`${guideFilterLabel(card.type)} node`}>
+    <span className="blueprint-guide-card-visual-icon" aria-hidden="true">{card.type === "stay" ? itineraryTypeIcon("stay") : transportModeIcon("transit")}</span>
+    <strong>{card.title}</strong>
+    <small>{card.locationLabel}</small>
   </div>;
 }
 
@@ -1021,6 +1091,8 @@ function mapMarkerIcon(type: GuideFilter): string {
   if (type === "dining") return `<path d="M7 3v8"/><path d="M11 3v8"/><path d="M7 7h4"/><path d="M9 11v10"/><path d="M17 3v18"/><path d="M15 3c2 1.8 3 4.2 3 7"/>`;
   if (type === "shopping") return `<path d="M6 8h12l-1 12H7L6 8Z"/><path d="M9 8a3 3 0 0 1 6 0"/>`;
   if (type === "experience") return `<path d="M12 3l2.2 5 5.4.5-4.1 3.6 1.2 5.3L12 14.7l-4.7 2.7 1.2-5.3-4.1-3.6 5.4-.5L12 3Z"/>`;
+  if (type === "stay") return `<path d="M4 11V5"/><path d="M20 19v-7a3 3 0 0 0-3-3H9v10"/><path d="M4 19v-8h5"/><path d="M4 15h16"/>`;
+  if (type === "transport") return `<path d="M6 5h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/><path d="M4 10h16"/><path d="M8 18l-2 3"/><path d="M16 18l2 3"/><path d="M8 14h.01"/><path d="M16 14h.01"/>`;
   return `<path d="M5 8h3l1.4-2h5.2L16 8h3v9H5V8Z"/><circle cx="12" cy="12.5" r="3"/>`;
 }
 
