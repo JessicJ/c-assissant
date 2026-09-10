@@ -110,6 +110,13 @@ export function createPlanningGenerationService(dependencies: {
           () => codex.generateSkillResearchBatch({ request, batch: { id: `scope-${index + 1}`, scopeLabel }, signal: job.controller.signal, profile, skillLineage }),
           () => appendGenerationEvent(job.generationKey, "research", "running", `Transient research failure for ${scopeLabel}; retrying this batch once.`, { scopeLabel, savedPlaceCount: research?.places.length ?? 0 })
         );
+        if (artifact.imageDiagnostics) {
+          appendGenerationEvent(job.generationKey, "research", "running", imageDiagnosticSummary(artifact.imageDiagnostics), {
+            scopeLabel,
+            savedPlaceCount: research?.places.length ?? 0,
+            nextAction: "Save source-bound images with this research batch."
+          });
+        }
         assertGenerationNotCancelled(job, session);
         const checkpointTime = new Date().toISOString();
         const incoming = importSkillResearchBatches([artifact], {
@@ -226,6 +233,12 @@ export function createPlanningGenerationService(dependencies: {
       ...(optional.savedPlaceCount === undefined ? {} : { savedPlaceCount: optional.savedPlaceCount }),
       ...(optional.nextAction === undefined ? {} : { nextAction: optional.nextAction })
     });
+  }
+
+  function imageDiagnosticSummary(diagnostics: NonNullable<Awaited<ReturnType<CodexRuntimeAdapter["generateSkillResearchBatch"]>>["imageDiagnostics"]>): string {
+    const omittedCount = diagnostics.omitted.length;
+    const omittedSuffix = omittedCount ? ` ${omittedCount} place(s) had no compliant sourced image.` : "";
+    return `Image enrichment accepted ${diagnostics.acceptedImageCount} sourced image(s) for ${diagnostics.requestedPlaceCount} requested place(s).${omittedSuffix}`;
   }
 
   function assertGenerationNotCancelled(job: PlanGenerationJob, session: PlanningSession) {

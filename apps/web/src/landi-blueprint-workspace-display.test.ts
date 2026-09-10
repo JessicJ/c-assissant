@@ -21,6 +21,11 @@ function place(id: string, patch: Partial<PlanPlace> = {}): PlanPlace {
   };
 }
 
+function placeWithoutCoordinates(id: string, patch: Partial<PlanPlace> = {}): PlanPlace {
+  const { coordinates: _coordinates, ...value } = place(id, patch);
+  return value;
+}
+
 function presentationFixture(patch: Partial<PlanPresentation> = {}): PlanPresentation {
   return {
     kind: "itinerary",
@@ -746,6 +751,27 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.equal(cards.some((card) => /Higashiyama|Kyoto/i.test(card.tags.join(" "))), false);
   });
 
+  it("uses trip area fallback map view and blocks direct add for places without coordinates", () => {
+    const presentation = presentationFixture({
+      summary: "Bali plan.",
+      cities: ["Bali, Indonesia"],
+      places: [
+        placeWithoutCoordinates("temple", { city: "Ubud", locationLabel: "Ubud" }),
+        placeWithoutCoordinates("bath", { city: "South Kuta", locationLabel: "South Kuta", category: "spa experience", schedulingEligibility: { decision: "schedulable", reason: "Legacy draft marked it schedulable before map data was available." } }),
+        place("kecak", { city: "Uluwatu", locationLabel: "Uluwatu", category: "performance", coordinates: [-8.8306, 115.0854] })
+      ],
+      days: [{ ...presentationFixture().days[0]!, city: "Ubud", placeIds: ["temple"], stops: [{ placeId: "temple", order: 1 }] }]
+    });
+    const workspace = buildBlueprintWorkspaceDisplay(planFixture(presentation, { title: "Bali Vacation Blueprint", location: "Bali, Indonesia" }), presentation);
+    const bathCard = workspace.guideCards.find((card) => card.placeId === "bath")!;
+    assert.deepEqual(workspace.mapFallback, { center: [-8.4095, 115.1889], zoom: 10, label: "Bali" });
+    assert.equal(workspace.itineraries[0]?.markers.length, 0);
+    assert.equal(workspace.itineraries[0]?.routePlaces.length, 0);
+    assert.equal(bathCard.canAdd, false);
+    assert.equal(bathCard.footerNote, "Location needs to be confirmed before adding.");
+    assert.equal(detailDisplayForWorkspacePlace(workspace, "bath")?.primaryActionLabel, "Location needs to be confirmed before adding.");
+  });
+
   it("builds direct place status actions without making scheduled archive a one-click edit", () => {
     const presentation = presentationFixture({
       places: [
@@ -1415,6 +1441,33 @@ describe("Landi Blueprint workspace display helpers", () => {
     });
     const card = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).guideCards[0] as unknown as Record<string, unknown>;
     assert.equal("source" in card, false);
+  });
+
+  it("exposes sourced detail images without creating placeholders for missing images", () => {
+    const presentation = presentationFixture({
+      places: [
+        place("with-image", {
+          images: [{ url: "https://example.com/place.jpg", alt: "Tea studio entry", sourceId: "photo-source", caption: "Studio entry", usage: ["detail"], status: "verified" }]
+        }),
+        place("without-image")
+      ],
+      sourceCatalog: [{ id: "photo-source", title: "Official gallery", authority: "Tea Studio", url: "https://example.com/gallery", retrievedAt: "2026-09-03", status: "verified" }],
+      days: []
+    });
+    const workspace = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation);
+
+    assert.deepEqual(detailDisplayForWorkspacePlace(workspace, "with-image")?.image, {
+      url: "https://example.com/place.jpg",
+      alt: "Tea studio entry",
+      caption: "Studio entry",
+      source: {
+        label: "Image source",
+        summary: "Official gallery · Tea Studio · 2026-09-03",
+        url: "https://example.com/gallery",
+        contexts: ["Image for with-image"]
+      }
+    });
+    assert.equal(detailDisplayForWorkspacePlace(workspace, "without-image")?.image, undefined);
   });
 
   it("lists detail sources without duplicating matching source refs", () => {

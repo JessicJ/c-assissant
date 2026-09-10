@@ -25,7 +25,7 @@ test("Web derives a complete read model from the linked Trip Blueprint", () => {
     fieldEvidence: [{ path: "guideTheme.title", status: "verified", evidence: [{ sourceId: "source-1", status: "verified" }] }],
     sources: [{ id: "source-1", title: "Official", authority: "City", url: "https://example.com/place", retrievedAt: "2026-08-26", status: "verified", official: true }],
     places: [
-      { id: "a", name: "A", locationLabel: "Lisbon", city: "Lisbon", category: "architecture", priority: "must", coordinates: [38.7, -9.1], whyWorthIt: "A", plan: "Visit A", detailSections: [{ title: "Look", items: ["Facade"] }], evidence: [{ sourceId: "source-1", status: "verified" }], fieldEvidence: [{ path: "places.a.whyWorthIt", status: "verified", evidence: [{ sourceId: "source-1", status: "verified" }] }] },
+      { id: "a", name: "A", locationLabel: "Lisbon", city: "Lisbon", category: "architecture", priority: "must", coordinates: [38.7, -9.1], whyWorthIt: "A", plan: "Visit A", detailSections: [{ title: "Look", items: ["Facade"] }], images: [{ url: "https://example.com/lisbon-a.jpg", alt: "Lisbon facade", caption: "Facade detail", sourceId: "source-1", usage: ["detail"], status: "verified" }], evidence: [{ sourceId: "source-1", status: "verified" }], fieldEvidence: [{ path: "places.a.whyWorthIt", status: "verified", evidence: [{ sourceId: "source-1", status: "verified" }] }] },
       { id: "b", name: "B", locationLabel: "Lisbon", city: "Lisbon", category: "local-life", priority: "preferred", coordinates: [38.71, -9.11], whyWorthIt: "B", plan: "Visit B", evidence: [] },
       { id: "c", name: "C", locationLabel: "Lisbon", city: "Lisbon", category: "cafe", priority: "nearby", display: { type: "dining", markerKind: "dining" }, guideDisplay: { cardSummary: "Coffee break selected by the Blueprint.", tags: ["45 min"], detailLeadTitle: "Coffee role", comparisonRows: [{ id: "row-a", relatedPlaceId: "a", area: "Lisbon", routeFit: "After the anchor", timing: "Afternoon", effort: "Low effort", sourceState: "Verified source" }] }, schedulingEligibility: { decision: "schedulable", reason: "Works as a coffee alternative.", suitableDayIds: ["day-1"] }, whyWorthIt: "C", plan: "Keep C as an alternative", evidence: [] }
     ],
@@ -55,6 +55,7 @@ test("Web derives a complete read model from the linked Trip Blueprint", () => {
   assert.equal(presentation.places[2]?.guideDisplay?.cardSummary, "Coffee break selected by the Blueprint.");
   assert.equal(presentation.places[2]?.guideDisplay?.comparisonRows?.[0]?.relatedPlaceId, "a");
   assert.deepEqual(presentation.places[2]?.schedulingEligibility?.suitableDayIds, ["day-1"]);
+  assert.deepEqual(presentation.places[0]?.images, [{ url: "https://example.com/lisbon-a.jpg", alt: "Lisbon facade", caption: "Facade detail", sourceId: "source-1", usage: ["detail"], status: "verified" }]);
   assert.deepEqual(presentation.moduleIdentity?.enabledModules.map((module) => module.id), ["itinerary", "tips"]);
   assert.equal(presentation.guideTheme?.visitorMode, "balanced-visitor");
   assert.equal(presentation.guideRelationshipGraph?.relationships[0]?.kind, "meal_support");
@@ -75,6 +76,19 @@ test("Web derives a complete read model from the linked Trip Blueprint", () => {
   assert.equal(workspace.sources.some((source) => source.summary === "Official · City · 2026-08-26"), true);
   assert.equal(workspace.sources.some((source) => source.contexts?.includes("Supports 2026-10-12 Morning architecture anchor itinerary block")), true);
   assert.equal(workspace.details.find((detail) => detail.placeId === "a")?.sources.some((source) => source.contexts?.includes("Supports 2026-10-12 Morning architecture anchor itinerary block")), true);
+  assert.deepEqual(workspace.guideCards.find((card) => card.placeId === "a")?.image, { url: "https://example.com/lisbon-a.jpg", alt: "Lisbon facade" });
+  assert.equal(workspace.guideCards.find((card) => card.placeId === "b")?.image, undefined);
+  assert.deepEqual(workspace.details.find((detail) => detail.placeId === "a")?.image, {
+    url: "https://example.com/lisbon-a.jpg",
+    alt: "Lisbon facade",
+    caption: "Facade detail",
+    source: {
+      label: "Image source",
+      summary: "Official · City · 2026-08-26",
+      url: "https://example.com/place",
+      contexts: ["Image for A"]
+    }
+  });
   assert.deepEqual(workspace.details.find((detail) => detail.placeId === "c")?.guideContext.map((item) => ({ label: item.label, title: item.title, description: item.description, context: item.context, source: item.sources[0]?.summary })), [{
     label: "Local food",
     title: "Pastel stop",

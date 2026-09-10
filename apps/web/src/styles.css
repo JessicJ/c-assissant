@@ -781,6 +781,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .blueprint-itinerary-block.selected { border-color: #276758; box-shadow: inset 3px 0 0 #276758; background: #f7fbf9; }
 .blueprint-itinerary-block.dragging { border-color: #8dbfe8; box-shadow: 0 0 0 3px rgba(139,203,245,.22); background: #f4faff; user-select: none; }
 .blueprint-itinerary-block.moved { border-style: dashed; border-color: #8dbfe8; background: #f4faff; }
+.blueprint-itinerary-block.static { grid-template-columns: minmax(0,1fr); }
+.blueprint-itinerary-block.static .blueprint-itinerary-card-main { grid-column: 1 / -1; }
 .blueprint-itinerary-block-pending { border-style: dashed; border-color: #c9a53b; background: #fffaf0; cursor: pointer; }
 .blueprint-itinerary-block-pending:hover { border-color: #c9a53b; background: #fffaf0; }
 .blueprint-itinerary-block-pending.selected { border-color: #a98317; box-shadow: inset 3px 0 0 #c9a53b; background: #fff7df; }
@@ -859,6 +861,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .blueprint-guide-card strong { color: #233a33; font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
 .blueprint-priority-pill { flex: none; max-width: 92px; overflow: hidden; padding: 4px 6px; border-radius: 999px; background: #eef6f9; color: #426a8f; font-size: 9px; font-weight: 850; line-height: 1.1; text-overflow: ellipsis; white-space: nowrap; }
 .blueprint-guide-card p { margin: 0; color: #53655f; font-size: 11px; line-height: 1.48; overflow-wrap: anywhere; }
+.blueprint-guide-card-image { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border: 1px solid #dce4e0; border-radius: 8px; background: #f7faf8; }
 .blueprint-guide-tags { display: flex; flex-wrap: wrap; gap: 5px; }
 .blueprint-guide-tags span { padding: 4px 6px; border-radius: 999px; background: #eef3f0; color: #61706b; font-size: 9px; }
 .blueprint-guide-card footer { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
@@ -880,6 +883,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .blueprint-placement-panel > header p { margin: 5px 0 0; color: #61706b; font-size: 11px; line-height: 1.45; }
 .blueprint-pending-panel > header p { margin: 5px 0 0; color: #61706b; font-size: 11px; line-height: 1.45; }
 .blueprint-detail-draft-note { margin: 12px 0 0; padding: 8px 10px; border: 1px solid #dbe8e3; border-radius: 7px; background: #f5faf8; color: #376f62; font-size: 10px; font-weight: 750; line-height: 1.35; }
+.blueprint-detail-image { position: relative; margin: 14px 0 0; overflow: hidden; border: 1px solid #dce4e0; border-radius: 8px; background: #f7faf8; }
+.blueprint-detail-image img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
+.blueprint-detail-image figcaption { position: absolute; inset: auto 8px 8px 8px; display: flex; align-items: end; justify-content: space-between; gap: 8px; pointer-events: none; }
+.blueprint-detail-image figcaption > span:first-child { min-width: 0; overflow: hidden; padding: 4px 6px; border-radius: 6px; background: rgba(255,255,255,.88); color: #314940; font-size: 10px; font-weight: 700; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+.blueprint-detail-image-source { position: relative; flex: none; pointer-events: auto; text-decoration: none; }
+.blueprint-detail-image-source > span { display: inline-flex; align-items: center; min-height: 24px; padding: 0 8px; border: 1px solid rgba(169,195,186,.95); border-radius: 999px; background: rgba(255,255,255,.92); color: #276758; font-size: 9px; font-weight: 850; }
+.blueprint-detail-image-source small { position: absolute; right: 0; bottom: calc(100% + 7px); width: min(240px,70vw); padding: 7px 8px; border: 1px solid #c9d8d2; border-radius: 7px; background: #fff; box-shadow: 0 10px 24px rgba(20,32,29,.12); color: #465853; font-size: 10px; line-height: 1.35; opacity: 0; pointer-events: none; transform: translateY(4px); transition: opacity .14s ease, transform .14s ease; }
+.blueprint-detail-image-source:hover small,.blueprint-detail-image-source:focus small,.blueprint-detail-image-source:focus-within small { opacity: 1; transform: translateY(0); }
 .blueprint-detail-panel section { padding-top: 14px; }
 .blueprint-placement-panel section { padding-top: 14px; }
 .blueprint-pending-panel section { padding-top: 14px; }

@@ -195,6 +195,17 @@ export interface BlueprintEvidenceRef {
   supports?: string[];
 }
 
+export type BlueprintPlaceImageUsage = "detail" | "card";
+
+export interface BlueprintPlaceImage {
+  url: string;
+  alt: string;
+  sourceId: string;
+  caption?: string;
+  usage?: BlueprintPlaceImageUsage[];
+  status?: BlueprintEvidenceStatus;
+}
+
 export interface BlueprintPlace {
   id: string;
   name: string;
@@ -214,6 +225,7 @@ export interface BlueprintPlace {
   plan: string;
   tip?: string;
   detailSections?: Array<{ title: string; body?: string; items?: string[] }>;
+  images?: BlueprintPlaceImage[];
   officialUrl?: string;
   bookingUrl?: string;
   mapUrl?: string;
@@ -631,10 +643,23 @@ function validatePlace(place: BlueprintPlace, sourceIds: Set<string>, placeIds: 
   if (place.coordinates && !validCoordinates(place.coordinates)) issues.push(`${path} has invalid coordinates`);
   if (place.display) validatePlaceDisplay(place.display, issues, path);
   if (place.guideDisplay) validatePlaceGuideDisplay(place.guideDisplay, sourceIds, placeIds, issues, path, place.id);
+  validatePlaceImages(place.images ?? [], sourceIds, issues, path);
   validateFieldEvidence(place.fieldEvidence ?? [], sourceIds, issues, path);
   validateSchedulingEligibilityShape(place.schedulingEligibility, issues, path);
   if (place.possibleDuplicateOf?.some((id) => !placeIds.has(id) || id === place.id)) issues.push(`${path} has invalid possible duplicate reference`);
   validateEvidence(place.evidence, sourceIds, issues, path);
+}
+
+function validatePlaceImages(images: BlueprintPlaceImage[], sourceIds: Set<string>, issues: string[], path: string): void {
+  for (const [index, image] of images.entries()) {
+    const imagePath = `${path} image ${index + 1}`;
+    if (!image.url?.trim() || !validHttpsUrl(image.url)) issues.push(`${imagePath} has invalid image URL`);
+    if (!image.alt?.trim()) issues.push(`${imagePath} needs alt text`);
+    if (!sourceIds.has(image.sourceId)) issues.push(`${imagePath} references unknown source ${image.sourceId}`);
+    if (image.caption !== undefined && !image.caption.trim()) issues.push(`${imagePath} has an empty caption`);
+    for (const usage of image.usage ?? []) if (usage !== "detail" && usage !== "card") issues.push(`${imagePath} has invalid usage ${usage}`);
+    if (image.status !== undefined && image.status !== "verified" && image.status !== "recheck" && image.status !== "stale") issues.push(`${imagePath} has invalid status`);
+  }
 }
 
 function validatePlaceDisplay(display: BlueprintPlaceDisplayIntent, issues: string[], path: string): void {
@@ -861,6 +886,15 @@ function validSkillLineage(value: SkillLineage): boolean {
 
 function validCoordinates(value: [number, number]): boolean {
   return Number.isFinite(value[0]) && value[0] >= -90 && value[0] <= 90 && Number.isFinite(value[1]) && value[1] >= -180 && value[1] <= 180;
+}
+
+function validHttpsUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function validPlaceDisplayType(value: unknown): value is BlueprintPlaceDisplayType {

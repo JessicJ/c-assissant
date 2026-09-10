@@ -18,6 +18,7 @@ import {
   type BlueprintModuleIdentity,
   type BlueprintMovement,
   type BlueprintPlace,
+  type BlueprintPlaceImageUsage,
   type BlueprintPlaceRelationship,
   type BlueprintPreparationChecklistItem,
   type BlueprintProposalRef,
@@ -35,6 +36,16 @@ export const SKILL_IMPORTER_VERSION = "1.0.0";
 type SkillGuideDisplayArtifact = Omit<NonNullable<BlueprintPlace["guideDisplay"]>, "comparisonRows"> & {
   comparisonRows?: Array<Omit<BlueprintGuideComparisonDisplay, "evidence"> & { sourceUrls?: string[] }>;
 };
+
+export interface SkillResearchPlaceImageArtifact {
+  url: string;
+  alt: string;
+  caption?: string;
+  sourceUrl?: string;
+  sourceUrls?: string[];
+  usage?: NonNullable<BlueprintPlace["images"]>[number]["usage"];
+  status?: NonNullable<BlueprintPlace["images"]>[number]["status"];
+}
 
 export interface SkillResearchSourceArtifact {
   id?: string;
@@ -66,6 +77,7 @@ export interface SkillResearchPlaceArtifact {
   plan: string;
   tip?: string;
   detailSections?: BlueprintPlace["detailSections"];
+  images?: SkillResearchPlaceImageArtifact[];
   officialUrl?: string;
   bookingUrl?: string;
   mapUrl?: string;
@@ -169,6 +181,11 @@ export interface SkillResearchBatchArtifact {
   sources: SkillResearchSourceArtifact[];
   actionRequirements?: SkillActionRequirementArtifact[];
   completedAt: string;
+  imageDiagnostics?: {
+    requestedPlaceCount: number;
+    acceptedImageCount: number;
+    omitted: Array<{ placeId: string; reason: string }>;
+  };
 }
 
 export interface SkillItineraryArtifact {
@@ -217,6 +234,7 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
   }
   const referencedUrls = artifacts.flatMap((batch) => [
     ...batch.places.flatMap((place) => place.sourceUrls ?? []),
+    ...batch.places.flatMap((place) => place.images?.flatMap((image) => validHttpsUrls([image.sourceUrl, ...(image.sourceUrls ?? [])])) ?? []),
     ...batch.places.flatMap((place) => place.guideDisplay?.comparisonRows?.flatMap((row) => row.sourceUrls ?? []) ?? []),
     ...batch.events.flatMap((event) => event.sourceUrls ?? []),
     ...(batch.localFoods ?? []).flatMap((item) => item.sourceUrls ?? []),
@@ -242,10 +260,14 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
   }
   const sources = [...sourceByUrl.values()];
   const sourceIdByUrl = new Map(sources.map((source) => [source.url, source.id]));
+  const sourceIds = new Set(sources.map((source) => source.id));
   const sourceIdByArtifactId = new Map<string, string>();
-  for (const artifact of artifacts.flatMap((batch) => batch.sources)) {
-    if (!artifact.id) continue;
-    sourceIdByArtifactId.set(artifact.id, sourceIdByUrl.get(normalizedHttpsUrl(artifact.url))!);
+  for (const batch of artifacts) {
+    for (const artifact of batch.sources) {
+      const finalSourceId = sourceIdByUrl.get(normalizedHttpsUrl(artifact.url))!;
+      sourceIdByArtifactId.set(finalSourceId, finalSourceId);
+      if (artifact.id) registerSourceIdAliases(sourceIdByArtifactId, artifact.id, batch.id, finalSourceId);
+    }
   }
 
   const rawPlaces = artifacts.flatMap((batch) => batch.places);
@@ -275,6 +297,10 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
     const existingId = emittedPlaceIds.has(id);
     if (existingId) continue;
     emittedPlaceIds.add(id);
+    const coordinates = normalizePlaceCoordinates(artifact.coordinates);
+    const schedulingEligibility = artifact.schedulingEligibility
+      ? normalizeResearchSchedulingEligibility(artifact.schedulingEligibility, sourceIdByArtifactId, sourceIds, Boolean(coordinates))
+      : undefined;
     places.push({
       id,
       name: artifact.name.trim(),
@@ -284,7 +310,7 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
       ...(artifact.area?.trim() ? { area: artifact.area.trim() } : {}),
       category: artifact.category.trim(),
       priority: artifact.priority ?? "preferred",
-      ...(artifact.coordinates ? { coordinates: artifact.coordinates } : {}),
+      ...(coordinates ? { coordinates } : {}),
       ...(artifact.display ? { display: normalizePlaceDisplay(artifact.display) } : {}),
       ...(artifact.guideDisplay ? { guideDisplay: normalizeGuideDisplay(artifact.guideDisplay, sourceIdByUrl, inputPlaceIdMap, importedPlaceIds, id) } : {}),
       ...(artifact.contentTier ? { contentTier: artifact.contentTier } : {}),
@@ -294,10 +320,11 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
       plan: artifact.plan.trim(),
       ...(artifact.tip?.trim() ? { tip: artifact.tip.trim() } : {}),
       ...(artifact.detailSections ? { detailSections: structuredClone(artifact.detailSections) } : {}),
+      ...(artifact.images?.length ? { images: normalizePlaceImages(artifact.images, sourceIdByUrl) } : {}),
       ...optionalHttpsLinks(artifact),
       evidence: evidenceForUrls(artifact.sourceUrls, sourceIdByUrl),
-      ...(artifact.fieldEvidence?.length ? { fieldEvidence: remapFieldEvidence(artifact.fieldEvidence, sourceIdByArtifactId) } : {}),
-      ...(artifact.schedulingEligibility ? { schedulingEligibility: normalizeResearchSchedulingEligibility(artifact.schedulingEligibility, sourceIdByArtifactId) } : {})
+      ...(artifact.fieldEvidence?.length ? { fieldEvidence: remapFieldEvidence(artifact.fieldEvidence, sourceIdByArtifactId, sourceIds) } : {}),
+      ...(schedulingEligibility ? { schedulingEligibility } : {})
     });
   }
   const placeIds = new Set(places.map((place) => place.id));
@@ -978,25 +1005,70 @@ function evidenceForUrls(urls: string[] | undefined, sourceIdByUrl: Map<string, 
   }).filter((value, index, all) => all.findIndex((candidate) => candidate.sourceId === value.sourceId) === index);
 }
 
-function remapFieldEvidence(items: BlueprintFieldEvidence[], sourceIdByArtifactId: Map<string, string>): BlueprintFieldEvidence[] {
-  return items.map((item) => ({
-    ...structuredClone(item),
-    status: item.status === "verified" && !evidenceIsFullyVerified(item.evidence) ? "recheck" : item.status,
-    evidence: item.evidence.map((ref) => ({
-      ...ref,
-      sourceId: sourceIdByArtifactId.get(ref.sourceId) ?? ref.sourceId
-    }))
-  }));
+function normalizePlaceImages(images: SkillResearchPlaceImageArtifact[], sourceIdByUrl: Map<string, string>): NonNullable<BlueprintPlace["images"]> {
+  return images.flatMap((image) => {
+    const url = safeNormalizedHttpsUrl(image.url);
+    const alt = image.alt?.trim();
+    const sourceId = validHttpsUrls([image.sourceUrl, ...(image.sourceUrls ?? [])])
+      .map((sourceUrl) => sourceIdByUrl.get(sourceUrl))
+      .find((id): id is string => Boolean(id));
+    if (!url || !alt || !sourceId) return [];
+    const usage: BlueprintPlaceImageUsage[] = (image.usage ?? [])
+      .filter((value): value is BlueprintPlaceImageUsage => value === "detail" || value === "card")
+      .filter(uniqueFilter);
+    const status: NonNullable<BlueprintPlace["images"]>[number]["status"] = image.status === "verified" || image.status === "stale" ? image.status : "recheck";
+    const normalized: NonNullable<BlueprintPlace["images"]>[number] = {
+      url,
+      alt,
+      sourceId,
+      status
+    };
+    if (image.caption?.trim()) normalized.caption = image.caption.trim();
+    if (usage.length) normalized.usage = usage;
+    return [normalized];
+  }).filter((image, index, all) => all.findIndex((candidate) => candidate.url === image.url && candidate.sourceId === image.sourceId) === index);
 }
 
-function normalizeResearchSchedulingEligibility(eligibility: BlueprintSchedulingEligibility, sourceIdByArtifactId: Map<string, string>): BlueprintSchedulingEligibility {
+function remapFieldEvidence(items: BlueprintFieldEvidence[], sourceIdByArtifactId: Map<string, string>, sourceIds: Set<string>): BlueprintFieldEvidence[] {
+  return items.map((item) => {
+    const evidence = remapEvidenceRefs(item.evidence, sourceIdByArtifactId, sourceIds);
+    return {
+      ...structuredClone(item),
+      status: item.status === "verified" && !evidenceIsFullyVerified(evidence) ? "recheck" : item.status,
+      evidence
+    };
+  });
+}
+
+function normalizePlaceCoordinates(value: unknown): [number, number] | undefined {
+  if (!Array.isArray(value) || value.length !== 2) return undefined;
+  const [first, second] = value;
+  if (typeof first !== "number" || typeof second !== "number") return undefined;
+  if (isLatitudeLongitudePair(first, second)) return [first, second];
+  if (isLatitudeLongitudePair(second, first)) return [second, first];
+  return undefined;
+}
+
+function isLatitudeLongitudePair(latitude: number, longitude: number): boolean {
+  return Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 && Number.isFinite(longitude) && longitude >= -180 && longitude <= 180;
+}
+
+function normalizeResearchSchedulingEligibility(eligibility: BlueprintSchedulingEligibility, sourceIdByArtifactId: Map<string, string>, sourceIds: Set<string>, hasMapReadyCoordinates: boolean): BlueprintSchedulingEligibility {
+  if (!hasMapReadyCoordinates && eligibility.decision === "schedulable") {
+    return {
+      decision: "informational",
+      reason: "This place lacks map-ready coordinates, so it remains useful written context until its location is verified.",
+      ...(eligibility.highImpactReasons?.length ? { highImpactReasons: uniqueStrings(eligibility.highImpactReasons.map((reason) => reason.trim()).filter(Boolean)) } : {}),
+      ...(eligibility.evidence?.length ? { evidence: remapEvidenceRefs(eligibility.evidence, sourceIdByArtifactId, sourceIds) } : {})
+    };
+  }
   return {
     decision: eligibility.decision,
     reason: eligibility.reason.trim(),
     ...(eligibility.suitableDayIds?.length ? { suitableDayIds: uniqueStrings(eligibility.suitableDayIds.map((id) => id.trim()).filter(Boolean)) } : {}),
     ...(eligibility.blockedDayIds?.length ? { blockedDayIds: uniqueStrings(eligibility.blockedDayIds.map((id) => id.trim()).filter(Boolean)) } : {}),
     ...(eligibility.highImpactReasons?.length ? { highImpactReasons: uniqueStrings(eligibility.highImpactReasons.map((reason) => reason.trim()).filter(Boolean)) } : {}),
-    ...(eligibility.evidence?.length ? { evidence: remapEvidenceRefs(eligibility.evidence, sourceIdByArtifactId) } : {})
+    ...(eligibility.evidence?.length ? { evidence: remapEvidenceRefs(eligibility.evidence, sourceIdByArtifactId, sourceIds) } : {})
   };
 }
 
@@ -1014,11 +1086,20 @@ function normalizeBlueprintSchedulingEligibility(eligibility: BlueprintSchedulin
   };
 }
 
-function remapEvidenceRefs(evidence: BlueprintEvidenceRef[], sourceIdByArtifactId: Map<string, string>): BlueprintEvidenceRef[] {
-  return evidence.map((ref) => ({
-    ...structuredClone(ref),
-    sourceId: sourceIdByArtifactId.get(ref.sourceId) ?? ref.sourceId
-  })).filter((ref, index, all) => all.findIndex((candidate) => candidate.sourceId === ref.sourceId && candidate.status === ref.status) === index);
+function remapEvidenceRefs(evidence: BlueprintEvidenceRef[], sourceIdByArtifactId: Map<string, string>, sourceIds: Set<string>): BlueprintEvidenceRef[] {
+  return evidence.flatMap((ref) => {
+    const sourceId = sourceIdByArtifactId.get(ref.sourceId) ?? ref.sourceId;
+    if (!sourceIds.has(sourceId)) return [];
+    return [{ ...structuredClone(ref), sourceId }];
+  }).filter((ref, index, all) => all.findIndex((candidate) => candidate.sourceId === ref.sourceId && candidate.status === ref.status) === index);
+}
+
+function registerSourceIdAliases(map: Map<string, string>, artifactId: string, batchId: string, finalSourceId: string): void {
+  const trimmed = artifactId.trim();
+  if (!trimmed) return;
+  const aliases = [trimmed, `${batchId}-${trimmed}`];
+  if (trimmed.startsWith(`${batchId}-`)) aliases.push(trimmed.slice(batchId.length + 1));
+  for (const alias of aliases) if (alias) map.set(alias, finalSourceId);
 }
 
 function evidenceIsFullyVerified(evidence: BlueprintEvidenceRef[]): boolean {
@@ -1118,6 +1199,22 @@ function normalizedHttpsUrl(value: string): string {
   if (url.protocol !== "https:") throw new Error(`Skill artifact URL must use HTTPS: ${value}`);
   url.hash = "";
   return url.toString();
+}
+
+function safeNormalizedHttpsUrl(value: string | undefined): string | undefined {
+  if (!value?.trim()) return undefined;
+  try {
+    return normalizedHttpsUrl(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function validHttpsUrls(values: Array<string | undefined>): string[] {
+  return values.flatMap((value) => {
+    const url = safeNormalizedHttpsUrl(value);
+    return url ? [url] : [];
+  }).filter(uniqueFilter);
 }
 
 function optionalHttpsLinks(input: Pick<SkillResearchPlaceArtifact, "officialUrl" | "bookingUrl" | "mapUrl" | "experienceUrl">): Pick<BlueprintPlace, "officialUrl" | "bookingUrl" | "mapUrl" | "experienceUrl"> {

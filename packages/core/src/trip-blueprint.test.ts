@@ -69,6 +69,32 @@ test("Research Set accepts evidence gaps and places without coordinates", () => 
   assert.deepEqual(researchSetIntegrityIssues(research()), []);
 });
 
+test("Trip Blueprint accepts sourced HTTPS place images", () => {
+  const value = blueprint();
+  value.sources = [{ id: "photo-source", title: "Official gallery", authority: "Example", url: "https://example.com/gallery", retrievedAt: "2026-08-26T00:00:00.000Z", status: "verified", official: true }];
+  value.places[0] = {
+    ...value.places[0]!,
+    images: [{ url: "https://example.com/a.jpg", alt: "A street-level view of place a.", sourceId: "photo-source", usage: ["detail"], status: "verified" }]
+  };
+
+  assert.deepEqual(tripBlueprintIntegrityIssues(value), []);
+});
+
+test("Trip Blueprint flags place images without safe URLs or known sources", () => {
+  const value = blueprint();
+  value.places[0] = {
+    ...value.places[0]!,
+    images: [{ url: "http://example.com/a.jpg", alt: "", sourceId: "missing-source", usage: ["detail", "poster" as "detail"], status: "verified" }]
+  };
+
+  assert.deepEqual(tripBlueprintIntegrityIssues(value), [
+    "place a image 1 has invalid image URL",
+    "place a image 1 needs alt text",
+    "place a image 1 references unknown source missing-source",
+    "place a image 1 has invalid usage poster"
+  ]);
+});
+
 test("Trip Blueprint accepts explicit rest days and unverified movement", () => {
   const value = blueprint();
   assert.deepEqual(tripBlueprintIntegrityIssues(value, { expectedResearchPlaceIds: research().places.map((item) => item.id) }), []);

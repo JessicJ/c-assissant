@@ -63,6 +63,35 @@ test("Blueprint presentation preserves explicit empty tips and preparation check
   assert.deepEqual(presentation.preparationChecklist, []);
 });
 
+test("Blueprint presentation preserves sourced place images for Web detail surfaces", () => {
+  const blueprint: TripBlueprint = {
+    schemaVersion: 1,
+    id: "blueprint-place-image",
+    version: 1,
+    generationKey: "generation-place-image",
+    proposalRef: { sessionId: "session-place-image", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+    researchSetId: "research-place-image",
+    title: "Bali",
+    summary: "Ubud route.",
+    language: "en",
+    destinations: ["Bali"],
+    startDate: "2026-10-12",
+    endDate: "2026-10-12",
+    sources: [{ id: "photo-source", title: "Official gallery", authority: "Museum", url: "https://example.com/gallery", retrievedAt: "2026-08-26", status: "verified" }],
+    places: [{ id: "museum", name: "Museum", locationLabel: "Ubud", city: "Bali", category: "museum", priority: "must", coordinates: [-8.5, 115.26], whyWorthIt: "Art", plan: "Visit", evidence: [], images: [{ url: "https://example.com/museum.jpg", alt: "Museum courtyard", sourceId: "photo-source", usage: ["detail"], status: "verified" }] }],
+    events: [],
+    days: [{ id: "day-1", date: "2026-10-12", kind: "scheduled", city: "Bali", title: "Day", summary: "Flow", stops: [{ placeId: "museum", order: 1 }], candidatePlaceIds: [] }],
+    movements: [],
+    actionRequirements: [],
+    createdAt: "2026-08-26T00:00:00.000Z"
+  };
+
+  const presentation = blueprintPresentation(blueprint);
+  assert.deepEqual(presentation.places[0]?.images, [{ url: "https://example.com/museum.jpg", alt: "Museum courtyard", sourceId: "photo-source", usage: ["detail"], status: "verified" }]);
+  assert.deepEqual(presentation.sourceCatalog?.[0]?.id, "photo-source");
+});
+
 test("Blueprint presentation keeps movement evidence for route read surfaces", () => {
   const blueprint: TripBlueprint = {
     schemaVersion: 1,

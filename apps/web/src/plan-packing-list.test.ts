@@ -50,11 +50,13 @@ describe("plan packing list", () => {
   });
 
   it("suggests seasonal, activity, and transfer items from itinerary context", () => {
-    const titles = planPackingItems(itineraryPlan()).map((item) => item.title);
+    const items = planPackingItems(itineraryPlan());
+    const titles = items.map((item) => item.title);
 
     assert.ok(titles.includes("Light jacket, cardigan, or thin overshirt"));
     assert.ok(titles.includes("Clean socks for shoes-off stops"));
     assert.ok(titles.includes("Luggage tag and compact lock"));
+    assert.ok(items.every((item) => !/Tokyo and Kyoto/i.test(item.detail)));
   });
 
   it("groups items in stable display order", () => {

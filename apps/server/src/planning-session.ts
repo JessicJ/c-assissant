@@ -96,7 +96,7 @@ export function applyPlanningTurn(session: PlanningSession, rawMessage: string, 
       ? acknowledged
         ? `Got it: ${acknowledged}\n\n${unresolved[0]!.question}`
         : `Got it. ${unresolved[0]!.question}`
-      : "All details required for the final plan are complete. Select “Create Complete Plan” and Landi will verify the information and build the workspace plan.";
+      : "Got it. I have enough to start building the plan.";
     next.messages = [...next.messages, messageFrom("assistant", reply, timestamp)];
     return { session: next, reply };
   }
@@ -159,7 +159,7 @@ export function applyAgentPlanningTurn(session: PlanningSession, rawMessage: str
     next.unresolved = [];
   }
   const reply = collectingGenerationDetails && !next.unresolved.length
-    ? "The details are complete. I am creating the final plan now."
+    ? "Got it. I have enough to start building the plan."
     : agentTurn.reply;
   next.messages = [...next.messages, messageFrom("assistant", reply, timestamp)];
   return { session: next, reply };

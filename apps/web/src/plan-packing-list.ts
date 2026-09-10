@@ -28,7 +28,7 @@ export function suggestedPackingItems(plan: Plan): PackingDisplayItem[] {
   const items: PackingDisplayItem[] = [
     { key: "suggested-passport-wallet", group: "Essentials", title: "Passport, payment cards, and a small cash wallet", detail: "Keep hotel check-in, rail, reservation, and small cash-only stop essentials in one reachable pouch." },
     { key: "suggested-phone-power", group: "Essentials", title: "Charged phone, cable, and power bank", detail: "This trip leans on maps, booking pages, translation, and live route checks throughout the day." },
-    { key: "suggested-walking-shoes-socks", group: "Daily Carry", title: "Broken-in walking shoes and spare socks", detail: "Tokyo and Kyoto days combine stations, neighborhoods, temples, museums, and cafe detours." },
+    { key: "suggested-walking-shoes-socks", group: "Daily Carry", title: "Broken-in walking shoes and spare socks", detail: "The route combines transfers, neighborhoods, cultural stops, meals, and outdoor walking." },
     { key: "suggested-day-bag", group: "Daily Carry", title: "Light day bag", detail: "Carry essentials while larger luggage is stored, forwarded, or left at the accommodation." }
   ];
   if (months.some((month) => month >= 9 && month <= 11)) items.push({ key: "suggested-light-layer", group: "Weather", title: "Light jacket, cardigan, or thin overshirt", detail: "October sightseeing can move from warm afternoons to cooler river, garden, and evening routes." });
@@ -36,7 +36,7 @@ export function suggestedPackingItems(plan: Plan): PackingDisplayItem[] {
   if (/bath|spa|onsen|sento|laqua|hot spring/.test(text)) items.push({ key: "suggested-bath-kit", group: "Activity", title: "Bath kit: small towel, fresh socks, and hair tie if needed", detail: "Spa and public-bath stops are easier when you can reset afterward without relying on rentals." });
   if (/temple|shrine|tatami|shoes off/.test(text)) items.push({ key: "suggested-temple-socks", group: "Activity", title: "Clean socks for shoes-off stops", detail: "Some temples, traditional spaces, and dining rooms may ask you to remove shoes." });
   if (/museum|gallery|restaurant|reservation|ticket|booking|official/.test(text)) items.push({ key: "suggested-reservation-copies", group: "Activity", title: "Offline reservation and ticket screenshots", detail: "Save timed-entry, restaurant, hotel, and transport details before each long day." });
-  if (cities.size > 1 || /shinkansen|rail|train|station|luggage|forward/.test(text)) items.push({ key: "suggested-luggage-kit", group: "Transfer", title: "Luggage tag and compact lock", detail: "Helpful if you use luggage forwarding, station storage, or a hotel luggage room between Tokyo and Kyoto." });
+  if (cities.size > 1 || /shinkansen|rail|train|station|luggage|forward/.test(text)) items.push({ key: "suggested-luggage-kit", group: "Transfer", title: "Luggage tag and compact lock", detail: "Helpful if you use luggage forwarding, station storage, or a hotel luggage room between trip areas." });
   return dedupePackingDisplayItems(items);
 }
 

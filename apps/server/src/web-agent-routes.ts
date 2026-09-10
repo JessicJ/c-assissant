@@ -206,7 +206,7 @@ export function registerWebAgentRoutes(server: FastifyInstance, dependencies: {
       const job = generation.enqueuePlanningSessionGeneration(prepared.session, workspace);
       backgroundQueued = true;
       return reply.code(202).send({
-        reply: "Your details are confirmed. Landi is generating the complete plan now.",
+        reply: "Got it. I have enough to start building the plan.",
         workspace: store.getWorkspace(),
         planningSession: store.getPlanningSessionById(prepared.session.id),
         planningStatus: "generating",

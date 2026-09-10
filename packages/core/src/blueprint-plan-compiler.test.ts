@@ -55,6 +55,7 @@ test("Blueprint Plan Compiler adds deterministic packing items from trip shape",
   assert.equal(packing.tasks.find((task) => task.requirementId === "packing:phone-power")?.status, "completed");
   assert.ok(packing.tasks.some((task) => /umbrella|rain shell/i.test(task.title)));
   assert.ok(packing.tasks.some((task) => /towel/i.test(task.title)));
+  assert.ok(packing.tasks.every((task) => !/Tokyo and Kyoto/i.test(task.description ?? "")));
 });
 
 test("Blueprint Plan Compiler carries booking constraints into Plan details", () => {

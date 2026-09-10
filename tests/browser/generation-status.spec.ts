@@ -39,7 +39,7 @@ test("background Plan generation reports its stage and returns to a retryable pr
     updatedAt: "2026-08-24T00:00:00.000Z"
   };
   const activePlan = {
-    id: "empty-plan", version: 1, title: "No current plan", location: "Not set", dates: "Not set", status: "draft",
+    id: "empty-plan", version: 1, title: "Attend an exhibition in Shanghai", location: "Not set", dates: "Not set", status: "draft",
     knownInformation: [], assumptions: [], nextAction: "Create a plan.", createdAt: "2026-08-24T00:00:00.000Z",
     configuration: { accommodation: { status: "not_set" }, arrival: {}, transport: { preference: "plan_recommended" }, travelContext: {} },
     stages: [], sources: []
@@ -75,6 +75,7 @@ test("background Plan generation reports its stage and returns to a retryable pr
 
   await page.goto("/");
   await page.getByRole("button", { name: "Generate plan" }).click();
+  await expect(page.locator(".chat-bubble.thinking")).toHaveCount(0);
   await expect(page.locator(".composer-status")).toContainText("Researching places by geographic area and saving each batch…");
   failGeneration = true;
   await page.evaluate(() => {

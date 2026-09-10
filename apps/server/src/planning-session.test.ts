@@ -108,7 +108,7 @@ test("proposal confirmation collects generation-critical facts while accommodati
   assert.equal(ready.session.unresolved.length, 0);
   assert.equal(ready.session.facts.find((fact) => fact.key === "accommodation")?.value, "住宿还没有预订");
   assert.equal(ready.session.facts.find((fact) => fact.key === "arrival_status"), undefined);
-  assert.match(ready.reply, /Create Complete Plan/i);
+  assert.equal(ready.reply, "Got it. I have enough to start building the plan.");
 });
 
 test("generation-detail chat remembers a short year and asks only for the remaining dates", () => {
