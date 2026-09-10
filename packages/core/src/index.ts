@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PlanCompilationOrigin } from "./plan-compiler.js";
 import type { DestinationArrivalEvent } from "./current-destination.js";
-import type { BlueprintActionRequirement, BlueprintBookingConstraint, BlueprintEvidenceRef, BlueprintExperienceTheme, BlueprintFieldEvidence, BlueprintGuideRelationshipGraph, BlueprintGuideTheme, BlueprintItineraryBlock, BlueprintLocalFood, BlueprintLocalProduct, BlueprintModuleIdentity, BlueprintMovementDisplayIntent, BlueprintPlaceDisplayIntent, BlueprintPlaceGuideDisplay, BlueprintPreparationChecklistItem, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelTip, TripBlueprint } from "./trip-blueprint.js";
+import type { BlueprintActionRequirement, BlueprintBookingConstraint, BlueprintEvidenceRef, BlueprintExperienceTheme, BlueprintFieldEvidence, BlueprintGuideRelationshipGraph, BlueprintGuideTheme, BlueprintItineraryBlock, BlueprintLocalFood, BlueprintLocalProduct, BlueprintModuleIdentity, BlueprintMovementDisplayIntent, BlueprintPlaceDisplayIntent, BlueprintPlaceGuideDisplay, BlueprintPlaceImage, BlueprintPreparationChecklistItem, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelTip, TripBlueprint } from "./trip-blueprint.js";
 
 export { recommendPlanTransport, type TransportMode, type TransportRecommendation, type TransportRouteFact } from "./transport.js";
 export { assessPolicyPreparation, type PolicyPreparationAssessment, type PolicyPreparationItem, type PolicyPreparationStatus } from "./policy-applicability.js";
@@ -43,6 +43,7 @@ export {
   type SkillResearchBatchArtifact,
   type SkillResearchEventArtifact,
   type SkillPlaceRelationshipArtifact,
+  type SkillResearchPlaceImageArtifact,
   type SkillTravelTipArtifact,
   type SkillResearchPlaceArtifact,
   type SkillResearchSourceArtifact
@@ -90,6 +91,8 @@ export {
   type BlueprintPlaceDisplayIntent,
   type BlueprintPlaceDisplayType,
   type BlueprintPlaceGuideDisplay,
+  type BlueprintPlaceImage,
+  type BlueprintPlaceImageUsage,
   type BlueprintPlacePriority,
   type BlueprintPlaceWorkspaceSignals,
   type BlueprintPreparationChecklistItem,
@@ -244,6 +247,7 @@ export interface PlanPlace {
   plan: string;
   tip?: string;
   detailSections: Array<{ title: string; body?: string; items?: string[] }>;
+  images?: BlueprintPlaceImage[];
   officialUrl?: string;
   bookingUrl?: string;
   /** Venue admission decision researched by Landi; the user only owns slot selection and payment. */
@@ -470,6 +474,7 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
         plan: place.plan,
         ...(place.tip ? { tip: place.tip } : {}),
         detailSections: place.detailSections ?? [],
+        ...(place.images?.length ? { images: structuredClone(place.images) } : {}),
         ...(place.officialUrl ? { officialUrl: place.officialUrl } : {}),
         ...(place.bookingUrl ? { bookingUrl: place.bookingUrl } : {}),
         ...(place.mapUrl ? { mapUrl: place.mapUrl } : {}),

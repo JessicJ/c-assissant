@@ -15,6 +15,7 @@ export type BlueprintWorkspaceDisplay = {
   dateLabel: string;
   initialDayId: string;
   initialPlaceId: string;
+  mapFallback: BlueprintMapViewportDisplay;
   areas: readonly BlueprintWorkspaceArea[];
   days: BlueprintDayTabDisplay[];
   places: BlueprintPlaceDisplay[];
@@ -25,6 +26,12 @@ export type BlueprintWorkspaceDisplay = {
   preparationGroups: PreparationGroupDisplay[];
   tipGroups: TipGroupDisplay[];
   sources: SourceMarkerDisplay[];
+};
+
+export type BlueprintMapViewportDisplay = {
+  center: [number, number];
+  zoom: number;
+  label: string;
 };
 
 export type BlueprintDayTabDisplay = {
@@ -144,6 +151,7 @@ export type GuideCardDisplay = {
   type: GuideFilter;
   state: GuideState;
   summary: string;
+  image?: GuideCardImageDisplay;
   tags: string[];
   footerNote?: string;
   actionLabel?: string;
@@ -152,6 +160,11 @@ export type GuideCardDisplay = {
   draftActionLabel?: string;
   priorityLabel: string;
   timeline?: { dayId: string; label: string; timeLabel: string };
+};
+
+export type GuideCardImageDisplay = {
+  url: string;
+  alt: string;
 };
 
 export type SourceMarkerDisplay = {
@@ -180,6 +193,13 @@ export type DetailSectionDisplay = {
   title: string;
   body?: string;
   items?: string[];
+};
+
+export type DetailImageDisplay = {
+  url: string;
+  alt: string;
+  caption?: string;
+  source: SourceMarkerDisplay;
 };
 
 export type DetailEventDisplay = {
@@ -221,6 +241,7 @@ export type DetailPlaceDisplay = {
   priorityBlockedNote?: string;
   leadTitle: string;
   leadBody: string;
+  image?: DetailImageDisplay;
   planTitle?: string;
   planBody?: string;
   reservationNote?: string;
@@ -433,6 +454,7 @@ export function buildBlueprintWorkspaceDisplay(plan: Plan, presentation: PlanPre
     dateLabel: blueprintDateLabel(plan, presentation),
     initialDayId: presentation.days[0]?.id ?? "",
     initialPlaceId: presentation.days[0]?.placeIds[0] ?? presentation.places[0]?.id ?? informationalTopics[0]?.id ?? "",
+    mapFallback: mapFallbackForPlan(plan, presentation),
     areas: workspaceAreasForPresentation(presentation),
     days: presentation.days.map(dayTabForDay),
     places: presentation.places.map((place) => placeDisplayForPlace(place, presentation.travelTips, requirementsForPlace(presentation, place.id), presentation.bookingConstraints)),
@@ -457,7 +479,7 @@ function placeDisplayForPlace(place: PlanPlace, travelTips: PlanPresentation["tr
     id: place.id,
     title: displayPlaceName(place),
     locationLabel: place.locationLabel,
-    ...(place.coordinates ? { coordinates: place.coordinates } : {}),
+    ...(validPlaceCoordinates(place.coordinates) ? { coordinates: place.coordinates } : {}),
     markerType: markerTypeForPlace(place),
     ...(place.city ? { city: place.city } : {}),
     ...(place.area ? { area: place.area } : {}),
@@ -514,7 +536,7 @@ function mapPointForPlace(place: PlanPlace | BlueprintPlaceDisplay): BlueprintMa
     id: place.id,
     placeId: place.id,
     title: "title" in place ? place.title : displayPlaceName(place),
-    ...(place.coordinates ? { coordinates: place.coordinates } : {})
+    ...(validPlaceCoordinates(place.coordinates) ? { coordinates: place.coordinates } : {})
   };
 }
 
@@ -697,17 +719,17 @@ function itineraryDisplayFromBlocks(day: BlueprintDayTabDisplay, blocks: Timelin
     day,
     items: blocks.map((block) => itineraryCardForBlock(block)),
     placementOptions: itineraryPlacementOptions(blocks),
-    routePlaces: blocks.flatMap((block) => block.place && block.routeAnchor ? [mapPointForPlace(block.place)] : []),
+    routePlaces: blocks.flatMap((block) => block.place && block.routeAnchor && validPlaceCoordinates(block.place.coordinates) ? [mapPointForPlace(block.place)] : []),
     routeSegments,
     ...(routeRefresh ? { routeRefresh } : {}),
     markers: blocks.flatMap((block) => {
       const place = block.place;
-      if (!place || !block.routeAnchor) return [];
+      if (!place || !block.routeAnchor || !validPlaceCoordinates(place.coordinates)) return [];
       return {
         placeId: place.id,
         title: displayPlaceName(place),
         type: markerTypeForPlace(place),
-        ...(place.coordinates ? { coordinates: place.coordinates } : {}),
+        coordinates: place.coordinates,
         markerState: "on-day" as const,
         priority: place.priority
       };
@@ -739,7 +761,7 @@ function itineraryDisplayWithPending(base: ItineraryDayDisplay, places: Blueprin
     const pendingPlace = places.find((place) => place.id === edit.placeId);
     if (!pendingPlace) continue;
     items = insertPendingCard(items, itineraryCardForPendingPlace(pendingPlace, edit), edit.positionId ?? "end");
-    if (pendingPlace.coordinates && !markers.some((marker) => marker.placeId === pendingPlace.id)) {
+    if (validPlaceCoordinates(pendingPlace.coordinates) && !markers.some((marker) => marker.placeId === pendingPlace.id)) {
       markers.push({
         placeId: pendingPlace.id,
         title: pendingPlace.title,
@@ -839,12 +861,14 @@ function guideCardsForPresentation(presentation: PlanPresentation, planSources: 
     .map((place) => {
       const state = guideStateForPlace(place, scheduledPlaceIds);
       const requirements = requirementsForPlace(presentation, place.id);
+      const image = guideCardImageForPlace(place);
       return {
         placeId: place.id,
         title: displayPlaceName(place),
         type: guideTypeForPlace(place),
         state,
         summary: shortGuideSummary(place),
+        ...(image ? { image } : {}),
         tags: guideTags(presentation, place, requirements),
         priorityLabel: placePriorityLabel(place.priority),
         ...guideCardAction(place, state, firstTimelineByPlace.get(place.id), requirements),
@@ -867,6 +891,12 @@ function guideCardsForPresentation(presentation: PlanPresentation, planSources: 
   ];
 }
 
+function guideCardImageForPlace(place: PlanPlace): GuideCardImageDisplay | undefined {
+  const image = (place.images ?? []).find((candidate) => candidate.usage?.includes("card")) ?? place.images?.[0];
+  if (!image) return undefined;
+  return { url: image.url, alt: image.alt };
+}
+
 function detailDisplayForPlace(presentation: PlanPresentation, planSources: SourceReference[], place: PlanPlace): DetailPlaceDisplay {
   const type = guideTypeForPlace(place);
   const scheduledDay = presentation.days.find((day) => day.placeIds.includes(place.id));
@@ -879,6 +909,7 @@ function detailDisplayForPlace(presentation: PlanPresentation, planSources: Sour
   const leadBody = travelerFacingDefaultText(place.whyWorthIt) || travelerFacingDefaultText(place.plan);
   const planBody = travelerFacingDefaultText(place.plan);
   const reservationNote = reservationRequirementNote(requirements) || travelerFacingDefaultText(place.reservation?.note);
+  const image = detailImageForPlace(place, presentation.sourceCatalog ?? []);
   return {
     placeId: place.id,
     title: displayPlaceName(place),
@@ -888,6 +919,7 @@ function detailDisplayForPlace(presentation: PlanPresentation, planSources: Sour
     ...(placePriorityBlockedNote(place, Boolean(scheduledDay)) ? { priorityBlockedNote: placePriorityBlockedNote(place, Boolean(scheduledDay))! } : {}),
     leadTitle: place.guideDisplay?.detailLeadTitle ?? detailLeadTitle(type),
     leadBody,
+    ...(image ? { image } : {}),
     ...(planBody ? { planTitle: place.guideDisplay?.detailPlanTitle ?? detailPlanTitle(type), planBody } : {}),
     ...(reservationNote ? { reservationNote } : {}),
     visitNotes: visitNotesForRequirements(requirements),
@@ -905,6 +937,25 @@ function detailDisplayForPlace(presentation: PlanPresentation, planSources: Sour
     ...(canRemoveFromDay ? { removeActionLabel: "Remove from day" } : {}),
     ...(removeBlockedReason ? { removeBlockedReason } : {}),
     links: detailLinks(place)
+  };
+}
+
+function detailImageForPlace(place: PlanPlace, sourceCatalog: BlueprintSource[]): DetailImageDisplay | undefined {
+  const image = (place.images ?? []).find((candidate) => candidate.usage?.includes("detail")) ?? place.images?.[0];
+  if (!image) return undefined;
+  const source = sourceCatalog.find((candidate) => candidate.id === image.sourceId);
+  if (!source) return undefined;
+  const status = evidenceStatusLabel(image.status ?? source.status);
+  return {
+    url: image.url,
+    alt: image.alt,
+    ...(image.caption?.trim() ? { caption: image.caption.trim() } : {}),
+    source: {
+      label: "Image source",
+      summary: [sourceReferenceSummary(source), status].filter(Boolean).join(" · "),
+      url: source.url,
+      contexts: [`Image for ${displayPlaceName(place)}`]
+    }
   };
 }
 
@@ -1664,6 +1715,58 @@ function blueprintDateLabel(plan: Pick<Plan, "dates">, presentation: Pick<PlanPr
   return presentation.startDate && presentation.endDate ? `${presentation.startDate} - ${presentation.endDate}` : plan.dates;
 }
 
+function mapFallbackForPlan(plan: Pick<Plan, "location" | "title" | "dates">, presentation: PlanPresentation): BlueprintMapViewportDisplay {
+  const destinationFallback = destinationMapFallback([
+    plan.location,
+    plan.title,
+    plan.dates,
+    presentation.summary,
+    ...(presentation.cities ?? []),
+    ...presentation.days.flatMap((day) => [day.city, day.title, day.summary]),
+    ...presentation.places.flatMap((place) => [place.city, place.area, place.locationLabel])
+  ]);
+  if (destinationFallback) return destinationFallback;
+  const coordinates = presentation.places.flatMap((place) => validPlaceCoordinates(place.coordinates) ? [place.coordinates] : []);
+  if (coordinates.length) {
+    return {
+      center: averageCoordinates(coordinates),
+      zoom: coordinates.length > 1 ? 10 : 13,
+      label: "Trip area"
+    };
+  }
+  return { center: [0, 0], zoom: 2, label: "Trip area" };
+}
+
+function destinationMapFallback(values: Array<string | undefined>): BlueprintMapViewportDisplay | undefined {
+  const text = normalizeDestinationText(values);
+  if (/\b(bali|ubud|denpasar|dps|south kuta|seminyak|tabanan|uluwatu)\b/.test(text)) return { center: [-8.4095, 115.1889], zoom: 10, label: "Bali" };
+  if (/\bkyoto\b/.test(text)) return { center: [35.0116, 135.7681], zoom: 11, label: "Kyoto" };
+  if (/\b(tokyo|haneda|narita)\b/.test(text)) return { center: [35.6812, 139.7671], zoom: 11, label: "Tokyo" };
+  if (/\blisbon\b/.test(text)) return { center: [38.7223, -9.1393], zoom: 12, label: "Lisbon" };
+  if (/\bparis\b/.test(text)) return { center: [48.8566, 2.3522], zoom: 12, label: "Paris" };
+  return undefined;
+}
+
+function normalizeDestinationText(values: Array<string | undefined>): string {
+  return values.filter(Boolean).join(" ").normalize("NFKD").replace(/[^\p{L}\p{N}]+/gu, " ").trim().toLocaleLowerCase();
+}
+
+function averageCoordinates(coordinates: Array<[number, number]>): [number, number] {
+  const totals = coordinates.reduce((sum, coordinate) => [sum[0] + coordinate[0], sum[1] + coordinate[1]] as [number, number], [0, 0]);
+  return [totals[0] / coordinates.length, totals[1] / coordinates.length];
+}
+
+function validPlaceCoordinates(value: PlanPlace["coordinates"] | BlueprintPlaceDisplay["coordinates"] | undefined): value is [number, number] {
+  return Array.isArray(value)
+    && value.length === 2
+    && Number.isFinite(value[0])
+    && Number.isFinite(value[1])
+    && value[0] >= -90
+    && value[0] <= 90
+    && value[1] >= -180
+    && value[1] <= 180;
+}
+
 export function guideFilterLabel(filter: GuideFilter): string {
   return filter === "all" ? "All" : filter === "attraction" ? "Attractions" : filter === "dining" ? "Dining" : filter === "shopping" ? "Shopping" : "Experiences";
 }
@@ -1802,7 +1905,9 @@ function guideCardAction(place: PlanPlace, state: GuideState, timeline: GuideCar
     };
   }
   if (state === "unscheduled") {
-    const label = travelerFacingLabel(place.guideDisplay?.addBlockedLabel ?? place.guideDisplay?.blockedActionLabel, requirementCardNote(requirements) || addBlockedLabel(place));
+    const label = validPlaceCoordinates(place.coordinates)
+      ? travelerFacingLabel(place.guideDisplay?.addBlockedLabel ?? place.guideDisplay?.blockedActionLabel, requirementCardNote(requirements) || addBlockedLabel(place))
+      : addBlockedLabel(place);
     return { canAdd: false, footerNote: label, addBlockedReason: label };
   }
   if (state === "scheduled") return { canAdd: false, ...(timeline ? { footerNote: `${timeline.label} ${timeline.timeLabel}` } : {}) };
@@ -1818,7 +1923,8 @@ function detailPrimaryActionLabel(place: PlanPlace, scheduled: boolean, canAdd: 
   return travelerFacingLabel(place.guideDisplay?.blockedActionLabel ?? place.guideDisplay?.addBlockedLabel, addBlockedLabel(place));
 }
 
-function directAddAllowed(place: Pick<PlanPlace, "schedulingEligibility">): boolean {
+function directAddAllowed(place: Pick<PlanPlace, "coordinates" | "schedulingEligibility">): boolean {
+  if (!validPlaceCoordinates(place.coordinates)) return false;
   const decision = place.schedulingEligibility?.decision;
   return decision === undefined || decision === "schedulable";
 }
@@ -1834,7 +1940,7 @@ function directRemoveAllowed(place: Pick<PlanPlace, "priority" | "schedulingElig
   return directMoveAllowed(place, requirements, bookingConstraints);
 }
 
-function directRemoveBlockedLabel(place: Pick<PlanPlace, "priority" | "schedulingEligibility" | "reservation" | "display" | "id" | "name" | "localizedName" | "locationLabel">, requirements: BlueprintActionRequirement[] = [], bookingConstraints: BlueprintBookingConstraint[] | undefined = []): string {
+function directRemoveBlockedLabel(place: Pick<PlanPlace, "priority" | "coordinates" | "schedulingEligibility" | "reservation" | "display" | "id" | "name" | "localizedName" | "locationLabel">, requirements: BlueprintActionRequirement[] = [], bookingConstraints: BlueprintBookingConstraint[] | undefined = []): string {
   const reservationSignal = place.display?.workspaceSignals?.reservation;
   if (place.priority === "booked" || Boolean(fixedBookingConstraintForPlace(bookingConstraints, place)) || reservationSignal === "required" || (!reservationSignal && (reservationRequirementForPlace(requirements) || place.reservation?.requirement === "required"))) return "Fixed booking";
   return addBlockedLabel(place);
@@ -1925,7 +2031,8 @@ function visitNotesForRequirements(requirements: BlueprintActionRequirement[]): 
   });
 }
 
-function addBlockedLabel(place: Pick<PlanPlace, "schedulingEligibility">): string {
+function addBlockedLabel(place: Pick<PlanPlace, "coordinates" | "schedulingEligibility">): string {
+  if (!validPlaceCoordinates(place.coordinates)) return "Location needs to be confirmed before adding.";
   const decision = place.schedulingEligibility?.decision;
   if (decision === "high_impact") return "Ask Landi to adjust";
   if (decision === "blocked") return "Not for this plan";

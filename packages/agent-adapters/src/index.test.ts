@@ -5,7 +5,7 @@ import test from "node:test";
 
 import { importSkillItinerary, importSkillResearchBatches } from "@c-assistant/core";
 import { LANDI_BLUEPRINT_SKILL, LEGACY_BLUEPRINT_SKILL } from "./landi-blueprint-policy.js";
-import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError, areLocationsCompatible, buildPlanDraftPrompt, buildPlanRepairPrompt, buildPlanResearchPrompt, buildSkillItineraryPrompt, buildSkillResearchBatchPrompt, codexStrictOutputSchema, parseClaudePrintResult, parsePlanDraft, parsePlanResearchBrief, parsePlanningConversationTurn, parseSkillItineraryArtifact, parseSkillResearchBatchArtifact, planDraftSchema, planResearchBriefToSkillBatch, planResearchSchema, skillItinerarySchema, skillResearchBatchSchema, type RuntimeProcess } from "./index.js";
+import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError, areLocationsCompatible, buildPlanDraftPrompt, buildPlanRepairPrompt, buildPlanResearchPrompt, buildSkillImageEnrichmentPrompt, buildSkillItineraryPrompt, buildSkillResearchBatchPrompt, codexStrictOutputSchema, parseClaudePrintResult, parsePlanDraft, parsePlanResearchBrief, parsePlanningConversationTurn, parseSkillImageEnrichmentArtifact, parseSkillItineraryArtifact, parseSkillResearchBatchArtifact, planDraftSchema, planResearchBriefToSkillBatch, planResearchSchema, skillImageEnrichmentSchema, skillItinerarySchema, skillResearchBatchSchema, type RuntimeProcess } from "./index.js";
 
 const validDraft = JSON.stringify({
   title: "Attend an exhibition in Shanghai",
@@ -257,6 +257,8 @@ test("Skill research batch prompt scopes work without quotas or Xiaohongshu impo
   assert.match(prompt, /Do not flatten rich place content/i);
   assert.match(prompt, /include display\.type as one of attraction, dining, shopping, or experience/i);
   assert.match(prompt, /display\.markerKind/i);
+  assert.match(prompt, /add images with url, alt, sourceUrl/i);
+  assert.match(prompt, /omit images when that cannot be guaranteed/i);
   assert.match(prompt, /Use guideDisplay for Web workspace-specific display intent/i);
   assert.match(prompt, /Use localFoods, localProducts, and experienceThemes/i);
   assert.match(prompt, /Include destination-relevant travelTips/i);
@@ -266,12 +268,87 @@ test("Skill research batch prompt scopes work without quotas or Xiaohongshu impo
   assert.ok(skillResearchBatchSchema.properties.places.items.required.includes("display"));
   assert.ok(skillResearchBatchSchema.properties.places.items.required.includes("schedulingEligibility"));
   assert.ok("guideDisplay" in skillResearchBatchSchema.properties.places.items.properties);
+  assert.ok("images" in skillResearchBatchSchema.properties.places.items.properties);
+  assert.deepEqual(skillResearchBatchSchema.properties.places.items.properties.images.items.required, ["url", "alt", "sourceUrl"]);
   assert.ok("evidence" in skillResearchBatchSchema.properties.places.items.properties.schedulingEligibility.properties);
   assert.ok(skillResearchBatchSchema.required.includes("localFoods"));
   assert.ok(skillResearchBatchSchema.required.includes("localProducts"));
   assert.ok(skillResearchBatchSchema.required.includes("experienceThemes"));
   assert.ok(skillResearchBatchSchema.required.includes("travelTips"));
   assert.ok(skillResearchBatchSchema.required.includes("relationships"));
+});
+
+test("Skill image enrichment prompt and parser require source-bound direct images", () => {
+  const batch = parseSkillResearchBatchArtifact(JSON.stringify({
+    id: "ignored", scopeLabel: "ignored", completedAt: "ignored",
+    sources: [],
+    places: [
+      { id: "palace", name: "Ubud Palace", locationLabel: "Ubud", city: "Ubud", area: "Central Ubud", category: "palace", priority: "must", coordinates: [-8.5069, 115.2625], display: { type: "attraction" }, schedulingEligibility: { decision: "schedulable", reason: "Central Ubud stop." }, contentTier: "deep", whyWorthIt: "A central Balinese architecture anchor.", plan: "Visit the palace courtyard.", sourceUrls: [] }
+    ],
+    events: [],
+    relationships: [],
+    localFoods: [],
+    localProducts: [],
+    experienceThemes: [],
+    travelTips: [],
+    actionRequirements: []
+  }), { id: "bali", scopeLabel: "Ubud" }, "2026-09-08T00:00:00.000Z");
+  const prompt = buildSkillImageEnrichmentPrompt({
+    request: "Plan Bali.",
+    batch: { id: "bali", scopeLabel: "Ubud" },
+    completedAt: "2026-09-08T00:00:00.000Z",
+    profile: { preferredLanguage: "English", nationality: "Canada", gender: "not_specified", immigrationStatus: "not_obtained" }
+  }, batch);
+  assert.match(prompt, /Find sourced place images/i);
+  assert.match(prompt, /Wikimedia Commons/i);
+  assert.match(prompt, /sourceUrl must be the HTTPS page/i);
+  assert.match(prompt, /Do not use Xiaohongshu/i);
+  assert.equal(skillImageEnrichmentSchema.required.includes("sources"), true);
+  assert.equal(skillImageEnrichmentSchema.properties.images.items.required.includes("placeId"), true);
+
+  const parsed = parseSkillImageEnrichmentArtifact(JSON.stringify({
+    sources: [{ id: "commons-palace", title: "Ubud Palace image", authority: "Wikimedia Commons", url: "https://commons.wikimedia.org/wiki/File:Ubud_Palace.jpg#metadata", retrievedAt: "2026-09-08", status: "verified", official: false }],
+    images: [
+      { placeId: "bali-palace", url: "https://upload.wikimedia.org/wikipedia/commons/1/11/Ubud_Palace.jpg", alt: "Courtyard at Ubud Palace", caption: "Ubud Palace courtyard", sourceUrl: "https://commons.wikimedia.org/wiki/File:Ubud_Palace.jpg", usage: ["detail"], status: "verified" },
+      { placeId: "bali-palace", url: "https://unsupported.example/palace.jpg", alt: "Unsupported palace", sourceUrl: "https://unsupported.example/palace", usage: ["detail"], status: "verified" },
+      { placeId: "unknown", url: "https://upload.wikimedia.org/wikipedia/commons/2/22/Unknown.jpg", alt: "Unknown", sourceUrl: "https://commons.wikimedia.org/wiki/File:Ubud_Palace.jpg", usage: ["detail"], status: "verified" }
+    ],
+    omitted: [{ placeId: "unknown", reason: "Unknown place." }]
+  }), new Set(["bali-palace"]));
+  assert.equal(parsed.images.length, 1);
+  assert.equal(parsed.images[0]?.sourceUrl, "https://commons.wikimedia.org/wiki/File:Ubud_Palace.jpg");
+  assert.deepEqual(parsed.omitted, []);
+});
+
+test("Skill research image enrichment fills missing images before import", async () => {
+  const prompts: string[] = [];
+  const adapter = new CodexRuntimeAdapter({ run: async (_command, args) => {
+    if (args.includes("--version")) return { code: 0, stdout: "codex test", stderr: "" };
+    if (args[0] === "login") return { code: 0, stdout: "logged in", stderr: "" };
+    prompts.push(args.at(-1)!);
+    const outputPath = args[args.indexOf("--output-last-message") + 1]!;
+    if (outputPath.endsWith("skill-image-enrichment.json")) {
+      await writeFile(outputPath, JSON.stringify({
+        sources: [{ id: "commons-palace", title: "Ubud Palace image", authority: "Wikimedia Commons", url: "https://commons.wikimedia.org/wiki/File:Ubud_Palace.jpg", retrievedAt: "2026-09-08", status: "verified", official: false }],
+        images: [{ placeId: "bali-palace", url: "https://upload.wikimedia.org/wikipedia/commons/1/11/Ubud_Palace.jpg", alt: "Courtyard at Ubud Palace", caption: "Ubud Palace courtyard", sourceUrl: "https://commons.wikimedia.org/wiki/File:Ubud_Palace.jpg", usage: ["detail"], status: "verified" }],
+        omitted: []
+      }));
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    await writeFile(outputPath, JSON.stringify({
+      id: "batch", scopeLabel: "Ubud", sources: [], events: [], relationships: [], localFoods: [], localProducts: [], experienceThemes: [], travelTips: [], actionRequirements: [],
+      places: [{ id: "palace", name: "Ubud Palace", locationLabel: "Ubud", city: "Ubud", area: "Central Ubud", category: "palace", priority: "must", coordinates: [-8.5069, 115.2625], display: { type: "attraction" }, schedulingEligibility: { decision: "schedulable", reason: "Central Ubud stop." }, contentTier: "deep", whyWorthIt: "A central Balinese architecture anchor.", plan: "Visit the palace courtyard.", sourceUrls: [] }]
+    }));
+    return { code: 0, stdout: "", stderr: "" };
+  } });
+  const input = { request: "Plan Bali.", batch: { id: "bali", scopeLabel: "Ubud" }, completedAt: "2026-09-08T00:00:00.000Z", profile: { preferredLanguage: "English", nationality: "Canada", gender: "not_specified" as const, immigrationStatus: "not_obtained" as const } };
+  const artifact = await adapter.generateSkillResearchBatch(input);
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1]!, /Find sourced place images/i);
+  assert.deepEqual(artifact.imageDiagnostics, { requestedPlaceCount: 1, acceptedImageCount: 1, omitted: [] });
+  assert.equal(artifact.places[0]?.images?.[0]?.url, "https://upload.wikimedia.org/wikipedia/commons/1/11/Ubud_Palace.jpg");
+  const research = importSkillResearchBatches([artifact], { researchSetId: "r", generationKey: "g", proposalRef: { sessionId: "s", proposalVersion: 1 }, skillLineage: LANDI_BLUEPRINT_SKILL, createdAt: "2026-09-08T00:00:00Z", updatedAt: "2026-09-08T00:00:00Z" });
+  assert.equal(research.places[0]?.images?.[0]?.sourceId, research.sources.find((source) => source.url === "https://commons.wikimedia.org/wiki/File:Ubud_Palace.jpg")?.id);
 });
 
 test("research invocations carry the selected policy and unsupported versions never invoke the runtime", async () => {
@@ -286,7 +363,7 @@ test("research invocations carry the selected policy and unsupported versions ne
       days: [{ id: "d1", date: "2026-10-12", kind: "rest", city: "Lisbon", title: "Rest", summary: "Keep arrival flexible", stops: [], candidatePlaceIds: [] }], movements: []
     } : {
       id: "batch", scopeLabel: "Lisbon", sources: [], events: [], actionRequirements: [],
-      places: [{ id: "museum", name: "Museum", locationLabel: "Lisbon", category: "museum", whyWorthIt: "Local ceramic collection", plan: "Explore the collection", sourceUrls: [] }]
+      places: [{ id: "museum", name: "Museum", locationLabel: "Lisbon", category: "museum", whyWorthIt: "Local ceramic collection", plan: "Explore the collection", sourceUrls: [], images: [{ url: "https://example.com/museum.jpg", alt: "Museum gallery", sourceUrl: "https://example.com/museum", usage: ["detail"], status: "recheck" }] }]
     }));
     return { code: 0, stdout: "", stderr: "" };
   } });
@@ -369,6 +446,60 @@ test("Skill research batch keeps rich place content and namespaces local identit
   assert.equal(parsed.travelTips?.[0]?.placeId, "lisbon-place-1");
   assert.equal(parsed.places[0]?.detailSections?.[0]?.items?.length, 2);
   assert.equal(skillResearchBatchSchema.properties.places.maxItems, 240);
+});
+
+test("Skill research batch keeps already-scoped evidence source ids valid", () => {
+  const parsed = parseSkillResearchBatchArtifact(JSON.stringify({
+    id: "ignored",
+    scopeLabel: "ignored",
+    completedAt: "ignored",
+    sources: [{ id: "scope-1-src-tirta-empul", title: "Tirta Empul official guide", authority: "Official tourism", url: "https://example.com/tirta-empul", retrievedAt: "2026-09-09", status: "verified", official: true }],
+    places: [{
+      id: "scope-1-pl-tirta-empul",
+      name: "Tirta Empul",
+      locationLabel: "Tampaksiring, Bali",
+      city: "Bali",
+      area: "Tampaksiring",
+      category: "temple",
+      priority: "must",
+      coordinates: [-8.4156, 115.3156],
+      display: { type: "attraction", markerKind: "attraction" },
+      schedulingEligibility: { decision: "schedulable", reason: "Fits the cultural landscape day.", evidence: [{ sourceId: "scope-1-src-tirta-empul", status: "verified", supports: ["official overview"] }] },
+      fieldEvidence: [{ path: "whyWorthIt", status: "verified", evidence: [{ sourceId: "scope-1-src-tirta-empul", status: "verified", supports: ["official overview"] }] }],
+      contentTier: "deep",
+      visitRole: "water temple anchor",
+      durationMinutes: 90,
+      whyWorthIt: "A water temple that anchors the cultural landscape day.",
+      plan: "Visit respectfully before the rice terrace stop.",
+      detailSections: [{ title: "At the temple", body: "Use this as a cultural anchor.", items: ["Follow posted etiquette"] }],
+      sourceUrls: ["https://example.com/tirta-empul"]
+    }],
+    events: [],
+    relationships: [],
+    localFoods: [],
+    localProducts: [],
+    experienceThemes: [],
+    travelTips: [],
+    actionRequirements: []
+  }), { id: "scope-1", scopeLabel: "Bali" }, "2026-09-09T00:00:00.000Z");
+
+  const research = importSkillResearchBatches([parsed], {
+    researchSetId: "research-bali",
+    generationKey: "generation-bali",
+    proposalRef: { sessionId: "session-bali", proposalVersion: 1 },
+    skillLineage: LANDI_BLUEPRINT_SKILL,
+    createdAt: "2026-09-09T00:00:00.000Z",
+    updatedAt: "2026-09-09T00:00:00.000Z"
+  });
+
+  assert.equal(parsed.sources[0]?.id, "scope-1-src-tirta-empul");
+  assert.equal(parsed.places[0]?.id, "scope-1-pl-tirta-empul");
+  assert.equal(parsed.places[0]?.fieldEvidence?.[0]?.evidence[0]?.sourceId, "scope-1-src-tirta-empul");
+  const importedSourceIds = new Set(research.sources.map((source) => source.id));
+  const fieldSourceId = research.places[0]?.fieldEvidence?.[0]?.evidence[0]?.sourceId;
+  const schedulingSourceId = research.places[0]?.schedulingEligibility?.evidence?.[0]?.sourceId;
+  assert.ok(fieldSourceId && importedSourceIds.has(fieldSourceId));
+  assert.ok(schedulingSourceId && importedSourceIds.has(schedulingSourceId));
 });
 
 test("Skill research batch output imports into a complete Trip Blueprint slice", () => {

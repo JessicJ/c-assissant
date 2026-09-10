@@ -16,6 +16,7 @@ import {
   mergePendingItineraryEdit,
   pendingItineraryDraftSummary,
   scheduledDayIdForPlace,
+  type BlueprintMapViewportDisplay,
   type BlueprintMapMarkerDisplay,
   type BlueprintMapPointDisplay,
   type BlueprintRouteSegmentDisplay,
@@ -303,6 +304,9 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
     selectDayTab(dayId);
   }
 
+  const movableItineraryItemCount = itinerary.items.filter((item) => item.kind === "block" && item.routeAnchor && item.reorderable && item.placeId).length;
+  const canReorderSelectedDay = movableItineraryItemCount > 1;
+
   return <section className="blueprint-workspace" aria-label="Landi Blueprint workspace">
     <header className="blueprint-topbar">
       <div>
@@ -322,19 +326,21 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
           </button>)}</div>
         </div>
         <div className="blueprint-timeline-list" ref={timelineListRef}>
-          {itinerary.items.map((item) => item.kind === "pending"
-            ? <PendingItineraryCard item={item} selected={selectedPlaceId === item.placeId} onSelect={() => selectPlace(item.placeId)} onUndoDraft={() => undoPendingEdit(item.placeId)} key={item.key} />
-            : <Fragment key={item.key}>
-              {item.reorderable ? <ItineraryDropZone dropId={`before-${item.key}`} active={dragOverDropId === `before-${item.key}`} /> : null}
-              <ItineraryBlockCard item={item} dragging={Boolean(item.placeId) && draggedPlaceId === item.placeId} selected={Boolean(item.placeId) && selectedPlaceId === item.placeId} onSelect={() => item.placeId ? selectPlace(item.placeId) : undefined} onUndoDraft={() => undoPendingEdit(item.placeId)} onDragStart={(event) => startItineraryCardDrag(event, item)} onDragMove={moveItineraryCardDrag} onDragEnd={endItineraryCardDrag} onDragCancel={cancelItineraryCardDrag} />
+          {itinerary.items.map((item) => {
+            if (item.kind === "pending") return <PendingItineraryCard item={item} selected={selectedPlaceId === item.placeId} onSelect={() => selectPlace(item.placeId)} onUndoDraft={() => undoPendingEdit(item.placeId)} key={item.key} />;
+            const displayItem = canReorderSelectedDay ? item : { ...item, reorderable: false };
+            return <Fragment key={item.key}>
+              {displayItem.reorderable ? <ItineraryDropZone dropId={`before-${displayItem.key}`} active={dragOverDropId === `before-${displayItem.key}`} /> : null}
+              <ItineraryBlockCard item={displayItem} dragging={Boolean(displayItem.placeId) && draggedPlaceId === displayItem.placeId} selected={Boolean(displayItem.placeId) && selectedPlaceId === displayItem.placeId} onSelect={() => displayItem.placeId ? selectPlace(displayItem.placeId) : undefined} onUndoDraft={() => undoPendingEdit(displayItem.placeId)} onDragStart={(event) => startItineraryCardDrag(event, displayItem)} onDragMove={moveItineraryCardDrag} onDragEnd={endItineraryCardDrag} onDragCancel={cancelItineraryCardDrag} />
               {item.routeAfterLabel || (routeRefreshBusy && item.routeAfterStatusLabel) ? <ItineraryRouteReadout label={routeReadoutLabel(item, routeRefreshBusy)} state={routeReadoutState(item, routeRefreshBusy)} /> : null}
-            </Fragment>)}
-          {itinerary.items.some((item) => item.reorderable) ? <ItineraryDropZone dropId="end" active={dragOverDropId === "end"} /> : null}
+            </Fragment>;
+          })}
+          {canReorderSelectedDay ? <ItineraryDropZone dropId="end" active={dragOverDropId === "end"} /> : null}
           {!itinerary.items.length ? <p className="blueprint-empty-note">No itinerary blocks are available for this day.</p> : null}
         </div>
       </aside>
 
-      <BlueprintMap routePlaces={itinerary.routePlaces} routeSegments={itinerary.routeSegments} routeRefresh={itinerary.routeRefresh} markers={itinerary.markers} selectedPlaceId={selectedPlaceId} onSelectPlace={selectMapPlace} routeRefreshBusy={routeRefreshBusy} />
+      <BlueprintMap routePlaces={itinerary.routePlaces} routeSegments={itinerary.routeSegments} routeRefresh={itinerary.routeRefresh} markers={itinerary.markers} fallbackViewport={workspace.mapFallback} selectedPlaceId={selectedPlaceId} onSelectPlace={selectMapPlace} routeRefreshBusy={routeRefreshBusy} />
 
       <aside className="blueprint-side-panel" aria-label="Itinerary side panel">
         <div className="blueprint-panel-body">
@@ -431,12 +437,13 @@ function ItineraryRouteReadout({ label, state }: { label: string; state: "confir
 function ItineraryBlockCard({ item, selected, dragging, onSelect, onUndoDraft, onDragStart, onDragMove, onDragEnd, onDragCancel }: { item: ItineraryCardDisplay; selected: boolean; dragging: boolean; onSelect: () => void; onUndoDraft: () => void; onDragStart: (event: PointerEvent<HTMLElement>) => void; onDragMove: (event: PointerEvent<HTMLElement>) => void; onDragEnd: (event: PointerEvent<HTMLElement>) => void; onDragCancel: (event: PointerEvent<HTMLElement>) => void }) {
   const className = [
     "blueprint-itinerary-block",
+    item.reorderable ? "reorderable" : "static",
     selected ? "selected" : "",
     dragging ? "dragging" : "",
     item.editState === "moved" ? "moved" : ""
   ].filter(Boolean).join(" ");
   return <article className={className}>
-    <button type="button" className="blueprint-itinerary-drag-handle" aria-label={`Move ${item.title}`} disabled={!item.reorderable} onPointerDown={onDragStart} onPointerMove={onDragMove} onPointerUp={onDragEnd} onPointerCancel={onDragCancel}>↕</button>
+    {item.reorderable ? <button type="button" className="blueprint-itinerary-drag-handle" aria-label={`Move ${item.title}`} onPointerDown={onDragStart} onPointerMove={onDragMove} onPointerUp={onDragEnd} onPointerCancel={onDragCancel}>↕</button> : null}
     <button type="button" className="blueprint-itinerary-card-main" onClick={onSelect}>
       <span>{item.timeLabel}</span>
       <div>
@@ -465,7 +472,7 @@ function PendingItineraryCard({ item, selected, onSelect, onUndoDraft }: { item:
   </article>;
 }
 
-function BlueprintMap(props: { routePlaces: BlueprintMapPointDisplay[]; routeSegments: BlueprintRouteSegmentDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; routeRefreshBusy?: boolean }) {
+function BlueprintMap(props: { routePlaces: BlueprintMapPointDisplay[]; routeSegments: BlueprintRouteSegmentDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; fallbackViewport: BlueprintMapViewportDisplay; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; routeRefreshBusy?: boolean }) {
   const [googleUnavailable, setGoogleUnavailable] = useState(false);
   const handleGoogleUnavailable = useCallback(() => setGoogleUnavailable(true), []);
   const apiKey = __LANDI_GOOGLE_MAPS_API_KEY__;
@@ -473,7 +480,7 @@ function BlueprintMap(props: { routePlaces: BlueprintMapPointDisplay[]; routeSeg
   return <LeafletBlueprintMap {...props} />;
 }
 
-function GoogleBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers, selectedPlaceId, onSelectPlace, routeRefreshBusy, apiKey, onUnavailable }: { routePlaces: BlueprintMapPointDisplay[]; routeSegments: BlueprintRouteSegmentDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; routeRefreshBusy?: boolean; apiKey: string; onUnavailable: () => void }) {
+function GoogleBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers, fallbackViewport, selectedPlaceId, onSelectPlace, routeRefreshBusy, apiKey, onUnavailable }: { routePlaces: BlueprintMapPointDisplay[]; routeSegments: BlueprintRouteSegmentDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; fallbackViewport: BlueprintMapViewportDisplay; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; routeRefreshBusy?: boolean; apiKey: string; onUnavailable: () => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<GoogleMapInstance | null>(null);
   const mapsRef = useRef<GoogleMapsNamespace | null>(null);
@@ -485,11 +492,14 @@ function GoogleBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers,
   const fallbackLineState = fallbackRouteLineState(routeSegments, routeRefresh);
   const routeLatLngs = routePlaces.filter((place) => validCoordinates(place.coordinates)).map((place) => googleLatLngForCoordinates(place.coordinates!));
   const fitLatLngs = routeLatLngs.length ? routeLatLngs : points.map((marker) => googleLatLngForCoordinates(marker.coordinates!));
+  const fallbackLatLng = googleLatLngForCoordinates(fallbackViewport.center);
+  const hasFitTargets = fitLatLngs.length > 0;
   const fitKey = [
     routePlaces.filter((place) => validCoordinates(place.coordinates)).map((place) => `route:${place.placeId}:${place.coordinates!.join(",")}`).join("|"),
     routeLines.map((line) => `line:${line.id}:${line.mapLineState}`).join("|"),
     `fallback:${fallbackLineState ?? ""}`,
-    points.map((marker) => `marker:${marker.placeId}:${marker.coordinates!.join(",")}:${marker.markerState}:${marker.type}`).join("|")
+    points.map((marker) => `marker:${marker.placeId}:${marker.coordinates!.join(",")}:${marker.markerState}:${marker.type}`).join("|"),
+    `viewport:${fallbackViewport.center.join(",")}:${fallbackViewport.zoom}`
   ].join("::");
 
   useEffect(() => {
@@ -502,13 +512,13 @@ function GoogleBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers,
       if (cancelled || !hostRef.current) return;
       window.clearTimeout(fallbackTimer);
       const map = new maps.Map(hostRef.current, {
-        center: fitLatLngs[0] ?? { lat: 35.6812, lng: 139.7671 },
+        center: fitLatLngs[0] ?? fallbackLatLng,
         clickableIcons: false,
         disableDefaultUI: true,
         gestureHandling: "greedy",
         mapTypeId: "roadmap",
         styles: LANDI_GOOGLE_MAP_STYLES,
-        zoom: 12,
+        zoom: fitLatLngs[0] ? 12 : fallbackViewport.zoom,
         zoomControl: true
       });
       mapsRef.current = maps;
@@ -562,7 +572,7 @@ function GoogleBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers,
     layersRef.current = nextLayers;
 
     const selectedMarker = points.find((marker) => marker.placeId === selectedPlaceId);
-    if (fitKey && fitKey !== lastFitKeyRef.current) {
+    if (hasFitTargets && fitKey !== lastFitKeyRef.current) {
       if (fitLatLngs.length === 1) {
         map.setCenter(fitLatLngs[0]!);
         map.setZoom(12);
@@ -579,19 +589,19 @@ function GoogleBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers,
       const currentZoom = map.getZoom();
       map.panTo(googleLatLngForCoordinates(selectedMarker.coordinates!));
       map.setZoom(typeof currentZoom === "number" ? Math.max(currentZoom, 12) : 12);
-    } else if (!fitKey) {
-      map.setCenter({ lat: 35.6812, lng: 139.7671 });
-      map.setZoom(11);
+    } else if (!hasFitTargets) {
+      map.setCenter(fallbackLatLng);
+      map.setZoom(fallbackViewport.zoom);
     }
     lastFitKeyRef.current = fitKey;
-  }, [fallbackLineState, fitKey, fitLatLngs, mapReady, onSelectPlace, points, routeLatLngs, routeLines, routeRefreshBusy, selectedPlaceId]);
+  }, [fallbackLatLng, fallbackLineState, fallbackViewport.zoom, fitKey, fitLatLngs, hasFitTargets, mapReady, onSelectPlace, points, routeLatLngs, routeLines, routeRefreshBusy, selectedPlaceId]);
 
   return <section className="blueprint-map" aria-label="Itinerary map context">
     <div className="blueprint-map-stage blueprint-google-map" ref={hostRef} />
   </section>;
 }
 
-function LeafletBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers, selectedPlaceId, onSelectPlace, routeRefreshBusy }: { routePlaces: BlueprintMapPointDisplay[]; routeSegments: BlueprintRouteSegmentDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; routeRefreshBusy?: boolean }) {
+function LeafletBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers, fallbackViewport, selectedPlaceId, onSelectPlace, routeRefreshBusy }: { routePlaces: BlueprintMapPointDisplay[]; routeSegments: BlueprintRouteSegmentDisplay[]; routeRefresh?: ItineraryRouteRefreshDisplay | undefined; markers: BlueprintMapMarkerDisplay[]; fallbackViewport: BlueprintMapViewportDisplay; selectedPlaceId: string; onSelectPlace: (placeId: string) => void; routeRefreshBusy?: boolean }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layersRef = useRef<L.LayerGroup | null>(null);
@@ -601,11 +611,14 @@ function LeafletBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers
   const fallbackLineState = fallbackRouteLineState(routeSegments, routeRefresh);
   const routeLatLngs = routePlaces.filter((place) => validCoordinates(place.coordinates)).map((place) => latLngForCoordinates(place.coordinates!));
   const fitLatLngs = routeLatLngs.length ? routeLatLngs : points.map((marker) => latLngForCoordinates(marker.coordinates!));
+  const fallbackLatLng = latLngForCoordinates(fallbackViewport.center);
+  const hasFitTargets = fitLatLngs.length > 0;
   const fitKey = [
     routePlaces.filter((place) => validCoordinates(place.coordinates)).map((place) => `route:${place.placeId}:${place.coordinates!.join(",")}`).join("|"),
     routeLines.map((line) => `line:${line.id}:${line.mapLineState}`).join("|"),
     `fallback:${fallbackLineState ?? ""}`,
-    points.map((marker) => `marker:${marker.placeId}:${marker.coordinates!.join(",")}:${marker.markerState}:${marker.type}`).join("|")
+    points.map((marker) => `marker:${marker.placeId}:${marker.coordinates!.join(",")}:${marker.markerState}:${marker.type}`).join("|"),
+    `viewport:${fallbackViewport.center.join(",")}:${fallbackViewport.zoom}`
   ].join("::");
 
   useEffect(() => {
@@ -667,7 +680,7 @@ function LeafletBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers
     }
 
     const selectedMarker = points.find((marker) => marker.placeId === selectedPlaceId);
-    if (fitKey && fitKey !== lastFitKeyRef.current) {
+    if (hasFitTargets && fitKey !== lastFitKeyRef.current) {
       if (fitLatLngs.length === 1) {
         map.setView(fitLatLngs[0]!, 13, { animate: false });
       } else if (fitLatLngs.length > 1) {
@@ -676,11 +689,11 @@ function LeafletBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers
     } else if (selectedMarker) {
       const currentZoom = map.getZoom();
       map.setView(latLngForCoordinates(selectedMarker.coordinates!), Number.isFinite(currentZoom) ? Math.max(currentZoom, 13) : 13, { animate: true });
-    } else if (!fitKey) {
-      map.setView([35.6812, 139.7671], 11);
+    } else if (!hasFitTargets) {
+      map.setView(fallbackLatLng, fallbackViewport.zoom);
     }
     lastFitKeyRef.current = fitKey;
-  }, [fallbackLineState, fitKey, fitLatLngs, onSelectPlace, points, routeLatLngs, routeLines, routeRefreshBusy, selectedPlaceId]);
+  }, [fallbackLatLng, fallbackLineState, fallbackViewport.zoom, fitKey, fitLatLngs, hasFitTargets, onSelectPlace, points, routeLatLngs, routeLines, routeRefreshBusy, selectedPlaceId]);
 
   return <section className="blueprint-map" aria-label="Itinerary map context">
     <div className="blueprint-map-stage" ref={hostRef} />
@@ -697,6 +710,7 @@ function ExplorePanel({ filters, cards, filter, hidden, onFilter, onSelect, onAd
         <button type="button" className="blueprint-guide-card-main" onClick={() => onSelect(card.placeId)}>
           <header><div><strong>{card.title}</strong></div><span className="blueprint-priority-pill">{card.priorityLabel}</span></header>
           <p>{card.summary}</p>
+          {card.image ? <img className="blueprint-guide-card-image" src={card.image.url} alt={card.image.alt} loading="lazy" referrerPolicy="no-referrer" /> : null}
           {card.tags.length ? <div className="blueprint-guide-tags">{card.tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
         </button>
         {(card.footerNote || card.canAdd || card.draftActionLabel) ? <footer>{card.footerNote ? <span>{card.footerNote}</span> : <span />}{card.canAdd && card.actionLabel ? <button type="button" onClick={() => onAdd(card.placeId)}>{card.actionLabel}</button> : null}{card.draftActionLabel ? <button type="button" className="secondary" onClick={() => onUndoDraft(card.placeId)}>{card.draftActionLabel}</button> : null}</footer> : null}
@@ -713,6 +727,15 @@ function DetailPanel({ detail, hidden, onBack, onSelect, onAdd, onRemove, onUndo
       <div><h3>{detail.title}</h3></div>
     </header>
     {detail.itineraryDraftNote ? <p className="blueprint-detail-draft-note">{detail.itineraryDraftNote}</p> : null}
+    {detail.image ? <figure className="blueprint-detail-image">
+      <img src={detail.image.url} alt={detail.image.alt} loading="lazy" referrerPolicy="no-referrer" />
+      <figcaption>
+        {detail.image.caption ? <span>{detail.image.caption}</span> : null}
+        {detail.image.source.url
+          ? <a className="blueprint-detail-image-source" href={detail.image.source.url} target="_blank" rel="noreferrer" aria-label={`Image source: ${detail.image.source.summary}`}><span>Source</span><small role="tooltip">{detail.image.source.summary}</small></a>
+          : <span className="blueprint-detail-image-source" tabIndex={0} aria-label={`Image source: ${detail.image.source.summary}`}><span>Source</span><small role="tooltip">{detail.image.source.summary}</small></span>}
+      </figcaption>
+    </figure> : null}
     <section><h4>{detail.leadTitle}</h4><p>{detail.leadBody}</p></section>
     {detail.planTitle && detail.planBody ? <section><h4>{detail.planTitle}</h4><p>{detail.planBody}</p></section> : null}
     {detail.reservationNote ? <section><h4>Reservation</h4><p>{detail.reservationNote}</p></section> : null}
@@ -798,7 +821,14 @@ function areaLabel(area: BlueprintWorkspaceArea): string {
 }
 
 function validCoordinates(value: BlueprintMapPointDisplay["coordinates"]): value is [number, number] {
-  return Array.isArray(value) && value.length === 2 && value.every(Number.isFinite);
+  return Array.isArray(value)
+    && value.length === 2
+    && Number.isFinite(value[0])
+    && Number.isFinite(value[1])
+    && value[0] >= -90
+    && value[0] <= 90
+    && value[1] >= -180
+    && value[1] <= 180;
 }
 
 function latLngForCoordinates(coordinates: [number, number]): L.LatLngExpression {

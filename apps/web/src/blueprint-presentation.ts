@@ -100,6 +100,7 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
         ...(place.guideDisplay ? { guideDisplay: structuredClone(place.guideDisplay) } : {}),
         ...(place.schedulingEligibility ? { schedulingEligibility: structuredClone(place.schedulingEligibility) } : {}),
         ...(place.fieldEvidence ? { fieldEvidence: structuredClone(place.fieldEvidence) } : {}),
+        ...(place.images?.length ? { images: structuredClone(place.images) } : {}),
         ...(place.contentTier ? { contentTier: place.contentTier } : {}),
         ...(place.visitRole ? { visitRole: place.visitRole } : {}),
         ...(place.durationMinutes ? { durationMinutes: place.durationMinutes } : {}),

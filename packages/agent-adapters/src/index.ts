@@ -11,6 +11,7 @@ export type RuntimeKind = "codex" | "claude-code";
 const CODEX_PLAN_TOTAL_TIMEOUT_MS = 70 * 60_000;
 const RUNTIME_CHECK_TIMEOUT_MS = 30_000;
 const CODEX_RESEARCH_TIMEOUT_MS = 18 * 60_000;
+const CODEX_IMAGE_ENRICHMENT_TIMEOUT_MS = 8 * 60_000;
 const CODEX_DRAFT_TIMEOUT_MS = 30 * 60_000;
 const CODEX_REPAIR_TIMEOUT_MS = 20 * 60_000;
 
@@ -63,6 +64,12 @@ export interface SkillResearchBatchRequest extends CodexPlanRequest {
 
 export interface SkillItineraryRequest extends CodexPlanRequest {
   research: ResearchSet;
+}
+
+interface SkillImageEnrichmentArtifact {
+  sources: SkillResearchBatchArtifact["sources"];
+  images: Array<NonNullable<SkillResearchBatchArtifact["places"][number]["images"]>[number] & { placeId: string; sourceUrl: string }>;
+  omitted: Array<{ placeId: string; reason: string }>;
 }
 
 export interface RuntimeProcessResult {
@@ -181,9 +188,33 @@ export class CodexRuntimeAdapter {
       if (command.aborted) throw new RuntimeAdapterError("cancelled", "Blueprint research was cancelled. Saved batches remain available.");
       if (command.timedOut) throw new RuntimeAdapterError("timed_out", `Research for ${input.batch.scopeLabel} timed out. Earlier saved batches remain available.`);
       if (command.code !== 0) throw codexRuntimeFailure(command);
-      return parseSkillResearchBatchArtifact(await readCodexStructuredOutput(outputPath, command, "research"), input.batch, input.completedAt ?? new Date().toISOString());
+      const artifact = parseSkillResearchBatchArtifact(await readCodexStructuredOutput(outputPath, command, "research"), input.batch, input.completedAt ?? new Date().toISOString());
+      return await this.enrichSkillResearchBatchImages(input, artifact, runDirectory);
     } finally {
       await rm(runDirectory, { recursive: true, force: true });
+    }
+  }
+
+  private async enrichSkillResearchBatchImages(input: SkillResearchBatchRequest, artifact: SkillResearchBatchArtifact, runDirectory: string): Promise<SkillResearchBatchArtifact> {
+    const missing = placesNeedingImageEnrichment(artifact);
+    if (!missing.length) return artifact;
+    const schemaPath = join(runDirectory, "skill-image-enrichment.schema.json");
+    const outputPath = join(runDirectory, "skill-image-enrichment.json");
+    try {
+      await writeFile(schemaPath, JSON.stringify(codexStrictOutputSchema(skillImageEnrichmentSchema)), "utf8");
+      const command = await this.run("codex", ["--search", "exec", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "--output-schema", schemaPath, "--output-last-message", outputPath, buildSkillImageEnrichmentPrompt(input, artifact)], {
+        cwd: runDirectory,
+        env: scrubbedEnvironment(this.environment),
+        timeoutMs: CODEX_IMAGE_ENRICHMENT_TIMEOUT_MS,
+        ...(input.signal ? { signal: input.signal } : {})
+      });
+      if (command.aborted) throw new RuntimeAdapterError("cancelled", "Blueprint research was cancelled. Saved batches remain available.");
+      if (command.timedOut || command.code !== 0) return artifact;
+      const enrichment = parseSkillImageEnrichmentArtifact(await readCodexStructuredOutput(outputPath, command, "research"), new Set(artifact.places.map((place) => place.id).filter(isString)));
+      return mergeSkillResearchBatchImages(artifact, enrichment, missing.length);
+    } catch (error) {
+      if (error instanceof RuntimeAdapterError && error.code === "cancelled") throw error;
+      return artifact;
     }
   }
 
@@ -589,9 +620,19 @@ export function parseSkillResearchBatchArtifact(value: string, batch: { id: stri
     throw new RuntimeAdapterError("invalid_output", "The Skill research stage did not match the rich Research Batch contract.");
   }
   const rawPlaces = parsed.places as SkillResearchBatchArtifact["places"];
-  const placeIdMap = new Map(rawPlaces.flatMap((place) => place.id ? [[place.id, `${batch.id}-${place.id}`] as const] : []));
+  const placeIdMap = new Map<string, string>();
+  for (const place of rawPlaces) {
+    if (!place.id) continue;
+    const namespaced = namespacedBatchId(batch.id, place.id);
+    for (const alias of batchIdAliases(batch.id, place.id)) placeIdMap.set(alias, namespaced);
+  }
   const rawSources = parsed.sources as SkillResearchBatchArtifact["sources"];
-  const sourceIdMap = new Map(rawSources.flatMap((source) => source.id ? [[source.id, `${batch.id}-${source.id}`] as const] : []));
+  const sourceIdMap = new Map<string, string>();
+  for (const source of rawSources) {
+    if (!source.id) continue;
+    const namespaced = namespacedBatchId(batch.id, source.id);
+    for (const alias of batchIdAliases(batch.id, source.id)) sourceIdMap.set(alias, namespaced);
+  }
   const remapFieldEvidence = (items: NonNullable<SkillResearchBatchArtifact["places"][number]["fieldEvidence"]> | undefined) => items?.map((item) => ({
     ...item,
     evidence: item.evidence.map((ref) => ({ ...ref, sourceId: sourceIdMap.get(ref.sourceId) ?? ref.sourceId }))
@@ -611,15 +652,76 @@ export function parseSkillResearchBatchArtifact(value: string, batch: { id: stri
     id: batch.id,
     scopeLabel: batch.scopeLabel,
     completedAt,
-    sources: rawSources.map((source) => ({ ...source, ...(source.id ? { id: `${batch.id}-${source.id}` } : {}) })),
-    places: rawPlaces.map((place) => ({ ...place, ...(place.id ? { id: placeIdMap.get(place.id)! } : {}), ...(place.guideDisplay ? { guideDisplay: remapGuideDisplay(place.guideDisplay)! } : {}), ...(place.schedulingEligibility ? { schedulingEligibility: remapSchedulingEligibility(place.schedulingEligibility)! } : {}), ...(place.fieldEvidence?.length ? { fieldEvidence: remapFieldEvidence(place.fieldEvidence)! } : {}) })),
-    events: (parsed.events as SkillResearchBatchArtifact["events"]).map((event) => ({ ...event, ...(event.id ? { id: `${batch.id}-${event.id}` } : {}), ...(event.placeId ? { placeId: placeIdMap.get(event.placeId) ?? event.placeId } : {}) })),
-    relationships: parsedRelationships.map((relationship) => ({ ...relationship, ...(relationship.id ? { id: `${batch.id}-${relationship.id}` } : {}), fromPlaceId: placeIdMap.get(relationship.fromPlaceId) ?? relationship.fromPlaceId, toPlaceId: placeIdMap.get(relationship.toPlaceId) ?? relationship.toPlaceId })),
-    ...(parsedLocalFoods.length ? { localFoods: parsedLocalFoods.map((item) => ({ ...item, ...(item.id ? { id: `${batch.id}-${item.id}` } : {}), diningPlaceIds: item.diningPlaceIds.map((placeId) => placeIdMap.get(placeId) ?? placeId) })) } : {}),
-    ...(parsedLocalProducts.length ? { localProducts: parsedLocalProducts.map((item) => ({ ...item, ...(item.id ? { id: `${batch.id}-${item.id}` } : {}), purchasePlaceIds: item.purchasePlaceIds.map((placeId) => placeIdMap.get(placeId) ?? placeId) })) } : {}),
-    ...(parsedExperienceThemes.length ? { experienceThemes: parsedExperienceThemes.map((item) => ({ ...item, ...(item.id ? { id: `${batch.id}-${item.id}` } : {}), offeringPlaceIds: item.offeringPlaceIds.map((placeId) => placeIdMap.get(placeId) ?? placeId) })) } : {}),
-    ...(parsedTravelTips.length ? { travelTips: parsedTravelTips.map((tip) => ({ ...tip, ...(tip.id ? { id: `${batch.id}-${tip.id}` } : {}), ...(tip.placeId ? { placeId: placeIdMap.get(tip.placeId) ?? tip.placeId } : {}) })) } : {}),
-    actionRequirements: (parsed.actionRequirements as NonNullable<SkillResearchBatchArtifact["actionRequirements"]>).map((requirement) => ({ ...requirement, ...(requirement.id ? { id: `${batch.id}-${requirement.id}` } : {}), ...(requirement.placeId ? { placeId: placeIdMap.get(requirement.placeId) ?? requirement.placeId } : {}) }))
+    sources: rawSources.map((source) => ({ ...source, ...(source.id ? { id: namespacedBatchId(batch.id, source.id) } : {}) })),
+    places: rawPlaces.map((place) => ({ ...place, ...(place.id ? { id: placeIdMap.get(place.id) ?? namespacedBatchId(batch.id, place.id) } : {}), ...(place.guideDisplay ? { guideDisplay: remapGuideDisplay(place.guideDisplay)! } : {}), ...(place.schedulingEligibility ? { schedulingEligibility: remapSchedulingEligibility(place.schedulingEligibility)! } : {}), ...(place.fieldEvidence?.length ? { fieldEvidence: remapFieldEvidence(place.fieldEvidence)! } : {}) })),
+    events: (parsed.events as SkillResearchBatchArtifact["events"]).map((event) => ({ ...event, ...(event.id ? { id: namespacedBatchId(batch.id, event.id) } : {}), ...(event.placeId ? { placeId: placeIdMap.get(event.placeId) ?? event.placeId } : {}) })),
+    relationships: parsedRelationships.map((relationship) => ({ ...relationship, ...(relationship.id ? { id: namespacedBatchId(batch.id, relationship.id) } : {}), fromPlaceId: placeIdMap.get(relationship.fromPlaceId) ?? relationship.fromPlaceId, toPlaceId: placeIdMap.get(relationship.toPlaceId) ?? relationship.toPlaceId })),
+    ...(parsedLocalFoods.length ? { localFoods: parsedLocalFoods.map((item) => ({ ...item, ...(item.id ? { id: namespacedBatchId(batch.id, item.id) } : {}), diningPlaceIds: item.diningPlaceIds.map((placeId) => placeIdMap.get(placeId) ?? placeId) })) } : {}),
+    ...(parsedLocalProducts.length ? { localProducts: parsedLocalProducts.map((item) => ({ ...item, ...(item.id ? { id: namespacedBatchId(batch.id, item.id) } : {}), purchasePlaceIds: item.purchasePlaceIds.map((placeId) => placeIdMap.get(placeId) ?? placeId) })) } : {}),
+    ...(parsedExperienceThemes.length ? { experienceThemes: parsedExperienceThemes.map((item) => ({ ...item, ...(item.id ? { id: namespacedBatchId(batch.id, item.id) } : {}), offeringPlaceIds: item.offeringPlaceIds.map((placeId) => placeIdMap.get(placeId) ?? placeId) })) } : {}),
+    ...(parsedTravelTips.length ? { travelTips: parsedTravelTips.map((tip) => ({ ...tip, ...(tip.id ? { id: namespacedBatchId(batch.id, tip.id) } : {}), ...(tip.placeId ? { placeId: placeIdMap.get(tip.placeId) ?? tip.placeId } : {}) })) } : {}),
+    actionRequirements: (parsed.actionRequirements as NonNullable<SkillResearchBatchArtifact["actionRequirements"]>).map((requirement) => ({ ...requirement, ...(requirement.id ? { id: namespacedBatchId(batch.id, requirement.id) } : {}), ...(requirement.placeId ? { placeId: placeIdMap.get(requirement.placeId) ?? requirement.placeId } : {}) }))
+  };
+}
+
+function namespacedBatchId(batchId: string, id: string): string {
+  const trimmed = id.trim();
+  return trimmed.startsWith(`${batchId}-`) ? trimmed : `${batchId}-${trimmed}`;
+}
+
+function batchIdAliases(batchId: string, id: string): string[] {
+  const trimmed = id.trim();
+  const aliases = [trimmed, namespacedBatchId(batchId, trimmed)];
+  if (trimmed.startsWith(`${batchId}-`)) aliases.push(trimmed.slice(batchId.length + 1));
+  return aliases.filter((alias, index, all) => alias && all.indexOf(alias) === index);
+}
+
+export function parseSkillImageEnrichmentArtifact(value: string, knownPlaceIds: Set<string>): SkillImageEnrichmentArtifact {
+  let parsed: unknown;
+  try { parsed = normalizePlanDraftNulls(JSON.parse(value)); } catch { throw new RuntimeAdapterError("invalid_output", "The image enrichment stage returned unreadable JSON."); }
+  if (!isRecord(parsed) || !Array.isArray(parsed.sources) || !parsed.sources.every(isResearchSource) || !Array.isArray(parsed.images) || !parsed.images.every(isSkillImageEnrichmentImage) || !Array.isArray(parsed.omitted) || !parsed.omitted.every(isSkillImageOmission)) {
+    throw new RuntimeAdapterError("invalid_output", "The image enrichment stage did not match the image contract.");
+  }
+  const sources = parsed.sources as SkillResearchBatchArtifact["sources"];
+  const sourceUrls = new Set(sources.map((source) => normalizeEvidenceUrl(source.url)));
+  const images = (parsed.images as SkillImageEnrichmentArtifact["images"])
+    .filter((image) => knownPlaceIds.has(image.placeId))
+    .filter((image) => sourceUrls.has(normalizeEvidenceUrl(image.sourceUrl)) || (image.sourceUrls ?? []).some((sourceUrl) => sourceUrls.has(normalizeEvidenceUrl(sourceUrl))))
+    .filter((image, index, all) => all.findIndex((candidate) => candidate.placeId === image.placeId && normalizeEvidenceUrl(candidate.url) === normalizeEvidenceUrl(image.url)) === index);
+  return {
+    sources,
+    images,
+    omitted: (parsed.omitted as SkillImageEnrichmentArtifact["omitted"]).filter((item) => knownPlaceIds.has(item.placeId))
+  };
+}
+
+function mergeSkillResearchBatchImages(artifact: SkillResearchBatchArtifact, enrichment: SkillImageEnrichmentArtifact, requestedPlaceCount: number): SkillResearchBatchArtifact {
+  const imageDiagnostics = {
+    requestedPlaceCount,
+    acceptedImageCount: enrichment.images.length,
+    omitted: enrichment.omitted
+  };
+  if (!enrichment.images.length) return { ...artifact, imageDiagnostics };
+  const sourceByUrl = new Map<string, SkillResearchBatchArtifact["sources"][number]>();
+  for (const source of [...artifact.sources, ...enrichment.sources]) sourceByUrl.set(normalizeEvidenceUrl(source.url), source);
+  const imagesByPlaceId = new Map<string, SkillImageEnrichmentArtifact["images"]>();
+  for (const image of enrichment.images) {
+    const next = imagesByPlaceId.get(image.placeId) ?? [];
+    next.push(image);
+    imagesByPlaceId.set(image.placeId, next);
+  }
+  return {
+    ...artifact,
+    imageDiagnostics,
+    sources: [...sourceByUrl.values()],
+    places: artifact.places.map((place) => {
+      const incoming = imagesByPlaceId.get(place.id ?? "");
+      if (!incoming?.length) return place;
+      const mergedImages = [...(place.images ?? []), ...incoming.map(({ placeId: _placeId, ...image }) => image)]
+        .filter((image, index, all) => all.findIndex((candidate) => normalizeEvidenceUrl(candidate.url) === normalizeEvidenceUrl(image.url)) === index)
+        .slice(0, 4);
+      return { ...place, images: mergedImages };
+    })
   };
 }
 
@@ -683,8 +785,28 @@ function isSkillResearchPlace(value: unknown): boolean {
     && (value.guideDisplay === undefined || isSkillGuideDisplay(value.guideDisplay))
     && (value.schedulingEligibility === undefined || isSchedulingEligibility(value.schedulingEligibility))
     && (value.fieldEvidence === undefined || (Array.isArray(value.fieldEvidence) && value.fieldEvidence.every(isFieldEvidence)))
+    && (value.images === undefined || (Array.isArray(value.images) && value.images.every(isSkillPlaceImage)))
     && (value.sourceUrls === undefined || (Array.isArray(value.sourceUrls) && value.sourceUrls.every((url) => isString(url) && url.startsWith("https://"))))
     && (value.detailSections === undefined || (Array.isArray(value.detailSections) && value.detailSections.every((section) => isRecord(section) && isString(section.title))));
+}
+
+function isSkillPlaceImage(value: unknown): value is NonNullable<SkillResearchBatchArtifact["places"][number]["images"]>[number] {
+  return isRecord(value)
+    && isString(value.url) && value.url.startsWith("https://")
+    && isString(value.alt)
+    && isString(value.sourceUrl) && value.sourceUrl.startsWith("https://")
+    && (value.caption === undefined || isString(value.caption))
+    && (value.sourceUrls === undefined || (Array.isArray(value.sourceUrls) && value.sourceUrls.every((url) => isString(url) && url.startsWith("https://"))))
+    && (value.usage === undefined || (Array.isArray(value.usage) && value.usage.every((usage) => usage === "detail" || usage === "card")))
+    && (value.status === undefined || value.status === "verified" || value.status === "recheck" || value.status === "stale");
+}
+
+function isSkillImageEnrichmentImage(value: unknown): value is SkillImageEnrichmentArtifact["images"][number] {
+  return isRecord(value) && isString(value.placeId) && isSkillPlaceImage(value);
+}
+
+function isSkillImageOmission(value: unknown): value is SkillImageEnrichmentArtifact["omitted"][number] {
+  return isRecord(value) && isString(value.placeId) && isString(value.reason);
 }
 
 function isSkillGuideDisplay(value: unknown): value is NonNullable<SkillResearchBatchArtifact["places"][number]["guideDisplay"]> {
@@ -1239,6 +1361,79 @@ const skillSchedulingEligibilitySchema = {
   }
 } as const;
 
+const skillPlaceImageSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["url", "alt", "sourceUrl"],
+  properties: {
+    url: { type: "string", pattern: "^https://" },
+    alt: { type: "string", minLength: 1, maxLength: 240 },
+    caption: { type: "string", maxLength: 240 },
+    sourceUrl: { type: "string", pattern: "^https://" },
+    sourceUrls: { type: "array", maxItems: 4, items: { type: "string", pattern: "^https://" } },
+    usage: { type: "array", maxItems: 2, items: { type: "string", enum: ["detail", "card"] } },
+    status: { type: "string", enum: ["verified", "recheck", "stale"] }
+  }
+} as const;
+
+export const skillImageEnrichmentSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["sources", "images", "omitted"],
+  properties: {
+    sources: {
+      type: "array",
+      maxItems: 96,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title", "authority", "url", "retrievedAt"],
+        properties: {
+          id: { type: "string", maxLength: 100 },
+          title: { type: "string", minLength: 1, maxLength: 240 },
+          authority: { type: "string", minLength: 1, maxLength: 200 },
+          url: { type: "string", pattern: "^https://" },
+          retrievedAt: { type: "string", minLength: 1, maxLength: 40 },
+          status: { type: "string", enum: ["verified", "recheck", "stale"] },
+          official: { type: "boolean" }
+        }
+      }
+    },
+    images: {
+      type: "array",
+      maxItems: 96,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["placeId", "url", "alt", "sourceUrl"],
+        properties: {
+          placeId: { type: "string", minLength: 1, maxLength: 100 },
+          url: { type: "string", pattern: "^https://" },
+          alt: { type: "string", minLength: 1, maxLength: 240 },
+          caption: { type: "string", maxLength: 240 },
+          sourceUrl: { type: "string", pattern: "^https://" },
+          sourceUrls: { type: "array", maxItems: 4, items: { type: "string", pattern: "^https://" } },
+          usage: { type: "array", maxItems: 2, items: { type: "string", enum: ["detail", "card"] } },
+          status: { type: "string", enum: ["verified", "recheck", "stale"] }
+        }
+      }
+    },
+    omitted: {
+      type: "array",
+      maxItems: 96,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["placeId", "reason"],
+        properties: {
+          placeId: { type: "string", minLength: 1, maxLength: 100 },
+          reason: { type: "string", minLength: 1, maxLength: 240 }
+        }
+      }
+    }
+  }
+} as const;
+
 export const skillResearchBatchSchema = {
   type: "object",
   additionalProperties: false,
@@ -1251,7 +1446,7 @@ export const skillResearchBatchSchema = {
       id: { type: "string", maxLength: 100 }, title: { type: "string", minLength: 1, maxLength: 240 }, authority: { type: "string", minLength: 1, maxLength: 200 }, url: { type: "string", pattern: "^https://" }, retrievedAt: { type: "string", minLength: 1, maxLength: 40 }, status: { type: "string", enum: ["verified", "recheck", "stale"] }, official: { type: "boolean" }
     } } },
     places: { type: "array", maxItems: 240, items: { type: "object", additionalProperties: false, required: ["name", "locationLabel", "category", "display", "schedulingEligibility", "whyWorthIt", "plan"], properties: {
-      id: { type: "string", maxLength: 100 }, externalIdentity: { type: "string", maxLength: 200 }, name: { type: "string", minLength: 1, maxLength: 200 }, localizedName: { type: "string", maxLength: 200 }, locationLabel: { type: "string", minLength: 1, maxLength: 240 }, city: { type: "string", maxLength: 160 }, area: { type: "string", maxLength: 160 }, category: { type: "string", minLength: 1, maxLength: 100 }, priority: { type: "string", enum: ["must", "preferred", "nearby", "archive", "pending", "recheck", "booked"] }, coordinates: { anyOf: [{ type: "array", minItems: 2, maxItems: 2, items: { type: "number" } }, { type: "null" }] }, display: { type: "object", additionalProperties: false, required: ["type"], properties: { type: { type: "string", enum: ["attraction", "dining", "shopping", "experience"] }, markerKind: { type: "string", enum: ["attraction", "dining", "shopping", "experience"] } } }, guideDisplay: skillGuideDisplaySchema, schedulingEligibility: skillSchedulingEligibilitySchema, contentTier: { type: "string", enum: ["deep", "standard", "compact"] }, visitRole: { type: "string", maxLength: 160 }, durationMinutes: { type: "integer", minimum: 1, maximum: 10080 }, whyWorthIt: { type: "string", minLength: 1, maxLength: 1200 }, plan: { type: "string", minLength: 1, maxLength: 1200 }, tip: { type: "string", maxLength: 800 }, detailSections: { type: "array", maxItems: 8, items: { type: "object", additionalProperties: false, required: ["title", "body", "items"], properties: { title: { type: "string", minLength: 1, maxLength: 120 }, body: { type: "string", maxLength: 1200 }, items: { type: "array", maxItems: 8, items: { type: "string", maxLength: 500 } } } } }, fieldEvidence: { type: "array", maxItems: 24, items: { type: "object", additionalProperties: false, required: ["path", "status", "evidence"], properties: { path: { type: "string", minLength: 1, maxLength: 160 }, status: { type: "string", enum: ["verified", "recheck", "stale"] }, evidence: { type: "array", maxItems: 12, items: skillEvidenceRefSchema } } } }, officialUrl: { type: "string", pattern: "^https://" }, bookingUrl: { type: "string", pattern: "^https://" }, mapUrl: { type: "string", pattern: "^https://" }, experienceUrl: { type: "string", pattern: "^https://" }, sourceUrls: { type: "array", maxItems: 12, items: { type: "string", pattern: "^https://" } }
+      id: { type: "string", maxLength: 100 }, externalIdentity: { type: "string", maxLength: 200 }, name: { type: "string", minLength: 1, maxLength: 200 }, localizedName: { type: "string", maxLength: 200 }, locationLabel: { type: "string", minLength: 1, maxLength: 240 }, city: { type: "string", maxLength: 160 }, area: { type: "string", maxLength: 160 }, category: { type: "string", minLength: 1, maxLength: 100 }, priority: { type: "string", enum: ["must", "preferred", "nearby", "archive", "pending", "recheck", "booked"] }, coordinates: { anyOf: [{ type: "array", minItems: 2, maxItems: 2, items: { type: "number" } }, { type: "null" }] }, display: { type: "object", additionalProperties: false, required: ["type"], properties: { type: { type: "string", enum: ["attraction", "dining", "shopping", "experience"] }, markerKind: { type: "string", enum: ["attraction", "dining", "shopping", "experience"] } } }, guideDisplay: skillGuideDisplaySchema, schedulingEligibility: skillSchedulingEligibilitySchema, contentTier: { type: "string", enum: ["deep", "standard", "compact"] }, visitRole: { type: "string", maxLength: 160 }, durationMinutes: { type: "integer", minimum: 1, maximum: 10080 }, whyWorthIt: { type: "string", minLength: 1, maxLength: 1200 }, plan: { type: "string", minLength: 1, maxLength: 1200 }, tip: { type: "string", maxLength: 800 }, detailSections: { type: "array", maxItems: 8, items: { type: "object", additionalProperties: false, required: ["title", "body", "items"], properties: { title: { type: "string", minLength: 1, maxLength: 120 }, body: { type: "string", maxLength: 1200 }, items: { type: "array", maxItems: 8, items: { type: "string", maxLength: 500 } } } } }, images: { type: "array", maxItems: 4, items: skillPlaceImageSchema }, fieldEvidence: { type: "array", maxItems: 24, items: { type: "object", additionalProperties: false, required: ["path", "status", "evidence"], properties: { path: { type: "string", minLength: 1, maxLength: 160 }, status: { type: "string", enum: ["verified", "recheck", "stale"] }, evidence: { type: "array", maxItems: 12, items: skillEvidenceRefSchema } } } }, officialUrl: { type: "string", pattern: "^https://" }, bookingUrl: { type: "string", pattern: "^https://" }, mapUrl: { type: "string", pattern: "^https://" }, experienceUrl: { type: "string", pattern: "^https://" }, sourceUrls: { type: "array", maxItems: 12, items: { type: "string", pattern: "^https://" } }
     } } },
     events: { type: "array", maxItems: 120, items: { type: "object", additionalProperties: false, required: ["title", "description"], properties: {
       id: { type: "string", maxLength: 100 }, title: { type: "string", minLength: 1, maxLength: 240 }, startDate: { type: "string", maxLength: 40 }, endDate: { type: "string", maxLength: 40 }, locationLabel: { type: "string", maxLength: 240 }, placeId: { type: "string", maxLength: 100 }, description: { type: "string", minLength: 1, maxLength: 1200 }, sourceUrls: { type: "array", maxItems: 12, items: { type: "string", pattern: "^https://" } }
@@ -1548,6 +1743,7 @@ ${legacy ? "- Follow the Skill's source-verification and applicable Regional Sou
 - Keep nearby Discovery Areas as candidates; do not silently promote them into primary destinations.
 - Preserve place-specific whyWorthIt, actionable plan, contentTier, visitRole, tip, and type-appropriate detailSections. Do not flatten rich place content into a generic summary.
 - For every place, include display.type as one of attraction, dining, shopping, or experience. Use attraction for sights, museums, gardens, viewpoints, neighborhoods, and landmarks; dining for restaurants, cafes, bars, bakeries, and markets when the primary use is eating; shopping for shopping streets, craft stores, boutiques, bookstores, department stores, and markets when the primary use is browsing or buying; experience for tours, workshops, classes, ceremonies, spas, shows, festivals, cruises, rides, and other activity bookings. Set display.markerKind to the same value unless the map icon should intentionally emphasize a different branch.
+- If a place has a suitable sourced image, add images with url, alt, sourceUrl, optional caption, and usage detail or card. The sourceUrl must exactly match a URL also returned in this batch's sources after removing fragments; omit images when that cannot be guaranteed.
 - Use guideDisplay for Web workspace-specific display intent: showInGuide when a place should be hidden or shown despite category, cardSummary for the short guide card copy, tags for concise factual chips, detailLeadTitle/detailPlanTitle when the detail sections need type-specific headings, and comparisonRows for factual peer comparison rows. Do not put long guide prose, source excerpts, internal terms, or unverified claims into guideDisplay.
 - For every place, include schedulingEligibility.decision and reason. Use schedulable for ordinary map-ready places, informational for useful context that should not be directly inserted into a day, blocked for places that cannot fit the confirmed trip, and high_impact when adding it would require city/date/hard-constraint replanning. Add schedulingEligibility.evidence when source facts support the decision, preserving verified/recheck/stale exactly from the cited source.
 - Add relationships that help the Web workspace compare and modify the plan: same_area, same_direction, alternative, supports_anchor, meal_support, rainy_day_alternative, low_energy_alternative, event_link, or similar. Use stable local place ids, not names.
@@ -1556,6 +1752,67 @@ ${legacy ? "- Follow the Skill's source-verification and applicable Regional Sou
 - Include destination-relevant travelTips for short traveler-facing cautions such as payment, transit, etiquette, safety, weather, timing, language, or local norms. Do not include generic encouragement or inspiration.
 - Include reservations, travel authorization, transport preparation, and time-sensitive rechecks only as structured actionRequirements with a clear accountable party and completion condition; traveler-owned requirements will become the Preparation checklist.
 - Return only this batch's sources, rich places, events, relationships, localFoods, localProducts, experienceThemes, travelTips, and actionRequirements in the supplied JSON contract. Do not create itinerary days, Plan Stages, Tasks, or Reminders.`;
+}
+
+export function buildSkillImageEnrichmentPrompt(input: SkillResearchBatchRequest, artifact: SkillResearchBatchArtifact): string {
+  const places = placesNeedingImageEnrichment(artifact);
+  return `${LANDI_BLUEPRINT_GENERATION_RULES}
+
+Find sourced place images for the confirmed Landi Trip Blueprint research batch. Return only JSON matching the supplied image enrichment schema.
+
+Confirmed request: ${input.request.trim()}
+Profile context: ${JSON.stringify(input.profile)}
+Batch id: ${artifact.id}
+Geographic scope: ${artifact.scopeLabel}
+Retrieval date: ${(input.completedAt ?? new Date().toISOString()).slice(0, 10)}
+
+Places needing images:
+${JSON.stringify(places.map((place) => ({
+    id: place.id,
+    name: place.name,
+    localizedName: place.localizedName,
+    city: place.city,
+    area: place.area,
+    locationLabel: place.locationLabel,
+    category: place.category,
+    priority: place.priority,
+    contentTier: place.contentTier,
+    officialUrl: place.officialUrl,
+    mapUrl: place.mapUrl,
+    experienceUrl: place.experienceUrl,
+    sourceUrls: place.sourceUrls
+  })))}
+
+Image rules:
+- Try to return one strong detail image per listed place when a safe sourced image exists.
+- Prefer official place, official tourism, museum/institution, merchant, venue, or Wikimedia Commons file pages. Third-party platforms are allowed only when the image is clearly about the named place and has a source page that can be cited.
+- Do not use Xiaohongshu, search result pages, AI-generated image pages, generic stock photos, maps/screenshots, logos, or images that only depict a broad destination rather than the named place.
+- image.url must be a direct HTTPS image URL suitable for an <img> tag.
+- image.sourceUrl must be the HTTPS page that documents or hosts that image, and the same normalized URL must also appear in the returned sources array. Do not return an image without its source metadata.
+- Use alt text that names what is visible, not keyword stuffing. Set usage to ["detail"] and status to verified only when the source page clearly supports the image-place match; otherwise use recheck.
+- If no compliant image is found for a place, omit the image and add one omitted item with the placeId and a short reason.
+- Return only sources, images, and omitted. Do not change place text, coordinates, itinerary days, route order, or preparation content.`;
+}
+
+function placesNeedingImageEnrichment(artifact: SkillResearchBatchArtifact): SkillResearchBatchArtifact["places"] {
+  return artifact.places
+    .filter((place) => Boolean(place.id) && !(place.images ?? []).length)
+    .filter((place) => place.display?.type !== undefined || place.coordinates !== undefined || place.contentTier !== "compact")
+    .sort((left, right) => imageEnrichmentPriority(right) - imageEnrichmentPriority(left))
+    .slice(0, 32);
+}
+
+function imageEnrichmentPriority(place: SkillResearchBatchArtifact["places"][number]): number {
+  let score = 0;
+  if (place.priority === "must") score += 30;
+  else if (place.priority === "preferred") score += 20;
+  else if (place.priority === "nearby") score += 10;
+  if (place.contentTier === "deep") score += 20;
+  else if (place.contentTier === "standard") score += 10;
+  if (place.display?.type) score += 6;
+  if (place.coordinates) score += 4;
+  if (place.officialUrl || place.experienceUrl) score += 3;
+  return score;
 }
 
 export function buildSkillItineraryPrompt(input: SkillItineraryRequest): string {

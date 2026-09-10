@@ -29,6 +29,89 @@ test("Skill Importer performs safe normalization and only merges confirmed ident
   assert.equal(research.guideRelationships?.[0]?.toPlaceId, research.places[1]?.id);
 });
 
+test("Skill Importer normalizes reversed coordinates before Research Set integrity checks", () => {
+  const value = batch();
+  value.relationships = [];
+  value.places = [
+    {
+      id: "ubud-palace",
+      name: "Ubud Palace",
+      locationLabel: "Jl. Raya Ubud No.8, Ubud, Bali",
+      city: "Bali",
+      area: "Ubud",
+      category: "sight",
+      coordinates: [115.2625, -8.5069],
+      whyWorthIt: "A central Ubud cultural anchor.",
+      plan: "Visit around the palace and nearby market.",
+      schedulingEligibility: { decision: "schedulable", reason: "Works as an Ubud day anchor." }
+    },
+    {
+      id: "broken-map-point",
+      name: "Broken map point",
+      locationLabel: "Bali",
+      city: "Bali",
+      category: "context",
+      coordinates: [300, 400],
+      whyWorthIt: "Useful context once its exact location is confirmed.",
+      plan: "Keep as written context until mapped.",
+      schedulingEligibility: { decision: "schedulable", reason: "Incoming source claimed this was schedulable." }
+    }
+  ];
+  const research = importSkillResearchBatches([value], {
+    researchSetId: "research-bali-coordinates",
+    generationKey: "generation-bali-coordinates",
+    proposalRef: { sessionId: "session-bali-coordinates", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+    createdAt: "2026-08-26T00:00:00.000Z",
+    updatedAt: "2026-08-26T00:00:00.000Z"
+  });
+  const palace = research.places.find((place) => place.name === "Ubud Palace");
+  const broken = research.places.find((place) => place.name === "Broken map point");
+  assert.deepEqual(palace?.coordinates, [-8.5069, 115.2625]);
+  assert.equal(palace?.schedulingEligibility?.decision, "schedulable");
+  assert.equal(broken?.coordinates, undefined);
+  assert.equal(broken?.schedulingEligibility?.decision, "informational");
+});
+
+test("Skill Importer keeps sourced place images and strips unsafe image entries", () => {
+  const value = batch();
+  value.relationships = [];
+  value.places = [{
+    id: "ubud-palace",
+    name: "Ubud Palace",
+    locationLabel: "Jl. Raya Ubud No.8, Ubud, Bali",
+    city: "Bali",
+    area: "Ubud",
+    category: "sight",
+    whyWorthIt: "A central Ubud cultural anchor.",
+    plan: "Visit around the palace and nearby market.",
+    sourceUrls: ["https://example.com/place"],
+    images: [
+      { url: "https://example.com/palace.jpg#hero", alt: "Ubud Palace courtyard", caption: "Palace courtyard", sourceUrl: "https://example.com/place#visit", usage: ["detail"], status: "verified" },
+      { url: "http://example.com/insecure.jpg", alt: "Insecure photo", sourceUrl: "https://example.com/place" },
+      { url: "https://example.com/no-source.jpg", alt: "No known source" }
+    ]
+  }];
+
+  const research = importSkillResearchBatches([value], {
+    researchSetId: "research-bali-images",
+    generationKey: "generation-bali-images",
+    proposalRef: { sessionId: "session-bali-images", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+    createdAt: "2026-08-26T00:00:00.000Z",
+    updatedAt: "2026-08-26T00:00:00.000Z"
+  });
+
+  assert.deepEqual(research.places[0]?.images, [{
+    url: "https://example.com/palace.jpg",
+    alt: "Ubud Palace courtyard",
+    sourceId: research.sources[0]?.id,
+    caption: "Palace courtyard",
+    usage: ["detail"],
+    status: "verified"
+  }]);
+});
+
 test("Skill Importer preserves every Research Set place in the Trip Blueprint", () => {
   const research = importSkillResearchBatches([{ ...batch(), places: batch().places.slice(0, 2) }], {
     researchSetId: "research-1", generationKey: "generation-1", proposalRef: { sessionId: "session-1", proposalVersion: 1 },
@@ -577,6 +660,91 @@ test("Skill Importer filters itinerary-scoped scheduling refs without changing e
   assert.deepEqual(blueprint.places[0]?.schedulingEligibility?.suitableDayIds, ["d1"]);
   assert.equal(blueprint.places[0]?.schedulingEligibility?.blockedDayIds, undefined);
   assert.deepEqual(blueprint.places[0]?.schedulingEligibility?.evidence, [{ sourceId: research.sources[0]!.id, status: "stale", supports: ["opening window"] }]);
+});
+
+test("Skill Importer resolves batch-scoped source aliases before integrity checks", () => {
+  const value: SkillResearchBatchArtifact = {
+    id: "scope-1",
+    scopeLabel: "Bali",
+    completedAt: "2026-09-09T00:00:00.000Z",
+    sources: [
+      { id: "src-tirta-empul", title: "Tirta Empul", authority: "Official tourism", url: "https://example.com/tirta-empul", retrievedAt: "2026-09-09", status: "verified", official: true },
+      { id: "scope-1-src-tanah-lot", title: "Tanah Lot", authority: "Official tourism", url: "https://example.com/tanah-lot", retrievedAt: "2026-09-09", status: "verified", official: true }
+    ],
+    places: [
+      {
+        id: "pl-tirta-empul",
+        name: "Tirta Empul",
+        locationLabel: "Tampaksiring, Bali",
+        city: "Bali",
+        category: "temple",
+        coordinates: [-8.4156, 115.3156],
+        whyWorthIt: "A water temple that anchors the cultural landscape day.",
+        plan: "Visit respectfully before the rice terrace stop.",
+        fieldEvidence: [{ path: "whyWorthIt", status: "verified", evidence: [{ sourceId: "scope-1-src-tirta-empul", status: "verified" }] }]
+      },
+      {
+        id: "pl-tanah-lot",
+        name: "Tanah Lot",
+        locationLabel: "Beraban, Bali",
+        city: "Bali",
+        category: "temple",
+        coordinates: [-8.6212, 115.0868],
+        whyWorthIt: "A coastal temple that can anchor a sunset day.",
+        plan: "Keep it for a west-coast route.",
+        tip: "Check tide and crowd timing near the date.",
+        fieldEvidence: [
+          { path: "whyWorthIt", status: "verified", evidence: [{ sourceId: "scope-1-src-tanah-lot", status: "verified" }] },
+          { path: "tip", status: "verified", evidence: [{ sourceId: "src-tanah-lot", status: "verified" }] }
+        ],
+        schedulingEligibility: { decision: "schedulable", reason: "Works as a west Bali sunset route.", evidence: [{ sourceId: "scope-1-src-tanah-lot", status: "verified" }] }
+      }
+    ],
+    events: [],
+    relationships: []
+  };
+
+  const research = importSkillResearchBatches([value], {
+    researchSetId: "research-bali-source-aliases",
+    generationKey: "generation-bali-source-aliases",
+    proposalRef: { sessionId: "session-bali-source-aliases", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+    createdAt: "2026-09-09T00:00:00.000Z",
+    updatedAt: "2026-09-09T00:00:00.000Z"
+  });
+  const sourceIds = new Set(research.sources.map((source) => source.id));
+  for (const place of research.places) {
+    for (const item of place.fieldEvidence ?? []) {
+      for (const ref of item.evidence) assert.equal(sourceIds.has(ref.sourceId), true);
+    }
+    for (const ref of place.schedulingEligibility?.evidence ?? []) assert.equal(sourceIds.has(ref.sourceId), true);
+  }
+});
+
+test("Skill Importer drops unresolved field evidence refs instead of failing research import", () => {
+  const value = batch();
+  value.relationships = [];
+  value.sources = [];
+  value.places = [{
+    id: "place-with-stale-claim",
+    name: "Place with stale claim",
+    locationLabel: "Bali",
+    city: "Bali",
+    category: "context",
+    whyWorthIt: "Useful only after source review.",
+    plan: "Keep the place but do not treat the unsupported claim as verified.",
+    fieldEvidence: [{ path: "whyWorthIt", status: "verified", evidence: [{ sourceId: "scope-1-src-missing", status: "verified" }] }]
+  }];
+
+  const research = importSkillResearchBatches([value], {
+    researchSetId: "research-unresolved-source",
+    generationKey: "generation-unresolved-source",
+    proposalRef: { sessionId: "session-unresolved-source", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+    createdAt: "2026-09-09T00:00:00.000Z",
+    updatedAt: "2026-09-09T00:00:00.000Z"
+  });
+  assert.deepEqual(research.places[0]?.fieldEvidence, [{ path: "whyWorthIt", status: "recheck", evidence: [] }]);
 });
 
 test("Skill Importer refuses to keep a verified movement when route evidence is not verified", () => {

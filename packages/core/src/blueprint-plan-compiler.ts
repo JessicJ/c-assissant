@@ -195,7 +195,7 @@ function packingItemsForBlueprint(blueprint: TripBlueprint): PackingItem[] {
   const items: PackingItem[] = [
     { id: "passport-wallet", title: "Passport, payment cards, and a small cash wallet", description: "Keep the items you need for hotel check-in, rail tickets, reservations, and small cash-only stops in one reachable pouch." },
     { id: "phone-power", title: "Charged phone, cable, and power bank", description: "The itinerary depends on maps, booking pages, translation, and live route checks throughout the day." },
-    { id: "walking-shoes-socks", title: "Broken-in walking shoes and spare socks", description: "Tokyo and Kyoto days combine stations, neighborhoods, temples, museums, and cafe detours." },
+    { id: "walking-shoes-socks", title: "Broken-in walking shoes and spare socks", description: "The route combines transfers, neighborhoods, cultural stops, meals, and outdoor walking." },
     { id: "day-bag", title: "Light day bag", description: "Carry essentials while larger luggage is stored, forwarded, or left at the accommodation." }
   ];
   if (months.some((month) => month >= 9 && month <= 11)) {
@@ -214,7 +214,7 @@ function packingItemsForBlueprint(blueprint: TripBlueprint): PackingItem[] {
     items.push({ id: "reservation-copies", title: "Offline reservation and ticket screenshots", description: "Save timed-entry, restaurant, hotel, and transport details before each long day." });
   }
   if (multiCity || /shinkansen|rail|train|station|luggage|forward/.test(normalized)) {
-    items.push({ id: "luggage-transfer-kit", title: "Luggage tag and compact lock", description: "Helpful if you use luggage forwarding, station storage, or a hotel luggage room between Tokyo and Kyoto." });
+    items.push({ id: "luggage-transfer-kit", title: "Luggage tag and compact lock", description: "Helpful if you use luggage forwarding, station storage, or a hotel luggage room between trip areas." });
   }
   return dedupePackingItems(items);
 }
