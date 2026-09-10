@@ -583,16 +583,17 @@ a {
 
 .place-row {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
-  gap: 9px;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 6px;
   align-items: center;
-  padding: 10px;
+  min-height: 64px;
+  padding: 5px 8px;
 }
 
 .place-drag-handle,
 .place-drag-spacer {
-  width: 20px;
-  min-width: 20px;
+  width: 24px;
+  min-width: 24px;
 }
 
 .place-drag-handle {
@@ -616,18 +617,33 @@ a {
 
 .place-main {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr);
-  gap: 9px;
+  grid-template-columns: 50px minmax(0, 1fr);
+  gap: 10px;
   align-items: center;
   min-width: 0;
-  min-height: 44px;
+  min-height: 54px;
   border: 0;
   padding: 0;
   background: transparent;
   text-align: left;
 }
 
-.place-order {
+.place-thumbnail {
+  display: grid;
+  width: 50px;
+  height: 48px;
+  overflow: hidden;
+  place-items: center;
+  border: 1px solid var(--trip-line);
+  border-radius: 8px;
+  background: var(--trip-accent-soft);
+  color: var(--trip-accent);
+  object-fit: cover;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.place-order:not([hidden]) {
   display: grid;
   width: 28px;
   height: 28px;
@@ -638,11 +654,34 @@ a {
   font-weight: 700;
 }
 
-.place-order.hotel {
+.place-order.hotel:not([hidden]) {
   border: 1px solid var(--trip-line);
   background: #fff;
   color: var(--trip-muted);
   font-size: 11px;
+}
+
+.place-main > span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.place-name,
+.place-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.place-name {
+  color: var(--trip-ink);
+  font-weight: 750;
+}
+
+.place-meta {
+  color: var(--trip-muted);
+  font-size: 12px;
 }
 
 .place-transit {
@@ -1208,8 +1247,8 @@ a {
 }
 
 .detail-browse .place-row {
-  grid-template-columns: 20px minmax(0, 1fr) 32px;
-  padding: 9px;
+  grid-template-columns: 24px minmax(0, 1fr) 32px;
+  padding: 5px 8px;
 }
 
 .detail-browse .place-actions {

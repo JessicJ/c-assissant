@@ -42,6 +42,41 @@ test("external booking facts can complete proposal direction and stay in generat
   assert.doesNotMatch(request, /ABC12345/);
 });
 
+test("accepted accommodation bookings add overnight departure continuity to generation context", () => {
+  const session = applyPlanningTurn(createPlanningSession(), "我想去巴黎旅行7天，主要看艺术；2026年10月6日至10月12日；3个人出行；交通倾向于Landi推荐；从上海出发，抵达戴高乐机场，预计14:30到达；返程从戴高乐机场预计18:20离开").session;
+  const confirmed = { ...session, status: "proposal_confirmed" as const, confirmedProposalVersion: session.proposal!.version };
+  const booking: TravelBooking = {
+    id: "hotel-booking",
+    planningSessionId: confirmed.id,
+    type: "accommodation",
+    status: "confirmed",
+    title: "Hotel A",
+    source: "manual",
+    sourceHash: "hash",
+    sourceLabel: "Manual hotel entry",
+    importedAt: "2026-08-27T00:00:00.000Z",
+    updatedAt: "2026-08-27T00:00:00.000Z",
+    constraintStrength: "hard",
+    segments: [{
+      id: "hotel-segment",
+      segmentType: "hotel_stay",
+      title: "Hotel A stay",
+      status: "confirmed",
+      startAtLocal: "2026-10-06T15:00",
+      endAtLocal: "2026-10-09T11:00",
+      location: "1 Rue Example, Paris",
+      constraintStrength: "hard",
+      fixedCommitment: true,
+      needsReviewReasons: []
+    }]
+  };
+  const request = planningRequestForGenerationWithBookings(confirmed, [booking]);
+  assert.match(request, /Accommodation continuity rule/i);
+  assert.match(request, /each morning's route should depart from the hotel or lodging where the traveler slept the previous night/i);
+  assert.match(request, /HARD accommodation: Hotel A/);
+  assert.match(request, /hotel_stay|Hotel A stay|1 Rue Example, Paris/i);
+});
+
 test("editing a ready proposal preserves known facts and increments its version", () => {
   const first = applyPlanningTurn(createPlanningSession(), "我想去葡萄牙旅行10天，主要看建筑和当地生活；从上海出发，抵达里斯本机场，预计14:30到达");
   assert.equal(first.session.proposal?.version, 1);

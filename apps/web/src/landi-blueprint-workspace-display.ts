@@ -3,12 +3,13 @@ import { groupPreparationItems } from "./plan-preparation-display.js";
 import { displayTripTitle } from "./trip-title.js";
 
 export type BlueprintWorkspaceArea = "itinerary" | "preparation" | "tips" | "sources";
-export type GuideFilter = "all" | "attraction" | "dining" | "shopping" | "experience";
+export type GuideFilter = "all" | "attraction" | "dining" | "shopping" | "experience" | "stay" | "transport";
+export type ItineraryTimelineRole = "place" | "transport" | "activity" | "rest" | "pending_place";
 export type GuideState = "scheduled" | "unscheduled" | "informational";
 export type GuideStateFilter = "all" | GuideState;
 
 const blueprintWorkspaceAreas = ["itinerary", "preparation", "tips", "sources"] as const satisfies readonly BlueprintWorkspaceArea[];
-const blueprintGuideFilters = ["attraction", "dining", "shopping", "experience"] as const satisfies readonly Exclude<GuideFilter, "all">[];
+const blueprintGuideFilters = ["attraction", "dining", "shopping", "experience", "stay", "transport"] as const satisfies readonly Exclude<GuideFilter, "all">[];
 
 export type BlueprintWorkspaceDisplay = {
   title: string;
@@ -47,6 +48,7 @@ export type BlueprintPlaceDisplay = {
   id: string;
   title: string;
   locationLabel: string;
+  image?: GuideCardImageDisplay;
   coordinates?: [number, number];
   markerType: GuideFilter;
   city?: string;
@@ -71,6 +73,7 @@ type TimelineBlock = {
   order: number;
   timeLabel: string;
   type: GuideFilter;
+  timelineRole: ItineraryTimelineRole;
   title?: string;
   meta?: string;
   routeAnchor?: boolean;
@@ -86,10 +89,16 @@ export type ItineraryCardDisplay = {
   placeId: string;
   title: string;
   timeLabel: string;
+  type: GuideFilter;
+  timelineRole: ItineraryTimelineRole;
+  image?: GuideCardImageDisplay;
   meta?: string;
   statusLabel?: string;
   routeAfterLabel?: string;
   routeAfterStatusLabel?: string;
+  routeAfterMode?: PlanRouteSegment["mode"];
+  routeAfterDurationLabel?: string;
+  routeAfterDetail?: string;
   routeAnchor?: boolean;
   reorderable?: boolean;
   editState?: "moved";
@@ -151,6 +160,7 @@ export type GuideCardDisplay = {
   type: GuideFilter;
   state: GuideState;
   summary: string;
+  locationLabel: string;
   image?: GuideCardImageDisplay;
   tags: string[];
   footerNote?: string;
@@ -475,10 +485,12 @@ function placeDisplayForPlace(place: PlanPlace, travelTips: PlanPresentation["tr
   const signals = workspaceSignalsForPlace(place, requirements, bookingConstraints);
   const contextualTip = contextualTipForPlace(place, travelTips, {}, requirements);
   const placementNote = placementNoteForPlace(place, requirements);
+  const image = guideCardImageForPlace(place);
   return {
     id: place.id,
     title: displayPlaceName(place),
     locationLabel: place.locationLabel,
+    ...(image ? { image } : {}),
     ...(validPlaceCoordinates(place.coordinates) ? { coordinates: place.coordinates } : {}),
     markerType: markerTypeForPlace(place),
     ...(place.city ? { city: place.city } : {}),
@@ -614,6 +626,8 @@ function guideTypeForPlace(place: Pick<PlanPlace, "category" | "visitRole" | "na
   const explicit = place.display?.type;
   if (explicit) return explicit;
   const text = `${place.category} ${place.visitRole ?? ""} ${place.name}`.toLocaleLowerCase();
+  if (/\b(hotel|accommodation|lodg|villa|resort|inn|guesthouse|check.?in|check.?out)\b/.test(text)) return "stay";
+  if (/\b(airport|station|terminal|flight|rail|train|metro|subway|bus|ferry|transfer|transport|taxi|shuttle)\b/.test(text)) return "transport";
   if (/\b(experience|workshop|class|tour|show|performance|theatre|theater|festival|ceremony|onsen|spa|cruise|ride)\b/.test(text)) return "experience";
   if (/\b(restaurant|dining|food|meal|breakfast|lunch|dinner|cafe|coffee|tea|dessert|bar|market|izakaya|ramen|sushi|noodle|bakery)\b/.test(text)) return "dining";
   if (/\b(shopping|shop|store|mall|market|craft|souvenir|product|design|boutique|bookstore|department)\b/.test(text)) return "shopping";
@@ -628,7 +642,8 @@ function isGuidePlace(place: PlanPlace): boolean {
   if (place.guideDisplay?.showInGuide !== undefined) return place.guideDisplay.showInGuide;
   if (place.display) return true;
   const text = `${place.category} ${place.visitRole ?? ""} ${place.name}`.toLocaleLowerCase();
-  return !/hotel|accommodation|lodg|\bairport\b|\bstation\b|\bflight\b|\brail\b|\btransfer\b|\btransport\b/.test(text);
+  if (/hotel|accommodation|lodg|villa|resort|inn|guesthouse|\bairport\b|\bstation\b|\bterminal\b|\bflight\b|\brail\b|\btrain\b|\bmetro\b|\bsubway\b|\bbus\b|\bferry\b|\btransfer\b|\btransport\b/.test(text)) return true;
+  return true;
 }
 
 function guideStateForPlace(place: PlanPlace, scheduledPlaceIds: Set<string>): GuideState {
@@ -662,6 +677,7 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
         order: block.order,
         timeLabel: block.display?.timeLabel?.trim() || roughBlockTimeLabel(block, place, index),
         type: place ? guideTypeForPlace(place) : blockGuideType(block),
+        timelineRole: timelineRoleForBlock(block, place),
         ...(blockTitle(block, place) ? { title: blockTitle(block, place)! } : {}),
         ...(blockMeta(block) ? { meta: blockMeta(block)! } : {}),
         ...(routeAnchor ? { routeAnchor: true } : {}),
@@ -688,6 +704,7 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
       order: stop.order,
       timeLabel: roughTimeLabel(stop.time, stop.role, place, index),
       type: guideTypeForPlace(place),
+      timelineRole: timelineRoleForPlace(place),
       routeAnchor: true,
       ...(directMoveAllowed(place, requirements, presentation.bookingConstraints) ? { reorderable: true } : {}),
       ...(status ? { status } : {}),
@@ -717,7 +734,7 @@ function itineraryDisplayFromBlocks(day: BlueprintDayTabDisplay, blocks: Timelin
   const base = {
     dayId: day.id,
     day,
-    items: blocks.map((block) => itineraryCardForBlock(block)),
+    items: blocks.map((block) => itineraryCardForBlock(block, places)),
     placementOptions: itineraryPlacementOptions(blocks),
     routePlaces: blocks.flatMap((block) => block.place && block.routeAnchor && validPlaceCoordinates(block.place.coordinates) ? [mapPointForPlace(block.place)] : []),
     routeSegments,
@@ -868,6 +885,7 @@ function guideCardsForPresentation(presentation: PlanPresentation, planSources: 
         type: guideTypeForPlace(place),
         state,
         summary: shortGuideSummary(place),
+        locationLabel: place.locationLabel,
         ...(image ? { image } : {}),
         tags: guideTags(presentation, place, requirements),
         priorityLabel: placePriorityLabel(place.priority),
@@ -883,6 +901,7 @@ function guideCardsForPresentation(presentation: PlanPresentation, planSources: 
       type: topic.type,
       state: "informational" as const,
       summary: topic.summary,
+      locationLabel: topic.context ?? topic.label,
       tags: [topic.label, topic.context].filter((value): value is string => Boolean(value)).slice(0, 3),
       priorityLabel: "Background",
       canAdd: false,
@@ -1274,6 +1293,9 @@ function itineraryCardForPendingPlace(place: BlueprintPlaceDisplay, edit: Pendin
     placeId: place.id,
     title: place.title,
     timeLabel: "Draft",
+    type: place.markerType,
+    timelineRole: "place",
+    ...(place.image ? { image: place.image } : {}),
     ...(edit.positionLabel ? { meta: edit.positionLabel } : {}),
     statusLabel: "Not saved",
     routeAnchor: true,
@@ -1282,20 +1304,27 @@ function itineraryCardForPendingPlace(place: BlueprintPlaceDisplay, edit: Pendin
   };
 }
 
-function itineraryCardForBlock(block: TimelineBlock): ItineraryCardDisplay {
+function itineraryCardForBlock(block: TimelineBlock, places: PlanPlace[] = []): ItineraryCardDisplay {
   const routeAfterNeedsCheck = Boolean(block.routeAfter && routeSegmentShowsAsFormalRoute(block.routeAfter) && routeSegmentNeedsRefresh(block.routeAfter));
   const routeAfterLabel = routeAfterNeedsCheck ? undefined : itineraryRouteReadout(block.routeAfter);
   const routeAfterStatusLabel = routeAfterNeedsCheck ? routeCheckReadoutLabel(false) : undefined;
+  const image = block.place ? guideCardImageForPlace(block.place) : undefined;
+  const meta = timelineCardMeta(block);
   return {
     kind: "block",
     key: `${block.day.id}-${block.place?.id ?? block.block?.id ?? block.order}-${block.order}`,
     placeId: block.place?.id ?? "",
-    title: block.title ?? (block.place ? displayPlaceName(block.place) : "Flexible time"),
+    title: block.place ? displayPlaceName(block.place) : block.title ?? "Flexible time",
     timeLabel: block.timeLabel,
-    ...(block.meta ? { meta: block.meta } : {}),
+    type: block.type,
+    timelineRole: block.timelineRole,
+    ...(image ? { image } : {}),
+    ...(meta ? { meta } : {}),
     ...(block.status ? { statusLabel: block.status } : {}),
     ...(routeAfterLabel ? { routeAfterLabel } : {}),
     ...(routeAfterStatusLabel ? { routeAfterStatusLabel } : {}),
+    ...(block.routeAfter?.mode ? { routeAfterMode: block.routeAfter.mode } : block.timelineRole === "transport" ? { routeAfterMode: transportModeFromText(`${block.title ?? ""} ${block.meta ?? ""}`) } : {}),
+    ...(block.routeAfter ? { routeAfterDetail: conciseRouteDetail(block.routeAfter, places) } : {}),
     ...(block.routeAnchor ? { routeAnchor: true } : {}),
     ...(block.place && block.reorderable ? { reorderable: true } : {}),
     ...(block.contextualTip ? { contextualTip: block.contextualTip } : {})
@@ -1304,7 +1333,120 @@ function itineraryCardForBlock(block: TimelineBlock): ItineraryCardDisplay {
 
 function itineraryRouteReadout(segment: PlanRouteSegment | undefined): string | undefined {
   if (!segment || segment.verification !== "verified" || !routeSegmentShowsAsFormalRoute(segment)) return undefined;
+  return routeConnectorTitle(segment);
+}
+
+function conciseRouteDetail(segment: PlanRouteSegment, places: PlanPlace[]): string {
+  const placeById = new Map(places.map((place) => [place.id, place] as const));
+  const origin = placeById.get(segment.originPlaceId);
+  const destination = placeById.get(segment.destinationPlaceId);
+  const endpoints = origin && destination ? `${shortRoutePlaceName(origin)} -> ${shortRoutePlaceName(destination)}` : "";
+  const distance = segment.mode === "walking" ? routeDistanceLabel(segment) : "";
+  return [endpoints, distance].filter(Boolean).join(" · ") || travelerFacingDefaultText(segment.detail) || "";
+}
+
+function conciseTransportDetail(value: string): string {
+  return travelerFacingDefaultText(value)
+    .replace(/Use a vehicle suitable for three travelers and luggage\.?/i, "Vehicle for 3 travelers + luggage.")
+    .replace(/Destination and travel time depend on the selected first lodging and live traffic\.?/i, "")
+    .replace(/Travel mode and time depend on the selected accommodation and live traffic\.?/i, "Confirm once lodging is set.")
+    .replace(/after checking the exact lodging and entrance points; travel time remains to be checked\.?/i, "after lodging and entrances are set.")
+    .replace(/Confirm transport after lodging and reservation details are known; travel time remains to be checked\.?/i, "Confirm after lodging and reservation details.")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function timelineCardMeta(block: TimelineBlock): string | undefined {
+  if (block.timelineRole === "transport") return block.meta ? conciseTransportDetail(block.meta) : undefined;
+  if (block.timelineRole === "rest") return undefined;
+  if (block.timelineRole === "pending_place") return pendingPlaceMeta(block);
+  if (block.timelineRole === "activity") return undefined;
+  const meta = travelerFacingDefaultText(block.meta);
+  if (block.place) {
+    const title = travelerFacingDefaultText(block.block?.title ?? block.title);
+    const placeName = displayPlaceName(block.place);
+    return firstUsefulText([
+      concisePlaceActionTitle(title, block.place),
+      timelineSafePlaceMeta(meta),
+      block.place.area || block.place.city ? [block.place.area, block.place.city].filter(Boolean).join(" · ") : block.place.locationLabel
+    ]);
+  }
+  return meta;
+}
+
+function concisePlaceActionTitle(title: string, place: PlanPlace): string | undefined {
+  if (!title || sameText(title, displayPlaceName(place))) return undefined;
+  if (/\bcomplete arrival processing|collect luggage|arriv(?:e|al)\b/i.test(title)) return place.city ? `Arrive in ${place.city}` : "Arrival";
+  if (/\bcheck[ -]?in|settle\b/i.test(title)) return "Check in";
+  if (/\bcheck[ -]?out\b/i.test(title)) return "Check out";
+  return timelineSafePlaceMeta(title);
+}
+
+function timelineSafePlaceMeta(value: string): string | undefined {
+  const text = travelerFacingDefaultText(value);
+  if (!text || aiPlanningExplanationText(text)) return undefined;
+  return shorten(text, 72);
+}
+
+function pendingPlaceMeta(block: TimelineBlock): string | undefined {
+  const text = `${block.title ?? ""} ${block.meta ?? ""}`.toLocaleLowerCase();
+  if (/\b(restaurant|dinner|lunch|meal)\b/.test(text)) return "Restaurant TBD";
+  if (/\b(station|pickup point|meeting point)\b/.test(text)) return "Place not confirmed";
+  if (/\b(hotel|accommodation|lodging|check[ -]?in|settle)\b/.test(text)) return "Hotel not selected";
+  return timelineSafePlaceMeta(block.meta ?? "") ?? "Place not confirmed";
+}
+
+function aiPlanningExplanationText(value: string): boolean {
+  return /\b(the plan assumes|recommended because|confirm once|depends on|after checking|route refresh|before execution|needs replanning|suitable for|choose an easy|prioritize hydration|travel time remains to be checked)\b/i.test(value);
+}
+
+function shortRoutePlaceName(place: PlanPlace): string {
+  return displayPlaceName(place).split(/[·•|]/)[0]!.replace(/\s+Sanctuary\b/i, "").trim();
+}
+
+function routeDistanceLabel(segment: Pick<PlanRouteSegment, "detail" | "distanceMeters">): string {
+  if (typeof segment.distanceMeters === "number" && Number.isFinite(segment.distanceMeters)) {
+    return segment.distanceMeters >= 1000 ? `${trimDistance(segment.distanceMeters / 1000)} km` : `${Math.round(segment.distanceMeters)} m`;
+  }
+  const text = travelerFacingDefaultText(segment.detail);
+  const match = text.match(/\babout\s+([\d.]+\s*(?:km|miles?|mi|m))\b/i);
+  return match?.[1] ?? "";
+}
+
+function routeConnectorTitle(segment: PlanRouteSegment): string {
+  const duration = segment.durationMinutes ? compactTravelDurationLabel(segment.durationMinutes) : "";
+  const mode = transportModeLabel(segment.mode);
+  if (duration) return mode ? `${duration} ${mode}` : duration;
   return routeDisplayLabel(segment);
+}
+
+function compactTravelDurationLabel(minutes: number): string {
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+}
+
+function transportModeLabel(mode: PlanRouteSegment["mode"]): string {
+  if (mode === "walking") return "walk";
+  if (mode === "driving") return "drive";
+  if (mode === "rail") return "by rail";
+  if (mode === "flight") return "flight";
+  if (mode === "transit") return "by transit";
+  return "";
+}
+
+function transportModeFromText(text: string): PlanRouteSegment["mode"] {
+  const normalized = text.toLocaleLowerCase();
+  if (/\bwalk|walking|徒歩|步行\b/.test(normalized)) return "walking";
+  if (/\btrain|rail|shinkansen|metro|subway|station|火车|地铁|新干线\b/.test(normalized)) return "rail";
+  if (/\bflight|fly|airport|航班|飞机\b/.test(normalized)) return "flight";
+  if (/\bbus|transit|tram|公交\b/.test(normalized)) return "transit";
+  return "driving";
+}
+
+function trimDistance(value: number): string {
+  return value >= 10 ? String(Math.round(value)) : value.toFixed(1).replace(/\.0$/, "");
 }
 
 function routeCheckReadoutLabel(afterConfirmation: boolean): string {
@@ -1513,8 +1655,8 @@ function roughBlockTimeLabel(block: BlueprintItineraryBlock, place: PlanPlace | 
   if (block.startTime && /^\d{2}:\d{2}$/.test(block.startTime)) return block.startTime;
   if (block.kind === "meal") return /dinner|evening/i.test(`${block.role ?? ""} ${block.title ?? ""}`) ? "Dinner window" : "Around lunch";
   if (block.kind === "rest") return "Rest window";
-  if (block.kind === "transfer") return "Transfer";
-  if (block.kind === "lodging") return "Hotel time";
+  if (block.kind === "transfer") return "";
+  if (block.kind === "lodging") return "";
   if (block.kind === "event") return "Event window";
   if (block.kind === "flexible") return index >= 3 ? "Flexible afternoon" : "Flexible time";
   return roughTimeLabel(block.startTime, block.role, place ?? { category: block.kind, name: block.title ?? block.kind }, index);
@@ -1523,16 +1665,39 @@ function roughBlockTimeLabel(block: BlueprintItineraryBlock, place: PlanPlace | 
 function blockGuideType(block: BlueprintItineraryBlock): GuideFilter {
   if (block.kind === "meal") return "dining";
   if (block.kind === "event") return "experience";
+  if (block.kind === "lodging") return "stay";
+  if (block.kind === "transfer") return "transport";
   return "attraction";
 }
 
+function timelineRoleForBlock(block: BlueprintItineraryBlock, place: PlanPlace | undefined): ItineraryTimelineRole {
+  if (place) return "place";
+  if (block.kind === "transfer") return "transport";
+  if (block.kind === "rest") return "rest";
+  if (block.kind === "lodging") return "pending_place";
+  if (block.kind === "meal") return blockImpliesPendingPlace(block) ? "pending_place" : "activity";
+  return "activity";
+}
+
+function timelineRoleForPlace(place: PlanPlace): ItineraryTimelineRole {
+  return "place";
+}
+
+function blockImpliesPendingPlace(block: BlueprintItineraryBlock): boolean {
+  const text = `${block.title ?? ""} ${block.summary ?? ""} ${block.role ?? ""}`.toLocaleLowerCase();
+  if (/\b(tbd|to be determined|not selected|not confirmed|unconfirmed|choose restaurant|select restaurant|choose hotel|select hotel|pickup point|meeting point)\b/.test(text)) return true;
+  if (/\b(restaurant|hotel|accommodation|lodging|station|attraction)\b.*\b(tbd|not selected|not confirmed|unconfirmed)\b/.test(text)) return true;
+  if (/\b(tbd|not selected|not confirmed|unconfirmed)\b.*\b(restaurant|hotel|accommodation|lodging|station|attraction)\b/.test(text)) return true;
+  return /待定|未定|未选择|未确认|选择酒店|选择餐厅|集合点/.test(text);
+}
+
 function blockTitle(block: BlueprintItineraryBlock, place: PlanPlace | undefined): string | undefined {
-  if (block.title?.trim()) return block.title;
   if (place) return displayPlaceName(place);
+  if (block.kind === "lodging") return "Accommodation";
+  if (block.title?.trim()) return block.title;
   if (block.kind === "meal") return "Meal window";
   if (block.kind === "rest") return "Rest";
   if (block.kind === "transfer") return "Transfer";
-  if (block.kind === "lodging") return "Hotel time";
   if (block.kind === "event") return "Timed event";
   if (block.kind === "flexible") return "Flexible time";
   return undefined;
@@ -1768,7 +1933,19 @@ function validPlaceCoordinates(value: PlanPlace["coordinates"] | BlueprintPlaceD
 }
 
 export function guideFilterLabel(filter: GuideFilter): string {
-  return filter === "all" ? "All" : filter === "attraction" ? "Attractions" : filter === "dining" ? "Dining" : filter === "shopping" ? "Shopping" : "Experiences";
+  return filter === "all"
+    ? "All"
+    : filter === "attraction"
+      ? "Attractions"
+      : filter === "dining"
+        ? "Dining"
+        : filter === "shopping"
+          ? "Shopping"
+          : filter === "experience"
+            ? "Experiences"
+            : filter === "stay"
+              ? "Stay"
+              : "Transport";
 }
 
 export function placePriorityLabel(priority: PlanPlacePriority): string {
@@ -2288,15 +2465,15 @@ function tipTitle(value: string): string {
 }
 
 function detailLeadTitle(type: GuideFilter): string {
-  return type === "dining" ? "What to eat" : type === "shopping" ? "What to buy" : type === "experience" ? "Experience fit" : "Why it matters";
+  return type === "dining" ? "What to eat" : type === "shopping" ? "What to buy" : type === "experience" ? "Experience fit" : type === "stay" ? "Stay context" : type === "transport" ? "Transport role" : "Why it matters";
 }
 
 function detailPlanTitle(type: GuideFilter): string {
-  return type === "dining" ? "Meal context" : type === "shopping" ? "Purchase context" : type === "experience" ? "How it works" : "Visit style";
+  return type === "dining" ? "Meal context" : type === "shopping" ? "Purchase context" : type === "experience" ? "How it works" : type === "stay" ? "How it anchors the day" : type === "transport" ? "Route context" : "Visit style";
 }
 
 function comparisonTitle(type: GuideFilter): string {
-  return type === "dining" ? "Compare dining nearby" : type === "shopping" ? "Compare shopping options" : type === "experience" ? "Compare experience options" : "Compare nearby options";
+  return type === "dining" ? "Compare dining nearby" : type === "shopping" ? "Compare shopping options" : type === "experience" ? "Compare experience options" : type === "stay" ? "Compare stay options" : type === "transport" ? "Compare transport nodes" : "Compare nearby options";
 }
 
 function relatedEventsForPlace(presentation: PlanPresentation, planSources: SourceReference[], placeId: string): DetailEventDisplay[] {

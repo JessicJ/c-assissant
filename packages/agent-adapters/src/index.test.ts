@@ -673,6 +673,9 @@ test("Skill itinerary parser keeps typed day blocks and filters invalid referenc
         { id: "block-flex", kind: "flexible", order: 6, placeId: "c", title: "Same-direction backup", summary: "Use only if pace allows.", evidence: [] },
         { id: "block-transfer", kind: "transfer", order: 7, title: "Move across the neighborhood", summary: "Refresh live routing before leaving.", evidence: [] },
         { id: "block-event", kind: "event", order: 8, eventId: "event-1", title: "Evening program", summary: "Only if the event remains confirmed.", evidence: [] },
+        { id: "block-filler-rest", kind: "rest", order: 9, title: "Slow morning", summary: "Take it easy.", evidence: [] },
+        { id: "block-filler-flex", kind: "flexible", order: 10, title: "Flexible afternoon", summary: "Free time.", evidence: [] },
+        { id: "block-placeholder", kind: "meal", order: 11, title: "Dinner", summary: "Restaurant TBD", evidence: [] },
         { id: "block-unscheduled-stop", kind: "stop", order: 9, placeId: "c", title: "Should drop", evidence: [] },
         { id: "block-missing-place", kind: "meal", order: 10, placeId: "missing", title: "Should drop", evidence: [] },
         { id: "block-missing-event", kind: "event", order: 11, eventId: "missing-event", title: "Should drop", evidence: [] },
@@ -690,12 +693,15 @@ test("Skill itinerary parser keeps typed day blocks and filters invalid referenc
     ["lodging", "hotel", undefined, 4],
     ["flexible", "c", undefined, 5],
     ["transfer", undefined, undefined, 6],
-    ["event", undefined, "event-1", 7]
+    ["event", undefined, "event-1", 7],
+    ["meal", undefined, undefined, 8]
   ]);
   assert.equal(parsed.days[0]?.blocks?.[0]?.title, "Garden anchor");
   assert.equal(parsed.days[0]?.blocks?.[0]?.summary, "Start with the main visit.");
   assert.equal(parsed.days[0]?.blocks?.[0]?.durationMinutes, 90);
   assert.deepEqual(parsed.days[0]?.blocks?.[0]?.evidence, [{ sourceId: "source-1", status: "verified", supports: ["opening window"] }]);
+  assert.equal(parsed.days[0]?.blocks?.[7]?.title, "Dinner");
+  assert.equal(parsed.days[0]?.blocks?.[7]?.summary, undefined);
 });
 
 test("Skill itinerary parser degrades invalid place candidates and movements instead of rejecting the whole itinerary", () => {
@@ -769,7 +775,11 @@ test("Skill itinerary prompt uses a compact Research Set and forbids Plan execut
   assert.match(prompt, /Use only the supplied stable place IDs/i);
   assert.match(prompt, /Include guideTheme/i);
   assert.match(prompt, /Every day must include typed day\.blocks/i);
-  assert.match(prompt, /Do not hide meals, rest, hotel returns, luggage handling, or flexible windows/i);
+  assert.match(prompt, /Do not create filler blocks merely to fill blank time/i);
+  assert.match(prompt, /If deleting the block would not reduce the traveler's ability to understand or execute the day, omit it/i);
+  assert.match(prompt, /Do not output Time TBD, Duration TBD, Distance TBD/i);
+  assert.match(prompt, /make each covered morning depart from the accommodation occupied the previous night/i);
+  assert.match(prompt, /skip this rule without asking for hotel details/i);
   assert.match(prompt, /stop block with placeId must correspond to a same-day stop/i);
   assert.match(prompt, /"display":\{"type":"attraction","markerKind":"attraction"\}/i);
   assert.match(prompt, /Do not return place records, sources, Plan Stages, Tasks, Reminders/i);

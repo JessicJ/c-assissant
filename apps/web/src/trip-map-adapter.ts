@@ -30,6 +30,7 @@ export type NativePoi = {
   plan: string;
   tip: string;
   imageQuery: string;
+  thumbnail?: { url: string; alt: string };
   officialUrl?: string;
   mapUrl?: string;
   experienceUrl?: string;
@@ -123,6 +124,7 @@ function countDayTrips(days: ItineraryDay[]): number {
 }
 
 function toNativePoi(place: PlanPlace, recurring = false): NativePoi {
+  const thumbnail = nativeThumbnailForPlace(place);
   return {
     id: place.id,
     name: place.name,
@@ -136,12 +138,19 @@ function toNativePoi(place: PlanPlace, recurring = false): NativePoi {
     plan: [place.plan, ...place.detailSections.flatMap((section) => [section.body, ...(section.items ?? [])]).filter(Boolean)].join("\n"),
     tip: place.tip ?? "Recheck opening hours, reservations, and transport status before departure.",
     imageQuery: `${place.name} ${place.city ?? place.locationLabel}`,
+    ...(thumbnail ? { thumbnail } : {}),
     ...(place.durationMinutes ? { durationMinutes: place.durationMinutes } : {}),
     ...(recurring ? { recurring: true } : {}),
     ...(place.officialUrl ? { officialUrl: place.officialUrl } : {}),
     ...(place.mapUrl ? { mapUrl: place.mapUrl } : {}),
     ...(place.experienceUrl ? { experienceUrl: place.experienceUrl } : {})
   };
+}
+
+function nativeThumbnailForPlace(place: PlanPlace): NativePoi["thumbnail"] | undefined {
+  const image = (place.images ?? []).find((candidate) => candidate.usage?.includes("card")) ?? place.images?.[0];
+  if (!image) return undefined;
+  return { url: image.url, alt: image.alt };
 }
 
 function toNativeDay(day: ItineraryDay, segments: PlanRouteSegment[], validIds: Set<string>, pois: Map<string, NativePoi>): NativeDay {
