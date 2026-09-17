@@ -8,6 +8,8 @@ export type BlueprintDayKind = "scheduled" | "transit" | "rest" | "free_time";
 export type BlueprintWorkspaceModuleId = "itinerary" | "preparation" | "tips" | "sources";
 export type BlueprintVisitorMode = "first-visit" | "return-visit" | "landmark-light" | "local-only" | "balanced-visitor";
 export type BlueprintItineraryBlockKind = "stop" | "flexible" | "meal" | "rest" | "transfer" | "lodging" | "event";
+export type BlueprintPlanRole = "planned" | "optional" | "replacement";
+export type BlueprintOperationalConditionKind = "reservation" | "session" | "weather" | "route" | "access" | "traveler_choice" | "recheck";
 export type BlueprintSchedulingDecision = "schedulable" | "informational" | "blocked" | "high_impact";
 export type BlueprintPlaceRelationshipKind = "same_area" | "same_direction" | "alternative" | "supports_anchor" | "meal_support" | "rainy_day_alternative" | "low_energy_alternative" | "event_link" | "similar";
 export type BlueprintTravelTipTheme = "payment" | "transport" | "etiquette" | "safety" | "weather" | "timing" | "language" | "local_norms";
@@ -97,6 +99,67 @@ export interface BlueprintFieldEvidence {
   status: BlueprintEvidenceStatus;
   evidence: BlueprintEvidenceRef[];
   note?: string;
+}
+
+export interface BlueprintOperationalFactApplicability {
+  date?: string;
+  startDate?: string;
+  endDate?: string;
+  weekdays?: Array<"monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday">;
+  season?: string;
+  note?: string;
+}
+
+export interface BlueprintOperationalFactBase {
+  status: BlueprintEvidenceStatus;
+  checkedAt?: string;
+  appliesTo?: BlueprintOperationalFactApplicability;
+  evidence: BlueprintEvidenceRef[];
+  uncertaintyNote?: string;
+}
+
+export interface BlueprintOperationalWindowFact extends BlueprintOperationalFactBase {
+  label?: string;
+  opensAt?: string;
+  closesAt?: string;
+}
+
+export interface BlueprintOperationalClosedFact extends BlueprintOperationalFactBase {
+  pattern: string;
+}
+
+export interface BlueprintOperationalLastEntryFact extends BlueprintOperationalFactBase {
+  time?: string;
+  offsetMinutesBeforeClose?: number;
+  note?: string;
+}
+
+export interface BlueprintOperationalSessionFact extends BlueprintOperationalFactBase {
+  label?: string;
+  startsAt?: string;
+  endsAt?: string;
+  durationMinutes?: number;
+}
+
+export interface BlueprintOperationalRequirementFact extends BlueprintOperationalFactBase {
+  requirement: "required" | "recommended" | "not_required" | "unknown";
+  note?: string;
+  bookingUrl?: string;
+}
+
+export interface BlueprintOperationalFacts {
+  access?: {
+    windows?: BlueprintOperationalWindowFact[];
+    closed?: BlueprintOperationalClosedFact[];
+    lastEntry?: BlueprintOperationalLastEntryFact;
+  };
+  sessions?: BlueprintOperationalSessionFact[];
+  entry?: {
+    reservation?: BlueprintOperationalRequirementFact;
+    ticket?: BlueprintOperationalRequirementFact;
+    booking?: BlueprintOperationalRequirementFact;
+    capacity?: BlueprintOperationalRequirementFact;
+  };
 }
 
 export interface BlueprintModuleIdentity {
@@ -232,6 +295,7 @@ export interface BlueprintPlace {
   experienceUrl?: string;
   evidence: BlueprintEvidenceRef[];
   fieldEvidence?: BlueprintFieldEvidence[];
+  operationalFacts?: BlueprintOperationalFacts;
   schedulingEligibility?: BlueprintSchedulingEligibility;
   possibleDuplicateOf?: string[];
 }
@@ -388,6 +452,23 @@ export interface BlueprintItineraryBlockDisplayIntent {
   reorderable?: boolean;
 }
 
+export interface BlueprintTravelContext {
+  label: string;
+  status: "confirmed_property" | "planned_base_pending_property" | "unresolved_base" | "transport_node" | "in_transit";
+}
+
+export interface BlueprintOperationalCondition {
+  kind: BlueprintOperationalConditionKind;
+  note?: string;
+}
+
+export interface BlueprintPlanAlternative {
+  title: string;
+  summary: string;
+  kind: "replacement" | "optional" | "excluded";
+  replacementFor?: string;
+}
+
 export interface BlueprintItineraryBlock {
   id: string;
   kind: BlueprintItineraryBlockKind;
@@ -400,6 +481,11 @@ export interface BlueprintItineraryBlock {
   summary?: string;
   durationMinutes?: number;
   role?: string;
+  planRole?: BlueprintPlanRole;
+  primaryExperience?: boolean;
+  operationalConditions?: BlueprintOperationalCondition[];
+  replacementFor?: string;
+  replacementForBlockId?: string;
   display?: BlueprintItineraryBlockDisplayIntent;
   evidence: BlueprintEvidenceRef[];
 }
@@ -411,6 +497,8 @@ export interface BlueprintItineraryDay {
   city: string;
   title: string;
   summary: string;
+  startContext?: BlueprintTravelContext;
+  endContext?: BlueprintTravelContext;
   stops: BlueprintStop[];
   blocks?: BlueprintItineraryBlock[];
   candidatePlaceIds: string[];
@@ -482,6 +570,8 @@ export interface TripBlueprint {
   experienceThemes?: BlueprintExperienceTheme[];
   travelTips?: BlueprintTravelTip[];
   preparationChecklist?: BlueprintPreparationChecklistItem[];
+  alternatives?: BlueprintPlanAlternative[];
+  researchGrounding?: string[];
   fieldEvidence?: BlueprintFieldEvidence[];
   createdAt: string;
 }
@@ -554,6 +644,8 @@ export function tripBlueprintIntegrityIssues(blueprint: TripBlueprint, options: 
   uniqueIdentityIssues("blueprint.travelTips", (blueprint.travelTips ?? []).map((tip) => tip.id), issues);
   uniqueIdentityIssues("blueprint.preparationChecklist", (blueprint.preparationChecklist ?? []).map((item) => item.id), issues);
   uniqueIdentityIssues("blueprint.guideRelationshipGraph.relationships", (blueprint.guideRelationshipGraph?.relationships ?? []).map((relationship) => relationship.id), issues);
+  for (const [index, alternative] of (blueprint.alternatives ?? []).entries()) validatePlanAlternative(alternative, issues, `blueprint alternatives[${index}]`);
+  for (const [index, grounding] of (blueprint.researchGrounding ?? []).entries()) if (!grounding.trim()) issues.push(`blueprint researchGrounding[${index}] is empty`);
 
   for (const place of blueprint.places) validatePlace(place, sourceIds, placeIds, issues, `place ${place.id || "<missing>"}`);
   for (const event of blueprint.events) {
@@ -575,6 +667,8 @@ export function tripBlueprintIntegrityIssues(blueprint: TripBlueprint, options: 
     else seenDates.add(day.date);
     if (!day.city.trim()) issues.push(`day ${day.id} requires a city or scope label`);
     if (!day.title.trim() || !day.summary.trim()) issues.push(`day ${day.id} requires title and summary`);
+    validateTravelContext(day.startContext, issues, `day ${day.id} startContext`);
+    validateTravelContext(day.endContext, issues, `day ${day.id} endContext`);
     if (day.kind === "scheduled" && day.stops.length === 0) issues.push(`scheduled day ${day.id} requires at least one stop`);
     const stopIds = day.stops.map((stop) => stop.placeId);
     if (new Set(stopIds).size !== stopIds.length) issues.push(`day ${day.id} contains duplicate stops`);
@@ -645,9 +739,81 @@ function validatePlace(place: BlueprintPlace, sourceIds: Set<string>, placeIds: 
   if (place.guideDisplay) validatePlaceGuideDisplay(place.guideDisplay, sourceIds, placeIds, issues, path, place.id);
   validatePlaceImages(place.images ?? [], sourceIds, issues, path);
   validateFieldEvidence(place.fieldEvidence ?? [], sourceIds, issues, path);
+  validateOperationalFacts(place.operationalFacts, sourceIds, issues, path);
   validateSchedulingEligibilityShape(place.schedulingEligibility, issues, path);
   if (place.possibleDuplicateOf?.some((id) => !placeIds.has(id) || id === place.id)) issues.push(`${path} has invalid possible duplicate reference`);
   validateEvidence(place.evidence, sourceIds, issues, path);
+}
+
+function validateOperationalFacts(facts: BlueprintPlace["operationalFacts"] | undefined, sourceIds: Set<string>, issues: string[], path: string): void {
+  if (!facts) return;
+  const access = facts.access;
+  for (const [index, window] of access?.windows?.entries() ?? []) {
+    const factPath = `${path} operational access window ${index + 1}`;
+    validateOperationalFactBase(window, sourceIds, issues, factPath);
+    if (window.label !== undefined && !window.label.trim()) issues.push(`${factPath} has an empty label`);
+    if (window.opensAt !== undefined && !validClockTime(window.opensAt)) issues.push(`${factPath} has invalid opening time`);
+    if (window.closesAt !== undefined && !validClockTime(window.closesAt)) issues.push(`${factPath} has invalid closing time`);
+    if (!window.opensAt && !window.closesAt && !window.label?.trim()) issues.push(`${factPath} needs a time or label`);
+  }
+  for (const [index, closed] of access?.closed?.entries() ?? []) {
+    const factPath = `${path} operational closure ${index + 1}`;
+    validateOperationalFactBase(closed, sourceIds, issues, factPath);
+    if (!closed.pattern.trim()) issues.push(`${factPath} needs a closure pattern`);
+  }
+  if (access?.lastEntry) {
+    validateOperationalFactBase(access.lastEntry, sourceIds, issues, `${path} operational last entry`);
+    if (access.lastEntry.time !== undefined && !validClockTime(access.lastEntry.time)) issues.push(`${path} operational last entry has invalid time`);
+    if (access.lastEntry.offsetMinutesBeforeClose !== undefined && (!Number.isInteger(access.lastEntry.offsetMinutesBeforeClose) || access.lastEntry.offsetMinutesBeforeClose < 0)) issues.push(`${path} operational last entry has invalid offset`);
+    if (!access.lastEntry.time && access.lastEntry.offsetMinutesBeforeClose === undefined && !access.lastEntry.note?.trim()) issues.push(`${path} operational last entry needs a time, offset, or note`);
+  }
+  for (const [index, session] of facts.sessions?.entries() ?? []) {
+    const factPath = `${path} operational session ${index + 1}`;
+    validateOperationalFactBase(session, sourceIds, issues, factPath);
+    if (session.label !== undefined && !session.label.trim()) issues.push(`${factPath} has an empty label`);
+    if (session.startsAt !== undefined && !validClockTime(session.startsAt)) issues.push(`${factPath} has invalid start time`);
+    if (session.endsAt !== undefined && !validClockTime(session.endsAt)) issues.push(`${factPath} has invalid end time`);
+    if (session.durationMinutes !== undefined && (!Number.isInteger(session.durationMinutes) || session.durationMinutes < 1)) issues.push(`${factPath} has invalid duration`);
+    if (!session.startsAt && !session.endsAt && !session.label?.trim()) issues.push(`${factPath} needs a time or label`);
+  }
+  const entry = facts.entry;
+  for (const key of ["reservation", "ticket", "booking", "capacity"] as const) {
+    const fact = entry?.[key];
+    if (!fact) continue;
+    const factPath = `${path} operational ${key}`;
+    validateOperationalFactBase(fact, sourceIds, issues, factPath);
+    if (fact.requirement !== "required" && fact.requirement !== "recommended" && fact.requirement !== "not_required" && fact.requirement !== "unknown") issues.push(`${factPath} has invalid requirement`);
+    if (fact.note !== undefined && !fact.note.trim()) issues.push(`${factPath} has an empty note`);
+    if (fact.bookingUrl !== undefined && !validHttpsUrl(fact.bookingUrl)) issues.push(`${factPath} has invalid booking URL`);
+  }
+}
+
+function validateOperationalFactBase(fact: { status: BlueprintEvidenceStatus; checkedAt?: string; evidence: BlueprintEvidenceRef[]; uncertaintyNote?: string; appliesTo?: BlueprintOperationalFactApplicability }, sourceIds: Set<string>, issues: string[], path: string): void {
+  if (fact.status !== "verified" && fact.status !== "recheck" && fact.status !== "stale") issues.push(`${path} has invalid status`);
+  if (fact.checkedAt !== undefined && !fact.checkedAt.trim()) issues.push(`${path} has an empty checkedAt`);
+  if (fact.uncertaintyNote !== undefined && !fact.uncertaintyNote.trim()) issues.push(`${path} has an empty uncertainty note`);
+  validateOperationalApplicability(fact.appliesTo, issues, path);
+  if (fact.evidence.length === 0) issues.push(`${path} needs evidence`);
+  validateEvidence(fact.evidence, sourceIds, issues, path);
+}
+
+function validateOperationalApplicability(appliesTo: BlueprintOperationalFactApplicability | undefined, issues: string[], path: string): void {
+  if (!appliesTo) return;
+  if (appliesTo.date !== undefined && !validDate(appliesTo.date)) issues.push(`${path} has invalid applicability date`);
+  if (appliesTo.startDate !== undefined && !validDate(appliesTo.startDate)) issues.push(`${path} has invalid applicability start date`);
+  if (appliesTo.endDate !== undefined && !validDate(appliesTo.endDate)) issues.push(`${path} has invalid applicability end date`);
+  if (appliesTo.startDate && appliesTo.endDate && appliesTo.startDate > appliesTo.endDate) issues.push(`${path} has invalid applicability date range`);
+  for (const weekday of appliesTo.weekdays ?? []) if (!validWeekday(weekday)) issues.push(`${path} has invalid applicability weekday ${weekday}`);
+  if (appliesTo.season !== undefined && !appliesTo.season.trim()) issues.push(`${path} has an empty applicability season`);
+  if (appliesTo.note !== undefined && !appliesTo.note.trim()) issues.push(`${path} has an empty applicability note`);
+}
+
+function validWeekday(value: string): boolean {
+  return value === "monday" || value === "tuesday" || value === "wednesday" || value === "thursday" || value === "friday" || value === "saturday" || value === "sunday";
+}
+
+function validClockTime(value: string): boolean {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
 }
 
 function validatePlaceImages(images: BlueprintPlaceImage[], sourceIds: Set<string>, issues: string[], path: string): void {
@@ -712,6 +878,12 @@ function validateRequirement(requirement: BlueprintActionRequirement, placeIds: 
   validateEvidence(requirement.evidence, sourceIds, issues, `action requirement ${requirement.id}`);
 }
 
+function validatePlanAlternative(alternative: BlueprintPlanAlternative, issues: string[], path: string): void {
+  if (!alternative.title.trim() || !alternative.summary.trim()) issues.push(`${path} is incomplete`);
+  if (alternative.kind !== "replacement" && alternative.kind !== "optional" && alternative.kind !== "excluded") issues.push(`${path} has invalid kind`);
+  if (alternative.kind === "replacement" && !alternative.replacementFor?.trim()) issues.push(`${path} replacement requires replacementFor`);
+}
+
 function validateModuleIdentity(identity: BlueprintModuleIdentity, issues: string[]): void {
   if (identity.primaryModule !== "itinerary") issues.push("blueprint module identity must use itinerary as the primary module");
   const moduleIds = uniqueIdentityIssues("blueprint.moduleIdentity.enabledModules", identity.enabledModules.map((module) => module.id), issues);
@@ -746,8 +918,25 @@ function validateItineraryBlocks(day: BlueprintItineraryDay, placeIds: Set<strin
     if (block.placeId && !placeIds.has(block.placeId)) issues.push(`day ${day.id} block ${block.id} references unknown place ${block.placeId}`);
     if (block.eventId && !eventIds.has(block.eventId)) issues.push(`day ${day.id} block ${block.id} references unknown event ${block.eventId}`);
     if (block.durationMinutes !== undefined && (!Number.isInteger(block.durationMinutes) || block.durationMinutes < 1)) issues.push(`day ${day.id} block ${block.id} has invalid duration`);
+    validateBlockSemantics(block, issues, `day ${day.id} block ${block.id}`);
     if (block.display) validateItineraryBlockDisplay(block, new Set(day.stops.map((stop) => stop.placeId)), issues, `day ${day.id} block ${block.id || "<missing>"}`);
     validateEvidence(block.evidence, sourceIds, issues, `day ${day.id} block ${block.id}`);
+  }
+}
+
+function validateTravelContext(context: BlueprintItineraryDay["startContext"] | undefined, issues: string[], path: string): void {
+  if (!context) return;
+  if (!context.label.trim()) issues.push(`${path} requires a label`);
+  if (!["confirmed_property", "planned_base_pending_property", "unresolved_base", "transport_node", "in_transit"].includes(context.status)) issues.push(`${path} has invalid status`);
+}
+
+function validateBlockSemantics(block: BlueprintItineraryBlock, issues: string[], path: string): void {
+  if (block.planRole !== undefined && !["planned", "optional", "replacement"].includes(block.planRole)) issues.push(`${path} has invalid planRole`);
+  if (block.replacementFor !== undefined && !block.replacementFor.trim()) issues.push(`${path} has empty replacementFor`);
+  if (block.replacementForBlockId !== undefined && !block.replacementForBlockId.trim()) issues.push(`${path} has empty replacementForBlockId`);
+  for (const [index, condition] of block.operationalConditions?.entries() ?? []) {
+    if (!["reservation", "session", "weather", "route", "access", "traveler_choice", "recheck"].includes(condition.kind)) issues.push(`${path} operational condition ${index + 1} has invalid kind`);
+    if (condition.note !== undefined && !condition.note.trim()) issues.push(`${path} operational condition ${index + 1} has empty note`);
   }
 }
 

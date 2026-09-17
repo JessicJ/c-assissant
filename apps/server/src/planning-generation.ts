@@ -5,15 +5,24 @@ import {
   importSkillItinerary,
   importSkillResearchBatches,
   mergeResearchSetCheckpoint,
+  type BlueprintPlaceRelationship,
   type BlueprintGeneration,
   type BlueprintGenerationStage,
   type Plan,
   type PlanningSession,
+  type ResearchSet,
+  type SkillResearchBatchArtifact,
   type TravelBooking,
   type WorkspaceSnapshot
 } from "@c-assistant/core";
 import type { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { blueprintBookingConstraintsFromTravelBookings } from "./booking-plan-sync.js";
+import {
+  assessBlueprintDayReasonableness,
+  buildCompletionItineraryRequest,
+  buildTargetedCompletionResearchRequest,
+  completionTargetsForBlueprint
+} from "./day-completion.js";
 import type { PlanningGenerationService } from "./planning-generation-service.js";
 import {
   savedBlueprintGenerationKey,
@@ -32,14 +41,18 @@ import {
   planningResearchScopes,
   planningTransportPreference
 } from "./planning-session-generation.js";
+import { scheduleSemanticShadow, type SemanticShadowConfig, type SemanticShadowDiagnosticEvent } from "./semantic-shadow.js";
 
 export function createPlanningGenerationService(dependencies: {
   store: SqliteWorkspaceStore;
   codex: CodexRuntimeAdapter;
+  semanticShadow?: SemanticShadowConfig;
+  onSemanticShadowDiagnostic?: (event: SemanticShadowDiagnosticEvent | { event: "scheduling_branch_reached"; generationKey: string }) => void;
   setGeneratingPlan: (running: boolean) => void;
   logGenerationFailure: (details: Record<string, unknown>, message: string) => void;
 }): PlanningGenerationService {
   const { store, codex, setGeneratingPlan, logGenerationFailure } = dependencies;
+  const semanticShadow = dependencies.semanticShadow ?? { enabled: false, sampleRate: 0, timeoutMs: 10 * 60_000 };
   const jobs = new Map<string, PlanGenerationJob>();
   const blueprintGenerationKey = (sessionId: string, proposalVersion: number) => savedBlueprintGenerationKey(sessionId, proposalVersion, (key) => store.getBlueprintGeneration(key));
 
@@ -142,23 +155,27 @@ export function createPlanningGenerationService(dependencies: {
       if (research.status !== "completed") {
         research = store.saveResearchSet({ ...research, status: "completed", completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
       }
+      let completedResearch = research;
       assertGenerationNotCancelled(job, session);
       let blueprint = store.getTripBlueprintByGenerationKey(job.generationKey);
       if (!blueprint) {
-        updateGenerationJob(job, { stage: "itinerary", scopeLabel: undefined, savedPlaceCount: research.places.length, message: "Building the daily itinerary from saved places." });
+        updateGenerationJob(job, { stage: "itinerary", scopeLabel: undefined, savedPlaceCount: completedResearch.places.length, message: "Building the daily itinerary from saved places." });
         updatePersistedGeneration(job.generationKey, "itinerary", "running");
-        appendGenerationEvent(job.generationKey, "itinerary", "running", "Started Skill itinerary generation from the complete Research Set.", { savedPlaceCount: research.places.length, nextAction: "Publish the Trip Blueprint after structural validation." });
+        appendGenerationEvent(job.generationKey, "itinerary", "running", "Started Skill itinerary generation from the complete Research Set.", { savedPlaceCount: completedResearch.places.length, nextAction: "Publish the Trip Blueprint after structural validation." });
         const artifact = await withSingleTransientRetry(
-          () => codex.generateSkillItinerary({ request, research, signal: job.controller.signal, profile }),
-          () => appendGenerationEvent(job.generationKey, "itinerary", "running", "Transient itinerary failure; retrying this stage once.", { savedPlaceCount: research!.places.length })
+          () => codex.generateSkillItinerary({ request, research: completedResearch, signal: job.controller.signal, profile }),
+          () => appendGenerationEvent(job.generationKey, "itinerary", "running", "Transient itinerary failure; retrying this stage once.", { savedPlaceCount: completedResearch.places.length })
         );
         assertGenerationNotCancelled(job, session);
         updateGenerationJob(job, { stage: "import", message: "Validating and publishing the Trip Blueprint." });
         updatePersistedGeneration(job.generationKey, "import", "running");
         const createdAt = new Date().toISOString();
-        blueprint = importSkillItinerary(research, artifact, { blueprintId: `blueprint-${randomUUID()}`, blueprintVersion: 1, createdAt, bookingConstraints });
+        blueprint = importSkillItinerary(completedResearch, artifact, { blueprintId: `blueprint-${randomUUID()}`, blueprintVersion: 1, createdAt, bookingConstraints });
         blueprint = store.saveTripBlueprint(blueprint);
         appendGenerationEvent(job.generationKey, "import", "running", "Trip Blueprint published with every Research Set place preserved.", { savedPlaceCount: blueprint.places.length, nextAction: "Compile deterministic execution work for review." });
+        const completed = await completeUnderPlannedDays({ job, session, request, profile, skillLineage, research: completedResearch, blueprint, bookingConstraints });
+        completedResearch = completed.research;
+        blueprint = completed.blueprint;
       }
       if (bookingConstraints.length && JSON.stringify(blueprint.bookingConstraints ?? []) !== JSON.stringify(bookingConstraints)) {
         blueprint = store.saveTripBlueprint({ ...blueprint, bookingConstraints });
@@ -182,6 +199,25 @@ export function createPlanningGenerationService(dependencies: {
       store.finishPlanGenerationRun({ runId: job.runId, status: "succeeded", outputPlanId: generatedWorkspace.activePlan.id });
       appendGenerationEvent(job.generationKey, "ready", "completed", "Trip Blueprint and Draft Plan are ready for review. No execution has started.", { savedPlaceCount: blueprint.places.length, nextAction: "Review the complete itinerary and confirm the Draft Plan when ready." });
       updateGenerationJob(job, { stage: "ready", status: "succeeded", message: "The complete Trip Blueprint and Draft Plan are ready for review." });
+      dependencies.onSemanticShadowDiagnostic?.({ event: "scheduling_branch_reached", generationKey: job.generationKey });
+      scheduleSemanticShadow({
+        generationKey: job.generationKey,
+        sessionId: session.id,
+        proposalVersion: session.confirmedProposalVersion!,
+        request,
+        profile,
+        completedResearch,
+        bookingConstraints,
+        legacyPlan: generatedWorkspace.activePlan,
+        legacyBlueprint: blueprint,
+        sessionFacts: session.facts
+      }, {
+        store,
+        codex,
+        config: semanticShadow,
+        logGenerationFailure,
+        ...(dependencies.onSemanticShadowDiagnostic ? { onDiagnostic: (event: SemanticShadowDiagnosticEvent) => dependencies.onSemanticShadowDiagnostic?.(event) } : {})
+      });
     } catch (error) {
       const failedStage: BlueprintGenerationStage = job.stage === "failed" || job.stage === "cancelled" ? "queued" : job.stage;
       const failureCode = planGenerationFailureCode(error);
@@ -233,6 +269,150 @@ export function createPlanningGenerationService(dependencies: {
       ...(optional.savedPlaceCount === undefined ? {} : { savedPlaceCount: optional.savedPlaceCount }),
       ...(optional.nextAction === undefined ? {} : { nextAction: optional.nextAction })
     });
+  }
+
+  async function completeUnderPlannedDays(input: {
+    job: PlanGenerationJob;
+    session: PlanningSession;
+    request: string;
+    profile: {
+      preferredLanguage: WorkspaceSnapshot["profile"]["preferredLanguage"];
+      nationality: WorkspaceSnapshot["profile"]["nationality"];
+      gender: WorkspaceSnapshot["profile"]["gender"];
+      immigrationStatus: WorkspaceSnapshot["profile"]["immigrationStatus"];
+    };
+    skillLineage: BlueprintGeneration["skillLineage"];
+    research: NonNullable<ReturnType<SqliteWorkspaceStore["getResearchSetByGenerationKey"]>>;
+    blueprint: NonNullable<ReturnType<SqliteWorkspaceStore["getTripBlueprintByGenerationKey"]>>;
+    bookingConstraints: ReturnType<typeof blueprintBookingConstraintsFromTravelBookings>;
+  }): Promise<{ research: typeof input.research; blueprint: typeof input.blueprint }> {
+    let research = input.research;
+    let blueprint = input.blueprint;
+    const targets = completionTargetsForBlueprint(blueprint, research);
+    const dependencyGaps = assessBlueprintDayReasonableness(blueprint).filter((day) => day.classification === "UNDER_PLANNED" && day.cause === "DEPENDENCY_GAP");
+    if (!targets.length) {
+      const detail = dependencyGaps.length
+        ? `Stage 3.10 day completion found no candidate-gap days. Preserved ${dependencyGaps.length} dependency-gap day(s): ${dependencyGaps.map((day) => day.date).join(", ")}.`
+        : "Stage 3.10 day completion found no materially under-planned candidate-gap days.";
+      appendGenerationEvent(input.job.generationKey, "itinerary", "running", detail, { savedPlaceCount: research.places.length, nextAction: "Run final reasonableness check before compile." });
+      return { research, blueprint };
+    }
+
+    const researchTargets = targets.filter((target) => !target.existingCandidates.length && target.researchScopeLabel);
+    for (const [index, target] of researchTargets.entries()) {
+      assertGenerationNotCancelled(input.job, input.session);
+      const scopeLabel = target.researchScopeLabel!;
+      updateGenerationJob(input.job, { stage: "research", scopeLabel, savedPlaceCount: research.places.length, message: `Researching completion candidates for ${target.day.date}.` });
+      updatePersistedGeneration(input.job.generationKey, "research", "running");
+      appendGenerationEvent(input.job.generationKey, "research", "running", `Started targeted day-completion research for ${target.day.date}.`, {
+        scopeLabel,
+        savedPlaceCount: research.places.length,
+        nextAction: "Merge day-specific candidates into the Research Set."
+      });
+      const completedAt = new Date().toISOString();
+      const artifact = await withSingleTransientRetry(
+        () => codex.generateSkillResearchBatch({
+          request: buildTargetedCompletionResearchRequest(input.request, target),
+          batch: { id: `completion-${index + 1}-${target.day.date}`, scopeLabel },
+          signal: input.job.controller.signal,
+          profile: input.profile,
+          skillLineage: input.skillLineage,
+          completedAt
+        }),
+        () => appendGenerationEvent(input.job.generationKey, "research", "running", `Transient targeted research failure for ${target.day.date}; retrying this batch once.`, { scopeLabel, savedPlaceCount: research.places.length })
+      );
+      assertGenerationNotCancelled(input.job, input.session);
+      const checkpointTime = new Date().toISOString();
+      const previousPlaceIds = new Set(research.places.map((place) => place.id));
+      const incoming = importSkillResearchBatches([sameBatchRelationshipsOnly(artifact)], {
+        researchSetId: research.id,
+        generationKey: input.job.generationKey,
+        proposalRef: { sessionId: input.session.id, proposalVersion: input.session.confirmedProposalVersion! },
+        skillLineage: input.skillLineage,
+        createdAt: research.createdAt,
+        updatedAt: checkpointTime
+      });
+      research = mergeResearchSetCheckpoint(research, incoming, { status: "completed", updatedAt: checkpointTime });
+      research = withCompletionAnchorRelationships(research, target, previousPlaceIds);
+      research = store.saveResearchSet(research);
+      appendGenerationEvent(input.job.generationKey, "research", "running", `Saved targeted day-completion research for ${target.day.date}.`, {
+        scopeLabel,
+        savedPlaceCount: research.places.length,
+        nextAction: "Re-compose under-planned day with the normal itinerary generator."
+      });
+    }
+
+    assertGenerationNotCancelled(input.job, input.session);
+    updateGenerationJob(input.job, { stage: "itinerary", scopeLabel: undefined, savedPlaceCount: research.places.length, message: "Re-composing under-planned days." });
+    updatePersistedGeneration(input.job.generationKey, "itinerary", "running");
+    const dates = targets.map((target) => target.day.date).join(", ");
+    appendGenerationEvent(input.job.generationKey, "itinerary", "running", `Stage 3.10 re-composing under-planned day(s): ${dates}.`, {
+      savedPlaceCount: research.places.length,
+      nextAction: "Validate the completion pass before compile."
+    });
+    const completionArtifact = await withSingleTransientRetry(
+      () => codex.generateSkillItinerary({ request: buildCompletionItineraryRequest(input.request, targets, researchTargets.length > 0), research, signal: input.job.controller.signal, profile: input.profile }),
+      () => appendGenerationEvent(input.job.generationKey, "itinerary", "running", "Transient completion itinerary failure; retrying this stage once.", { savedPlaceCount: research.places.length })
+    );
+    assertGenerationNotCancelled(input.job, input.session);
+    blueprint = importSkillItinerary(research, completionArtifact, { blueprintId: blueprint.id, blueprintVersion: blueprint.version, createdAt: blueprint.createdAt, bookingConstraints: input.bookingConstraints });
+    blueprint = store.saveTripBlueprint(blueprint);
+    const finalUnderPlanned = assessBlueprintDayReasonableness(blueprint).filter((day) => day.classification === "UNDER_PLANNED");
+    appendGenerationEvent(input.job.generationKey, "itinerary", "running", finalUnderPlanned.length
+      ? `Stage 3.10 final reasonableness check still has under-planned day(s): ${finalUnderPlanned.map((day) => `${day.date} ${day.cause ?? "UNKNOWN"}`).join(", ")}.`
+      : "Stage 3.10 final reasonableness check passed without under-planned days.", {
+      savedPlaceCount: blueprint.places.length,
+      nextAction: "Compile deterministic execution work for review."
+    });
+    return { research, blueprint };
+  }
+
+  function sameBatchRelationshipsOnly(artifact: SkillResearchBatchArtifact): SkillResearchBatchArtifact {
+    const batchPlaceIds = new Set(artifact.places.map((place) => place.id).filter((id): id is string => Boolean(id)));
+    const sameBatchPlaceId = (placeId: string | undefined): placeId is string => Boolean(placeId && batchPlaceIds.has(placeId));
+    const sameBatchPlaceIds = (placeIds: string[]): string[] => placeIds.filter((placeId, index, all) => batchPlaceIds.has(placeId) && all.indexOf(placeId) === index);
+    const withoutPlaceId = <T extends { placeId?: string }>(item: T): Omit<T, "placeId"> => {
+      const { placeId: _placeId, ...rest } = item;
+      return rest;
+    };
+    return {
+      ...artifact,
+      events: artifact.events.map((event) => sameBatchPlaceId(event.placeId) || !event.placeId ? event : withoutPlaceId(event)),
+      relationships: (artifact.relationships ?? []).filter((relationship) => batchPlaceIds.has(relationship.fromPlaceId) && batchPlaceIds.has(relationship.toPlaceId)),
+      ...(artifact.localFoods ? { localFoods: artifact.localFoods.map((item) => ({ ...item, diningPlaceIds: sameBatchPlaceIds(item.diningPlaceIds) })).filter((item) => item.diningPlaceIds.length) } : {}),
+      ...(artifact.localProducts ? { localProducts: artifact.localProducts.map((item) => ({ ...item, purchasePlaceIds: sameBatchPlaceIds(item.purchasePlaceIds) })).filter((item) => item.purchasePlaceIds.length) } : {}),
+      ...(artifact.experienceThemes ? { experienceThemes: artifact.experienceThemes.map((item) => ({ ...item, offeringPlaceIds: sameBatchPlaceIds(item.offeringPlaceIds) })).filter((item) => item.offeringPlaceIds.length) } : {}),
+      ...(artifact.travelTips ? { travelTips: artifact.travelTips.map((tip) => sameBatchPlaceId(tip.placeId) || !tip.placeId ? tip : withoutPlaceId(tip)) } : {}),
+      ...(artifact.preparationChecklist ? { preparationChecklist: artifact.preparationChecklist.map((item) => sameBatchPlaceId(item.placeId) || !item.placeId ? item : withoutPlaceId(item)) } : {}),
+      ...(artifact.actionRequirements ? { actionRequirements: artifact.actionRequirements.map((requirement) => sameBatchPlaceId(requirement.placeId) || !requirement.placeId ? requirement : withoutPlaceId(requirement)) } : {})
+    };
+  }
+
+  function withCompletionAnchorRelationships(research: ResearchSet, target: ReturnType<typeof completionTargetsForBlueprint>[number], previousPlaceIds: Set<string>): ResearchSet {
+    const newPlaces = research.places.filter((place) => !previousPlaceIds.has(place.id));
+    if (!newPlaces.length || !target.anchors.length) return research;
+    const existingIds = new Set((research.guideRelationships ?? []).map((relationship) => relationship.id));
+    const added: BlueprintPlaceRelationship[] = [];
+    for (const place of newPlaces) {
+      for (const anchor of target.anchors) {
+        const id = `relationship-completion-${target.day.date}-${slug(anchor.id)}-${slug(place.id)}`;
+        if (existingIds.has(id)) continue;
+        existingIds.add(id);
+        added.push({
+          id,
+          kind: place.area && anchor.area && place.area.toLowerCase() === anchor.area.toLowerCase() ? "same_area" : "same_direction",
+          fromPlaceId: anchor.id,
+          toPlaceId: place.id,
+          rationale: `Stage 3.10 targeted completion candidate for ${target.day.date}; selected because it fits the same day area or direction as ${anchor.name}.`,
+          evidence: []
+        });
+      }
+    }
+    return { ...research, guideRelationships: [...(research.guideRelationships ?? []), ...added], updatedAt: new Date().toISOString() };
+  }
+
+  function slug(value: string): string {
+    return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "item";
   }
 
   function imageDiagnosticSummary(diagnostics: NonNullable<Awaited<ReturnType<CodexRuntimeAdapter["generateSkillResearchBatch"]>>["imageDiagnostics"]>): string {

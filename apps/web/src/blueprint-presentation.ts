@@ -27,6 +27,8 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
       summary: day.summary,
       candidates,
       stops,
+      ...(day.startContext ? { startContext: structuredClone(day.startContext) } : {}),
+      ...(day.endContext ? { endContext: structuredClone(day.endContext) } : {}),
       ...(day.blocks ? { blocks: structuredClone(day.blocks) } : {})
     };
   });
@@ -100,6 +102,7 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
         ...(place.guideDisplay ? { guideDisplay: structuredClone(place.guideDisplay) } : {}),
         ...(place.schedulingEligibility ? { schedulingEligibility: structuredClone(place.schedulingEligibility) } : {}),
         ...(place.fieldEvidence ? { fieldEvidence: structuredClone(place.fieldEvidence) } : {}),
+        ...(place.operationalFacts ? { operationalFacts: structuredClone(place.operationalFacts) } : {}),
         ...(place.images?.length ? { images: structuredClone(place.images) } : {}),
         ...(place.contentTier ? { contentTier: place.contentTier } : {}),
         ...(place.visitRole ? { visitRole: place.visitRole } : {}),
@@ -130,6 +133,8 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
     })),
     ...(blueprint.travelTips ? { travelTips: structuredClone(blueprint.travelTips) } : {}),
     ...(blueprint.preparationChecklist ? { preparationChecklist: structuredClone(blueprint.preparationChecklist) } : {}),
+    ...(blueprint.alternatives?.length ? { alternatives: structuredClone(blueprint.alternatives) } : {}),
+    ...(blueprint.researchGrounding?.length ? { researchGrounding: structuredClone(blueprint.researchGrounding) } : {}),
     ...(blueprint.actionRequirements.length ? { actionRequirements: structuredClone(blueprint.actionRequirements) } : {}),
     days,
     routeSegments

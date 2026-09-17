@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { DirectBlueprintRevisionBatchMetadata, Plan, PlanPlace, PlanPresentation } from "@c-assistant/core";
-import { appliedItineraryRevisionSummary, buildBlueprintWorkspaceDisplay, buildPendingItineraryEditForWorkspace, buildPendingItineraryMoveForWorkspace, buildPendingItineraryRemoveForWorkspace, compactPendingItineraryEdits, detailDisplayForWorkspacePlace, filterGuideCards, guideCardsForWorkspace, itineraryDisplayForWorkspace, mergePendingItineraryEdit, pendingItineraryDraftSummary, pendingItineraryEditBatchRequest, pendingItineraryEditRequest, scheduledDayIdForPlace } from "./landi-blueprint-workspace-display.js";
+import { appliedItineraryRevisionSummary, buildBlueprintWorkspaceDisplay, buildPendingItineraryEditForWorkspace, buildPendingItineraryMoveForWorkspace, buildPendingItineraryRemoveForWorkspace, compactPendingItineraryEdits, detailDisplayForWorkspacePlace, filterGuideCards, guideCardsForWorkspace, itineraryDisplayForWorkspace, mergePendingItineraryEdit, pendingItineraryDraftSummary, pendingItineraryEditBatchRequest, pendingItineraryEditRequest, scheduledDayIdForPlace, timelineVisualPrimitiveForItem } from "./landi-blueprint-workspace-display.js";
 
 function place(id: string, patch: Partial<PlanPlace> = {}): PlanPlace {
   return {
@@ -202,7 +202,36 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.equal(workspace.itineraries[2]?.items[0]?.routeAfterDetail, "Sacred Monkey Forest -> Nusantara by Locavore · 469 m");
   });
 
-  it("keeps unspecific meals lightweight, pending place placeholders distinct, and rest visually lowest priority", () => {
+  it("does not expose precise route duration labels for unverified movements without evidence", () => {
+    const presentation = presentationFixture({
+      places: [
+        place("forest", { name: "Sacred Monkey Forest Sanctuary", category: "sanctuary attraction" }),
+        place("museum", { name: "Museum Puri Lukisan", category: "museum" }),
+        place("temple", { name: "Uluwatu Temple", category: "temple" })
+      ],
+      days: [{
+        id: "day-1",
+        label: "Oct 8",
+        date: "2026-10-08",
+        city: "Bali",
+        placeIds: ["forest", "museum", "temple"],
+        stops: [{ placeId: "forest", order: 1, time: "09:00" }, { placeId: "museum", order: 2, time: "11:00" }, { placeId: "temple", order: 3, time: "15:30" }]
+      }],
+      routeSegments: [
+        { id: "unsupported", dayId: "day-1", originPlaceId: "forest", destinationPlaceId: "museum", mode: "driving", verification: "needs_verification", durationMinutes: 35, sourceRefs: [] },
+        { id: "supported", dayId: "day-1", originPlaceId: "museum", destinationPlaceId: "temple", mode: "driving", verification: "needs_verification", durationMinutes: 70, sourceRefs: [], evidence: [{ sourceId: "guide", status: "recheck" }] }
+      ],
+      sourceCatalog: [{ id: "guide", title: "Route note", authority: "Guide", url: "https://example.com/route", retrievedAt: "2026-09-01", status: "recheck" }]
+    });
+    const itinerary = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).itineraries[0]!;
+
+    assert.equal(itinerary.routeSegments[0]?.durationLabel, undefined);
+    assert.equal(itinerary.routeSegments[0]?.label, "Travel time to confirm");
+    assert.equal(itinerary.routeSegments[1]?.durationLabel, "~70 min");
+    assert.equal(itinerary.routeSegments[1]?.label, "~70 min by car");
+  });
+
+  it("filters low-value filler blocks while keeping actionable dependencies visible", () => {
     const presentation = presentationFixture({
       places: [],
       days: [{
@@ -224,14 +253,364 @@ describe("Landi Blueprint workspace display helpers", () => {
     const items = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).itineraries[0]?.items ?? [];
 
     assert.deepEqual(items.map((item) => ({ title: item.title, role: item.timelineRole, type: item.type, meta: item.meta, time: item.timeLabel })), [
-      { title: "Slow morning", role: "rest", type: "attraction", meta: undefined, time: "Rest window" },
-      { title: "Lunch near hotel", role: "activity", type: "dining", meta: undefined, time: "Around lunch" },
       { title: "Dinner", role: "pending_place", type: "dining", meta: "Restaurant TBD", time: "Dinner window" },
       { title: "Accommodation", role: "pending_place", type: "stay", meta: "Hotel not selected", time: "" },
       { title: "Airport transfer", role: "transport", type: "transport", meta: "Confirm once lodging is set.", time: "" }
     ]);
+    assert.deepEqual(presentation.days[0]?.blocks?.map((block) => block.id), ["slow", "lunch", "dinner", "hotel", "transfer"]);
+    assert.deepEqual(presentation.days[0]?.stops, []);
+    assert.deepEqual(presentation.days[0]?.placeIds, []);
+    assert.deepEqual(presentation.routeSegments, []);
     assert.equal(items.some((item) => item.image), false);
     assert.equal(items.some((item) => item.routeAnchor), false);
+  });
+
+  it("keeps legacy stop fallback only when day blocks are missing", () => {
+    const presentation = presentationFixture({
+      places: [place("temple", { name: "Kiyomizu-dera", category: "temple" })],
+      days: [{
+        id: "day-1",
+        label: "Legacy day",
+        date: "2026-10-01",
+        city: "Kyoto",
+        placeIds: ["temple"],
+        stops: [{ placeId: "temple", order: 1, time: "09:00" }]
+      }]
+    });
+    const items = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).itineraries[0]?.items ?? [];
+
+    assert.deepEqual(items.map((item) => ({ title: item.title, time: item.timeLabel, role: item.timelineRole })), [
+      { title: "Kiyomizu-dera", time: "09:00", role: "place" }
+    ]);
+  });
+
+  it("treats explicit empty day blocks as an authoritative empty timeline", () => {
+    const presentation = presentationFixture({
+      places: [place("temple", { name: "Kiyomizu-dera", category: "temple" })],
+      days: [{
+        id: "day-1",
+        label: "Open day",
+        date: "2026-10-01",
+        city: "Kyoto",
+        placeIds: ["temple"],
+        stops: [{ placeId: "temple", order: 1, time: "09:00" }],
+        blocks: []
+      }]
+    });
+    const items = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).itineraries[0]?.items ?? [];
+
+    assert.deepEqual(items, []);
+  });
+
+  it("shows day context for context-only travel days without fabricating itinerary items", () => {
+    const presentation = presentationFixture({
+      places: [],
+      days: [{
+        id: "day-1",
+        label: "Oct 5",
+        date: "2026-10-05",
+        city: "Bali",
+        title: "Arrival and transfer to Ubud",
+        summary: "Arrival, immigration, baggage, private transfer, check-in, and recovery.",
+        startContext: { label: "DPS", status: "transport_node" },
+        endContext: { label: "Ubud accommodation", status: "planned_base_pending_property" },
+        placeIds: [],
+        stops: [],
+        blocks: []
+      }]
+    });
+    const itinerary = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).itineraries[0]!;
+
+    assert.deepEqual(itinerary.items, []);
+    assert.deepEqual(itinerary.dayContext, {
+      startLabel: "DPS",
+      endLabel: "Ubud accommodation",
+      summary: "Arrival, immigration, baggage, private transfer, check-in, and recovery."
+    });
+    assert.deepEqual(itinerary.routePlaces, []);
+    assert.deepEqual(itinerary.markers, []);
+  });
+
+  it("shows base-change context on days with normal itinerary content", () => {
+    const presentation = presentationFixture({
+      places: [place("jatiluwih", { name: "Jatiluwih Rice Terraces", category: "rice terraces" })],
+      days: [{
+        id: "day-1",
+        label: "Oct 9",
+        date: "2026-10-09",
+        city: "Bali",
+        title: "Jatiluwih and move to Jimbaran",
+        summary: "Transfer base after the rice terraces.",
+        startContext: { label: "Ubud accommodation", status: "planned_base_pending_property" },
+        endContext: { label: "Jimbaran accommodation", status: "planned_base_pending_property" },
+        placeIds: ["jatiluwih"],
+        stops: [],
+        blocks: [{ id: "jatiluwih", kind: "stop", order: 1, placeId: "jatiluwih", startTime: "08:30", evidence: [] }]
+      }]
+    });
+    const itinerary = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).itineraries[0]!;
+
+    assert.deepEqual(itinerary.items.map((item) => item.title), ["Jatiluwih Rice Terraces"]);
+    assert.deepEqual(itinerary.dayContext, {
+      startLabel: "Ubud accommodation",
+      endLabel: "Jimbaran accommodation"
+    });
+  });
+
+  it("does not show repetitive same-base context on ordinary sightseeing days", () => {
+    const presentation = presentationFixture({
+      days: [{
+        id: "day-1",
+        label: "Oct 7",
+        date: "2026-10-07",
+        city: "Bali",
+        title: "Ubud temples and museums",
+        summary: "A normal local sightseeing day; keep the final airport transfer in mind but do not move base.",
+        startContext: { label: "Ubud accommodation", status: "planned_base_pending_property" },
+        endContext: { label: "Ubud accommodation", status: "planned_base_pending_property" },
+        placeIds: ["temple"],
+        stops: [],
+        blocks: [{ id: "temple", kind: "stop", order: 1, placeId: "temple", startTime: "09:00", evidence: [] }]
+      }]
+    });
+    const itinerary = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).itineraries[0]!;
+
+    assert.equal(itinerary.dayContext, undefined);
+    assert.deepEqual(itinerary.items.map((item) => item.title), ["temple"]);
+  });
+
+  it("renders explicit visible place blocks without falling back to stops", () => {
+    const presentation = presentationFixture({
+      places: [
+        place("temple", { name: "Kiyomizu-dera", category: "temple" }),
+        place("market", { name: "Nishiki Market", category: "food market" })
+      ],
+      days: [{
+        id: "day-1",
+        label: "Block day",
+        date: "2026-10-01",
+        city: "Kyoto",
+        placeIds: ["temple", "market"],
+        stops: [{ placeId: "temple", order: 1, time: "09:00" }, { placeId: "market", order: 2 }],
+        blocks: [{ id: "temple-block", kind: "stop", order: 1, placeId: "temple", startTime: "10:00", title: "Temple visit", evidence: [] }]
+      }]
+    });
+    const items = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).itineraries[0]?.items ?? [];
+
+    assert.deepEqual(items.map((item) => ({ title: item.title, meta: item.meta, time: item.timeLabel })), [
+      { title: "Kiyomizu-dera", meta: "Temple visit", time: "10:00" }
+    ]);
+  });
+
+  it("keeps explicit rest constraints visible instead of treating every rest block as filler", () => {
+    const presentation = presentationFixture({
+      places: [],
+      days: [{
+        id: "day-1",
+        label: "Loose day",
+        date: "2026-10-01",
+        city: "Bali",
+        placeIds: [],
+        stops: [],
+        blocks: [
+          { id: "medicine-rest", kind: "rest", order: 1, title: "Medication rest window", summary: "Return to the room for a required health break.", startTime: "15:00", durationMinutes: 45, evidence: [] },
+          { id: "free-evening", kind: "flexible", order: 2, title: "Free evening window", summary: "Leave this open.", evidence: [] }
+        ]
+      }]
+    });
+    const items = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).itineraries[0]?.items ?? [];
+
+    assert.deepEqual(items.map((item) => ({ title: item.title, role: item.timelineRole, time: item.timeLabel, meta: item.meta })), [
+      { title: "Medication rest window", role: "rest", time: "15:00", meta: undefined }
+    ]);
+  });
+
+  it("shows planned unresolved experiences while keeping optional and replacement blocks out of the main timeline", () => {
+    const presentation = presentationFixture({
+      places: [
+        place("waterbom", { name: "Waterbom Bali", category: "water park" }),
+        place("uluwatu", { name: "Uluwatu Temple", category: "temple" }),
+        place("kecak", { name: "Uluwatu Kecak", category: "performance" })
+      ],
+      days: [{
+        id: "day-1",
+        label: "Oct 11",
+        date: "2026-10-11",
+        city: "Bali",
+        placeIds: ["uluwatu", "kecak"],
+        stops: [{ placeId: "uluwatu", order: 1, time: "15:30" }, { placeId: "kecak", order: 2, time: "18:00" }],
+        blocks: [
+          { id: "jimbaran-planned", kind: "flexible", order: 1, title: "Jimbaran Beach", summary: "Use this as the morning beach window.", startTime: "09:30", durationMinutes: 120, planRole: "planned", evidence: [] },
+          { id: "uluwatu", kind: "stop", order: 2, placeId: "uluwatu", startTime: "15:30", planRole: "planned", evidence: [] },
+          { id: "kecak", kind: "event", order: 3, placeId: "kecak", startTime: "18:00", planRole: "planned", primaryExperience: true, operationalConditions: [{ kind: "session" }, { kind: "reservation" }], evidence: [] },
+          { id: "taman-ayun", kind: "flexible", order: 4, title: "Taman Ayun", planRole: "optional", evidence: [] },
+          { id: "jimbaran-replacement", kind: "flexible", order: 5, title: "Jimbaran Beach", planRole: "replacement", replacementFor: "Waterbom Bali", replacementForBlockId: "waterbom", evidence: [] }
+        ]
+      }, {
+        id: "day-2",
+        label: "Oct 10",
+        date: "2026-10-10",
+        city: "Bali",
+        placeIds: ["waterbom"],
+        stops: [{ placeId: "waterbom", order: 1, time: "10:00" }],
+        blocks: [
+          { id: "waterbom", kind: "stop", order: 1, placeId: "waterbom", startTime: "10:00", planRole: "planned", primaryExperience: true, operationalConditions: [{ kind: "access" }, { kind: "reservation" }], evidence: [] }
+        ]
+      }]
+    });
+    const workspace = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation);
+    const oct11Items = workspace.itineraries.find((day) => day.dayId === "day-1")?.items ?? [];
+
+    assert.deepEqual(oct11Items.map((item) => ({ title: item.title, role: item.timelineRole, placeId: item.placeId, time: item.timeLabel })), [
+      { title: "Jimbaran Beach", role: "activity", placeId: "", time: "09:30" },
+      { title: "Uluwatu Temple", role: "place", placeId: "uluwatu", time: "15:30" },
+      { title: "Uluwatu Kecak", role: "place", placeId: "kecak", time: "18:00" }
+    ]);
+    assert.equal(oct11Items.some((item) => item.title === "Taman Ayun"), false);
+    assert.equal(oct11Items.filter((item) => item.title === "Jimbaran Beach").length, 1);
+    assert.deepEqual(workspace.itineraries.find((day) => day.dayId === "day-1")?.dayAlternatives.map((item) => ({ title: item.title, kind: item.kind, replacementFor: item.replacementFor })), [
+      { title: "Taman Ayun", kind: "optional", replacementFor: undefined },
+      { title: "Jimbaran Beach", kind: "replacement", replacementFor: "Waterbom Bali" }
+    ]);
+    assert.deepEqual(presentation.days[0]?.blocks?.find((block) => block.id === "kecak")?.operationalConditions?.map((condition) => condition.kind), ["session", "reservation"]);
+  });
+
+  it("keeps day-local alternatives attached to their day without fake place identity", () => {
+    const presentation = presentationFixture({
+      places: [place("waterbom", { name: "Waterbom Bali", category: "water park" })],
+      days: [{
+        id: "day-1",
+        label: "Oct 9",
+        date: "2026-10-09",
+        city: "Bali",
+        placeIds: [],
+        stops: [],
+        blocks: [
+          { id: "taman-ayun", kind: "flexible", order: 1, title: "Taman Ayun", summary: "Use only if the transfer route and energy allow.", planRole: "optional", operationalConditions: [{ kind: "route", note: "Check route after hotel selection." }], evidence: [] }
+        ]
+      }, {
+        id: "day-2",
+        label: "Oct 10",
+        date: "2026-10-10",
+        city: "Bali",
+        placeIds: ["waterbom"],
+        stops: [{ placeId: "waterbom", order: 1, time: "09:30" }],
+        blocks: [
+          { id: "waterbom", kind: "stop", order: 1, placeId: "waterbom", startTime: "09:30", planRole: "planned", evidence: [] },
+          { id: "jimbaran", kind: "flexible", order: 2, title: "Jimbaran Beach", summary: "Replace the water park if the group wants a beach day.", planRole: "replacement", replacementFor: "Waterbom Bali", operationalConditions: [{ kind: "traveler_choice", note: "Use only if travelers reject the water-park plan." }], evidence: [] }
+        ]
+      }]
+    });
+    const workspace = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation);
+    const oct9 = workspace.itineraries.find((day) => day.dayId === "day-1")!;
+    const oct10 = workspace.itineraries.find((day) => day.dayId === "day-2")!;
+
+    assert.deepEqual(oct9.items, []);
+    assert.deepEqual(oct9.dayAlternatives.map((item) => ({ title: item.title, kind: item.kind, condition: item.condition, hasPlaceId: "placeId" in item })), [
+      { title: "Taman Ayun", kind: "optional", condition: "Check route after hotel selection.", hasPlaceId: false }
+    ]);
+    assert.deepEqual(oct10.items.map((item) => item.title), ["Waterbom Bali"]);
+    assert.deepEqual(oct10.dayAlternatives.map((item) => ({ title: item.title, kind: item.kind, replacementFor: item.replacementFor, condition: item.condition, hasPlaceId: "placeId" in item })), [
+      { title: "Jimbaran Beach", kind: "replacement", replacementFor: "Waterbom Bali", condition: "Use only if travelers reject the water-park plan.", hasPlaceId: false }
+    ]);
+  });
+
+  it("keeps intentional exclusions out of the timeline as plan-level rationale", () => {
+    const presentation = presentationFixture({
+      alternatives: [{ kind: "excluded", title: "Nusa Penida", summary: "Left out because it would add too much boat-transfer burden." }],
+      days: [{
+        id: "day-1",
+        label: "Oct 10",
+        date: "2026-10-10",
+        city: "Bali",
+        placeIds: ["temple"],
+        stops: [{ placeId: "temple", order: 1, time: "09:00" }]
+      }]
+    });
+    const workspace = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation);
+
+    assert.equal(workspace.itineraries[0]?.items.some((item) => item.title === "Nusa Penida"), false);
+    assert.deepEqual(workspace.planAlternatives.map((item) => ({ title: item.title, kind: item.kind, summary: item.summary })), [
+      { title: "Nusa Penida", kind: "excluded", summary: "Left out because it would add too much boat-transfer burden." }
+    ]);
+  });
+
+  it("maps visible timeline items onto converged visual primitives without changing the visible set", () => {
+    const image: NonNullable<PlanPlace["images"]>[number] = { url: "https://example.test/airport.jpg", alt: "Airport", sourceId: "source-guide", usage: ["detail"], status: "verified" };
+    const presentation = presentationFixture({
+      places: [
+        place("airport", { name: "I Gusti Ngurah Rai International Airport", category: "airport transport", images: [image] }),
+        place("museum", { name: "Museum Puri Lukisan", category: "museum" }),
+        place("hotel", { name: "Hotel not selected", category: "hotel accommodation" }),
+        place("restaurant", { name: "Paon Bali Cooking Class", category: "cooking class restaurant" })
+      ],
+      days: [{
+        id: "day-1",
+        label: "Primitive day",
+        date: "2026-10-06",
+        city: "Bali",
+        placeIds: ["airport", "museum", "hotel", "restaurant"],
+        stops: [
+          { placeId: "airport", order: 1, time: "09:00" },
+          { placeId: "museum", order: 2, time: "13:30" },
+          { placeId: "hotel", order: 3 },
+          { placeId: "restaurant", order: 4 }
+        ],
+        blocks: [
+          { id: "airport", kind: "stop", order: 1, placeId: "airport", startTime: "09:00", title: "Arrival", evidence: [] },
+          { id: "pickup", kind: "transfer", order: 1.5, title: "Pickup / meeting arrangement", summary: "Confirm pickup point.", evidence: [] },
+          { id: "museum", kind: "stop", order: 2, placeId: "museum", startTime: "13:30", evidence: [] },
+          { id: "hotel", kind: "lodging", order: 3, placeId: "hotel", evidence: [] },
+          { id: "restaurant", kind: "event", order: 4, placeId: "restaurant", evidence: [] },
+          { id: "free-evening", kind: "flexible", order: 5, title: "Free evening window", summary: "Leave this open.", evidence: [] }
+        ]
+      }],
+      routeSegments: [
+        { id: "walk", dayId: "day-1", originPlaceId: "airport", destinationPlaceId: "museum", mode: "walking", verification: "verified", durationMinutes: 28, sourceRefs: [] }
+      ],
+      actionRequirements: [
+        { id: "cooking-class-reservation", kind: "reservation", title: "Reserve cooking class", description: "Reserve the cooking class before the trip.", accountableParty: "traveler", completionCondition: "Cooking class reserved.", placeId: "restaurant", evidence: [] }
+      ]
+    });
+    const items = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).itineraries[0]?.items ?? [];
+
+    assert.deepEqual(items.map((item) => item.title), [
+      "I Gusti Ngurah Rai International Airport",
+      "Pickup / meeting arrangement",
+      "Museum Puri Lukisan",
+      "Hotel not selected",
+      "Paon Bali Cooking Class"
+    ]);
+    assert.deepEqual(items.map((item) => timelineVisualPrimitiveForItem(item)), ["place", "movement", "place", "place", "place"]);
+    assert.deepEqual(items.map((item) => item.timelineRole), ["place", "transport", "place", "place", "place"]);
+    assert.equal(items.find((item) => item.title === "Paon Bali Cooking Class")?.statusLabel, "Reservation required");
+    assert.equal(items.filter((item) => item.statusLabel === "Reservation required").length, 1);
+    assert.equal(items.find((item) => item.title === "Museum Puri Lukisan")?.image, undefined);
+    assert.equal(items[0]?.routeAfterLabel, "28 min walk");
+  });
+
+  it("keeps pending places on the place primitive and lightweight constraints off the place skeleton", () => {
+    const presentation = presentationFixture({
+      places: [],
+      days: [{
+        id: "day-1",
+        label: "Dependency day",
+        date: "2026-10-01",
+        city: "Bali",
+        placeIds: [],
+        stops: [],
+        blocks: [
+          { id: "hotel", kind: "lodging", order: 1, title: "Accommodation", summary: "Hotel not selected", evidence: [] },
+          { id: "medication", kind: "rest", order: 2, title: "Medication rest window", summary: "Required health break.", evidence: [] }
+        ]
+      }]
+    });
+    const items = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).itineraries[0]?.items ?? [];
+
+    assert.deepEqual(items.map((item) => ({ title: item.title, role: item.timelineRole, primitive: timelineVisualPrimitiveForItem(item) })), [
+      { title: "Accommodation", role: "pending_place", primitive: "place" },
+      { title: "Medication rest window", role: "rest", primitive: "action" }
+    ]);
   });
 
   it("uses explicit Blueprint display intent before category inference", () => {
@@ -432,6 +811,111 @@ describe("Landi Blueprint workspace display helpers", () => {
     }]);
   });
 
+  it("derives Explore plan fit and practical signals from existing plan context", () => {
+    const presentation = presentationFixture({
+      places: [
+        place("monkey", { name: "Sacred Monkey Forest Sanctuary", category: "forest sanctuary", area: "Ubud", durationMinutes: 120, whyWorthIt: "Shaded forest, temples, and macaques make this a concrete Ubud anchor." }),
+        place("paon", { name: "Paon Bali Cooking Class", category: "cooking class", area: "Ubud", durationMinutes: 240, whyWorthIt: "A hands-on Balinese cooking class in a family compound." }),
+        place("kecak", { name: "Uluwatu Kecak and Fire Dance", category: "performance", area: "Uluwatu", priority: "recheck", durationMinutes: 90, whyWorthIt: "A conditional sunset performance option." }),
+        place("walk", { name: "Campuhan Ridge Walk", category: "walk", area: "Ubud", durationMinutes: 90, whyWorthIt: "An easy greenery walk that can flex around weather." }),
+        place("waterbom", { name: "Waterbom Bali", category: "water park", area: "Kuta", whyWorthIt: "A low-logistics leisure backup." })
+      ],
+      days: [
+        { id: "day-1", label: "Oct 6", date: "2026-10-06", city: "Ubud", placeIds: ["monkey"], stops: [{ placeId: "monkey", order: 1, time: "09:00" }], candidates: ["walk"] },
+        { id: "day-arrival", label: "Oct 3", title: "Arrival day", summary: "Airport arrival and hotel transfer.", city: "Bali", placeIds: [], stops: [], candidates: ["waterbom"] }
+      ],
+      actionRequirements: [
+        { id: "reserve-paon", kind: "reservation", title: "Reserve Paon", description: "Reserve the class before the trip.", accountableParty: "traveler", completionCondition: "Class reserved.", placeId: "paon", evidence: [] },
+        { id: "check-kecak", kind: "time_sensitive_recheck", title: "Check Kecak schedule", description: "Confirm the performance schedule and ticket status.", accountableParty: "traveler", completionCondition: "Schedule checked.", placeId: "kecak", evidence: [] }
+      ],
+      guideRelationshipGraph: {
+        relationships: [
+          { id: "rain-walk", kind: "rainy_day_alternative", fromPlaceId: "walk", toPlaceId: "monkey", rationale: "Use as a flexible Ubud weather swap.", dayIds: ["day-1"], evidence: [] }
+        ]
+      }
+    });
+    const cards = new Map(buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).guideCards.map((card) => [card.placeId, card]));
+
+    assert.equal(cards.get("monkey")?.planFitLabel, "In your plan · Oct 6, 09:00");
+    assert.equal(cards.get("monkey")?.practicalSignal, "~2h");
+    assert.equal(cards.get("paon")?.planFitLabel, "Add after booking check");
+    assert.equal(cards.get("paon")?.practicalSignal, "Reservation required");
+    assert.equal(cards.get("kecak")?.planFitLabel, "Add after schedule check");
+    assert.equal(cards.get("kecak")?.practicalSignal, "Needs schedule check");
+    assert.equal(cards.get("walk")?.planFitLabel, "Rainy-day option for Oct 6");
+    assert.equal(cards.get("waterbom")?.planFitLabel, "Not currently in your plan");
+    assert.equal(cards.get("waterbom")?.image, undefined);
+  });
+
+  it("suppresses logistics-day candidate fit while keeping sightseeing candidates available", () => {
+    const presentation = presentationFixture({
+      places: [
+        place("museum", { name: "Museum", category: "museum" }),
+        place("arrival-spa", { name: "Arrival spa", category: "spa" }),
+        place("departure-cafe", { name: "Departure cafe", category: "cafe" })
+      ],
+      days: [
+        { id: "sightseeing", label: "Oct 6", title: "Ubud day", city: "Ubud", placeIds: ["temple"], stops: [{ placeId: "temple", order: 1 }], candidates: ["museum"] },
+        { id: "arrival", label: "Oct 3", title: "Arrival day", summary: "Airport arrival and transfer.", city: "Bali", placeIds: [], stops: [], candidates: ["arrival-spa"] },
+        { id: "departure", label: "Oct 12", title: "Departure day", summary: "Check out and flight out.", city: "Bali", placeIds: ["lunch"], stops: [{ placeId: "lunch", order: 1 }], candidates: ["departure-cafe"] }
+      ]
+    });
+    const cards = new Map(buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).guideCards.map((card) => [card.placeId, card]));
+
+    assert.equal(cards.get("museum")?.planFitLabel, "Fits your Ubud day");
+    assert.equal(cards.get("arrival-spa")?.planFitLabel, "Not currently in your plan");
+    assert.equal(cards.get("departure-cafe")?.planFitLabel, "Not currently in your plan");
+  });
+
+  it("keeps conditional event blocks from looking committed in Explore", () => {
+    const presentation = presentationFixture({
+      places: [
+        place("temple", { name: "Uluwatu Temple", category: "temple" }),
+        place("kecak", { name: "Uluwatu Kecak", category: "performance", priority: "recheck" })
+      ],
+      days: [{
+        id: "day-1",
+        label: "Oct 11",
+        date: "2026-10-11",
+        city: "Uluwatu",
+        placeIds: ["temple"],
+        stops: [{ placeId: "temple", order: 1, time: "15:30" }],
+        blocks: [
+          { id: "temple", kind: "stop", order: 1, placeId: "temple", startTime: "15:30", evidence: [] },
+          { id: "kecak-note", kind: "event", order: 2, placeId: "kecak", title: "Kecak if schedule works", display: { routeAnchor: false, timeLabel: "Flexible afternoon" }, evidence: [] }
+        ]
+      }],
+      actionRequirements: [{ id: "check-kecak", kind: "time_sensitive_recheck", title: "Check Kecak schedule", description: "Confirm the performance schedule.", accountableParty: "traveler", completionCondition: "Schedule checked.", placeId: "kecak", evidence: [] }]
+    });
+    const cards = new Map(buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).guideCards.map((card) => [card.placeId, card]));
+
+    assert.equal(cards.get("temple")?.planFitLabel, "In your plan · Oct 11, 15:30");
+    assert.equal(cards.get("kecak")?.state, "unscheduled");
+    assert.equal(cards.get("kecak")?.planFitLabel, "Add after schedule check");
+    assert.equal(cards.get("kecak")?.practicalSignal, "Needs schedule check");
+    assert.equal(cards.get("kecak")?.timeline, undefined);
+  });
+
+  it("builds Place Detail as visit guidance with itinerary context and lower-priority sources", () => {
+    const presentation = presentationFixture({
+      sourceCatalog: [{ id: "guide", title: "Official guide", authority: "Museum", url: "https://museum.example", retrievedAt: "2026-09-01", status: "verified" }],
+      places: [
+        place("monkey", { name: "Sacred Monkey Forest Sanctuary", category: "forest sanctuary", area: "Ubud", city: "Ubud", locationLabel: "Ubud, Bali", durationMinutes: 120, whyWorthIt: "Shaded forest, temples, and macaques make this a concrete Ubud anchor.", plan: "Go early, keep loose items secured, and continue after lunch if energy is good.", sourceRefs: ["guide"] }),
+        place("museum", { name: "Museum Puri Lukisan", category: "museum", area: "Ubud", city: "Ubud", locationLabel: "Ubud, Bali", durationMinutes: 90, whyWorthIt: "A focused Balinese art museum." })
+      ],
+      days: [{ id: "day-1", label: "Oct 6", date: "2026-10-06", city: "Ubud", placeIds: ["monkey", "museum"], stops: [{ placeId: "monkey", order: 1, time: "09:00" }, { placeId: "museum", order: 2, time: "13:30" }] }],
+      routeSegments: [{ id: "walk", dayId: "day-1", originPlaceId: "monkey", destinationPlaceId: "museum", mode: "walking", verification: "verified", durationMinutes: 28, sourceRefs: [] }]
+    });
+    const detail = detailDisplayForWorkspacePlace(buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation), "monkey")!;
+
+    assert.deepEqual(detail.heroMeta, ["Forest Sanctuary", "Ubud", "Ubud, Bali"]);
+    assert.deepEqual(detail.visitFacts, ["Allow ~2h"]);
+    assert.equal(detail.itineraryContext?.body, "Oct 6 · 09:00");
+    assert.deepEqual(detail.itineraryContext?.items, ["Planned stay · ~2h", "Next: Museum Puri Lukisan", "28 min walk · verified"]);
+    assert.equal(detail.sources.length, 1);
+    assert.equal(detail.sourceTitle, undefined);
+  });
+
   it("keeps scheduling constraints out of left guide card summaries", () => {
     const presentation = presentationFixture({
       places: [
@@ -536,8 +1020,8 @@ describe("Landi Blueprint workspace display helpers", () => {
       title: item.title,
       description: item.description
     })), [{
-      title: "Travel preparation",
-      description: "Check eSIM coverage before departure."
+      title: "Check eSIM coverage before departure.",
+      description: undefined
     }]);
     assert.equal(/workspace|schema|json|candidate|route refresh|execution|replan/i.test(JSON.stringify({
       tips: workspace.tipGroups,
@@ -588,7 +1072,7 @@ describe("Landi Blueprint workspace display helpers", () => {
     }]);
     assert.deepEqual(display.preparationGroups, [{
       title: "Documents",
-      items: [{ id: "prep-passport", title: "Check passport validity", description: "Confirm passport validity before departure.", completion: "Passport validity is confirmed.", checked: true }]
+      items: [{ id: "prep-passport", title: "Check passport validity", description: "Confirm passport validity before departure.", completion: "Passport validity is confirmed.", role: "general", checked: true }]
     }]);
   });
 
@@ -707,7 +1191,6 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.deepEqual(workspace.areas, ["itinerary", "tips"]);
     assert.deepEqual(workspace.itineraries[0]?.items.map((item) => ({ title: item.title, time: item.timeLabel, meta: item.meta, placeId: item.placeId })), [
       { title: "temple", time: "09:30", meta: "Central · Kyoto", placeId: "temple" },
-      { title: "Hotel rest", time: "Rest window", meta: undefined, placeId: "" },
       { title: "lunch", time: "Around lunch", meta: "lunch", placeId: "lunch" }
     ]);
     assert.deepEqual(workspace.itineraries[0]?.routePlaces.map((place) => place.placeId), ["temple", "lunch"]);
@@ -725,7 +1208,7 @@ describe("Landi Blueprint workspace display helpers", () => {
     const detail = detailDisplayForWorkspacePlace(workspace, "tea");
     assert.equal(detail?.canAdd, true);
     assert.deepEqual(detail?.comparisonRows.map((row) => ({ id: row.id, route: row.routeFit, timing: row.timing, effort: row.effort, source: row.sourceState })), [
-      { id: "lunch", route: "Meal support", timing: "2026-10-01", effort: "Tea works as a softer break after lunch.", source: "Verified connection" }
+      { id: "lunch", route: "Meal support", timing: "October 1", effort: "Tea works as a softer break after lunch.", source: "Verified connection" }
     ]);
     assert.equal(detailDisplayForWorkspacePlace(workspace, "hotel-shift")?.canAdd, false);
     assert.equal(detailDisplayForWorkspacePlace(workspace, "temple")?.primaryActionLabel, "Open scheduled temple");
@@ -766,7 +1249,6 @@ describe("Landi Blueprint workspace display helpers", () => {
     const itinerary = workspace.itineraries[0]!;
     assert.deepEqual(itinerary.items.map((item) => ({ title: item.title, placeId: item.placeId, routeAnchor: Boolean(item.routeAnchor), reorderable: Boolean(item.reorderable) })), [
       { title: "temple", placeId: "temple", routeAnchor: true, reorderable: true },
-      { title: "Return for a short pause", placeId: "", routeAnchor: false, reorderable: false },
       { title: "tea", placeId: "tea", routeAnchor: false, reorderable: false },
       { title: "festival", placeId: "festival", routeAnchor: false, reorderable: false },
       { title: "lunch", placeId: "lunch", routeAnchor: true, reorderable: true }
@@ -862,10 +1344,11 @@ describe("Landi Blueprint workspace display helpers", () => {
     });
     const cards = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).guideCards;
     assert.deepEqual(cards.map((card) => ({ id: card.placeId, canAdd: card.canAdd, actionLabel: card.actionLabel, footerNote: card.footerNote })), [
-      { id: "temple", canAdd: false, actionLabel: undefined, footerNote: "2026-10-01 09:00" },
+      { id: "temple", canAdd: false, actionLabel: undefined, footerNote: undefined },
       { id: "tea", canAdd: true, actionLabel: "Add", footerNote: undefined },
       { id: "context", canAdd: false, actionLabel: undefined, footerNote: undefined }
     ]);
+    assert.equal(cards.find((card) => card.placeId === "temple")?.planFitLabel, "In your plan · October 1, 09:00");
     assert.equal(cards.some((card) => /available|informational|in itinerary/i.test([card.footerNote, card.actionLabel].filter(Boolean).join(" "))), false);
     assert.equal(cards.some((card) => /Higashiyama|Kyoto/i.test(card.tags.join(" "))), false);
   });
@@ -1024,7 +1507,7 @@ describe("Landi Blueprint workspace display helpers", () => {
     const detail = detailDisplayForWorkspacePlace(workspace, "ticket")!;
 
     assert.deepEqual(placeDisplay?.placementSignals, { reservation: "required", needsRecheck: true, longStop: false });
-    assert.equal(card?.tags.includes("Reservation"), true);
+    assert.equal(card?.practicalSignal, "Reservation required");
     assert.equal(item?.statusLabel, "Reservation required");
     assert.equal(item?.reorderable, undefined);
     assert.equal(detail.reservationNote, "Choose the current timed-entry slot before visiting.");
@@ -1544,13 +2027,65 @@ describe("Landi Blueprint workspace display helpers", () => {
       }]
     }), presentation);
     const item = workspace.preparationGroups[0]?.items[0] as unknown as Record<string, unknown>;
+    assert.equal(workspace.preparationGroups[0]?.title, "Action Required");
     assert.equal(item.title, "Check Japan entry rules");
     assert.equal(item.description, "Review official entry rules for the traveler passport before departure.");
     assert.equal(item.completion, "Entry rules reviewed.");
-    assert.equal(item.context, "For Nezu Shrine · 根津神社");
+    assert.equal(item.context, "For Nezu Shrine · 根津神社 · Before departure");
+    assert.equal(item.role, "action");
     assert.equal(item.checked, false);
     const text = JSON.stringify(workspace.preparationGroups);
     assert.equal(/authorization|dueLabel|relevantAt|accountableParty|travel_authorization|legacy/i.test(text), false);
+  });
+
+  it("puts action requirements before general preparation and deduplicates matching checklist items", () => {
+    const longDescription = "Reserve the exact class date, session time, menu, pickup details, allergy notes, cancellation terms, and written capacity confirmation for all travelers before relying on this activity as the day anchor.";
+    const presentation = presentationFixture({
+      actionRequirements: [{
+        id: "reserve-class",
+        kind: "reservation",
+        title: "Confirm cooking class booking",
+        description: longDescription,
+        accountableParty: "traveler",
+        completionCondition: "The class confirms date, time, menu, pickup details, and capacity.",
+        relevantAt: "Before the selected class date",
+        evidence: []
+      }, {
+        id: "assistant-route-check",
+        kind: "time_sensitive_recheck",
+        title: "Verify route durations",
+        description: "Assistant should refresh route durations.",
+        accountableParty: "assistant",
+        completionCondition: "Routes refreshed.",
+        evidence: []
+      }],
+      preparationChecklist: [{
+        id: "prep-class",
+        title: "Confirm cooking class booking",
+        description: longDescription,
+        group: "bookings_departure",
+        completionCondition: "The class confirms date, time, menu, pickup details, and capacity.",
+        evidence: []
+      }, {
+        id: "prep-pack",
+        title: "Pack rain gear",
+        description: "Bring light rain shells and shoes suitable for wet paths.",
+        group: "packing",
+        completionCondition: "Rain gear is packed.",
+        evidence: []
+      }]
+    });
+    const groups = buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation).preparationGroups;
+
+    assert.deepEqual(groups.map((group) => group.title), ["Action Required", "Packing"]);
+    assert.deepEqual(groups[0]?.items.map((item) => ({ title: item.title, role: item.role, description: item.description })), [{
+      title: "Confirm cooking class booking",
+      role: "action",
+      description: longDescription
+    }]);
+    assert.deepEqual(groups[1]?.items.map((item) => ({ title: item.title, role: item.role })), [{ title: "Pack rain gear", role: "general" }]);
+    assert.equal(JSON.stringify(groups).includes("Verify route durations"), false);
+    assert.equal(groups.flatMap((group) => group.items).filter((item) => item.title === "Confirm cooking class booking").length, 1);
   });
 
   it("keeps text-only guide cards free of source marker fields", () => {
@@ -1652,7 +2187,46 @@ describe("Landi Blueprint workspace display helpers", () => {
     assert.ok(sources[1]?.contexts?.includes("Supports event timing"));
     assert.ok(sources[1]?.contexts?.includes("Needs confirmation close to the trip"));
     assert.ok(sources[1]?.contexts?.includes("Checked 2026-09-04"));
-    assert.equal(/fieldEvidence|source-place|places\.sourced|schema|candidate|stale|recheck|reserve-entry|accountableParty/i.test(JSON.stringify(sources)), false);
+    assert.equal(/fieldEvidence|source-place|places\.sourced|schema|candidate|reserve-entry|accountableParty/i.test(JSON.stringify(sources)), false);
+  });
+
+  it("groups Sources by recheck and grounded evidence without losing structured sources", () => {
+    const longEntryUrl = "https://official.example/travel/entry-requirements/indonesia/visa-on-arrival?utm_source=planner&very_long_tracking_parameter=abcdefghijklmnopqrstuvwxyz";
+    const presentation = presentationFixture({
+      sourceCatalog: [
+        { id: "entry-official", title: "Official entry requirements", authority: "Immigration authority", url: longEntryUrl, retrievedAt: "2026-09-03", status: "verified" },
+        { id: "kecak-calendar", title: "Kecak performance calendar", authority: "Uluwatu operator", url: "https://operator.example/uluwatu/kecak", retrievedAt: "2026-09-04", status: "verified" },
+        { id: "same-publisher-monkey", title: "Monkey Forest visitor information", authority: "Bali Tourism", url: "https://tourism.example/places/monkey-forest", retrievedAt: "2026-09-01", status: "verified" },
+        { id: "same-publisher-jatiluwih", title: "Jatiluwih visitor information", authority: "Bali Tourism", url: "https://tourism.example/places/jatiluwih", retrievedAt: "2026-09-01", status: "verified" }
+      ],
+      fieldEvidence: [{ path: "summary", status: "verified", evidence: [{ sourceId: "entry-official", status: "verified", supports: ["entry requirements"], checkedAt: "2026-09-03" }] }],
+      actionRequirements: [
+        { id: "confirm-kecak", kind: "time_sensitive_recheck", title: "Confirm Kecak time", description: "Confirm the October performance time.", accountableParty: "traveler", completionCondition: "Performance time confirmed.", evidence: [{ sourceId: "kecak-calendar", status: "recheck", supports: ["October Kecak session"], checkedAt: "2026-09-04" }] }
+      ],
+      places: [
+        place("monkey", { name: "Monkey Forest", fieldEvidence: [{ path: "places.monkey.plan", status: "verified", evidence: [{ sourceId: "same-publisher-monkey", status: "verified", supports: ["visitor information"] }] }] }),
+        place("jatiluwih", { name: "Jatiluwih", fieldEvidence: [{ path: "places.jatiluwih.plan", status: "verified", evidence: [{ sourceId: "same-publisher-jatiluwih", status: "verified", supports: ["visitor information"] }] }] })
+      ],
+      researchGrounding: ["Narrative targeted research note without a structured source identity."],
+      days: []
+    });
+    const workspace = buildBlueprintWorkspaceDisplay(planFixture(presentation, {
+      sources: [
+        { title: "Legacy duplicate entry source", url: "https://official.example/travel/entry-requirements/indonesia/visa-on-arrival?utm_campaign=old", authority: "Legacy", retrievedAt: "2026-09-01" },
+        { title: "Independent planning article", url: "https://independent.example/bali/planning", authority: "Independent guide", retrievedAt: "2026-09-02" }
+      ]
+    }), presentation);
+
+    assert.equal(workspace.sources.length, 5);
+    assert.deepEqual(workspace.sourceGroups.map((group) => group.id), ["needs_recheck", "verified", "other"]);
+    assert.equal(workspace.sourceGroups.flatMap((group) => group.sources).length, workspace.sources.length);
+    assert.deepEqual(workspace.sourceGroups[0]?.sources.map((source) => source.title), ["Kecak performance calendar"]);
+    assert.equal(workspace.sourceGroups.flatMap((group) => group.sources).filter((source) => source.url?.startsWith("https://official.example/travel/entry-requirements")).length, 1);
+    assert.deepEqual(workspace.sourceGroups.flatMap((group) => group.sources).filter((source) => source.publisher === "Bali Tourism").map((source) => source.title).sort(), ["Jatiluwih visitor information", "Monkey Forest visitor information"]);
+    assert.equal(workspace.sourceGroups.flatMap((group) => group.sources).find((source) => source.url === longEntryUrl)?.title, "Official entry requirements");
+    assert.deepEqual(workspace.researchGrounding, ["Narrative targeted research note without a structured source identity."]);
+    assert.equal(JSON.stringify(workspace.sourceGroups).includes("Narrative targeted research note"), false);
+    assert.equal(/entry-official|kecak-calendar|same-publisher/i.test(JSON.stringify(workspace.sourceGroups)), false);
   });
 
   it("filters tips to destination-relevant practical cautions", () => {
@@ -1723,13 +2297,36 @@ describe("Landi Blueprint workspace display helpers", () => {
     const rows = detailDisplayForWorkspacePlace(buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation), "selected")?.comparisonRows ?? [];
 
     assert.deepEqual(rows.map((row) => ({ id: row.id, route: row.routeFit, timing: row.timing, effort: row.effort, source: row.sourceState })), [
-      { id: "lunch", route: "Meal support", timing: "2026-10-01", effort: "Lunch keeps the garden morning easy.", source: "Verified connection" },
+      { id: "lunch", route: "Meal support", timing: "October 1", effort: "Lunch keeps the garden morning easy.", source: "Verified connection" },
       { id: "museum", route: "Alternative", timing: "Flexible timing", effort: "Use this when the main stop is crowded.", source: "No source listed" },
-      { id: "market", route: "Same direction", timing: "2026-10-01", effort: "This stays on the same east-side route.", source: "Referenced connection" },
+      { id: "market", route: "Same direction", timing: "October 1", effort: "This stays on the same east-side route.", source: "Referenced connection" },
       { id: "arcade", route: "Rain option", timing: "Flexible timing", effort: "Rain option", source: "Referenced connection" }
     ]);
     assert.equal(rows.some((row) => row.id === "display-row" || row.id === "fallback"), false);
     assert.doesNotMatch(JSON.stringify(rows), /\bcandidate\b|\bschema\b|\bjson\b|\broute refresh\b|\bexecution\b|\breplan\b/i);
+  });
+
+  it("deduplicates nearby alternatives by related place identity", () => {
+    const presentation = presentationFixture({
+      guideRelationshipGraph: {
+        relationships: [
+          { id: "rel-rain", kind: "rainy_day_alternative", fromPlaceId: "selected", toPlaceId: "museum", rationale: "Use the museum if rain changes the walk.", dayIds: ["day-1"], evidence: [{ sourceId: "guide", status: "verified" }] },
+          { id: "rel-area", kind: "same_area", fromPlaceId: "selected", toPlaceId: "museum", rationale: "Both fit the same Ubud area.", dayIds: ["day-1"], evidence: [] },
+          { id: "rel-energy", kind: "low_energy_alternative", fromPlaceId: "selected", toPlaceId: "garden", rationale: "Use the garden when energy is low.", evidence: [] }
+        ]
+      },
+      places: [
+        place("selected", { category: "walk", area: "Ubud" }),
+        place("museum", { name: "Museum Puri Lukisan", category: "museum", area: "Ubud" }),
+        place("garden", { name: "Quiet Garden", category: "garden", area: "Ubud" })
+      ]
+    });
+    const rows = detailDisplayForWorkspacePlace(buildBlueprintWorkspaceDisplay(planFixture(presentation), presentation), "selected")?.comparisonRows ?? [];
+
+    assert.deepEqual(rows.map((row) => ({ id: row.id, routeFit: row.routeFit, timing: row.timing, sourceState: row.sourceState })), [
+      { id: "museum", routeFit: "Rain option", timing: "October 1", sourceState: "Verified connection" },
+      { id: "garden", routeFit: "Low-energy option", timing: "Flexible timing", sourceState: "No source listed" }
+    ]);
   });
 
   it("builds detail display without a separate category eyebrow", () => {

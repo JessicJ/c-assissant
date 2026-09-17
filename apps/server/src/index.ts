@@ -11,6 +11,7 @@ const {
   envPath,
   databasePath,
   blueprintGenerationEnabled,
+  semanticShadow,
   webAssetsPath,
   webTripMapPath,
   webIndexPath,
@@ -27,6 +28,7 @@ const {
 } = createAppServices({
   projectRoot,
   store,
+  semanticShadow,
   uberClientId: () => process.env.UBER_CLIENT_ID,
   allowedWhatsAppUserNumber: () => process.env.WHATSAPP_ALLOWED_USER_NUMBER,
   logGenerationFailure: (details, message) => server.log.error(details, message),

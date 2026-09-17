@@ -9,7 +9,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/index.test.ts"
+    "test": "tsx --test src/index.test.ts src/semantic-validator.test.ts src/semantic-plan-repair.test.ts"
   },
   "dependencies": {
     "@c-assistant/core": "workspace:*"

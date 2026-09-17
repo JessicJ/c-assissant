@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { compileTripBlueprint } from "./blueprint-plan-compiler.js";
+import { blueprintPresentation } from "./index.js";
 import { importSkillItinerary, importSkillResearchBatches, mergeResearchSetCheckpoint, type SkillResearchBatchArtifact } from "./skill-importer.js";
 
 const batch = (): SkillResearchBatchArtifact => ({
@@ -112,6 +114,45 @@ test("Skill Importer keeps sourced place images and strips unsafe image entries"
   }]);
 });
 
+test("Skill Importer drops optional operational facts whose evidence is removed during source remapping", () => {
+  const value = batch();
+  value.relationships = [];
+  value.sources = [
+    { id: "official", title: "Official", authority: "Venue", url: "https://example.com/place", retrievedAt: "2026-08-26T00:00:00.000Z", official: true, status: "verified" }
+  ];
+  value.places = [{
+    id: "feira",
+    name: "Feira da Ladra",
+    locationLabel: "Lisbon",
+    city: "Lisbon",
+    category: "market",
+    whyWorthIt: "A flea-market stop near Alfama.",
+    plan: "Use as optional day-completion intelligence.",
+    sourceUrls: ["https://example.com/place"],
+    operationalFacts: {
+      access: {
+        windows: [
+          { opensAt: "09:00", closesAt: "18:00", status: "verified", evidence: [{ sourceId: "official", status: "verified", supports: ["official hours 09:00-18:00"] }] },
+          { opensAt: "10:00", closesAt: "17:00", status: "verified", evidence: [{ sourceId: "missing-source", status: "verified", supports: ["directory hours 10:00-17:00"] }] }
+        ]
+      }
+    }
+  }];
+
+  const research = importSkillResearchBatches([value], {
+    researchSetId: "research-lisbon-completion",
+    generationKey: "generation-lisbon-completion",
+    proposalRef: { sessionId: "session-lisbon-completion", proposalVersion: 1 },
+    skillLineage: { skillId: "landi-trip-blueprint", skillVersion: "1.0.0" },
+    createdAt: "2026-08-26T00:00:00.000Z",
+    updatedAt: "2026-08-26T00:00:00.000Z"
+  });
+
+  assert.equal(research.places[0]?.operationalFacts?.access?.windows?.length, 1);
+  assert.equal(research.places[0]?.operationalFacts?.access?.windows?.[0]?.opensAt, "09:00");
+  assert.equal(research.places[0]?.operationalFacts?.access?.windows?.[0]?.evidence[0]?.sourceId, research.sources[0]?.id);
+});
+
 test("Skill Importer preserves every Research Set place in the Trip Blueprint", () => {
   const research = importSkillResearchBatches([{ ...batch(), places: batch().places.slice(0, 2) }], {
     researchSetId: "research-1", generationKey: "generation-1", proposalRef: { sessionId: "session-1", proposalVersion: 1 },
@@ -124,6 +165,26 @@ test("Skill Importer preserves every Research Set place in the Trip Blueprint", 
   }, { blueprintId: "blueprint-1", blueprintVersion: 1, createdAt: "2026-08-26T01:00:00.000Z" });
   assert.deepEqual(blueprint.places.map((place) => place.id), research.places.map((place) => place.id));
   assert.equal(blueprint.guideRelationshipGraph?.relationships[0]?.kind, "same_area");
+});
+
+test("Skill Importer preserves explicit empty day blocks through compilation and presentation", () => {
+  const research = importSkillResearchBatches([{ ...batch(), places: batch().places.slice(0, 2) }], {
+    researchSetId: "research-empty-blocks", generationKey: "generation-empty-blocks", proposalRef: { sessionId: "session-empty-blocks", proposalVersion: 1 },
+    skillLineage: { skillId: "landi-trip-blueprint", skillVersion: "1.0.0" }, createdAt: "2026-08-26T00:00:00.000Z", updatedAt: "2026-08-26T00:00:00.000Z"
+  });
+  const [a, b] = research.places.map((place) => place.id);
+  const blueprint = importSkillItinerary(research, {
+    title: "Tokyo", summary: "Tokyo", language: "en", destinations: ["Tokyo"], startDate: "2026-09-01", endDate: "2026-09-01",
+    days: [{ id: "d1", date: "2026-09-01", kind: "scheduled", city: "Tokyo", title: "Open day", summary: "Keep the formal timeline empty.", stops: [{ placeId: a!, order: 1 }], blocks: [], candidatePlaceIds: [b!] }],
+    movements: []
+  }, { blueprintId: "blueprint-empty-blocks", blueprintVersion: 1, createdAt: "2026-08-26T01:00:00.000Z" });
+  const compiled = compileTripBlueprint(blueprint, { createdAt: "2026-08-26T01:05:00.000Z" });
+  const presentation = blueprintPresentation(blueprint);
+
+  assert.deepEqual(blueprint.days[0]?.blocks, []);
+  assert.equal(compiled.plan.title, "Tokyo");
+  assert.deepEqual(presentation.days[0]?.blocks, []);
+  assert.deepEqual(presentation.days[0]?.stops?.map((stop) => stop.placeId), [a!]);
 });
 
 test("Skill Importer adds a reasonableness pass for candidates and unverified movements", () => {
@@ -745,6 +806,113 @@ test("Skill Importer drops unresolved field evidence refs instead of failing res
     updatedAt: "2026-09-09T00:00:00.000Z"
   });
   assert.deepEqual(research.places[0]?.fieldEvidence, [{ path: "whyWorthIt", status: "recheck", evidence: [] }]);
+});
+
+test("Skill Importer merge canonicalizes duplicate source identities and remaps field evidence", () => {
+  const currentBatch = batch();
+  currentBatch.id = "scope-1";
+  currentBatch.scopeLabel = "Porto";
+  currentBatch.sources = [
+    { id: "src-ribeira-commons", title: "Ribeira official", authority: "Porto", url: "https://example.com/ribeira", retrievedAt: "2026-09-09", status: "verified", official: true },
+    { id: "src-alfama", title: "Alfama official", authority: "Lisbon", url: "https://example.com/alfama", retrievedAt: "2026-09-09", status: "verified", official: true }
+  ];
+  currentBatch.places = [{
+    id: "porto-ribeira",
+    name: "Ribeira",
+    locationLabel: "Porto",
+    city: "Porto",
+    category: "riverfront",
+    whyWorthIt: "A useful riverfront anchor.",
+    plan: "Walk the riverfront.",
+    sourceUrls: ["https://example.com/ribeira"]
+  }];
+  currentBatch.relationships = [];
+
+  const current = importSkillResearchBatches([currentBatch], {
+    researchSetId: "research-portugal-merge",
+    generationKey: "generation-portugal-merge",
+    proposalRef: { sessionId: "session-portugal-merge", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+    createdAt: "2026-09-09T00:00:00.000Z",
+    updatedAt: "2026-09-09T00:00:00.000Z"
+  });
+
+  const incomingBatch = batch();
+  incomingBatch.id = "scope-3";
+  incomingBatch.scopeLabel = "Portugal";
+  incomingBatch.sources = [
+    { id: "src-ribeira-commons", title: "Ribeira duplicate id", authority: "Porto", url: "https://example.com/ribeira-duplicate", retrievedAt: "2026-09-10", status: "verified", official: true },
+    { id: "src-alfama-d67t19", title: "Alfama duplicate URL", authority: "Lisbon", url: "https://example.com/alfama", retrievedAt: "2026-09-10", status: "verified", official: true },
+    { id: "src-serralves-jtx164", title: "Serralves official", authority: "Porto", url: "https://example.com/serralves", retrievedAt: "2026-09-10", status: "verified", official: true },
+    { id: "src-cp-online-2734w4", title: "CP official", authority: "CP", url: "https://example.com/cp", retrievedAt: "2026-09-10", status: "verified", official: true }
+  ];
+  incomingBatch.places = [
+    {
+      id: "lis-alfama",
+      name: "Alfama",
+      locationLabel: "Lisbon",
+      city: "Lisbon",
+      category: "neighborhood",
+      whyWorthIt: "A historic neighborhood for route texture.",
+      plan: "Use it as a Lisbon context candidate.",
+      tip: "Keep the route compact.",
+      images: [{ url: "https://example.com/alfama.jpg", alt: "Alfama street", sourceUrl: "https://example.com/alfama", status: "verified" }],
+      schedulingEligibility: { decision: "schedulable", reason: "Fits after arrival by train.", evidence: [{ sourceId: "scope-3-src-cp-online-2734w4", status: "verified" }] },
+      fieldEvidence: [
+        { path: "whyWorthIt", status: "verified", evidence: [{ sourceId: "scope-3-src-alfama-d67t19", status: "verified" }, { sourceId: "missing-source", status: "verified" }] },
+        { path: "tip", status: "verified", evidence: [{ sourceId: "src-alfama-d67t19", status: "verified" }] }
+      ]
+    },
+    {
+      id: "porto-serralves",
+      name: "Serralves",
+      locationLabel: "Porto",
+      city: "Porto",
+      category: "museum",
+      whyWorthIt: "A strong art and garden anchor.",
+      plan: "Pair with a Porto day.",
+      tip: "Check garden time.",
+      images: [{ url: "https://example.com/serralves.jpg", alt: "Serralves garden", sourceUrl: "https://example.com/serralves", status: "verified" }],
+      fieldEvidence: [
+        { path: "whyWorthIt", status: "verified", evidence: [{ sourceId: "scope-3-src-serralves-jtx164", status: "verified" }] },
+        { path: "tip", status: "verified", evidence: [{ sourceId: "src-serralves-jtx164", status: "verified" }] },
+        { path: "detailSections", status: "verified", evidence: [{ sourceId: "unsupported-source", status: "verified" }] }
+      ]
+    }
+  ];
+  incomingBatch.relationships = [];
+
+  const incoming = importSkillResearchBatches([incomingBatch], {
+    researchSetId: current.id,
+    generationKey: current.generationKey,
+    proposalRef: current.proposalRef,
+    skillLineage: current.skillLineage,
+    createdAt: current.createdAt,
+    updatedAt: "2026-09-10T00:00:00.000Z"
+  });
+  const merged = mergeResearchSetCheckpoint(current, incoming, { status: "completed", updatedAt: "2026-09-10T00:00:00.000Z" });
+  const sourceIds = merged.sources.map((source) => source.id);
+  assert.equal(sourceIds.length, new Set(sourceIds).size);
+  const alfamaSource = current.sources.find((source) => source.url === "https://example.com/alfama");
+  const serralvesSource = merged.sources.find((source) => source.url === "https://example.com/serralves");
+  const cpSource = merged.sources.find((source) => source.url === "https://example.com/cp");
+  assert.ok(alfamaSource);
+  assert.ok(serralvesSource);
+  assert.ok(cpSource);
+  const alfama = merged.places.find((place) => place.name === "Alfama");
+  const serralves = merged.places.find((place) => place.name === "Serralves");
+  assert.deepEqual(alfama?.fieldEvidence?.map((item) => [item.path, item.status, item.evidence.map((ref) => ref.sourceId)]), [
+    ["whyWorthIt", "verified", [alfamaSource.id]],
+    ["tip", "verified", [alfamaSource.id]]
+  ]);
+  assert.deepEqual(serralves?.fieldEvidence?.map((item) => [item.path, item.status, item.evidence.map((ref) => ref.sourceId)]), [
+    ["whyWorthIt", "verified", [serralvesSource.id]],
+    ["tip", "verified", [serralvesSource.id]],
+    ["detailSections", "recheck", []]
+  ]);
+  assert.deepEqual(alfama?.images?.map((image) => image.sourceId), [alfamaSource.id]);
+  assert.deepEqual(alfama?.schedulingEligibility?.evidence?.map((ref) => ref.sourceId), [cpSource.id]);
+  assert.deepEqual(serralves?.images?.map((image) => image.sourceId), [serralvesSource.id]);
 });
 
 test("Skill Importer refuses to keep a verified movement when route evidence is not verified", () => {

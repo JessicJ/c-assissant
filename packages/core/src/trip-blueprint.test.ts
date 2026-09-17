@@ -95,6 +95,83 @@ test("Trip Blueprint flags place images without safe URLs or known sources", () 
   ]);
 });
 
+test("Trip Blueprint preserves typed operational access, session, and entry facts", () => {
+  const value = blueprint();
+  value.sources = [{ id: "official", title: "Official hours", authority: "Official", url: "https://example.com/hours", retrievedAt: "2026-09-10", status: "verified", official: true }];
+  value.places[0] = {
+    ...value.places[0]!,
+    operationalFacts: {
+      access: {
+        windows: [{ opensAt: "09:00", closesAt: "18:00", appliesTo: { weekdays: ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] }, status: "verified", checkedAt: "2026-09-10", evidence: [{ sourceId: "official", status: "verified", checkedAt: "2026-09-10" }] }],
+        lastEntry: { time: "17:00", status: "verified", checkedAt: "2026-09-10", evidence: [{ sourceId: "official", status: "verified" }] }
+      },
+      sessions: [{ label: "Morning class", startsAt: "09:00", durationMinutes: 240, status: "recheck", checkedAt: "2026-09-10", evidence: [{ sourceId: "official", status: "recheck" }], uncertaintyNote: "Confirm the selected travel date before booking." }],
+      entry: {
+        reservation: { requirement: "required", bookingUrl: "https://example.com/book", status: "verified", checkedAt: "2026-09-10", evidence: [{ sourceId: "official", status: "verified" }] },
+        ticket: { requirement: "unknown", status: "recheck", checkedAt: "2026-09-10", evidence: [{ sourceId: "official", status: "recheck" }], uncertaintyNote: "Ticket channel for the target date is unpublished." },
+        capacity: { requirement: "recommended", status: "stale", checkedAt: "2026-08-01", evidence: [{ sourceId: "official", status: "stale" }], uncertaintyNote: "Capacity notices are date-sensitive." }
+      }
+    }
+  };
+
+  assert.deepEqual(tripBlueprintIntegrityIssues(value), []);
+});
+
+test("Trip Blueprint validates operational fact evidence and shape without defaulting unknowns", () => {
+  const value = blueprint();
+  value.places[0] = {
+    ...value.places[0]!,
+    operationalFacts: {
+      access: {
+        windows: [{ opensAt: "9am", status: "verified", evidence: [{ sourceId: "missing-source", status: "verified" }] }],
+        lastEntry: { status: "verified", evidence: [] }
+      },
+      sessions: [{ status: "verified", evidence: [] }],
+      entry: { reservation: { requirement: "maybe" as "required", status: "verified", bookingUrl: "http://example.com/book", evidence: [] } }
+    }
+  };
+  const issues = tripBlueprintIntegrityIssues(value);
+  assert.ok(issues.includes("place a operational access window 1 has invalid opening time"));
+  assert.ok(issues.includes("place a operational access window 1 references unknown source missing-source"));
+  assert.ok(issues.includes("place a operational last entry needs a time, offset, or note"));
+  assert.ok(issues.includes("place a operational session 1 needs a time or label"));
+  assert.ok(issues.includes("place a operational reservation has invalid requirement"));
+  assert.ok(issues.includes("place a operational reservation has invalid booking URL"));
+
+  const noFacts = blueprint();
+  assert.equal(noFacts.places[0]?.operationalFacts, undefined);
+  assert.deepEqual(tripBlueprintIntegrityIssues(noFacts), []);
+});
+
+test("Operational entry fact remains independent from traveler action requirements", () => {
+  const value = blueprint();
+  value.sources = [{ id: "official", title: "Official booking", authority: "Official", url: "https://example.com/book", retrievedAt: "2026-09-10", status: "verified", official: true }];
+  value.places[0] = {
+    ...value.places[0]!,
+    bookingUrl: "https://example.com/book",
+    operationalFacts: {
+      entry: {
+        reservation: { requirement: "required", bookingUrl: "https://example.com/book", status: "verified", checkedAt: "2026-09-10", evidence: [{ sourceId: "official", status: "verified" }] }
+      }
+    }
+  };
+  value.actionRequirements = [{
+    id: "book-a",
+    kind: "reservation",
+    title: "Book A",
+    description: "Choose and pay for a slot.",
+    accountableParty: "traveler",
+    completionCondition: "Slot is booked.",
+    placeId: "a",
+    evidence: [{ sourceId: "official", status: "verified" }]
+  }];
+  assert.deepEqual(tripBlueprintIntegrityIssues(value), []);
+
+  value.actionRequirements = [];
+  assert.equal(value.places[0]?.operationalFacts?.entry?.reservation?.requirement, "required");
+  assert.deepEqual(tripBlueprintIntegrityIssues(value), []);
+});
+
 test("Trip Blueprint accepts explicit rest days and unverified movement", () => {
   const value = blueprint();
   assert.deepEqual(tripBlueprintIntegrityIssues(value, { expectedResearchPlaceIds: research().places.map((item) => item.id) }), []);

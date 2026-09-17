@@ -4,10 +4,12 @@ import { createCountryPackServices } from "./country-pack-services.js";
 import { createGeneratedPlanEvidencePreparer } from "./generated-plan-evidence.js";
 import { createMessagingServices } from "./messaging-services.js";
 import { createRuntimeServices } from "./runtime-services.js";
+import type { SemanticShadowConfig } from "./semantic-shadow.js";
 
 export function createAppServices(dependencies: {
   projectRoot: string;
   store: SqliteWorkspaceStore;
+  semanticShadow: SemanticShadowConfig;
   uberClientId: () => string | undefined;
   allowedWhatsAppUserNumber: () => string | undefined;
   logGenerationFailure: (details: Record<string, unknown>, message: string) => void;
@@ -17,6 +19,7 @@ export function createAppServices(dependencies: {
   const {
     projectRoot,
     store,
+    semanticShadow,
     uberClientId,
     allowedWhatsAppUserNumber,
     logGenerationFailure,
@@ -34,7 +37,7 @@ export function createAppServices(dependencies: {
     japanSourcePreparation,
     resolvePlanCountryPack
   } = countryPackServices;
-  const runtimeServices = createRuntimeServices({ store, logGenerationFailure });
+  const runtimeServices = createRuntimeServices({ store, semanticShadow, logGenerationFailure });
   const prepareGeneratedPlanEvidence = createGeneratedPlanEvidencePreparer({
     store,
     getMaps: () => connectorServices.getConnectors().maps,
