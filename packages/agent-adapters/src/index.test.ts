@@ -3,9 +3,9 @@ import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
 
-import { importSkillItinerary, importSkillResearchBatches } from "@c-assistant/core";
+import { blueprintPresentation, importSkillItinerary, importSkillResearchBatches } from "@c-assistant/core";
 import { LANDI_BLUEPRINT_SKILL, LEGACY_BLUEPRINT_SKILL } from "./landi-blueprint-policy.js";
-import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError, areLocationsCompatible, buildPlanDraftPrompt, buildPlanRepairPrompt, buildPlanResearchPrompt, buildSkillImageEnrichmentPrompt, buildSkillItineraryPrompt, buildSkillResearchBatchPrompt, codexStrictOutputSchema, parseClaudePrintResult, parsePlanDraft, parsePlanResearchBrief, parsePlanningConversationTurn, parseSkillImageEnrichmentArtifact, parseSkillItineraryArtifact, parseSkillResearchBatchArtifact, planDraftSchema, planResearchBriefToSkillBatch, planResearchSchema, skillImageEnrichmentSchema, skillItinerarySchema, skillResearchBatchSchema, type RuntimeProcess } from "./index.js";
+import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError, areLocationsCompatible, buildPlanDraftPrompt, buildPlanRepairPrompt, buildPlanResearchPrompt, buildSemanticTravelPlanPrompt, buildSkillImageEnrichmentPrompt, buildSkillItineraryPrompt, buildSkillResearchBatchPrompt, codexStrictOutputSchema, parseClaudePrintResult, parsePlanDraft, parsePlanResearchBrief, parsePlanningConversationTurn, parseSemanticTravelPlan, parseSkillImageEnrichmentArtifact, parseSkillItineraryArtifact, parseSkillResearchBatchArtifact, planDraftSchema, planResearchBriefToSkillBatch, planResearchSchema, semanticTravelPlanSchema, skillImageEnrichmentSchema, skillItinerarySchema, skillResearchBatchSchema, type RuntimeProcess } from "./index.js";
 
 const validDraft = JSON.stringify({
   title: "Attend an exhibition in Shanghai",
@@ -122,6 +122,96 @@ test("planning conversation output keeps natural copy separate from structured f
   assert.equal(turn.reply, "好的，我记下是2026年。具体哪一天出发？");
   assert.deepEqual(turn.facts, [{ key: "travel_year", value: "2026" }]);
   assert.throws(() => parsePlanningConversationTurn(JSON.stringify({ reply: "", facts: [] })), RuntimeAdapterError);
+});
+
+test("semantic travel plan requires daily start and end contexts", () => {
+  const markdown = `# Bali semantic plan
+
+## Daily itinerary
+
+### October 5
+Start: DPS airport.
+
+Experiences: Arrive, transfer, and recover near Ubud.
+
+End: Ubud accommodation - exact property pending.
+
+### October 6
+Start: Ubud accommodation - exact property pending.
+
+Experiences: Central Ubud forest, museum, and nearby unscheduled time.
+
+End: Ubud accommodation - exact property pending.
+
+This readable prototype deliberately keeps semantic accommodation anchors in the travel plan rather than turning them into Web blocks, execution origins, route anchor IDs, Telegram reminders, or production TripBlueprint fields. The text is long enough to represent a traveler-facing semantic plan and to prove that parsing checks the complete markdown artifact, not just the daily JSON rows.`;
+  const parsed = parseSemanticTravelPlan(JSON.stringify({
+    title: "Bali at an Easy Rhythm",
+    language: "en",
+    tripStrategy: "Use Ubud first, then South Bali, so culture and rice landscape days start from the inland base while Uluwatu and departure are easier from the southern base. Lodging uncertainty stays explicit until exact properties are selected.",
+    targetedResearch: [{ question: "Need one meaningful same-area companion experience near Ubud.", outcome: "Museum Puri Lukisan remains the best low-transfer companion to central Ubud." }],
+    dailyItinerary: [
+      {
+        date: "2026-10-05",
+        area: "DPS to Ubud",
+        startContext: { label: "DPS airport", status: "transport_node" },
+        endContext: { label: "Ubud accommodation - exact property pending", status: "planned_base_pending_property" },
+        plan: "Arrive at DPS, allow time for immigration and baggage, then transfer to the Ubud base. Keep the evening light because this is an arrival and recovery day rather than a sightseeing day."
+      },
+      {
+        date: "2026-10-06",
+        area: "Central Ubud",
+        startContext: { label: "Ubud accommodation - exact property pending", status: "planned_base_pending_property" },
+        endContext: { label: "Ubud accommodation - exact property pending", status: "planned_base_pending_property" },
+        plan: "Use the Ubud base for nearby forest and museum experiences, with open time kept close to the same accommodation context so the first complete sightseeing day does not require regional backtracking."
+      }
+    ],
+    unresolvedExperiences: ["Exact Ubud accommodation property remains unresolved."],
+    preparation: ["Select the exact Ubud property before route timing is finalized."],
+    tips: ["Use private-car transfers for regional days."],
+    researchGrounding: ["Sacred Monkey Forest Sanctuary and Museum Puri Lukisan ground the central Ubud day."],
+    followUpChecks: ["Confirm the exact Ubud property and airport pickup meeting point."],
+    markdown
+  }));
+
+  assert.equal(parsed.dailyItinerary[0]?.startContext.status, "transport_node");
+  assert.equal(parsed.dailyItinerary[0]?.endContext.label, "Ubud accommodation - exact property pending");
+  assert.equal(parsed.dailyItinerary[1]?.startContext.status, "planned_base_pending_property");
+  assert.throws(() => parseSemanticTravelPlan(JSON.stringify({ ...parsed, dailyItinerary: [{ date: "2026-10-05", area: "Ubud", plan: "A day without anchors is incomplete for this semantic contract." }], markdown })), RuntimeAdapterError);
+
+  const prompt = buildSemanticTravelPlanPrompt({
+    request: "Plan Bali.",
+    research: {
+      schemaVersion: 1,
+      id: "research-1",
+      generationKey: "key",
+      proposalRef: { sessionId: "session-1", proposalVersion: 1 },
+      skillLineage: LANDI_BLUEPRINT_SKILL,
+      status: "completed",
+      batches: [],
+      places: [],
+      events: [],
+      actionRequirements: [],
+      sources: [],
+      createdAt: "2026-08-11T00:00:00.000Z",
+      updatedAt: "2026-08-11T00:00:00.000Z",
+      completedAt: "2026-08-11T00:00:00.000Z"
+    },
+    profile: { preferredLanguage: "English", nationality: "USA", gender: "not_specified", immigrationStatus: "not_obtained" }
+  });
+  assert.match(prompt, /Every dailyItinerary item must answer where the traveler starts/i);
+  assert.match(prompt, /planned_base_pending_property/);
+  assert.match(prompt, /ResearchSet as high-quality known local context, not as a closed world/i);
+  assert.match(prompt, /at most four concrete, plan-serving research gaps/i);
+  assert.match(prompt, /RELAXED is not EMPTY/i);
+  assert.match(prompt, /generic soft activities may be valid/i);
+  assert.match(prompt, /small initial ResearchSet is not evidence of completeness/i);
+  assert.match(prompt, /fewer than about 18 concrete places/i);
+  assert.match(prompt, /which candidate\(s\) were selected, which were rejected, and why/i);
+  assert.match(prompt, /Start:", "Experiences:", and "End:" labels/);
+  assert.equal(semanticTravelPlanSchema.properties.dailyItinerary.items.required.includes("startContext"), true);
+  assert.equal(semanticTravelPlanSchema.properties.dailyItinerary.items.required.includes("endContext"), true);
+  assert.equal(semanticTravelPlanSchema.required.includes("targetedResearch"), true);
+  assert.equal(semanticTravelPlanSchema.required.includes("unresolvedExperiences"), true);
 });
 
 test("Codex Adapter removes structured-output nulls from optional Task fields", () => {
@@ -265,6 +355,11 @@ test("Skill research batch prompt scopes work without quotas or Xiaohongshu impo
   assert.match(prompt, /schedulingEligibility\.decision/i);
   assert.match(prompt, /schedulingEligibility\.evidence/i);
   assert.match(prompt, /Add relationships/i);
+  assert.match(prompt, /Evidence for operationalFacts is value-level/i);
+  assert.match(prompt, /Only include uncertaintyNote when the attached evidence supports that uncertainty/i);
+  assert.match(prompt, /official homepage alone is not a booking URL/i);
+  assert.match(prompt, /Status and uncertainty prose are separate/i);
+  assert.match(prompt, /Strict evidence should not mean skipping easily sourceable operational facts/i);
   assert.ok(skillResearchBatchSchema.properties.places.items.required.includes("display"));
   assert.ok(skillResearchBatchSchema.properties.places.items.required.includes("schedulingEligibility"));
   assert.ok("guideDisplay" in skillResearchBatchSchema.properties.places.items.properties);
@@ -417,7 +512,7 @@ test("Skill research batch keeps rich place content and namespaces local identit
     id: "ignored", scopeLabel: "ignored", completedAt: "ignored",
     sources: [{ id: "source-1", title: "Official place", authority: "City", url: "https://example.com/place", retrievedAt: "2026-08-26", status: "verified", official: true }],
     places: [
-      { id: "place-1", name: "Place", localizedName: "地点", locationLabel: "Center", city: "Lisbon", area: "Baixa", category: "architecture", priority: "must", coordinates: null, display: { type: "attraction", markerKind: "attraction" }, guideDisplay: { showInGuide: true, cardSummary: "Blueprint card copy.", tags: ["120 min"], detailLeadTitle: "Why this fits", comparisonRows: [{ id: "row-alt", relatedPlaceId: "place-2", area: "Baixa", routeFit: "Same area", timing: "Morning", effort: "Easy swap", sourceState: "Verified source", sourceUrls: ["https://example.com/place"] }] }, schedulingEligibility: { decision: "schedulable", reason: "Fits central Lisbon days.", evidence: [{ sourceId: "source-1", status: "stale", supports: ["opening window"] }] }, fieldEvidence: [{ path: "whyWorthIt", status: "verified", evidence: [{ sourceId: "source-1", status: "verified" }] }], contentTier: "deep", visitRole: "anchor", durationMinutes: 120, whyWorthIt: "Specific architectural value.", plan: "Inspect the facade and interior sequence.", tip: "Reserve energy.", detailSections: [{ title: "Look for", body: "Stone and light.", items: ["Facade", "Courtyard"] }], sourceUrls: ["https://example.com/place"] },
+      { id: "place-1", name: "Place", localizedName: "地点", locationLabel: "Center", city: "Lisbon", area: "Baixa", category: "architecture", priority: "must", coordinates: null, display: { type: "attraction", markerKind: "attraction" }, guideDisplay: { showInGuide: true, cardSummary: "Blueprint card copy.", tags: ["120 min"], detailLeadTitle: "Why this fits", comparisonRows: [{ id: "row-alt", relatedPlaceId: "place-2", area: "Baixa", routeFit: "Same area", timing: "Morning", effort: "Easy swap", sourceState: "Verified source", sourceUrls: ["https://example.com/place"] }] }, schedulingEligibility: { decision: "schedulable", reason: "Fits central Lisbon days.", evidence: [{ sourceId: "source-1", status: "stale", supports: ["opening window"] }] }, fieldEvidence: [{ path: "whyWorthIt", status: "verified", evidence: [{ sourceId: "source-1", status: "verified" }] }], operationalFacts: { access: { windows: [{ opensAt: "09:00", closesAt: "18:00", status: "verified", checkedAt: "2026-08-26", evidence: [{ sourceId: "source-1", status: "verified" }] }], lastEntry: { time: "17:30", status: "verified", evidence: [{ sourceId: "source-1", status: "verified" }] } }, sessions: [{ label: "Guided tour", startsAt: "10:00", status: "recheck", appliesTo: { weekdays: ["monday"], note: "Published weekly session" }, evidence: [{ sourceId: "source-1", status: "recheck" }], uncertaintyNote: "Confirm the selected date." }], entry: { reservation: { requirement: "required", bookingUrl: "https://example.com/place", status: "verified", evidence: [{ sourceId: "source-1", status: "verified" }] } } }, contentTier: "deep", visitRole: "anchor", durationMinutes: 120, whyWorthIt: "Specific architectural value.", plan: "Inspect the facade and interior sequence.", tip: "Reserve energy.", detailSections: [{ title: "Look for", body: "Stone and light.", items: ["Facade", "Courtyard"] }], sourceUrls: ["https://example.com/place"] },
       { id: "place-2", name: "Alternative Place", locationLabel: "Center", city: "Lisbon", area: "Baixa", category: "architecture", priority: "nearby", coordinates: null, display: { type: "attraction" }, schedulingEligibility: { decision: "schedulable", reason: "Fits central Lisbon days." }, whyWorthIt: "Nearby alternative.", plan: "Use if the anchor is crowded.", detailSections: [{ title: "Look for", body: "Quiet street.", items: ["Facade"] }], sourceUrls: ["https://example.com/place"] }
     ],
     events: [{ id: "event-1", title: "Event", placeId: "place-1", description: "Program", sourceUrls: ["https://example.com/place"] }],
@@ -437,6 +532,9 @@ test("Skill research batch keeps rich place content and namespaces local identit
   assert.deepEqual(parsed.places[0]?.guideDisplay?.comparisonRows?.[0]?.sourceUrls, ["https://example.com/place"]);
   assert.deepEqual(parsed.places[0]?.schedulingEligibility, { decision: "schedulable", reason: "Fits central Lisbon days.", evidence: [{ sourceId: "lisbon-source-1", status: "stale", supports: ["opening window"] }] });
   assert.equal(parsed.places[0]?.fieldEvidence?.[0]?.evidence[0]?.sourceId, "lisbon-source-1");
+  assert.equal(parsed.places[0]?.operationalFacts?.access?.windows?.[0]?.evidence[0]?.sourceId, "lisbon-source-1");
+  assert.equal(parsed.places[0]?.operationalFacts?.entry?.reservation?.requirement, "required");
+  assert.equal(parsed.places[0]?.operationalFacts?.sessions?.[0]?.status, "recheck");
   assert.equal(parsed.relationships?.[0]?.fromPlaceId, "lisbon-place-1");
   assert.equal(parsed.localFoods?.[0]?.id, "lisbon-food-1");
   assert.deepEqual(parsed.localFoods?.[0]?.diningPlaceIds, ["lisbon-place-1"]);
@@ -502,6 +600,165 @@ test("Skill research batch keeps already-scoped evidence source ids valid", () =
   assert.ok(schedulingSourceId && importedSourceIds.has(schedulingSourceId));
 });
 
+test("Skill research operational facts enforce precision for uncertainty, booking URLs, and verified values", () => {
+  const parsePlace = (place: Record<string, unknown>, sources: Array<Record<string, unknown>>) => parseSkillResearchBatchArtifact(JSON.stringify({
+    id: "ignored",
+    scopeLabel: "ignored",
+    completedAt: "ignored",
+    sources,
+    places: [{
+      id: "place",
+      name: "Operational Place",
+      locationLabel: "Bali",
+      city: "Bali",
+      category: "venue",
+      display: { type: "attraction" },
+      schedulingEligibility: { decision: "schedulable", reason: "Concrete venue." },
+      whyWorthIt: "Operationally relevant.",
+      plan: "Use the sourced facts.",
+      ...place
+    }],
+    events: [],
+    relationships: [],
+    localFoods: [],
+    localProducts: [],
+    experienceThemes: [],
+    travelTips: [],
+    actionRequirements: []
+  }), { id: "precision", scopeLabel: "Bali" }, "2026-09-11T00:00:00.000Z").places[0]!;
+  const officialSource = { id: "official", title: "Official venue page", authority: "Venue", url: "https://example.com/venue", retrievedAt: "2026-09-11", status: "verified", official: true };
+  const directorySource = { id: "directory", title: "Directory listing", authority: "Tourism directory", url: "https://example.com/directory", retrievedAt: "2026-09-11", status: "verified" };
+  const bookingSource = { id: "booking", title: "Official booking", authority: "Venue", url: "https://example.com/book", retrievedAt: "2026-09-11", status: "verified", official: true };
+
+  const supportedUncertainty = parsePlace({
+    operationalFacts: { access: { windows: [{ opensAt: "09:00", closesAt: "18:00", status: "recheck", evidence: [{ sourceId: "official", status: "verified", supports: ["official hours 09:00-18:00"] }, { sourceId: "directory", status: "verified", supports: ["directory differs and lists 10:00-17:00"] }], uncertaintyNote: "Attached sources conflict on opening hours." }] } }
+  }, [officialSource, directorySource]);
+  assert.equal(supportedUncertainty.operationalFacts?.access?.windows?.[0]?.uncertaintyNote, "Attached sources conflict on opening hours.");
+
+  const unsupportedUncertainty = parsePlace({
+    operationalFacts: { access: { windows: [{ opensAt: "09:00", closesAt: "18:00", status: "recheck", evidence: [{ sourceId: "official", status: "verified", supports: ["official hours 09:00-18:00"] }], uncertaintyNote: "Other sources may differ." }] } }
+  }, [officialSource]);
+  assert.equal(unsupportedUncertainty.operationalFacts?.access?.windows?.[0]?.uncertaintyNote, undefined);
+
+  const unsupportedConflictFromRecheckSource = parsePlace({
+    operationalFacts: { access: { windows: [{ opensAt: "09:00", closesAt: "18:00", status: "recheck", evidence: [{ sourceId: "official", status: "recheck", supports: ["official hours 09:00-18:00"] }], uncertaintyNote: "The official site lists 09:00-18:00, while another source lists 09:00-17:00." }] } }
+  }, [{ ...officialSource, status: "recheck" }]);
+  assert.equal(unsupportedConflictFromRecheckSource.operationalFacts?.access?.windows?.[0]?.uncertaintyNote, undefined);
+
+  const supportedBookingUrl = parsePlace({
+    operationalFacts: { entry: { ticket: { requirement: "required", bookingUrl: "https://example.com/book", status: "verified", evidence: [{ sourceId: "booking", status: "verified", supports: ["Tickets are required; book tickets at https://example.com/book"] }] } } }
+  }, [bookingSource]);
+  assert.equal(supportedBookingUrl.operationalFacts?.entry?.ticket?.bookingUrl, "https://example.com/book");
+
+  const unsupportedHomepageBookingUrl = parsePlace({
+    operationalFacts: { entry: { ticket: { requirement: "required", bookingUrl: "https://example.com/venue", status: "verified", evidence: [{ sourceId: "official", status: "verified", supports: ["separate ticket required at counter or selected platforms"] }] } } }
+  }, [officialSource]);
+  assert.equal(unsupportedHomepageBookingUrl.operationalFacts?.entry?.ticket?.requirement, "required");
+  assert.equal(unsupportedHomepageBookingUrl.operationalFacts?.entry?.ticket?.bookingUrl, undefined);
+
+  const topicLevelLastEntry = parsePlace({
+    operationalFacts: { access: { lastEntry: { time: "17:00", status: "verified", evidence: [{ sourceId: "official", status: "verified", supports: ["visitor information"] }] } } }
+  }, [officialSource]);
+  assert.equal(topicLevelLastEntry.operationalFacts?.access?.lastEntry?.time, "17:00");
+  assert.equal(topicLevelLastEntry.operationalFacts?.access?.lastEntry?.status, "recheck");
+
+  const futureSchedule = parsePlace({
+    operationalFacts: { sessions: [{ label: "Future target-date show", status: "recheck", appliesTo: { date: "2026-10-11" }, evidence: [{ sourceId: "official", status: "verified", supports: ["current daily performance schedule is published, but target-date schedule is not published"] }], uncertaintyNote: "Target-date schedule is not published." }] }
+  }, [officialSource]);
+  assert.equal(futureSchedule.operationalFacts?.sessions?.[0]?.startsAt, undefined);
+  assert.equal(futureSchedule.operationalFacts?.sessions?.[0]?.uncertaintyNote, "Target-date schedule is not published.");
+
+  const toyosuUnsupportedFacts = parsePlace({
+    operationalFacts: {
+      access: {
+        windows: [{ opensAt: "05:00", closesAt: "15:00", status: "verified", evidence: [{ sourceId: "missing-hours", status: "verified", supports: ["Toyosu Market hours 05:00-15:00"] }] }],
+        closed: [{ pattern: "Closed on Sundays and holidays", status: "verified", evidence: [{ sourceId: "missing-closure", status: "verified", supports: ["Toyosu Market is closed Sundays and holidays"] }] }]
+      },
+      sessions: [{ label: "Public tuna auction observation", status: "recheck", evidence: [{ sourceId: "official", status: "verified", supports: ["Visitor information for public tuna auction observation"] }] }]
+    }
+  }, [officialSource]);
+  assert.equal(toyosuUnsupportedFacts.name, "Operational Place");
+  assert.equal(toyosuUnsupportedFacts.operationalFacts?.access, undefined);
+  assert.equal(toyosuUnsupportedFacts.operationalFacts?.sessions?.length, 1);
+
+  const partialEvidenceWindow = parsePlace({
+    operationalFacts: {
+      access: {
+        windows: [{ opensAt: "09:00", closesAt: "17:00", status: "verified", evidence: [{ sourceId: "missing-hours", status: "verified", supports: ["directory hours 09:00-17:00"] }, { sourceId: "official", status: "verified", supports: ["official hours 09:00-17:00"] }] }]
+      }
+    }
+  }, [officialSource]);
+  assert.equal(partialEvidenceWindow.operationalFacts?.access?.windows?.length, 1);
+  assert.deepEqual(partialEvidenceWindow.operationalFacts?.access?.windows?.[0]?.evidence.map((ref) => ref.sourceId), ["precision-official"]);
+
+  const pasteisStyleAccess = parsePlace({
+    operationalFacts: {
+      access: {
+        windows: [{ opensAt: "09:00", closesAt: "17:00", status: "verified", evidence: [{ sourceId: "missing-hours", status: "verified", supports: ["Pastéis de Belém hours 09:00-17:00"] }] }]
+      }
+    }
+  }, [officialSource]);
+  assert.equal(pasteisStyleAccess.operationalFacts, undefined);
+
+  const louvreStyleEntry = parsePlace({
+    operationalFacts: {
+      entry: {
+        reservation: { requirement: "required", status: "verified", evidence: [{ sourceId: "missing-reservation", status: "verified", supports: ["Louvre reservation required"] }] },
+        ticket: { requirement: "required", status: "verified", evidence: [{ sourceId: "missing-ticket", status: "verified", supports: ["Louvre ticket required"] }] }
+      }
+    }
+  }, [officialSource]);
+  assert.equal(louvreStyleEntry.operationalFacts, undefined);
+
+  const kappabashiStyleClosure = parsePlace({
+    operationalFacts: {
+      access: {
+        closed: [{ pattern: "Closed Sundays", status: "verified", evidence: [{ sourceId: "missing-closure", status: "verified", supports: ["Kappabashi Kitchen Town closed Sundays"] }] }]
+      }
+    }
+  }, [officialSource]);
+  assert.equal(kappabashiStyleClosure.operationalFacts, undefined);
+
+  const toyosuBatch = parseSkillResearchBatchArtifact(JSON.stringify({
+    sources: [officialSource],
+    places: [{
+      id: "place-toyosu-market",
+      name: "Toyosu Market",
+      locationLabel: "Toyosu, Tokyo",
+      city: "Tokyo",
+      category: "market",
+      whyWorthIt: "A major food-market visit.",
+      plan: "Visit if access details can be verified.",
+      sourceUrls: ["https://example.com/venue"],
+      operationalFacts: {
+        access: {
+          windows: [{ opensAt: "05:00", closesAt: "15:00", status: "verified", evidence: [{ sourceId: "missing-hours", status: "verified", supports: ["Toyosu Market hours 05:00-15:00"] }] }],
+          closed: [{ pattern: "Closed on Sundays and holidays", status: "verified", evidence: [{ sourceId: "missing-closure", status: "verified", supports: ["Toyosu Market is closed Sundays and holidays"] }] }]
+        },
+        sessions: [{ label: "Public tuna auction observation", status: "recheck", evidence: [{ sourceId: "official", status: "verified", supports: ["Visitor information for public tuna auction observation"] }] }]
+      }
+    }],
+    events: [],
+    relationships: [],
+    localFoods: [],
+    localProducts: [],
+    experienceThemes: [],
+    travelTips: [],
+    actionRequirements: []
+  }), { id: "scope-1", scopeLabel: "Tokyo" }, "2026-09-16T01:25:39.000Z");
+  const toyosuResearch = importSkillResearchBatches([toyosuBatch], {
+    researchSetId: "research-toyosu-regression",
+    generationKey: "generation-toyosu-regression",
+    proposalRef: { sessionId: "session-toyosu-regression", proposalVersion: 1 },
+    skillLineage: LANDI_BLUEPRINT_SKILL,
+    createdAt: "2026-09-16T01:25:39.000Z",
+    updatedAt: "2026-09-16T01:25:39.000Z"
+  });
+  const toyosu = toyosuResearch.places.find((place) => place.name === "Toyosu Market");
+  assert.equal(toyosu?.operationalFacts?.access, undefined);
+  assert.equal(toyosu?.operationalFacts?.sessions?.length, 1);
+});
+
 test("Skill research batch output imports into a complete Trip Blueprint slice", () => {
   const parsed = parseSkillResearchBatchArtifact(JSON.stringify({
     id: "ignored",
@@ -522,6 +779,15 @@ test("Skill research batch output imports into a complete Trip Blueprint slice",
         guideDisplay: { showInGuide: true, state: "unscheduled", cardSummary: "Quiet garden anchor for a low-intensity morning.", tags: ["Garden", "Morning"], comparisonRows: [{ id: "row-cafe", relatedPlaceId: "cafe", area: "Kiyosumi", routeFit: "Same neighborhood", timing: "After the garden", effort: "Low effort", sourceState: "Needs route refresh", sourceUrls: ["https://example.com/kyoto"] }] },
         schedulingEligibility: { decision: "schedulable", reason: "Fits the Tokyo neighborhood day.", suitableDayIds: ["tokyo-day", "stale-day"], evidence: [{ sourceId: "official", status: "stale", supports: ["opening pattern"] }] },
         fieldEvidence: [{ path: "whyWorthIt", status: "verified", evidence: [{ sourceId: "official", status: "verified", supports: ["official overview"] }] }],
+        operationalFacts: {
+          access: {
+            windows: [{ opensAt: "09:00", closesAt: "17:00", status: "verified", checkedAt: "2026-08-26", evidence: [{ sourceId: "official", status: "verified" }] }],
+            closed: [{ pattern: "Year-end maintenance closure may apply.", status: "stale", checkedAt: "2026-07-01", evidence: [{ sourceId: "official", status: "stale" }], uncertaintyNote: "Older notice retained for future recheck." }]
+          },
+          entry: {
+            ticket: { requirement: "required", status: "verified", checkedAt: "2026-08-26", evidence: [{ sourceId: "official", status: "verified" }] }
+          }
+        },
         contentTier: "deep",
         visitRole: "morning anchor",
         durationMinutes: 90,
@@ -573,6 +839,8 @@ test("Skill research batch output imports into a complete Trip Blueprint slice",
   assert.equal(garden.guideDisplay?.comparisonRows?.[0]?.relatedPlaceId, cafe.id);
   assert.equal(garden.schedulingEligibility?.evidence?.[0]?.status, "stale");
   assert.equal(garden.fieldEvidence?.[0]?.evidence[0]?.status, "verified");
+  assert.equal(garden.operationalFacts?.access?.windows?.[0]?.opensAt, "09:00");
+  assert.equal(garden.operationalFacts?.access?.closed?.[0]?.status, "stale");
   const blueprint = importSkillItinerary(research, {
     title: "Tokyo",
     summary: "A slow Kiyosumi morning.",
@@ -604,11 +872,74 @@ test("Skill research batch output imports into a complete Trip Blueprint slice",
     ["flexible", undefined, "Leave the late morning flexible"]
   ]);
   assert.deepEqual(blueprint.places.find((place) => place.id === garden.id)?.schedulingEligibility?.suitableDayIds, ["tokyo-day"]);
+  assert.equal(blueprint.places.find((place) => place.id === garden.id)?.operationalFacts?.entry?.ticket?.requirement, "required");
   assert.equal(blueprint.localFoods?.[0]?.diningPlaceIds[0], cafe.id);
   assert.equal(blueprint.localProducts?.[0]?.purchasePlaceIds[0], garden.id);
   assert.equal(blueprint.experienceThemes?.[0]?.offeringPlaceIds[0], garden.id);
   assert.equal(blueprint.travelTips?.[0]?.placeId, cafe.id);
   assert.equal(blueprint.guideRelationshipGraph?.relationships[0]?.kind, "meal_support");
+});
+
+test("Bali operational facts survive parser, Research Set, Blueprint, and presentation without fabricating unresolved schedules", () => {
+  const raw = {
+    id: "ignored",
+    scopeLabel: "ignored",
+    completedAt: "ignored",
+    sources: [
+      { id: "monkey-official", title: "Monkey Forest visitor page", authority: "Monkey Forest", url: "https://example.com/monkey", retrievedAt: "2026-09-10", status: "verified", official: true },
+      { id: "paon-official", title: "Paon Bali class page", authority: "Paon Bali", url: "https://example.com/paon", retrievedAt: "2026-09-10", status: "verified", official: true },
+      { id: "puri-schedule", title: "Museum Puri Lukisan schedule", authority: "Museum directory", url: "https://example.com/puri", retrievedAt: "2026-09-10", status: "recheck" },
+      { id: "kecak-source", title: "Uluwatu Kecak listing", authority: "Tourism board", url: "https://example.com/kecak", retrievedAt: "2026-09-10", status: "recheck" },
+      { id: "waterbom-official", title: "Waterbom Bali official", authority: "Waterbom Bali", url: "https://example.com/waterbom", retrievedAt: "2026-09-10", status: "verified", official: true }
+    ],
+    places: [
+      { id: "monkey", name: "Sacred Monkey Forest Sanctuary", locationLabel: "Ubud, Bali", city: "Bali", area: "Ubud", category: "forest sanctuary", display: { type: "attraction" }, schedulingEligibility: { decision: "schedulable", reason: "Concrete Ubud anchor." }, durationMinutes: 120, whyWorthIt: "Forest and temple complex.", plan: "Visit near opening.", operationalFacts: { access: { windows: [{ opensAt: "09:00", closesAt: "18:00", appliesTo: { weekdays: ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] }, status: "verified", checkedAt: "2026-09-10", evidence: [{ sourceId: "monkey-official", status: "verified" }] }], lastEntry: { time: "17:00", status: "verified", checkedAt: "2026-09-10", evidence: [{ sourceId: "monkey-official", status: "verified" }] } } }, sourceUrls: ["https://example.com/monkey"] },
+      { id: "paon", name: "Paon Bali Cooking Class", locationLabel: "Ubud, Bali", city: "Bali", area: "Ubud", category: "cooking class", display: { type: "experience" }, schedulingEligibility: { decision: "schedulable", reason: "Reservable half-day class." }, durationMinutes: 240, whyWorthIt: "Hands-on Balinese cooking.", plan: "Choose a published class session.", bookingUrl: "https://example.com/paon", operationalFacts: { sessions: [{ label: "Morning class", startsAt: "09:00", status: "verified", checkedAt: "2026-09-10", evidence: [{ sourceId: "paon-official", status: "verified" }] }, { label: "Afternoon class", startsAt: "16:00", status: "verified", checkedAt: "2026-09-10", evidence: [{ sourceId: "paon-official", status: "verified" }] }], entry: { reservation: { requirement: "required", bookingUrl: "https://example.com/paon", status: "verified", checkedAt: "2026-09-10", evidence: [{ sourceId: "paon-official", status: "verified" }] } } }, sourceUrls: ["https://example.com/paon"] },
+      { id: "puri", name: "Museum Puri Lukisan", locationLabel: "Ubud, Bali", city: "Bali", area: "Ubud", category: "museum", display: { type: "attraction" }, schedulingEligibility: { decision: "schedulable", reason: "Weather-resilient Ubud stop." }, durationMinutes: 90, whyWorthIt: "Balinese art collection.", plan: "Use as a rainy-day cultural stop.", operationalFacts: { access: { windows: [{ label: "Published visiting schedule requires recheck", status: "recheck", checkedAt: "2026-09-10", evidence: [{ sourceId: "puri-schedule", status: "recheck" }], uncertaintyNote: "Directory schedule may not be reliable enough for execution." }] } }, sourceUrls: ["https://example.com/puri"] },
+      { id: "kecak", name: "Uluwatu Kecak and Fire Dance", locationLabel: "Uluwatu, Bali", city: "Bali", area: "Uluwatu", category: "dance performance", display: { type: "experience" }, schedulingEligibility: { decision: "schedulable", reason: "Can follow the temple after schedule check." }, durationMinutes: 90, whyWorthIt: "Open-air performance.", plan: "Keep as optional until schedule is confirmed.", operationalFacts: { sessions: [{ label: "Target-date schedule unpublished", status: "recheck", appliesTo: { date: "2026-10-11" }, evidence: [{ sourceId: "kecak-source", status: "recheck" }], uncertaintyNote: "Do not infer a performance time for October 11." }], entry: { ticket: { requirement: "unknown", status: "recheck", evidence: [{ sourceId: "kecak-source", status: "recheck" }], uncertaintyNote: "Official ticket channel and separate admission need confirmation." } } }, sourceUrls: ["https://example.com/kecak"] },
+      { id: "waterbom", name: "Waterbom Bali", locationLabel: "Kuta, Bali", city: "Bali", area: "Kuta", category: "water park", display: { type: "experience" }, schedulingEligibility: { decision: "schedulable", reason: "Concrete leisure-day option." }, durationMinutes: 300, whyWorthIt: "Self-contained leisure day.", plan: "Check capacity before choosing dated admission.", bookingUrl: "https://example.com/waterbom", operationalFacts: { access: { windows: [{ opensAt: "09:00", closesAt: "18:00", status: "verified", checkedAt: "2026-09-10", evidence: [{ sourceId: "waterbom-official", status: "verified" }] }] }, entry: { capacity: { requirement: "recommended", bookingUrl: "https://example.com/waterbom", status: "recheck", checkedAt: "2026-09-10", evidence: [{ sourceId: "waterbom-official", status: "recheck" }], uncertaintyNote: "Dated capacity notices can change." } } }, sourceUrls: ["https://example.com/waterbom"] }
+    ],
+    events: [],
+    relationships: [],
+    localFoods: [],
+    localProducts: [],
+    experienceThemes: [],
+    travelTips: [],
+    actionRequirements: [{ id: "book-paon", kind: "reservation", title: "Reserve Paon", description: "Choose a class session for three travelers.", accountableParty: "traveler", completionCondition: "Class slot is confirmed.", placeId: "paon", sourceUrls: ["https://example.com/paon"] }]
+  };
+  const parsed = parseSkillResearchBatchArtifact(JSON.stringify(raw), { id: "bali", scopeLabel: "Bali" }, "2026-09-10T00:00:00.000Z");
+  const research = importSkillResearchBatches([parsed], {
+    researchSetId: "research-bali",
+    generationKey: "generation-bali",
+    proposalRef: { sessionId: "session-bali", proposalVersion: 1 },
+    skillLineage: LANDI_BLUEPRINT_SKILL,
+    createdAt: "2026-09-10T00:00:00.000Z",
+    updatedAt: "2026-09-10T00:00:00.000Z"
+  });
+  const paon = research.places.find((place) => place.name === "Paon Bali Cooking Class")!;
+  const kecak = research.places.find((place) => place.name === "Uluwatu Kecak and Fire Dance")!;
+  assert.equal(research.places.find((place) => place.name === "Sacred Monkey Forest Sanctuary")?.operationalFacts?.access?.lastEntry?.time, "17:00");
+  assert.deepEqual(paon.operationalFacts?.sessions?.map((session) => session.startsAt), ["09:00", "16:00"]);
+  assert.equal(kecak.operationalFacts?.sessions?.[0]?.startsAt, undefined);
+  assert.equal(kecak.operationalFacts?.sessions?.[0]?.status, "recheck");
+  assert.equal(paon.operationalFacts?.entry?.reservation?.requirement, "required");
+  assert.equal(research.actionRequirements[0]?.placeId, paon.id);
+
+  const blueprint = importSkillItinerary(research, {
+    title: "Bali",
+    summary: "Operational fact preservation fixture.",
+    language: "en",
+    destinations: ["Bali"],
+    startDate: "2026-10-09",
+    endDate: "2026-10-09",
+    guideTheme: { title: "Bali", narrative: "Preserve operational facts." },
+    days: [{ id: "day-bali", date: "2026-10-09", kind: "scheduled", city: "Bali", title: "Class day", summary: "Paon class day.", stops: [{ placeId: paon.id, order: 1, time: "09:00" }], blocks: [], candidatePlaceIds: [kecak.id] }],
+    movements: []
+  }, { blueprintId: "blueprint-bali", blueprintVersion: 1, createdAt: "2026-09-10T01:00:00.000Z" });
+  const presentation = blueprintPresentation(blueprint);
+  assert.equal(blueprint.places.find((place) => place.id === paon.id)?.operationalFacts?.entry?.reservation?.requirement, "required");
+  assert.equal(presentation.places.find((place) => place.id === paon.id)?.operationalFacts?.sessions?.[1]?.startsAt, "16:00");
+  assert.equal(presentation.places.find((place) => place.id === kecak.id)?.operationalFacts?.entry?.ticket?.requirement, "unknown");
 });
 
 test("Skill research batch rejects invalid place display intent", () => {
@@ -648,6 +979,21 @@ test("Skill itinerary artifact contains only known place identities and allows r
   assert.ok(skillItinerarySchema.properties.days.items.properties.blocks);
 });
 
+test("Skill itinerary artifact accepts explicit empty day blocks", () => {
+  const value = {
+    title: "Tokyo", summary: "A balanced trip", language: "en", destinations: ["Tokyo"], startDate: "2026-09-01", endDate: "2026-09-01",
+    days: [
+      { id: "d1", date: "2026-09-01", kind: "scheduled", city: "Tokyo", title: "Open day", summary: "One researched place remains unscheduled.", stops: [{ placeId: "a", order: 1 }], blocks: [], candidatePlaceIds: ["b"] }
+    ], movements: []
+  };
+  const parsed = parseSkillItineraryArtifact(JSON.stringify(value), new Set(["a", "b"]));
+  assert.deepEqual(parsed.days[0]?.blocks, []);
+  const blockSchema = skillItinerarySchema.properties.days.items.properties.blocks;
+  assert.equal(blockSchema.type, "array");
+  assert.equal("minItems" in blockSchema, false);
+  assert.ok(skillItinerarySchema.properties.days.items.required.includes("blocks"));
+});
+
 test("Skill itinerary parser keeps typed day blocks and filters invalid references", () => {
   const value = {
     title: "Tokyo",
@@ -668,18 +1014,21 @@ test("Skill itinerary parser keeps typed day blocks and filters invalid referenc
       blocks: [
         { id: "block-stop", kind: "stop", order: 2, placeId: "a", startTime: "09:00", title: "Garden anchor", summary: "Start with the main visit.", durationMinutes: 90, role: "anchor", evidence: [{ sourceId: "source-1", status: "verified", supports: ["opening window"] }, { sourceId: "missing-source", status: "verified" }] },
         { id: "block-meal", kind: "meal", order: 3, placeId: "b", startTime: "10:45", title: "Coffee break", summary: "Use a real pause, not a hidden note.", durationMinutes: 45, evidence: [] },
-        { id: "block-rest", kind: "rest", order: 4, title: "Hotel pause", summary: "Keep time open before the afternoon.", durationMinutes: 30, evidence: [] },
+        { id: "block-rest", kind: "rest", order: 4, title: "Required medical rest window", summary: "Traveler must keep this break before the afternoon.", durationMinutes: 30, evidence: [] },
         { id: "block-lodging", kind: "lodging", order: 5, placeId: "hotel", title: "Return to the hotel area", summary: "Regroup before dinner.", evidence: [] },
         { id: "block-flex", kind: "flexible", order: 6, placeId: "c", title: "Same-direction backup", summary: "Use only if pace allows.", evidence: [] },
         { id: "block-transfer", kind: "transfer", order: 7, title: "Move across the neighborhood", summary: "Refresh live routing before leaving.", evidence: [] },
-        { id: "block-event", kind: "event", order: 8, eventId: "event-1", title: "Evening program", summary: "Only if the event remains confirmed.", evidence: [] },
-        { id: "block-filler-rest", kind: "rest", order: 9, title: "Slow morning", summary: "Take it easy.", evidence: [] },
-        { id: "block-filler-flex", kind: "flexible", order: 10, title: "Flexible afternoon", summary: "Free time.", evidence: [] },
-        { id: "block-placeholder", kind: "meal", order: 11, title: "Dinner", summary: "Restaurant TBD", evidence: [] },
-        { id: "block-unscheduled-stop", kind: "stop", order: 9, placeId: "c", title: "Should drop", evidence: [] },
-        { id: "block-missing-place", kind: "meal", order: 10, placeId: "missing", title: "Should drop", evidence: [] },
-        { id: "block-missing-event", kind: "event", order: 11, eventId: "missing-event", title: "Should drop", evidence: [] },
-        { id: "block-event-no-id", kind: "event", order: 12, title: "Should drop", evidence: [] }
+        { id: "block-real-transfer", kind: "transfer", order: 8, title: "Taxi from airport to hotel", summary: "Connect arrival to the base.", evidence: [] },
+        { id: "block-event", kind: "event", order: 9, eventId: "event-1", title: "Evening program", summary: "Only if the event remains confirmed.", evidence: [] },
+        { id: "block-lodging-status", kind: "lodging", order: 10, title: "Hotel not selected", summary: "Routing cannot be finalized until the base is known.", evidence: [] },
+        { id: "block-generic-lodging", kind: "lodging", order: 11, title: "Depart selected lodging", summary: "Start from the hotel.", evidence: [] },
+        { id: "block-filler-rest", kind: "rest", order: 12, title: "Slow morning", summary: "Take it easy.", evidence: [] },
+        { id: "block-filler-flex", kind: "flexible", order: 13, title: "Flexible afternoon", summary: "Free time.", evidence: [] },
+        { id: "block-placeholder", kind: "meal", order: 14, title: "Dinner", summary: "Restaurant TBD", evidence: [] },
+        { id: "block-unscheduled-stop", kind: "stop", order: 15, placeId: "c", title: "Should drop", evidence: [] },
+        { id: "block-missing-place", kind: "meal", order: 16, placeId: "missing", title: "Should drop", evidence: [] },
+        { id: "block-missing-event", kind: "event", order: 17, eventId: "missing-event", title: "Should drop", evidence: [] },
+        { id: "block-event-no-id", kind: "event", order: 18, title: "Should drop", evidence: [] }
       ],
       candidatePlaceIds: ["c"]
     }],
@@ -691,17 +1040,16 @@ test("Skill itinerary parser keeps typed day blocks and filters invalid referenc
     ["meal", "b", undefined, 2],
     ["rest", undefined, undefined, 3],
     ["lodging", "hotel", undefined, 4],
-    ["flexible", "c", undefined, 5],
-    ["transfer", undefined, undefined, 6],
-    ["event", undefined, "event-1", 7],
-    ["meal", undefined, undefined, 8]
+    ["transfer", undefined, undefined, 5],
+    ["event", undefined, "event-1", 6],
+    ["lodging", undefined, undefined, 7]
   ]);
   assert.equal(parsed.days[0]?.blocks?.[0]?.title, "Garden anchor");
   assert.equal(parsed.days[0]?.blocks?.[0]?.summary, "Start with the main visit.");
   assert.equal(parsed.days[0]?.blocks?.[0]?.durationMinutes, 90);
   assert.deepEqual(parsed.days[0]?.blocks?.[0]?.evidence, [{ sourceId: "source-1", status: "verified", supports: ["opening window"] }]);
-  assert.equal(parsed.days[0]?.blocks?.[7]?.title, "Dinner");
-  assert.equal(parsed.days[0]?.blocks?.[7]?.summary, undefined);
+  assert.equal(parsed.days[0]?.blocks?.[4]?.title, "Taxi from airport to hotel");
+  assert.equal(parsed.days[0]?.blocks?.[6]?.title, "Hotel not selected");
 });
 
 test("Skill itinerary parser degrades invalid place candidates and movements instead of rejecting the whole itinerary", () => {
@@ -774,8 +1122,11 @@ test("Skill itinerary prompt uses a compact Research Set and forbids Plan execut
   });
   assert.match(prompt, /Use only the supplied stable place IDs/i);
   assert.match(prompt, /Include guideTheme/i);
-  assert.match(prompt, /Every day must include typed day\.blocks/i);
+  assert.match(prompt, /Every day must include a blocks array/i);
+  assert.match(prompt, /\[\] is valid and often correct/i);
+  assert.doesNotMatch(prompt, /Every day must include typed day\.blocks/i);
   assert.match(prompt, /Do not create filler blocks merely to fill blank time/i);
+  assert.match(prompt, /Generic Breakfast, Lunch, Dinner/i);
   assert.match(prompt, /If deleting the block would not reduce the traveler's ability to understand or execute the day, omit it/i);
   assert.match(prompt, /Do not output Time TBD, Duration TBD, Distance TBD/i);
   assert.match(prompt, /make each covered morning depart from the accommodation occupied the previous night/i);

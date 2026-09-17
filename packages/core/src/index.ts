@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PlanCompilationOrigin } from "./plan-compiler.js";
 import type { DestinationArrivalEvent } from "./current-destination.js";
-import type { BlueprintActionRequirement, BlueprintBookingConstraint, BlueprintEvidenceRef, BlueprintExperienceTheme, BlueprintFieldEvidence, BlueprintGuideRelationshipGraph, BlueprintGuideTheme, BlueprintItineraryBlock, BlueprintLocalFood, BlueprintLocalProduct, BlueprintModuleIdentity, BlueprintMovementDisplayIntent, BlueprintPlaceDisplayIntent, BlueprintPlaceGuideDisplay, BlueprintPlaceImage, BlueprintPreparationChecklistItem, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelTip, TripBlueprint } from "./trip-blueprint.js";
+import type { BlueprintActionRequirement, BlueprintBookingConstraint, BlueprintEvidenceRef, BlueprintExperienceTheme, BlueprintFieldEvidence, BlueprintGuideRelationshipGraph, BlueprintGuideTheme, BlueprintItineraryBlock, BlueprintLocalFood, BlueprintLocalProduct, BlueprintModuleIdentity, BlueprintMovementDisplayIntent, BlueprintOperationalCondition, BlueprintOperationalFacts, BlueprintPlanAlternative, BlueprintPlaceDisplayIntent, BlueprintPlaceGuideDisplay, BlueprintPlaceImage, BlueprintPreparationChecklistItem, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelContext, BlueprintTravelTip, TripBlueprint } from "./trip-blueprint.js";
 
 export { recommendPlanTransport, type TransportMode, type TransportRecommendation, type TransportRouteFact } from "./transport.js";
 export { assessPolicyPreparation, type PolicyPreparationAssessment, type PolicyPreparationItem, type PolicyPreparationStatus } from "./policy-applicability.js";
@@ -87,6 +87,9 @@ export {
   type BlueprintMovementDisplayIntent,
   type BlueprintMovementMapLineState,
   type BlueprintMovementMode,
+  type BlueprintOperationalCondition,
+  type BlueprintOperationalConditionKind,
+  type BlueprintPlanAlternative,
   type BlueprintPlace,
   type BlueprintPlaceDisplayIntent,
   type BlueprintPlaceDisplayType,
@@ -104,6 +107,8 @@ export {
   type BlueprintSchedulingEligibility,
   type BlueprintSource,
   type BlueprintStop,
+  type BlueprintPlanRole,
+  type BlueprintTravelContext,
   type BlueprintTravelTip,
   type BlueprintTravelTipTheme,
   type BlueprintVisitorMode,
@@ -240,6 +245,7 @@ export interface PlanPlace {
   guideDisplay?: BlueprintPlaceGuideDisplay;
   schedulingEligibility?: BlueprintSchedulingEligibility;
   fieldEvidence?: BlueprintFieldEvidence[];
+  operationalFacts?: BlueprintOperationalFacts;
   contentTier?: "deep" | "standard" | "compact";
   visitRole?: string;
   durationMinutes?: number;
@@ -287,6 +293,8 @@ export interface ItineraryDay {
   candidates?: string[];
   stops?: Array<{ placeId: string; order: number; time?: string; role?: string }>;
   blocks?: BlueprintItineraryBlock[];
+  startContext?: BlueprintTravelContext;
+  endContext?: BlueprintTravelContext;
   /** Current accommodation to the first scheduled place; host-managed after the user saves a stay. */
   accommodationDeparture?: {
     accommodationName: string;
@@ -363,6 +371,8 @@ export interface PlanPresentation {
   experienceThemes?: BlueprintExperienceTheme[];
   travelTips?: BlueprintTravelTip[];
   preparationChecklist?: BlueprintPreparationChecklistItem[];
+  alternatives?: BlueprintPlanAlternative[];
+  researchGrounding?: string[];
   actionRequirements?: BlueprintActionRequirement[];
   routeSegments: PlanRouteSegment[];
 }
@@ -394,6 +404,8 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
       summary: day.summary,
       candidates,
       stops,
+      ...(day.startContext ? { startContext: structuredClone(day.startContext) } : {}),
+      ...(day.endContext ? { endContext: structuredClone(day.endContext) } : {}),
       ...(day.blocks ? { blocks: structuredClone(day.blocks) } : {})
     };
   });
@@ -467,6 +479,7 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
         ...(place.guideDisplay ? { guideDisplay: structuredClone(place.guideDisplay) } : {}),
         ...(place.schedulingEligibility ? { schedulingEligibility: structuredClone(place.schedulingEligibility) } : {}),
         ...(place.fieldEvidence ? { fieldEvidence: structuredClone(place.fieldEvidence) } : {}),
+        ...(place.operationalFacts ? { operationalFacts: structuredClone(place.operationalFacts) } : {}),
         ...(place.contentTier ? { contentTier: place.contentTier } : {}),
         ...(place.visitRole ? { visitRole: place.visitRole } : {}),
         ...(place.durationMinutes ? { durationMinutes: place.durationMinutes } : {}),
@@ -497,6 +510,8 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
     })),
     ...(blueprint.travelTips ? { travelTips: structuredClone(blueprint.travelTips) } : {}),
     ...(blueprint.preparationChecklist ? { preparationChecklist: structuredClone(blueprint.preparationChecklist) } : {}),
+    ...(blueprint.alternatives?.length ? { alternatives: structuredClone(blueprint.alternatives) } : {}),
+    ...(blueprint.researchGrounding?.length ? { researchGrounding: structuredClone(blueprint.researchGrounding) } : {}),
     ...(blueprint.actionRequirements.length ? { actionRequirements: structuredClone(blueprint.actionRequirements) } : {}),
     days,
     routeSegments

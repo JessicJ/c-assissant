@@ -941,6 +941,12 @@ export class SqliteWorkspaceStore {
     return id;
   }
 
+  listDiagnosticArtifacts(generationKey: string): Array<{ id: string; generationKey: string; rawResponse: string; createdAt: string; expiresAt: string }> {
+    const rows = this.database.prepare(`SELECT id, generation_key, raw_response, created_at, expires_at
+      FROM blueprint_diagnostic_artifacts WHERE generation_key = ? ORDER BY created_at, rowid`).all(generationKey) as Array<{ id: string; generation_key: string; raw_response: string; created_at: string; expires_at: string }>;
+    return rows.map((row) => ({ id: row.id, generationKey: row.generation_key, rawResponse: row.raw_response, createdAt: row.created_at, expiresAt: row.expires_at }));
+  }
+
   deleteExpiredDiagnosticArtifacts(now = new Date()): number {
     if (!Number.isFinite(now.getTime())) throw new Error("Diagnostic cleanup needs a valid time.");
     return Number(this.database.prepare("DELETE FROM blueprint_diagnostic_artifacts WHERE expires_at <= ?").run(now.toISOString()).changes);

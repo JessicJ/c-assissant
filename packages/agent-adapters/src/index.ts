@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { planPresentationIntegrityIssues, type GeneratedPlanDraft, type ImmigrationStatus, type PlanningSession, type PlanPresentation, type ProfileGender, type ResearchSet, type SkillItineraryArtifact, type SkillResearchBatchArtifact, type SkillLineage } from "@c-assistant/core";
 import { blueprintPolicyKind, LANDI_BLUEPRINT_GENERATION_RULES, LANDI_BLUEPRINT_SKILL, LANDI_BLUEPRINT_SOURCE_RULES } from "./landi-blueprint-policy.js";
 export { blueprintPolicyKind, LANDI_BLUEPRINT_SKILL, LEGACY_BLUEPRINT_SKILL } from "./landi-blueprint-policy.js";
+export * from "./semantic-validator.js";
+export * from "./semantic-plan-repair.js";
+export * from "./semantic-plan-structurer.js";
 
 export type RuntimeKind = "codex" | "claude-code";
 
@@ -64,6 +67,73 @@ export interface SkillResearchBatchRequest extends CodexPlanRequest {
 
 export interface SkillItineraryRequest extends CodexPlanRequest {
   research: ResearchSet;
+}
+
+export interface SemanticTravelPlanRequest extends CodexPlanRequest {
+  research: ResearchSet;
+}
+
+export interface SemanticTravelPlan {
+  title: string;
+  language: string;
+  tripStrategy: string;
+  targetedResearch: SemanticTargetedResearch[];
+  dailyItinerary: Array<{
+    date: string;
+    area: string;
+    startContext: SemanticDayContext;
+    endContext: SemanticDayContext;
+    plan: string;
+    experiences?: SemanticTravelExperience[];
+  }>;
+  unresolvedExperiences: string[];
+  preparation: string[];
+  tips: string[];
+  researchGrounding: string[];
+  followUpChecks: string[];
+  markdown: string;
+}
+
+export interface SemanticTravelPlanResult {
+  rawJson: string;
+  plan: SemanticTravelPlan;
+}
+
+export interface SemanticTravelPlanRepairGenerationRequest {
+  prompt: string;
+  signal?: AbortSignal;
+}
+
+export interface SemanticTargetedResearch {
+  question: string;
+  outcome: string;
+}
+
+export type SemanticPlanRole = "planned" | "optional" | "replacement";
+export type SemanticOperationalConditionKind = "reservation" | "session" | "weather" | "route" | "access" | "traveler_choice" | "recheck";
+
+export interface SemanticOperationalCondition {
+  kind: SemanticOperationalConditionKind;
+  note?: string;
+}
+
+export interface SemanticTravelExperience {
+  title: string;
+  planRole: SemanticPlanRole;
+  summary: string;
+  placeName?: string;
+  primaryExperience?: boolean;
+  operationalConditions?: SemanticOperationalCondition[];
+  replacementFor?: string;
+  startTime?: string;
+  durationMinutes?: number;
+}
+
+export type SemanticDayContextStatus = "confirmed_property" | "planned_base_pending_property" | "unresolved_base" | "transport_node" | "in_transit";
+
+export interface SemanticDayContext {
+  label: string;
+  status: SemanticDayContextStatus;
 }
 
 interface SkillImageEnrichmentArtifact {
@@ -230,7 +300,7 @@ export class CodexRuntimeAdapter {
     try {
       await writeFile(schemaPath, JSON.stringify(codexStrictOutputSchema(skillItinerarySchema)), "utf8");
       input.onStage?.("drafting");
-      const command = await this.run("codex", ["exec", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "--output-schema", schemaPath, "--output-last-message", outputPath, prompt], {
+      const command = await this.run("codex", ["--search", "exec", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "--output-schema", schemaPath, "--output-last-message", outputPath, prompt], {
         cwd: runDirectory,
         env: scrubbedEnvironment(this.environment),
         timeoutMs: CODEX_DRAFT_TIMEOUT_MS,
@@ -240,6 +310,60 @@ export class CodexRuntimeAdapter {
       if (command.timedOut) throw new RuntimeAdapterError("timed_out", "Itinerary generation timed out. The Research Set remains saved and can be resumed.");
       if (command.code !== 0) throw codexRuntimeFailure(command);
       return parseSkillItineraryArtifact(await readCodexStructuredOutput(outputPath, command, "itinerary"), new Set(input.research.places.map((place) => place.id)), new Set(input.research.sources.map((source) => source.id)), new Set(input.research.events.map((event) => event.id)));
+    } finally {
+      await rm(runDirectory, { recursive: true, force: true });
+    }
+  }
+
+  async generateSemanticTravelPlan(input: SemanticTravelPlanRequest): Promise<SemanticTravelPlanResult> {
+    if (!input.request.trim() || input.research.status !== "completed") throw new RuntimeAdapterError("invalid_request", "Semantic planning needs a confirmed request and completed Research Set.");
+    const prompt = buildSemanticTravelPlanPrompt(input);
+    const health = await this.check();
+    if (!health.installed) throw new RuntimeAdapterError("not_installed", health.message ?? "Codex CLI is not available.");
+    if (!health.authenticated) throw new RuntimeAdapterError("not_authenticated", health.message ?? "Codex login is required.");
+    const runDirectory = await mkdtemp(join(tmpdir(), "c-assistant-semantic-plan-"));
+    const schemaPath = join(runDirectory, "semantic-travel-plan.schema.json");
+    const outputPath = join(runDirectory, "semantic-travel-plan.json");
+    try {
+      await writeFile(schemaPath, JSON.stringify(codexStrictOutputSchema(semanticTravelPlanSchema)), "utf8");
+      input.onStage?.("drafting");
+      const command = await this.run("codex", ["exec", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "--output-schema", schemaPath, "--output-last-message", outputPath, prompt], {
+        cwd: runDirectory,
+        env: scrubbedEnvironment(this.environment),
+        timeoutMs: CODEX_DRAFT_TIMEOUT_MS,
+        ...(input.signal ? { signal: input.signal } : {})
+      });
+      if (command.aborted) throw new RuntimeAdapterError("cancelled", "Semantic travel planning was cancelled.");
+      if (command.timedOut) throw new RuntimeAdapterError("timed_out", "Semantic travel planning timed out.");
+      if (command.code !== 0) throw codexRuntimeFailure(command);
+      const rawJson = await readCodexStructuredOutput(outputPath, command, "semantic");
+      return { rawJson, plan: parseSemanticTravelPlan(rawJson) };
+    } finally {
+      await rm(runDirectory, { recursive: true, force: true });
+    }
+  }
+
+  async generateSemanticTravelPlanRepair(input: SemanticTravelPlanRepairGenerationRequest): Promise<SemanticTravelPlanResult> {
+    if (!input.prompt.trim()) throw new RuntimeAdapterError("invalid_request", "Semantic repair needs a repair prompt.");
+    const health = await this.check();
+    if (!health.installed) throw new RuntimeAdapterError("not_installed", health.message ?? "Codex CLI is not available.");
+    if (!health.authenticated) throw new RuntimeAdapterError("not_authenticated", health.message ?? "Codex login is required.");
+    const runDirectory = await mkdtemp(join(tmpdir(), "c-assistant-semantic-repair-"));
+    const schemaPath = join(runDirectory, "semantic-travel-plan.schema.json");
+    const outputPath = join(runDirectory, "semantic-travel-plan-repair.json");
+    try {
+      await writeFile(schemaPath, JSON.stringify(codexStrictOutputSchema(semanticTravelPlanSchema)), "utf8");
+      const command = await this.run("codex", ["exec", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "--output-schema", schemaPath, "--output-last-message", outputPath, input.prompt], {
+        cwd: runDirectory,
+        env: scrubbedEnvironment(this.environment),
+        timeoutMs: CODEX_REPAIR_TIMEOUT_MS,
+        ...(input.signal ? { signal: input.signal } : {})
+      });
+      if (command.aborted) throw new RuntimeAdapterError("cancelled", "Semantic travel plan repair was cancelled.");
+      if (command.timedOut) throw new RuntimeAdapterError("timed_out", "Semantic travel plan repair timed out.");
+      if (command.code !== 0) throw codexRuntimeFailure(command);
+      const rawJson = await readCodexStructuredOutput(outputPath, command, "repair");
+      return { rawJson, plan: parseSemanticTravelPlan(rawJson) };
     } finally {
       await rm(runDirectory, { recursive: true, force: true });
     }
@@ -628,7 +752,9 @@ export function parseSkillResearchBatchArtifact(value: string, batch: { id: stri
   }
   const rawSources = parsed.sources as SkillResearchBatchArtifact["sources"];
   const sourceIdMap = new Map<string, string>();
+  const sourceUrlById = new Map<string, string>();
   for (const source of rawSources) {
+    if (source.id) sourceUrlById.set(source.id, source.url);
     if (!source.id) continue;
     const namespaced = namespacedBatchId(batch.id, source.id);
     for (const alias of batchIdAliases(batch.id, source.id)) sourceIdMap.set(alias, namespaced);
@@ -637,6 +763,31 @@ export function parseSkillResearchBatchArtifact(value: string, batch: { id: stri
     ...item,
     evidence: item.evidence.map((ref) => ({ ...ref, sourceId: sourceIdMap.get(ref.sourceId) ?? ref.sourceId }))
   }));
+  const remapOperationalFacts = (facts: NonNullable<SkillResearchBatchArtifact["places"][number]["operationalFacts"]> | undefined) => {
+    if (!facts) return undefined;
+    const remapFact = <T extends { evidence: Array<{ sourceId: string }> }>(fact: T): T => ({
+      ...structuredClone(fact),
+      evidence: fact.evidence.map((ref) => ({ ...ref, sourceId: sourceIdMap.get(ref.sourceId) ?? ref.sourceId }))
+    });
+    return {
+      ...(facts.access ? {
+        access: {
+          ...(facts.access.windows?.length ? { windows: facts.access.windows.map(remapFact) } : {}),
+          ...(facts.access.closed?.length ? { closed: facts.access.closed.map(remapFact) } : {}),
+          ...(facts.access.lastEntry ? { lastEntry: remapFact(facts.access.lastEntry) } : {})
+        }
+      } : {}),
+      ...(facts.sessions?.length ? { sessions: facts.sessions.map(remapFact) } : {}),
+      ...(facts.entry ? {
+        entry: {
+          ...(facts.entry.reservation ? { reservation: remapFact(facts.entry.reservation) } : {}),
+          ...(facts.entry.ticket ? { ticket: remapFact(facts.entry.ticket) } : {}),
+          ...(facts.entry.booking ? { booking: remapFact(facts.entry.booking) } : {}),
+          ...(facts.entry.capacity ? { capacity: remapFact(facts.entry.capacity) } : {})
+        }
+      } : {})
+    };
+  };
   const remapSchedulingEligibility = (eligibility: SkillResearchBatchArtifact["places"][number]["schedulingEligibility"] | undefined) => eligibility ? {
     ...eligibility,
     ...(eligibility.evidence?.length ? { evidence: eligibility.evidence.map((ref) => ({ ...ref, sourceId: sourceIdMap.get(ref.sourceId) ?? ref.sourceId })) } : {})
@@ -653,7 +804,11 @@ export function parseSkillResearchBatchArtifact(value: string, batch: { id: stri
     scopeLabel: batch.scopeLabel,
     completedAt,
     sources: rawSources.map((source) => ({ ...source, ...(source.id ? { id: namespacedBatchId(batch.id, source.id) } : {}) })),
-    places: rawPlaces.map((place) => ({ ...place, ...(place.id ? { id: placeIdMap.get(place.id) ?? namespacedBatchId(batch.id, place.id) } : {}), ...(place.guideDisplay ? { guideDisplay: remapGuideDisplay(place.guideDisplay)! } : {}), ...(place.schedulingEligibility ? { schedulingEligibility: remapSchedulingEligibility(place.schedulingEligibility)! } : {}), ...(place.fieldEvidence?.length ? { fieldEvidence: remapFieldEvidence(place.fieldEvidence)! } : {}) })),
+    places: rawPlaces.map((place) => {
+      const { operationalFacts: _rawOperationalFacts, ...placeWithoutOperationalFacts } = place;
+      const operationalFacts = sanitizeOperationalFacts(place.operationalFacts, sourceUrlById);
+      return { ...placeWithoutOperationalFacts, ...(place.id ? { id: placeIdMap.get(place.id) ?? namespacedBatchId(batch.id, place.id) } : {}), ...(place.guideDisplay ? { guideDisplay: remapGuideDisplay(place.guideDisplay)! } : {}), ...(place.schedulingEligibility ? { schedulingEligibility: remapSchedulingEligibility(place.schedulingEligibility)! } : {}), ...(place.fieldEvidence?.length ? { fieldEvidence: remapFieldEvidence(place.fieldEvidence)! } : {}), ...(operationalFacts ? { operationalFacts: remapOperationalFacts(operationalFacts)! } : {}) };
+    }),
     events: (parsed.events as SkillResearchBatchArtifact["events"]).map((event) => ({ ...event, ...(event.id ? { id: namespacedBatchId(batch.id, event.id) } : {}), ...(event.placeId ? { placeId: placeIdMap.get(event.placeId) ?? event.placeId } : {}) })),
     relationships: parsedRelationships.map((relationship) => ({ ...relationship, ...(relationship.id ? { id: namespacedBatchId(batch.id, relationship.id) } : {}), fromPlaceId: placeIdMap.get(relationship.fromPlaceId) ?? relationship.fromPlaceId, toPlaceId: placeIdMap.get(relationship.toPlaceId) ?? relationship.toPlaceId })),
     ...(parsedLocalFoods.length ? { localFoods: parsedLocalFoods.map((item) => ({ ...item, ...(item.id ? { id: namespacedBatchId(batch.id, item.id) } : {}), diningPlaceIds: item.diningPlaceIds.map((placeId) => placeIdMap.get(placeId) ?? placeId) })) } : {}),
@@ -785,6 +940,7 @@ function isSkillResearchPlace(value: unknown): boolean {
     && (value.guideDisplay === undefined || isSkillGuideDisplay(value.guideDisplay))
     && (value.schedulingEligibility === undefined || isSchedulingEligibility(value.schedulingEligibility))
     && (value.fieldEvidence === undefined || (Array.isArray(value.fieldEvidence) && value.fieldEvidence.every(isFieldEvidence)))
+    && (value.operationalFacts === undefined || isOperationalFacts(value.operationalFacts))
     && (value.images === undefined || (Array.isArray(value.images) && value.images.every(isSkillPlaceImage)))
     && (value.sourceUrls === undefined || (Array.isArray(value.sourceUrls) && value.sourceUrls.every((url) => isString(url) && url.startsWith("https://"))))
     && (value.detailSections === undefined || (Array.isArray(value.detailSections) && value.detailSections.every((section) => isRecord(section) && isString(section.title))));
@@ -907,6 +1063,184 @@ function isFieldEvidence(value: unknown): boolean {
     && value.evidence.every(isEvidenceRef);
 }
 
+function isOperationalFacts(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const access = value.access;
+  const sessions = value.sessions;
+  const entry = value.entry;
+  return (access === undefined || (isRecord(access)
+    && (access.windows === undefined || (Array.isArray(access.windows) && access.windows.every(isOperationalWindowFact)))
+    && (access.closed === undefined || (Array.isArray(access.closed) && access.closed.every(isOperationalClosedFact)))
+    && (access.lastEntry === undefined || isOperationalLastEntryFact(access.lastEntry))))
+    && (sessions === undefined || (Array.isArray(sessions) && sessions.every(isOperationalSessionFact)))
+    && (entry === undefined || (isRecord(entry)
+      && (entry.reservation === undefined || isOperationalRequirementFact(entry.reservation))
+      && (entry.ticket === undefined || isOperationalRequirementFact(entry.ticket))
+      && (entry.booking === undefined || isOperationalRequirementFact(entry.booking))
+      && (entry.capacity === undefined || isOperationalRequirementFact(entry.capacity))));
+}
+
+function isOperationalFactBase(value: unknown): value is Record<string, unknown> {
+  return isRecord(value)
+    && ["verified", "recheck", "stale"].includes(String(value.status))
+    && (value.checkedAt === undefined || isString(value.checkedAt))
+    && (value.uncertaintyNote === undefined || isString(value.uncertaintyNote))
+    && (value.appliesTo === undefined || isOperationalApplicability(value.appliesTo))
+    && Array.isArray(value.evidence)
+    && value.evidence.length > 0
+    && value.evidence.every(isEvidenceRef);
+}
+
+function isOperationalApplicability(value: unknown): boolean {
+  return isRecord(value)
+    && (value.date === undefined || isString(value.date))
+    && (value.startDate === undefined || isString(value.startDate))
+    && (value.endDate === undefined || isString(value.endDate))
+    && (value.weekdays === undefined || (Array.isArray(value.weekdays) && value.weekdays.every((weekday) => ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"].includes(String(weekday)))))
+    && (value.season === undefined || isString(value.season))
+    && (value.note === undefined || isString(value.note));
+}
+
+function isOperationalWindowFact(value: unknown): boolean {
+  return isOperationalFactBase(value)
+    && (value.label === undefined || isString(value.label))
+    && (value.opensAt === undefined || isString(value.opensAt))
+    && (value.closesAt === undefined || isString(value.closesAt));
+}
+
+function isOperationalClosedFact(value: unknown): boolean {
+  return isOperationalFactBase(value) && isString(value.pattern);
+}
+
+function isOperationalLastEntryFact(value: unknown): boolean {
+  return isOperationalFactBase(value)
+    && (value.time === undefined || isString(value.time))
+    && (value.offsetMinutesBeforeClose === undefined || Number.isInteger(value.offsetMinutesBeforeClose))
+    && (value.note === undefined || isString(value.note));
+}
+
+function isOperationalSessionFact(value: unknown): boolean {
+  return isOperationalFactBase(value)
+    && (value.label === undefined || isString(value.label))
+    && (value.startsAt === undefined || isString(value.startsAt))
+    && (value.endsAt === undefined || isString(value.endsAt))
+    && (value.durationMinutes === undefined || Number.isInteger(value.durationMinutes));
+}
+
+function isOperationalRequirementFact(value: unknown): boolean {
+  return isOperationalFactBase(value)
+    && ["required", "recommended", "not_required", "unknown"].includes(String(value.requirement))
+    && (value.note === undefined || isString(value.note))
+    && (value.bookingUrl === undefined || (isString(value.bookingUrl) && value.bookingUrl.startsWith("https://")));
+}
+
+type SkillOperationalFactsArtifact = NonNullable<SkillResearchBatchArtifact["places"][number]["operationalFacts"]>;
+type SkillOperationalFactWithEvidence = {
+  status: "verified" | "recheck" | "stale";
+  evidence: Array<{ sourceId: string; status: "verified" | "recheck" | "stale"; supports?: string[] | undefined }>;
+  uncertaintyNote?: string | undefined;
+  appliesTo?: { date?: string | undefined; startDate?: string | undefined; endDate?: string | undefined; note?: string | undefined } | undefined;
+};
+type SkillOperationalRequirementFactArtifact = NonNullable<NonNullable<SkillOperationalFactsArtifact["entry"]>["reservation"]>;
+
+function sanitizeOperationalFacts(facts: SkillResearchBatchArtifact["places"][number]["operationalFacts"] | undefined, sourceUrlById: Map<string, string>): SkillResearchBatchArtifact["places"][number]["operationalFacts"] | undefined {
+  if (!facts) return undefined;
+  const windows = facts.access?.windows?.map((fact) => sanitizePreciseOperationalFact(fact, sourceUrlById)).filter(isDefined);
+  const closed = facts.access?.closed?.map((fact) => sanitizePreciseOperationalFact(fact, sourceUrlById)).filter(isDefined);
+  const lastEntry = facts.access?.lastEntry ? sanitizePreciseOperationalFact(facts.access.lastEntry, sourceUrlById) : undefined;
+  const sessions = facts.sessions?.map((fact) => sanitizePreciseOperationalFact(fact, sourceUrlById)).filter(isDefined);
+  const reservation = facts.entry?.reservation ? sanitizeRequirementOperationalFact(facts.entry.reservation, sourceUrlById) : undefined;
+  const ticket = facts.entry?.ticket ? sanitizeRequirementOperationalFact(facts.entry.ticket, sourceUrlById) : undefined;
+  const booking = facts.entry?.booking ? sanitizeRequirementOperationalFact(facts.entry.booking, sourceUrlById) : undefined;
+  const capacity = facts.entry?.capacity ? sanitizeRequirementOperationalFact(facts.entry.capacity, sourceUrlById) : undefined;
+  const access = {
+    ...(windows?.length ? { windows } : {}),
+    ...(closed?.length ? { closed } : {}),
+    ...(lastEntry ? { lastEntry } : {})
+  };
+  const entry = {
+    ...(reservation ? { reservation } : {}),
+    ...(ticket ? { ticket } : {}),
+    ...(booking ? { booking } : {}),
+    ...(capacity ? { capacity } : {})
+  };
+  const sanitized = {
+    ...(Object.keys(access).length ? { access } : {}),
+    ...(sessions?.length ? { sessions } : {}),
+    ...(Object.keys(entry).length ? { entry } : {})
+  };
+  return Object.keys(sanitized).length ? sanitized : undefined;
+}
+
+function sanitizePreciseOperationalFact<T extends SkillOperationalFactWithEvidence>(fact: T, sourceUrlById: Map<string, string>): T | undefined {
+  const next = sanitizeOperationalUncertainty(structuredClone(fact));
+  next.evidence = next.evidence.filter((ref) => sourceUrlById.has(ref.sourceId));
+  if (!next.evidence.length) return undefined;
+  if (next.status === "verified" && factNeedsValueLevelEvidence(next) && !hasValueLevelEvidence(next)) next.status = "recheck";
+  return next;
+}
+
+function sanitizeRequirementOperationalFact<T extends SkillOperationalRequirementFactArtifact>(fact: T, sourceUrlById: Map<string, string>): T | undefined {
+  const next = sanitizePreciseOperationalFact(fact, sourceUrlById);
+  if (!next) return undefined;
+  if (next.bookingUrl && !bookingUrlHasValueLevelEvidence(next, sourceUrlById)) delete next.bookingUrl;
+  return next;
+}
+
+function sanitizeOperationalUncertainty<T extends SkillOperationalFactWithEvidence>(fact: T): T {
+  if (fact.uncertaintyNote && !hasUncertaintyEvidence(fact)) delete fact.uncertaintyNote;
+  return fact;
+}
+
+function factNeedsValueLevelEvidence(fact: SkillOperationalFactWithEvidence): boolean {
+  const candidate = fact as Record<string, unknown>;
+  return ["opensAt", "closesAt", "time", "startsAt", "endsAt", "durationMinutes", "requirement"].some((key) => candidate[key] !== undefined);
+}
+
+function hasValueLevelEvidence(fact: SkillOperationalFactWithEvidence): boolean {
+  const candidate = fact as Record<string, unknown>;
+  const expected = ["opensAt", "closesAt", "time", "startsAt", "endsAt"]
+    .map((key) => candidate[key])
+    .filter((value): value is string => typeof value === "string");
+  const requirement = typeof candidate.requirement === "string" ? candidate.requirement : undefined;
+  return fact.evidence.some((ref) => ref.supports?.some((support) => {
+    if (expected.length && !expected.some((value) => support.includes(value))) return false;
+    if (!requirement) return support.trim().length > 0;
+    if (requirement === "required") return /\b(required|must|need(?:s|ed)?|ticketed|reservation|booking|appointment|advance)\b/i.test(support);
+    if (requirement === "recommended") return /\b(recommend(?:ed)?|advis(?:ed|able)|may sell out|capacity|advance)\b/i.test(support);
+    if (requirement === "not_required") return /\b(free|no (?:ticket|reservation|booking)|not required|walk-?in)\b/i.test(support);
+    return /\b(unknown|unpublished|not published|recheck|confirm)\b/i.test(support);
+  }) === true);
+}
+
+function hasUncertaintyEvidence(fact: SkillOperationalFactWithEvidence): boolean {
+  if (fact.uncertaintyNote && /\b(conflict|differ(?:s|ed|ent)?|while|another source|other source|other sources)\b/i.test(fact.uncertaintyNote)) {
+    if (fact.evidence.length < 2 && !fact.evidence.some((ref) => ref.supports?.some((support) => /\b(conflict|differ(?:s|ed|ent)?|while|another source|other source|other sources)\b/i.test(support)))) return false;
+  }
+  if (fact.status === "stale" || fact.evidence.some((ref) => ref.status !== "verified")) return true;
+  if (fact.status === "recheck" && (fact.appliesTo?.date || fact.appliesTo?.startDate || fact.appliesTo?.endDate)) return true;
+  const text = [
+    fact.appliesTo?.note,
+    ...fact.evidence.flatMap((ref) => ref.supports ?? [])
+  ].join(" ");
+  return /\b(conflict|differ(?:s|ed|ent)?|var(?:y|ies)|subject to change|change without notice|unpublished|not published|not yet published|recheck|stale|sold out|sell out|capacity|availability|target date|future schedule)\b/i.test(text);
+}
+
+function bookingUrlHasValueLevelEvidence(fact: SkillOperationalRequirementFactArtifact, sourceUrlById: Map<string, string>): boolean {
+  const normalizedBookingUrl = normalizeEvidenceUrl(fact.bookingUrl ?? "");
+  if (!normalizedBookingUrl) return false;
+  return fact.evidence.some((ref) => {
+    if (ref.supports?.some((support) => support.includes(fact.bookingUrl ?? "") || normalizeEvidenceUrl(support) === normalizedBookingUrl)) return true;
+    const sourceUrl = ref.sourceId ? sourceUrlById.get(ref.sourceId) : undefined;
+    if (!sourceUrl || normalizeEvidenceUrl(sourceUrl) !== normalizedBookingUrl) return false;
+    return ref.supports?.some((support) => /\b(book|booking|reserve|reservation|purchase|buy|appointment)\b/i.test(support)) === true;
+  });
+}
+
+function isDefined<T>(value: T | undefined): value is T {
+  return value !== undefined;
+}
+
 function isPlaceDisplayType(value: unknown): value is PlaceDisplayType {
   return value === "attraction" || value === "dining" || value === "shopping" || value === "experience";
 }
@@ -949,6 +1283,87 @@ export function parseSkillItineraryArtifact(value: string, knownPlaceIds: Set<st
   return { ...(parsed as unknown as SkillItineraryArtifact), days, movements };
 }
 
+export function parseSemanticTravelPlan(value: string): SemanticTravelPlan {
+  let parsed: unknown;
+  try { parsed = normalizePlanDraftNulls(JSON.parse(value)); } catch { throw new RuntimeAdapterError("invalid_output", "The semantic planner returned unreadable JSON."); }
+  if (!isRecord(parsed)
+    || !["title", "language", "tripStrategy", "markdown"].every((key) => isString(parsed[key]))
+    || !Array.isArray(parsed.dailyItinerary)
+    || !["unresolvedExperiences", "preparation", "tips", "researchGrounding", "followUpChecks"].every((key) => Array.isArray(parsed[key]) && (parsed[key] as unknown[]).every(isString))
+    || !Array.isArray(parsed.targetedResearch)) {
+    throw new RuntimeAdapterError("invalid_output", "The semantic planner did not match the Semantic Travel Plan contract.");
+  }
+  const targetedResearch = parsed.targetedResearch
+    .filter((item): item is Record<string, unknown> => isRecord(item) && isString(item.question) && isString(item.outcome))
+    .map((item) => ({ question: String(item.question).trim(), outcome: String(item.outcome).trim() }));
+  const dailyItinerary = parsed.dailyItinerary
+    .filter((day): day is Record<string, unknown> => isRecord(day) && ["date", "area", "plan"].every((key) => isString(day[key])) && isSemanticDayContext(day.startContext) && isSemanticDayContext(day.endContext))
+    .map((day) => ({
+      date: String(day.date).trim(),
+      area: String(day.area).trim(),
+      startContext: normalizeSemanticDayContext(day.startContext),
+      endContext: normalizeSemanticDayContext(day.endContext),
+      plan: String(day.plan).trim(),
+      ...(Array.isArray(day.experiences) ? { experiences: normalizeSemanticExperiences(day.experiences) } : {})
+    }));
+  if (!dailyItinerary.length) throw new RuntimeAdapterError("invalid_output", "The semantic planner did not include any usable daily itinerary.");
+  const markdown = String(parsed.markdown).trim();
+  if (markdown.length < 500) throw new RuntimeAdapterError("invalid_output", "The semantic planner did not include a complete readable markdown plan.");
+  return {
+    title: String(parsed.title).trim(),
+    language: String(parsed.language).trim(),
+    tripStrategy: String(parsed.tripStrategy).trim(),
+    targetedResearch,
+    dailyItinerary,
+    unresolvedExperiences: (parsed.unresolvedExperiences as string[]).map((item) => item.trim()),
+    preparation: (parsed.preparation as string[]).map((item) => item.trim()),
+    tips: (parsed.tips as string[]).map((item) => item.trim()),
+    researchGrounding: (parsed.researchGrounding as string[]).map((item) => item.trim()),
+    followUpChecks: (parsed.followUpChecks as string[]).map((item) => item.trim()),
+    markdown
+  };
+}
+
+function normalizeSemanticExperiences(values: unknown[]): SemanticTravelExperience[] {
+  return values
+    .filter((value): value is Record<string, unknown> => isRecord(value) && isString(value.title) && isString(value.planRole) && isString(value.summary))
+    .filter((value) => ["planned", "optional", "replacement"].includes(String(value.planRole)))
+    .map((value) => ({
+      title: String(value.title).trim(),
+      planRole: String(value.planRole) as SemanticPlanRole,
+      summary: String(value.summary).trim(),
+      ...(isString(value.placeName) && value.placeName.trim() ? { placeName: value.placeName.trim() } : {}),
+      ...(typeof value.primaryExperience === "boolean" ? { primaryExperience: value.primaryExperience } : {}),
+      ...(Array.isArray(value.operationalConditions) ? { operationalConditions: normalizeSemanticOperationalConditions(value.operationalConditions) } : {}),
+      ...(isString(value.replacementFor) && value.replacementFor.trim() ? { replacementFor: value.replacementFor.trim() } : {}),
+      ...(isString(value.startTime) && value.startTime.trim() ? { startTime: value.startTime.trim() } : {}),
+      ...(Number.isInteger(value.durationMinutes) && Number(value.durationMinutes) > 0 ? { durationMinutes: Number(value.durationMinutes) } : {})
+    }));
+}
+
+function normalizeSemanticOperationalConditions(values: unknown[]): SemanticOperationalCondition[] {
+  return values
+    .filter((value): value is Record<string, unknown> => isRecord(value) && ["reservation", "session", "weather", "route", "access", "traveler_choice", "recheck"].includes(String(value.kind)))
+    .map((value) => ({
+      kind: String(value.kind) as SemanticOperationalConditionKind,
+      ...(isString(value.note) && value.note.trim() ? { note: value.note.trim() } : {})
+    }));
+}
+
+function isSemanticDayContext(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && isString(value.label) && semanticDayContextStatuses.has(String(value.status));
+}
+
+function normalizeSemanticDayContext(value: unknown): SemanticDayContext {
+  const context = value as Record<string, unknown>;
+  return {
+    label: String(context.label).trim(),
+    status: String(context.status) as SemanticDayContextStatus
+  };
+}
+
+const semanticDayContextStatuses = new Set<string>(["confirmed_property", "planned_base_pending_property", "unresolved_base", "transport_node", "in_transit"]);
+
 function normalizeSkillItineraryDay(value: unknown, knownPlaceIds: Set<string>, knownSourceIds: Set<string>, knownEventIds: Set<string>, index: number): SkillItineraryArtifact["days"][number] | undefined {
   if (!isRecord(value) || !["date", "city", "title", "summary"].every((key) => isString(value[key])) || !Array.isArray(value.stops) || !isStringArray(value.candidatePlaceIds)) return undefined;
   const id = isString(value.id) && value.id.trim() ? value.id.trim() : `day-${index + 1}`;
@@ -982,6 +1397,8 @@ function normalizeSkillItineraryDay(value: unknown, knownPlaceIds: Set<string>, 
     city: city.trim(),
     title: title.trim(),
     summary: summary.trim(),
+    ...(isSemanticDayContext(value.startContext) ? { startContext: normalizeSemanticDayContext(value.startContext) } : {}),
+    ...(isSemanticDayContext(value.endContext) ? { endContext: normalizeSemanticDayContext(value.endContext) } : {}),
     stops: recoveredStops,
     ...(Array.isArray(value.blocks) ? { blocks: normalizeSkillItineraryBlocks(value.blocks, knownPlaceIds, knownSourceIds, knownEventIds, new Set(recoveredStops.map((stop) => stop.placeId))) } : {}),
     candidatePlaceIds: recoveredCandidatePlaceIds
@@ -1010,29 +1427,92 @@ function normalizeSkillItineraryBlocks(values: unknown[], knownPlaceIds: Set<str
       ...(isString(block.summary) && block.summary.trim() && !placeholderItineraryText(block.summary) ? { summary: block.summary.trim() } : {}),
       ...(Number.isInteger(block.durationMinutes) && Number(block.durationMinutes) > 0 ? { durationMinutes: Number(block.durationMinutes) } : {}),
       ...(isString(block.role) && block.role.trim() ? { role: block.role.trim() } : {}),
+      ...(isString(block.planRole) && ["planned", "optional", "replacement"].includes(block.planRole) ? { planRole: block.planRole as Exclude<NonNullable<SkillItineraryArtifact["days"][number]["blocks"]>[number]["planRole"], undefined> } : {}),
+      ...(typeof block.primaryExperience === "boolean" ? { primaryExperience: block.primaryExperience } : {}),
+      ...(Array.isArray(block.operationalConditions) ? { operationalConditions: normalizeSkillOperationalConditions(block.operationalConditions) } : {}),
+      ...(isString(block.replacementFor) && block.replacementFor.trim() ? { replacementFor: block.replacementFor.trim() } : {}),
+      ...(isString(block.replacementForBlockId) && block.replacementForBlockId.trim() ? { replacementForBlockId: block.replacementForBlockId.trim() } : {}),
       evidence: Array.isArray(block.evidence) ? block.evidence.filter((ref): ref is NonNullable<SkillItineraryArtifact["days"][number]["blocks"]>[number]["evidence"][number] => isRecord(ref) && isString(ref.sourceId) && knownSourceIds.has(ref.sourceId) && ["verified", "recheck", "stale"].includes(String(ref.status))).map((ref) => ({ sourceId: ref.sourceId, status: ref.status, ...(isString(ref.checkedAt) ? { checkedAt: ref.checkedAt } : {}), ...(Array.isArray(ref.supports) && ref.supports.every(isString) ? { supports: ref.supports } : {}) })) : []
+    }));
+}
+
+function normalizeSkillOperationalConditions(values: unknown[]): NonNullable<NonNullable<SkillItineraryArtifact["days"][number]["blocks"]>[number]["operationalConditions"]> {
+  return values
+    .filter((value): value is Record<string, unknown> => isRecord(value) && ["reservation", "session", "weather", "route", "access", "traveler_choice", "recheck"].includes(String(value.kind)))
+    .map((value) => ({
+      kind: String(value.kind) as NonNullable<NonNullable<SkillItineraryArtifact["days"][number]["blocks"]>[number]["operationalConditions"]>[number]["kind"],
+      ...(isString(value.note) && value.note.trim() ? { note: value.note.trim() } : {})
     }));
 }
 
 function lowValueVisibleItineraryBlock(block: Record<string, unknown>): boolean {
   const kind = String(block.kind);
-  if (!["rest", "flexible"].includes(kind)) return false;
-  if (isString(block.placeId) || isString(block.eventId)) return false;
-  const text = `${isString(block.title) ? block.title : ""} ${isString(block.summary) ? block.summary : ""} ${isString(block.role) ? block.role : ""}`.toLocaleLowerCase();
+  const text = itineraryBlockText(block);
   if (!text.trim()) return false;
-  if (actionableItineraryUnknown(text) || routeCriticalItineraryBuffer(text)) return false;
-  return /\b(slow|easy|quiet|free|flexible|optional|neighborhood|hotel rest|afternoon rest|relax|take it easy|jet-?lag|unhurried|leisure|early night|open window)\b/.test(text)
+  if (concreteOrConstrainedItineraryBlock(block, text)) return false;
+  if (plannerAlternativeBlock(block, text)) return true;
+  if (genericMealBlock(block, text)) return true;
+  if (genericLodgingBlock(block, text)) return true;
+  if (nonActionableTransferBlock(block, text)) return true;
+  if (!["rest", "flexible"].includes(kind)) return false;
+  return /\b(slow|easy|quiet|free|flexible|optional|neighborhood|hotel rest|hotel pause|afternoon rest|relax|take it easy|jet-?lag|unhurried|leisure|early night|open window|keep time open|open time|recovery time)\b/.test(text)
     || /自由活动|轻松|休息|慢节奏|早睡|随意/.test(text);
 }
 
+function itineraryBlockText(block: Record<string, unknown>): string {
+  return `${isString(block.title) ? block.title : ""} ${isString(block.summary) ? block.summary : ""} ${isString(block.role) ? block.role : ""}`.toLocaleLowerCase();
+}
+
+function concreteOrConstrainedItineraryBlock(block: Record<string, unknown>, text: string): boolean {
+  return isString(block.eventId)
+    || blockHasEvidence(block)
+    || actionableItineraryUnknown(text)
+    || routeCriticalItineraryBuffer(text)
+    || explicitItineraryConstraint(text);
+}
+
+function blockHasEvidence(block: Record<string, unknown>): boolean {
+  return Array.isArray(block.evidence) && block.evidence.some((ref) => isRecord(ref) && isString(ref.sourceId));
+}
+
+function plannerAlternativeBlock(block: Record<string, unknown>, text: string): boolean {
+  return String(block.kind) === "flexible"
+    && isString(block.placeId)
+    && /\b(alternative|backup|rainy[ -]?day|low[ -]?energy|if pace allows|if time allows|optional extension|same-direction backup)\b/.test(text);
+}
+
+function genericMealBlock(block: Record<string, unknown>, text: string): boolean {
+  if (String(block.kind) !== "meal" || isString(block.placeId) || isString(block.eventId)) return false;
+  return /^(?:\s*(?:breakfast|lunch|dinner|brunch|meal)(?:\s+(?:near|around|by|close to)\s+(?:lodging|hotel|venue|area|nearby))?(?:\s+if wanted)?\s*)$/.test(text)
+    || /\b(?:generic|simple|easy|light|local|nearby|near lodging|near hotel|near venue|if wanted)\s+(?:breakfast|lunch|dinner|brunch|meal)\b/.test(text)
+    || /\b(?:breakfast|lunch|dinner|brunch|meal)\s+(?:near lodging|near hotel|near venue|nearby|if wanted|restaurant tbd|restaurant unknown|place tbd)\b/.test(text);
+}
+
+function genericLodgingBlock(block: Record<string, unknown>, text: string): boolean {
+  if (String(block.kind) !== "lodging" || isString(block.placeId) || isString(block.eventId)) return false;
+  return /\b(?:depart|return to|return toward|head back to|check in and settle|settle|packing|rest)\s+(?:selected\s+)?(?:lodging|hotel|accommodation|base)\b/.test(text)
+    || /\b(?:selected\s+)?(?:lodging|hotel|accommodation|base)\s+(?:rest|return|settle|packing)\b/.test(text);
+}
+
+function nonActionableTransferBlock(block: Record<string, unknown>, text: string): boolean {
+  if (String(block.kind) !== "transfer" || isString(block.placeId) || isString(block.eventId)) return false;
+  if (/\b(?:from .+ to|between|airport|station|terminal|pier|pickup|meeting point|flight|train|bus|taxi|ride|drive|walk)\b/.test(text)) return false;
+  return /\b(?:return|head back|wander|nearby|around|across the neighborhood|relax|lodging|hotel|area)\b/.test(text);
+}
+
 function routeCriticalItineraryBuffer(text: string): boolean {
-  return /\b(buffer|wait|waiting|between|fixed|appointment|reservation|booking|timed entry|showtime|departure|arrival|flight|train|rail|airport|station|luggage|bag(?:gage)?|customs|immigration|check[ -]?in|check[ -]?out|hotel return|return to hotel|long-?haul|overnight)\b/.test(text)
-    || /行李|预约|预订|固定|航班|火车|车站|机场|入境|海关|入住|退房|返回酒店/.test(text);
+  return /\b(buffer|wait|waiting|between|fixed|appointment|reservation|booking|timed entry|showtime|departure|arrival|flight|train|rail|airport|station|luggage|bag(?:gage)?|customs|immigration|check[ -]?in|check[ -]?out|long-?haul|overnight)\b/.test(text)
+    || /行李|预约|预订|固定|航班|火车|车站|机场|入境|海关|入住|退房/.test(text);
 }
 
 function actionableItineraryUnknown(text: string): boolean {
   return /\b(not selected|not confirmed|unconfirmed|needs? recheck|requires? recheck|reservation required|ticket not purchased|pickup point|meeting point|action required|pending)\b/.test(text)
     || /未选择|未确认|需复核|需要复核|需要预订|未购票|集合点|待处理/.test(text);
+}
+
+function explicitItineraryConstraint(text: string): boolean {
+  return /\b(user requested|traveler requested|explicit(?:ly)? requested|required|must|medical|medicine|medication|mobility|wheelchair|accessibility|child|children|elderly|senior|dietary|allergy|allergic|diabetic|halal|kosher)\b/.test(text)
+    || /用户要求|明确要求|必须|医疗|药|行动不便|儿童|老人|饮食|过敏|清真|洁食/.test(text);
 }
 
 function placeholderItineraryText(value: string): boolean {
@@ -1253,7 +1733,7 @@ function sanitizedRuntimeDiagnostic(result: RuntimeProcessResult): string {
     .slice(-1000) || `Runtime exited with code ${result.code}.`;
 }
 
-async function readCodexStructuredOutput(path: string, command: RuntimeProcessResult, stage: "research" | "itinerary" | "draft" | "repair"): Promise<string> {
+async function readCodexStructuredOutput(path: string, command: RuntimeProcessResult, stage: "research" | "itinerary" | "draft" | "repair" | "semantic"): Promise<string> {
   let fileError: unknown;
   try {
     const output = await readFile(path, "utf8");
@@ -1281,6 +1761,113 @@ const skillEvidenceRefSchema = {
     status: { type: "string", enum: ["verified", "recheck", "stale"] },
     checkedAt: { type: "string", maxLength: 40 },
     supports: { type: "array", maxItems: 12, items: { type: "string", maxLength: 300 } }
+  }
+} as const;
+
+const skillOperationalApplicabilitySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+    startDate: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+    endDate: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+    weekdays: { type: "array", maxItems: 7, items: { type: "string", enum: ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] } },
+    season: { type: "string", minLength: 1, maxLength: 80 },
+    note: { type: "string", minLength: 1, maxLength: 240 }
+  }
+} as const;
+
+const skillOperationalFactBaseProperties = {
+  status: { type: "string", enum: ["verified", "recheck", "stale"] },
+  checkedAt: { type: "string", maxLength: 40 },
+  appliesTo: skillOperationalApplicabilitySchema,
+  evidence: { type: "array", minItems: 1, maxItems: 12, items: skillEvidenceRefSchema },
+  uncertaintyNote: { type: "string", minLength: 1, maxLength: 400, description: "Only include uncertainty stated or directly implied by the attached evidence, such as conflicting cited sources, unpublished target-date schedules, stale/recheck source status, or explicit source changeability. Omit generic cautionary prose." }
+} as const;
+
+const skillOperationalWindowFactSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "evidence"],
+  properties: {
+    ...skillOperationalFactBaseProperties,
+    label: { type: "string", minLength: 1, maxLength: 120 },
+    opensAt: { type: "string", pattern: "^([01]\\d|2[0-3]):[0-5]\\d$" },
+    closesAt: { type: "string", pattern: "^([01]\\d|2[0-3]):[0-5]\\d$" }
+  }
+} as const;
+
+const skillOperationalClosedFactSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["pattern", "status", "evidence"],
+  properties: {
+    ...skillOperationalFactBaseProperties,
+    pattern: { type: "string", minLength: 1, maxLength: 240 }
+  }
+} as const;
+
+const skillOperationalLastEntryFactSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "evidence"],
+  properties: {
+    ...skillOperationalFactBaseProperties,
+    time: { type: "string", pattern: "^([01]\\d|2[0-3]):[0-5]\\d$" },
+    offsetMinutesBeforeClose: { type: "integer", minimum: 0, maximum: 1440 },
+    note: { type: "string", minLength: 1, maxLength: 240 }
+  }
+} as const;
+
+const skillOperationalSessionFactSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "evidence"],
+  properties: {
+    ...skillOperationalFactBaseProperties,
+    label: { type: "string", minLength: 1, maxLength: 120 },
+    startsAt: { type: "string", pattern: "^([01]\\d|2[0-3]):[0-5]\\d$" },
+    endsAt: { type: "string", pattern: "^([01]\\d|2[0-3]):[0-5]\\d$" },
+    durationMinutes: { type: "integer", minimum: 1, maximum: 1440 }
+  }
+} as const;
+
+const skillOperationalRequirementFactSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["requirement", "status", "evidence"],
+  properties: {
+    ...skillOperationalFactBaseProperties,
+    requirement: { type: "string", enum: ["required", "recommended", "not_required", "unknown"] },
+    note: { type: "string", minLength: 1, maxLength: 400 },
+    bookingUrl: { type: "string", pattern: "^https://", description: "Only include when this exact URL is directly supported as a booking, reservation, ticket, purchase, or appointment destination by the fact evidence. Do not use a homepage merely because it is official." }
+  }
+} as const;
+
+const skillOperationalFactsSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    access: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        windows: { type: "array", maxItems: 16, items: skillOperationalWindowFactSchema },
+        closed: { type: "array", maxItems: 12, items: skillOperationalClosedFactSchema },
+        lastEntry: skillOperationalLastEntryFactSchema
+      }
+    },
+    sessions: { type: "array", maxItems: 24, items: skillOperationalSessionFactSchema },
+    entry: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        reservation: skillOperationalRequirementFactSchema,
+        ticket: skillOperationalRequirementFactSchema,
+        booking: skillOperationalRequirementFactSchema,
+        capacity: skillOperationalRequirementFactSchema
+      }
+    }
   }
 } as const;
 
@@ -1477,7 +2064,7 @@ export const skillResearchBatchSchema = {
       id: { type: "string", maxLength: 100 }, title: { type: "string", minLength: 1, maxLength: 240 }, authority: { type: "string", minLength: 1, maxLength: 200 }, url: { type: "string", pattern: "^https://" }, retrievedAt: { type: "string", minLength: 1, maxLength: 40 }, status: { type: "string", enum: ["verified", "recheck", "stale"] }, official: { type: "boolean" }
     } } },
     places: { type: "array", maxItems: 240, items: { type: "object", additionalProperties: false, required: ["name", "locationLabel", "category", "display", "schedulingEligibility", "whyWorthIt", "plan"], properties: {
-      id: { type: "string", maxLength: 100 }, externalIdentity: { type: "string", maxLength: 200 }, name: { type: "string", minLength: 1, maxLength: 200 }, localizedName: { type: "string", maxLength: 200 }, locationLabel: { type: "string", minLength: 1, maxLength: 240 }, city: { type: "string", maxLength: 160 }, area: { type: "string", maxLength: 160 }, category: { type: "string", minLength: 1, maxLength: 100 }, priority: { type: "string", enum: ["must", "preferred", "nearby", "archive", "pending", "recheck", "booked"] }, coordinates: { anyOf: [{ type: "array", minItems: 2, maxItems: 2, items: { type: "number" } }, { type: "null" }] }, display: { type: "object", additionalProperties: false, required: ["type"], properties: { type: { type: "string", enum: ["attraction", "dining", "shopping", "experience"] }, markerKind: { type: "string", enum: ["attraction", "dining", "shopping", "experience"] } } }, guideDisplay: skillGuideDisplaySchema, schedulingEligibility: skillSchedulingEligibilitySchema, contentTier: { type: "string", enum: ["deep", "standard", "compact"] }, visitRole: { type: "string", maxLength: 160 }, durationMinutes: { type: "integer", minimum: 1, maximum: 10080 }, whyWorthIt: { type: "string", minLength: 1, maxLength: 1200 }, plan: { type: "string", minLength: 1, maxLength: 1200 }, tip: { type: "string", maxLength: 800 }, detailSections: { type: "array", maxItems: 8, items: { type: "object", additionalProperties: false, required: ["title", "body", "items"], properties: { title: { type: "string", minLength: 1, maxLength: 120 }, body: { type: "string", maxLength: 1200 }, items: { type: "array", maxItems: 8, items: { type: "string", maxLength: 500 } } } } }, images: { type: "array", maxItems: 4, items: skillPlaceImageSchema }, fieldEvidence: { type: "array", maxItems: 24, items: { type: "object", additionalProperties: false, required: ["path", "status", "evidence"], properties: { path: { type: "string", minLength: 1, maxLength: 160 }, status: { type: "string", enum: ["verified", "recheck", "stale"] }, evidence: { type: "array", maxItems: 12, items: skillEvidenceRefSchema } } } }, officialUrl: { type: "string", pattern: "^https://" }, bookingUrl: { type: "string", pattern: "^https://" }, mapUrl: { type: "string", pattern: "^https://" }, experienceUrl: { type: "string", pattern: "^https://" }, sourceUrls: { type: "array", maxItems: 12, items: { type: "string", pattern: "^https://" } }
+      id: { type: "string", maxLength: 100 }, externalIdentity: { type: "string", maxLength: 200 }, name: { type: "string", minLength: 1, maxLength: 200 }, localizedName: { type: "string", maxLength: 200 }, locationLabel: { type: "string", minLength: 1, maxLength: 240 }, city: { type: "string", maxLength: 160 }, area: { type: "string", maxLength: 160 }, category: { type: "string", minLength: 1, maxLength: 100 }, priority: { type: "string", enum: ["must", "preferred", "nearby", "archive", "pending", "recheck", "booked"] }, coordinates: { anyOf: [{ type: "array", minItems: 2, maxItems: 2, items: { type: "number" } }, { type: "null" }] }, display: { type: "object", additionalProperties: false, required: ["type"], properties: { type: { type: "string", enum: ["attraction", "dining", "shopping", "experience"] }, markerKind: { type: "string", enum: ["attraction", "dining", "shopping", "experience"] } } }, guideDisplay: skillGuideDisplaySchema, schedulingEligibility: skillSchedulingEligibilitySchema, contentTier: { type: "string", enum: ["deep", "standard", "compact"] }, visitRole: { type: "string", maxLength: 160 }, durationMinutes: { type: "integer", minimum: 1, maximum: 10080 }, whyWorthIt: { type: "string", minLength: 1, maxLength: 1200 }, plan: { type: "string", minLength: 1, maxLength: 1200 }, tip: { type: "string", maxLength: 800 }, detailSections: { type: "array", maxItems: 8, items: { type: "object", additionalProperties: false, required: ["title", "body", "items"], properties: { title: { type: "string", minLength: 1, maxLength: 120 }, body: { type: "string", maxLength: 1200 }, items: { type: "array", maxItems: 8, items: { type: "string", maxLength: 500 } } } } }, images: { type: "array", maxItems: 4, items: skillPlaceImageSchema }, fieldEvidence: { type: "array", maxItems: 24, items: { type: "object", additionalProperties: false, required: ["path", "status", "evidence"], properties: { path: { type: "string", minLength: 1, maxLength: 160 }, status: { type: "string", enum: ["verified", "recheck", "stale"] }, evidence: { type: "array", maxItems: 12, items: skillEvidenceRefSchema } } } }, operationalFacts: skillOperationalFactsSchema, officialUrl: { type: "string", pattern: "^https://" }, bookingUrl: { type: "string", pattern: "^https://" }, mapUrl: { type: "string", pattern: "^https://" }, experienceUrl: { type: "string", pattern: "^https://" }, sourceUrls: { type: "array", maxItems: 12, items: { type: "string", pattern: "^https://" } }
     } } },
     events: { type: "array", maxItems: 120, items: { type: "object", additionalProperties: false, required: ["title", "description"], properties: {
       id: { type: "string", maxLength: 100 }, title: { type: "string", minLength: 1, maxLength: 240 }, startDate: { type: "string", maxLength: 40 }, endDate: { type: "string", maxLength: 40 }, locationLabel: { type: "string", maxLength: 240 }, placeId: { type: "string", maxLength: 100 }, description: { type: "string", minLength: 1, maxLength: 1200 }, sourceUrls: { type: "array", maxItems: 12, items: { type: "string", pattern: "^https://" } }
@@ -1551,6 +2138,102 @@ export const skillItinerarySchema = {
         }
       }
     }
+  }
+} as const;
+
+export const semanticTravelPlanSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["title", "language", "tripStrategy", "targetedResearch", "dailyItinerary", "unresolvedExperiences", "preparation", "tips", "researchGrounding", "followUpChecks", "markdown"],
+  properties: {
+    title: { type: "string", minLength: 1, maxLength: 200 },
+    language: { type: "string", minLength: 2, maxLength: 40 },
+    tripStrategy: { type: "string", minLength: 120, maxLength: 6000 },
+    targetedResearch: {
+      type: "array",
+      maxItems: 4,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["question", "outcome"],
+        properties: {
+          question: { type: "string", minLength: 1, maxLength: 300 },
+          outcome: { type: "string", minLength: 1, maxLength: 1000 }
+        }
+      }
+    },
+    dailyItinerary: {
+      type: "array",
+      minItems: 1,
+      maxItems: 30,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["date", "area", "startContext", "endContext", "plan", "experiences"],
+        properties: {
+          date: { type: "string", minLength: 1, maxLength: 80 },
+          area: { type: "string", minLength: 1, maxLength: 200 },
+          startContext: {
+            type: "object",
+            additionalProperties: false,
+            required: ["label", "status"],
+            properties: {
+              label: { type: "string", minLength: 1, maxLength: 240 },
+              status: { type: "string", enum: ["confirmed_property", "planned_base_pending_property", "unresolved_base", "transport_node", "in_transit"] }
+            }
+          },
+          endContext: {
+            type: "object",
+            additionalProperties: false,
+            required: ["label", "status"],
+            properties: {
+              label: { type: "string", minLength: 1, maxLength: 240 },
+              status: { type: "string", enum: ["confirmed_property", "planned_base_pending_property", "unresolved_base", "transport_node", "in_transit"] }
+            }
+          },
+          plan: { type: "string", minLength: 120, maxLength: 6000 },
+          experiences: {
+            type: "array",
+            minItems: 0,
+            maxItems: 12,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["title", "planRole", "summary"],
+              properties: {
+                title: { type: "string", minLength: 1, maxLength: 200 },
+                placeName: { type: "string", minLength: 1, maxLength: 200 },
+                planRole: { type: "string", enum: ["planned", "optional", "replacement"] },
+                primaryExperience: { type: "boolean" },
+                summary: { type: "string", minLength: 1, maxLength: 1200 },
+                operationalConditions: {
+                  type: "array",
+                  maxItems: 8,
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["kind"],
+                    properties: {
+                      kind: { type: "string", enum: ["reservation", "session", "weather", "route", "access", "traveler_choice", "recheck"] },
+                      note: { type: "string", minLength: 1, maxLength: 500 }
+                    }
+                  }
+                },
+                replacementFor: { type: "string", minLength: 1, maxLength: 200 },
+                startTime: { type: "string", minLength: 1, maxLength: 40 },
+                durationMinutes: { type: "integer", minimum: 1, maximum: 1440 }
+              }
+            }
+          }
+        }
+      }
+    },
+    unresolvedExperiences: { type: "array", maxItems: 20, items: { type: "string", minLength: 1, maxLength: 1000 } },
+    preparation: { type: "array", maxItems: 40, items: { type: "string", minLength: 1, maxLength: 1000 } },
+    tips: { type: "array", maxItems: 40, items: { type: "string", minLength: 1, maxLength: 1000 } },
+    researchGrounding: { type: "array", maxItems: 80, items: { type: "string", minLength: 1, maxLength: 1000 } },
+    followUpChecks: { type: "array", maxItems: 40, items: { type: "string", minLength: 1, maxLength: 1000 } },
+    markdown: { type: "string", minLength: 1000, maxLength: 60000 }
   }
 } as const;
 
@@ -1780,6 +2463,13 @@ ${legacy ? "- Follow the Skill's source-verification and applicable Regional Sou
 - Add relationships that help the Web workspace compare and modify the plan: same_area, same_direction, alternative, supports_anchor, meal_support, rainy_day_alternative, low_energy_alternative, event_link, or similar. Use stable local place ids, not names.
 - Use localFoods, localProducts, and experienceThemes to describe non-schedulable guide themes. Link them only to concrete diningPlaceIds, purchasePlaceIds, or offeringPlaceIds that already exist in places. Do not schedule a food, product, or theme directly.
 - Use fieldEvidence for place fields only when a specific source supports that field. Do not mark a field verified unless the referenced source is returned in this batch and truly supports the claim.
+- Use operationalFacts only for sourced operational conditions of a place: access windows or closures, last entry or admission, class/show/tour session starts, and entry requirements such as reservation, ticket, advance booking, or dated capacity dependency. Omit operationalFacts when unsupported; missing means unknown, not false.
+- Evidence for operationalFacts is value-level, not topic-level. If lastEntry is 17:00, evidence.supports must say it supports the 17:00 last entry value. If reservation is required, evidence.supports must say it supports the reservation/booking requirement. Do not use a general venue page or "visitor information" as support for a precise time, session, ticket, booking, reservation, or capacity fact.
+- Strict evidence should not mean skipping easily sourceable operational facts. For concrete venues, museums, parks, temples, performances, classes, and ticketed experiences, look for the official visitor, ticket, schedule, or booking page before deciding operationalFacts are unsupported. If only a generic tourism page is found and it lacks the value, omit the fact.
+- For each operational fact, preserve status, checkedAt when known, evidence, and applicability when the source limits the fact by date, date range, weekday, season, or future unpublished schedule. Prefer official/current sources. Use verified only when attached evidence supports the actual current fact value. Use recheck where future date validity is unresolved, the source explicitly indicates changeability, or evidence is incomplete. Status and uncertainty prose are separate.
+- Only include uncertaintyNote when the attached evidence supports that uncertainty: conflicting cited sources, an unpublished target-date schedule, source status that is stale/recheck, or an explicit source statement that schedules/tickets are subject to change. Omit generic "hours may change" prose and do not claim other sources differ unless the conflicting source is returned and attached.
+- Only include an operationalFacts entry bookingUrl when attached evidence directly supports that exact URL as a booking, reservation, ticket, purchase, or appointment destination. An official homepage alone is not a booking URL. If evidence says tickets are available at a counter or selected platforms but no exact supported URL is returned, keep the ticket/booking requirement and omit bookingUrl.
+- Keep operationalFacts separate from actionRequirements. A place may require reservation as a real-world entry fact while the traveler still has a separate actionRequirement to choose a slot, pay, or confirm the booking.
 - Include destination-relevant travelTips for short traveler-facing cautions such as payment, transit, etiquette, safety, weather, timing, language, or local norms. Do not include generic encouragement or inspiration.
 - Include reservations, travel authorization, transport preparation, and time-sensitive rechecks only as structured actionRequirements with a clear accountable party and completion condition; traveler-owned requirements will become the Preparation checklist.
 - Return only this batch's sources, rich places, events, relationships, localFoods, localProducts, experienceThemes, travelTips, and actionRequirements in the supplied JSON contract. Do not create itinerary days, Plan Stages, Tasks, or Reminders.`;
@@ -1867,19 +2557,161 @@ Rules:
 - Optimize for a reasonable trip a traveler could actually follow, not for maximum daily density. Use 1-3 anchors and usually 3-5 scheduled stops on a full sightseeing day; keep arrival, departure, jet-lag, luggage, and city-transfer days deliberately lighter.
 - Schedule a practical subset; every unscheduled Research Set place remains in the Blueprint automatically and does not need to be repeated in every day's candidates.
 - Candidate IDs are alternatives for that day and cannot also be scheduled stops. Use them as direct replacements, meal/café/rest stops, rainy-day options, low-energy options, or nearby extensions, not as extra obligations.
-- Stops use contiguous order starting at 1 and only represent concrete places scheduled into the formal route. Times are optional planning advice, not claimed opening times. Give realistic buffers for meals, rest, hotel returns, luggage handling, and transfers only when those buffers shape routing, constraints, or later commitments.
-- Every day must include typed day.blocks for the visible Web workspace day sequence, but the sequence should be concise and may contain large unscheduled gaps. Use stop only for scheduled concrete places, meal only for a concrete dining place or a necessary unspecific meal, rest only for actionable recovery/buffer/hotel-return windows, transfer only for real movement between plan nodes, lodging only for a concrete base/return or actionable lodging status, flexible only for a user-requested or constraint-driven open window, and event only for supplied Research Set events.
+- Stops use contiguous order starting at 1 and only represent concrete places scheduled into the formal route. Times are optional planning advice with a clear basis: booking, flight, train, opening or last-entry constraint, reservation, user preference, route-derived schedule, or a deliberate itinerary anchor. Do not add tidy exact times merely to make the day look complete.
+- Every day must include a blocks array for the visible Web workspace day sequence, but [] is valid and often correct. Only add blocks that pass the visible itinerary admission test; unscheduled time is represented by the absence of blocks, never by a block that says nothing is scheduled. Use stop only for scheduled concrete places, meal only for a concrete dining place or an execution-relevant meal constraint, rest only for explicit or constraint-driven recovery/buffer windows, transfer only for real movement between meaningful plan nodes, lodging only for a concrete base or actionable lodging status, flexible only for a user-requested or constraint-driven open window, and event only for supplied Research Set events.
 - Do not create filler blocks merely to fill blank time, express a relaxed pace, or complete morning/afternoon/evening structure. Omit standalone blocks titled or summarized like Slow morning, Easy morning, Early night, Quiet evening, Free time, Flexible time, Flexible afternoon, Optional neighborhood time, Hotel rest, Afternoon rest, Relax at hotel, Take it easy, Jet-lag recovery, Unhurried time, or Leisure time unless the block carries a material constraint or next action.
-- Before emitting any visible day.block, apply this test: it must represent a concrete place, a real movement, a user-executable activity, a fixed constraint, an actionable pending/warning state, or a route-critical buffer. If deleting the block would not reduce the traveler's ability to understand or execute the day, omit it.
+- Before emitting any visible day.block, apply this test: it must represent at least one of a concrete place or concrete experience, a necessary movement between meaningful plan nodes, a fixed commitment or constraint such as a flight, train, reservation, booking, check-in, check-out, appointment, ticket, or explicit user requirement, an actionable dependency or unresolved execution decision such as hotel not selected, reservation required, ticket required, meeting point pending, pickup pending, transfer pending, or route pending, or another user-executable activity. If deleting the block would not reduce the traveler's ability to understand or execute the day, omit it.
 - When a concrete place exists, make that place the center of the block. Prefer a restaurant, hotel, airport, station, attraction, cafe, shop, pier, venue, or meeting point over generic titles like Arrive, Check in, Visit temple, Lunch, or Dinner.
-- For meals without a selected restaurant, use simple labels only when the meal needs to appear in the plan: Lunch, Dinner, Lunch near hotel, or Dinner near venue. Do not use decorative titles like Flexible central-Ubud lunch, Simple dinner near lodging, Easy local lunch, or Relaxed dinner.
+- For meals without a selected restaurant, do not create a default visible block. Only include the meal if it has a reservation, fixed commitment, explicit dietary or traveler constraint, or other execution dependency. Generic Breakfast, Lunch, Dinner, lunch near lodging, dinner near venue, or light dinner if wanted belongs in unscheduled time, not in day.blocks.
 - Omit optional unknown or unsupported fields. Do not output Time TBD, Duration TBD, Distance TBD, Address TBD, Image unavailable, Opening hours unknown, Restaurant TBD, Hotel TBD, Route TBD, Duration unknown, or similar placeholders. Use concise actionable statuses only when the unknown affects execution, such as Hotel not selected, Reservation required, Pickup point not confirmed, or Route needs recheck.
-- When accepted accommodation bookingConstraints include hotel_stay dates and a location or destination, make each covered morning depart from the accommodation occupied the previous night: if the traveler sleeps at Hotel A tonight, tomorrow morning's first route origin must be Hotel A. Add a lodging block or same-day stop for that accommodation when needed to make the origin visible, and route from it to the first scheduled place. If no accommodation is imported or the hotel date/location is missing, skip this rule without asking for hotel details.
+- When accepted accommodation bookingConstraints include hotel_stay dates and a concrete place, location, or destination, make each covered morning depart from the accommodation occupied the previous night. Add a lodging block or same-day stop only when it represents a concrete accommodation or an actionable dependency such as hotel not selected, check-in/check-out, baggage storage, or a user-required hotel return. Do not create generic Depart selected lodging, Return to lodging and rest, Check in and settle, or Return for packing blocks. If no accommodation is imported or the hotel date/location is missing, skip this rule without asking for hotel details.
+- Transfers must have real action value. Do not create transfer blocks for heading back toward lodging, relaxing nearby, wandering, or other movement that does not connect meaningful plan nodes or execution constraints.
+- Keep options separate from the formal plan. Alternatives, rainy-day candidates, low-energy candidates, and backup places remain candidates unless selected into the route or tied to an actionable dependency.
 - A stop block with placeId must correspond to a same-day stop; non-stop blocks may reference an existing place when useful, or use title/summary when the block is contextual. Event blocks must reference an existing eventId. Preserve traveler-facing title, summary, startTime, endTime, durationMinutes, and role when they help the left-column itinerary.
 ${legacy ? "- Every adjacent pair of scheduled stops needs exactly one movement. A route may use mode unknown and status recheck when reliable details are unavailable; do not invent verified duration or geometry. If exact routing is unavailable, include a conservative planned duration and detail that live routing must be refreshed before execution." : "- Every adjacent pair of scheduled stops needs exactly one movement. This stage has no live routing tool: use supplied verified route facts only when they support the exact leg, otherwise retain unknown mode or recheck status and omit unsupported duration and geometry. Explain that travel time remains to be checked. Cite supplied source identities only where they support the specific claim; do not promote discovery evidence into verified routing."}
 - Evidence gaps do not collapse the itinerary. Keep the relationship and mark it recheck.
 - Do not return place records, sources, Plan Stages, Tasks, Reminders, map HTML, or Landi persistence fields.
 - Do not compress, replace, or delete the Research Set. Landi attaches it unchanged after this stage.`;
+}
+
+export function semanticTravelPlanStaticPrompt(): string {
+  return `You are Planner V2.4, a professional travel advisor creating a semantic travel plan prototype for Landi.
+
+Return only JSON matching the supplied Semantic Travel Plan schema. The "markdown" field must be a complete, polished, human-readable travel plan that could be shown directly to the traveler without a Web app, map, Telegram bot, or TripBlueprint.
+
+Planner V2.4 responsibilities:
+- Behave like an experienced travel advisor, not a POI selector.
+- Establish the whole-trip accommodation/base strategy before daily details: base regions, number of base changes, regional flow, which experiences belong to which base, and arrival/departure structure.
+- Treat lodging/base context as each day's real-world origin and destination.
+- Build geographically coherent full days around complementary experiences, realistic meals/rest/navigation capacity, approximate timing, and appropriate transport mode.
+- Protect arrival, departure, and transfer days. Do not overload them merely to use available places.
+- Let fixed-time or fixed-condition experiences shape the day: flights, classes, reservations, performances, sunset value, weather exposure, and transfer logistics.
+- Keep relaxed days meaningful. Relaxed may still mean beach plus spa, museum plus neighborhood browsing, one major experience plus one light nearby experience, or two close attractions. It does not mean empty.
+- Explain important exclusions when famous or high-impact options conflict with pace, geography, transfer burden, weather exposure, or user preference.
+- Provide useful preparation, practical guidance, meaningful alternatives/exclusions, and recheck notes.
+- Preserve the SemanticTravelPlan structure, whole-trip review, base strategy, daily start/end context, unresolved lodging semantics, Preparation, Tips, and clean generation without any gold itinerary.
+
+Meaningful day richness:
+- RELAXED is not EMPTY. Relaxed means low unnecessary movement, sensible pacing, sufficient buffers, fewer stressful fixed commitments, and geographically compact days.
+- Relaxed does not automatically mean one short attraction, generic cafe time, generic shopping, generic spa, browsing around, free morning, optional local walk, or most of the sightseeing day unused.
+- Generic soft activities may be valid, but only when intentionally chosen because they improve the trip. If soft time appears because you lack better local knowledge, treat that as a research gap.
+- Do not introduce minimum stop counts. Do not fill time for its own sake. Do not replace meaningful rest with sightseeing merely to increase density.
+- A strong normal sightseeing day should feel like a complete travel experience: start lodging -> primary experience -> appropriate meal/rest/transport -> worthwhile nearby or complementary experience(s) when useful -> end lodging.
+
+Research behavior:
+- Treat the supplied ResearchSet as high-quality known local context, not as a closed world.
+- First draft the trip strategy and day composition from the user context and ResearchSet.
+- Then review specific days where the plan feels too generic, sparse, geographically incomplete, or dependent on vague filler such as cafe, shopping, massage, spa, browse around, free morning, optional local walk, or open time that is not clearly protective.
+- For a multi-day destination stay, a small initial ResearchSet is not evidence of completeness. If the supplied ResearchSet has fewer than about 18 concrete places for five or more destination days, presume at least one targeted research question is needed unless every normal sightseeing day already has a clearly complete, specific, geographically coherent experience arc.
+- Identify at most four concrete, plan-serving research gaps. Use one bounded supplemental research phase only when another concrete experience could plausibly improve the traveler's day.
+- Research questions must come from the current travel design, for example: "Find one or two worthwhile, low-friction cultural experiences in central Ubud that pair naturally with Monkey Forest and Museum Puri Lukisan"; "Is there a meaningful lightweight stop on this return route that does not materially lengthen the day"; "Find a relaxed southern-base beach/spa/local experience for the final full day." Do not search generically for more attractions.
+- Research returns options; you retain decision authority. Use none, one, or several researched options only if they improve geography, experience diversity, traveler preference fit, day rhythm, or practical feasibility.
+- Record every targeted question actually used in targetedResearch. Each targetedResearch.outcome must say what was discovered, which candidate(s) were selected, which were rejected, and why. If no targeted research was needed, return [] and explain in the markdown why the ResearchSet was already sufficient for the daily design.
+- If a useful experience remains insufficiently grounded after the bounded research pass, include it only as an unresolved semantic experience and record it in unresolvedExperiences.
+- Do not provide a benchmark itinerary, prior accepted plan, expected Bali solution, or any hidden gold plan to yourself. Use only the production-like request, profile, conversation facts, and ResearchSet plus bounded targeted research.
+
+Daily base and start/end context:
+- Every dailyItinerary item must answer where the traveler starts that day and where the traveler ends or sleeps that night.
+- Use startContext and endContext as semantic travel-planning anchors, not presentation instructions. Do not create Web place cards, blocks, stops, movements, IDs, Telegram fields, or execution route anchors from them.
+- Context status meanings: confirmed_property means the traveler has a specific confirmed hotel/property; planned_base_pending_property means the base area is decided but the exact lodging is pending; unresolved_base means even the lodging area/base remains unresolved; transport_node means an airport, station, pier, or similar travel node; in_transit means the traveler is on a long-haul/overnight travel segment rather than sleeping at a destination base.
+- If a confirmed hotel/property exists in the request or research, use its real name as the applicable daily start/end anchor.
+- If the base area is known but the property is not, preserve an explicit anchor such as "Ubud accommodation - exact property pending" or "South Bali accommodation - Jimbaran preferred, final property pending." Do not invent hotel names.
+- If the base area is unresolved, name the dependency directly and explain how the choice affects later route decisions when relevant.
+- For ordinary sightseeing days, start and end at the same lodging context. For base-change days, start and end must be different lodging contexts. For arrival days, start at the arrival airport/station and end at lodging. For departure days, start at lodging and end at the departure airport/station. For overnight excursions, end at the excursion overnight location.
+- Use the day's start and end context when judging regional coherence, first-stop distance, backtracking, return burden, fixed evening activities, hotel-change logistics, luggage, check-in, and check-out. This remains travel-advisor reasoning; do not introduce deterministic routing algorithms or fabricated travel times.
+
+Explicit daily experience metadata:
+- In each dailyItinerary item, fill experiences with the concrete traveler experiences from the day's plan. This is semantic metadata for downstream preservation, not UI, routing, or execution.
+- For each experience, set planRole from travel intent only: planned means part of the intended itinerary, optional means an add-on if conditions fit, and replacement means it substitutes for another named experience.
+- Use primaryExperience true only for the day's principal anchor or anchors. Do not invent scores or density labels.
+- Use operationalConditions for readiness or uncertainty such as reservation, session, weather, route, access, traveler_choice, or recheck. Operational uncertainty must not change planRole. For example, a planned Kecak performance can require session and reservation confirmation; a planned terrace walk can have weather sensitivity.
+- Use replacementFor as a human-readable experience name such as "Waterbom Bali" when planRole is replacement. Do not create IDs.
+- Preserve unresolved but intentionally selected experiences in experiences too. If place identity is unresolved, omit placeName or use the unresolved human name; do not invent a ResearchSet identity.
+
+Daily travel shape:
+- For a normal full sightseeing day, think: lodging/start context -> meaningful experience(s) -> meals/rest/navigation as realistic capacity -> nearby or complementary experience when appropriate -> lodging/end context.
+- Do not enforce minimum stop counts. A full-day experience may stand alone, but a 1-2 hour attraction should not normally consume an otherwise open full sightseeing day without a real reason.
+- Use useful approximate timing where context supports it, such as leave hotel around 09:00, visit 09:30-11:00, return around 19:30-20:00. Do not invent minute-level precision when route or lodging information is unresolved.
+- Include human transport guidance by day where helpful: walking, ride-hailing, hotel transport, private driver, base-transfer vehicle, or airport transfer. Do not produce execution/reminder schemas.
+
+Whole-trip coherence process:
+- First draft the trip as a travel advisor, then review the complete journey before writing the final output.
+- This review is private reasoning that should improve the final plan; do not output review scores, diagnostic codes, engineering statuses, or a separate validator report.
+- During the review, ask whether the base sequence and regional logic make sense, whether any major experience is being visited from the wrong base, whether a long-distance day could move earlier or later to reduce backtracking, whether fixed-time experiences shape nearby time correctly, whether similar experiences are repetitive, whether slow days are genuinely justified, and whether each day contributes something meaningful.
+- During the review, also verify that every day has a real-world start and end context, that base-change days distinguish old lodging from new lodging, and that optional stops make sense for the actual origin-to-destination transfer.
+- During the richness review, ask whether a normal sightseeing day with substantial generic soft time is intentionally light or merely under-informed. If it is under-informed, perform targeted research before finalizing. Protect legitimate light days: arrival, departure, base change, long/full-day experience, demanding previous/next context, explicit rest request, and fixed late-day experience that benefits from a lighter morning.
+- Revise the final plan after this review so the delivered itinerary reads as one coherent journey, not a sequence of locally plausible days.
+
+Do not do these things:
+- Do not produce TripBlueprint, SkillItineraryArtifact, blocks, stops, movement IDs, block IDs, candidatePlaceIds, timeline UI fields, Telegram reminder schema, compiler tasks, execution configuration, map HTML, persistence fields, or database instructions.
+- Do not optimize for Stage 3.10, UNDER_PLANNED, CANDIDATE_GAP, DEPENDENCY_GAP, or any engineering diagnostic.
+- Do not force every section to contain content when it would be filler.
+- Do not add minimum stops per day, time-coverage thresholds, density scores, region optimization flags, or quality enums.
+- Do not invent verified opening hours, route durations, booking completion, payment, ticket purchase, or official eligibility.
+
+Content expectations:
+- Trip Strategy: explain the base/area logic, why the route is arranged this way, and the overall pace.
+- Daily Itinerary: each day should include date, area, Start, Experiences, End, intended experience/theme, useful approximate timing, expected duration, transport mode, why experiences belong together, constraints, and meaningful intentional open time when useful. In markdown, make the daily start/end context obvious with concise "Start:", "Experiences:", and "End:" labels.
+- Preparation: reservations, transport preparation, lodging-related preparation, ticketing, unresolved traveler actions, and other meaningful before-trip work.
+- Tips: destination-specific practical guidance, transport, culture/etiquette, food, and local logistics.
+- Alternatives/exclusions: explain the most important options intentionally left out or left as replacements.
+- Research grounding: include useful references to Research entities/sources and targeted research where appropriate. Name the research gaps, selected researched candidates, and rejected researched candidates in readable language.
+
+Quality bar:
+- Avoid days that contain only one short attraction unless arrival, departure, a full-day experience, transit, weather, or explicit traveler constraints justify it.
+- Avoid cross-area zigzag. Cluster by geography, traffic, and energy.
+- Use relaxed pacing without becoming under-planned. Open time should have a reason.
+- Write user-facing content in English.`;
+}
+
+export function buildSemanticTravelPlanPrompt(input: SemanticTravelPlanRequest): string {
+  const compactResearch = {
+    researchSetId: input.research.id,
+    status: input.research.status,
+    size: {
+      places: input.research.places.length,
+      events: input.research.events.length,
+      localFoods: input.research.localFoods?.length ?? 0,
+      localProducts: input.research.localProducts?.length ?? 0,
+      experienceThemes: input.research.experienceThemes?.length ?? 0,
+      travelTips: input.research.travelTips?.length ?? 0,
+      sources: input.research.sources.length,
+      actionRequirements: input.research.actionRequirements.length
+    },
+    places: input.research.places.map((place) => ({
+      researchId: place.id,
+      name: place.name,
+      localizedName: place.localizedName,
+      city: place.city,
+      area: place.area,
+      category: place.category,
+      priority: place.priority,
+      durationMinutes: place.durationMinutes,
+      whyWorthIt: place.whyWorthIt,
+      plan: place.plan,
+      tip: place.tip,
+      operationalFacts: place.operationalFacts,
+      schedulingEligibility: place.schedulingEligibility,
+      evidence: place.evidence
+    })),
+    events: input.research.events,
+    localFoods: input.research.localFoods ?? [],
+    localProducts: input.research.localProducts ?? [],
+    experienceThemes: input.research.experienceThemes ?? [],
+    travelTips: input.research.travelTips ?? [],
+    actionRequirements: input.research.actionRequirements,
+    sources: input.research.sources.map((source) => ({ id: source.id, title: source.title, authority: source.authority, url: source.url, status: source.status, official: source.official }))
+  };
+  return `${semanticTravelPlanStaticPrompt()}
+
+Confirmed request:
+${input.request.trim()}
+
+Profile context:
+${JSON.stringify(input.profile)}
+
+Reference research data, for grounding and inspiration:
+${JSON.stringify(compactResearch)}`;
 }
 
 export function buildPlanResearchPrompt(input: CodexPlanRequest): string {

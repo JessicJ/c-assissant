@@ -1,10 +1,11 @@
-import type { BlueprintActionRequirement, BlueprintBookingConstraint, BlueprintEvidenceRef, BlueprintItineraryBlock, BlueprintPlaceRelationship, BlueprintPreparationGroup, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelTipTheme, DirectBlueprintRevisionBatchMetadata, ItineraryDay, Plan, PlanPlace, PlanPlacePriority, PlanPresentation, PlanPresentationEvent, PlanRouteSegment, SourceReference, Task } from "@c-assistant/core";
+import type { BlueprintActionRequirement, BlueprintBookingConstraint, BlueprintEvidenceRef, BlueprintItineraryBlock, BlueprintPlaceRelationship, BlueprintPlanAlternative, BlueprintPreparationChecklistItem, BlueprintPreparationGroup, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelTipTheme, DirectBlueprintRevisionBatchMetadata, ItineraryDay, Plan, PlanPlace, PlanPlacePriority, PlanPresentation, PlanPresentationEvent, PlanRouteSegment, SourceReference, Task } from "@c-assistant/core";
 import { groupPreparationItems } from "./plan-preparation-display.js";
 import { displayTripTitle } from "./trip-title.js";
 
 export type BlueprintWorkspaceArea = "itinerary" | "preparation" | "tips" | "sources";
 export type GuideFilter = "all" | "attraction" | "dining" | "shopping" | "experience" | "stay" | "transport";
 export type ItineraryTimelineRole = "place" | "transport" | "activity" | "rest" | "pending_place";
+export type TimelineVisualPrimitive = "place" | "movement" | "action";
 export type GuideState = "scheduled" | "unscheduled" | "informational";
 export type GuideStateFilter = "all" | GuideState;
 
@@ -27,6 +28,10 @@ export type BlueprintWorkspaceDisplay = {
   preparationGroups: PreparationGroupDisplay[];
   tipGroups: TipGroupDisplay[];
   sources: SourceMarkerDisplay[];
+  sourceGroups: SourceGroupDisplay[];
+  alternatives: PlanPresentation["alternatives"];
+  planAlternatives: AlternativeDisplay[];
+  researchGrounding: PlanPresentation["researchGrounding"];
 };
 
 export type BlueprintMapViewportDisplay = {
@@ -42,6 +47,25 @@ export type BlueprintDayTabDisplay = {
   shortLabel?: string;
   city?: string;
   title?: string;
+  summary?: string;
+  startContext?: NonNullable<PlanPresentation["days"][number]["startContext"]>;
+  endContext?: NonNullable<PlanPresentation["days"][number]["endContext"]>;
+};
+
+export type DayContextDisplay = {
+  startLabel?: string;
+  endLabel?: string;
+  summary?: string;
+};
+
+export type AlternativeDisplay = {
+  key: string;
+  kind: BlueprintPlanAlternative["kind"];
+  label: string;
+  title: string;
+  summary: string;
+  replacementFor?: string;
+  condition?: string;
 };
 
 export type BlueprintPlaceDisplay = {
@@ -106,6 +130,12 @@ export type ItineraryCardDisplay = {
   contextualTip?: string;
 };
 
+export function timelineVisualPrimitiveForItem(item: Pick<ItineraryCardDisplay, "timelineRole">): TimelineVisualPrimitive {
+  if (item.timelineRole === "transport") return "movement";
+  if (item.timelineRole === "activity" || item.timelineRole === "rest") return "action";
+  return "place";
+}
+
 export type BlueprintMapPointDisplay = Pick<BlueprintPlaceDisplay, "id" | "title" | "coordinates"> & {
   placeId: string;
 };
@@ -136,6 +166,8 @@ export type BlueprintMapMarkerDisplay = {
 export type ItineraryDayDisplay = {
   dayId: string;
   day: BlueprintDayTabDisplay;
+  dayContext?: DayContextDisplay;
+  dayAlternatives: AlternativeDisplay[];
   items: ItineraryCardDisplay[];
   placementOptions: ItineraryPlacementOption[];
   routePlaces: BlueprintMapPointDisplay[];
@@ -161,6 +193,9 @@ export type GuideCardDisplay = {
   state: GuideState;
   summary: string;
   locationLabel: string;
+  typeLabel: string;
+  planFitLabel?: string;
+  practicalSignal?: string;
   image?: GuideCardImageDisplay;
   tags: string[];
   footerNote?: string;
@@ -182,6 +217,17 @@ export type SourceMarkerDisplay = {
   summary: string;
   url?: string;
   contexts?: string[];
+  title?: string;
+  publisher?: string;
+  status?: "verified" | "recheck" | "stale" | "unknown";
+  retrievedAt?: string;
+};
+
+export type SourceGroupDisplay = {
+  id: "needs_recheck" | "verified" | "other";
+  title: string;
+  description: string;
+  sources: SourceMarkerDisplay[];
 };
 
 export type ComparisonRow = {
@@ -245,12 +291,14 @@ type InformationalGuideTopic = {
 export type DetailPlaceDisplay = {
   placeId: string;
   title: string;
+  heroMeta: string[];
   priority: PlanPlacePriority;
   priorityLabel: string;
   priorityActions: PlacePriorityActionDisplay[];
   priorityBlockedNote?: string;
   leadTitle: string;
   leadBody: string;
+  visitFacts: string[];
   image?: DetailImageDisplay;
   planTitle?: string;
   planBody?: string;
@@ -261,6 +309,7 @@ export type DetailPlaceDisplay = {
   relatedEvents: DetailEventDisplay[];
   sources: SourceMarkerDisplay[];
   sourceTitle?: string;
+  itineraryContext?: DetailSectionDisplay;
   comparisonTitle?: string;
   comparisonRows: ComparisonRow[];
   primaryActionLabel: string;
@@ -308,6 +357,7 @@ export type PreparationChecklistItemDisplay = {
   description?: string;
   completion?: string;
   context?: string;
+  role: "action" | "general";
   checked: boolean;
 };
 
@@ -477,7 +527,11 @@ export function buildBlueprintWorkspaceDisplay(plan: Plan, presentation: PlanPre
     ],
     preparationGroups: preparationGroupsForPresentation(plan, presentation),
     tipGroups: groupTipsByTheme(tips),
-    sources: sourceMarkersForPlan(plan, presentation)
+    sources: sourceMarkersForPlan(plan, presentation),
+    sourceGroups: sourceGroupsForPlan(plan, presentation),
+    alternatives: structuredClone(presentation.alternatives ?? []),
+    planAlternatives: planLevelAlternativesForPresentation(presentation),
+    researchGrounding: structuredClone(presentation.researchGrounding ?? [])
   };
 }
 
@@ -565,7 +619,7 @@ function routeSegmentDisplayForSegment(segment: PlanRouteSegment, planSources: S
     needsRefresh,
     mapLineState: segment.verification === "verified" ? "formal" : segment.display?.mapLineState ?? (needsRefresh ? "needs_refresh" : "formal"),
     ...(refreshReason ? { refreshReason } : {}),
-    ...(segment.durationMinutes ? { durationLabel: `${segment.durationMinutes} min` } : {}),
+    ...(routeDurationDisplayLabel(segment) ? { durationLabel: routeDurationDisplayLabel(segment)! } : {}),
     ...(travelerFacingDefaultText(segment.detail) ? { detail: travelerFacingDefaultText(segment.detail) } : {}),
     sources: sourceSummariesForRouteSegment(segment, planSources, sourceCatalog)
   };
@@ -576,10 +630,19 @@ function routeDisplayLabel(segment: PlanRouteSegment): string {
 }
 
 function routeFallbackLabel(segment: PlanRouteSegment): string {
-  if (segment.mode === "walking") return segment.durationMinutes ? `${segment.durationMinutes} min walk` : "Walk between stops";
-  if (segment.mode === "transit") return segment.durationMinutes ? `${segment.durationMinutes} min by transit` : "Transit between stops";
-  if (segment.mode === "driving") return segment.durationMinutes ? `${segment.durationMinutes} min by car` : "Go by car";
-  return segment.durationMinutes ? `${segment.durationMinutes} min journey` : "Move between stops";
+  const duration = routeDurationDisplayLabel(segment);
+  if (!duration && segment.verification === "needs_verification" && !segment.evidence?.length) return "Travel time to confirm";
+  if (segment.mode === "walking") return duration ? `${duration} walk` : "Walk between stops";
+  if (segment.mode === "transit") return duration ? `${duration} by transit` : "Transit between stops";
+  if (segment.mode === "driving") return duration ? `${duration} by car` : "Go by car";
+  return duration ? `${duration} journey` : "Travel time to confirm";
+}
+
+function routeDurationDisplayLabel(segment: Pick<PlanRouteSegment, "durationMinutes" | "verification" | "evidence">): string | undefined {
+  if (!segment.durationMinutes) return undefined;
+  if (segment.verification === "verified") return `${segment.durationMinutes} min`;
+  if (segment.evidence?.length) return `~${segment.durationMinutes} min`;
+  return undefined;
 }
 
 function routeSegmentNeedsRefresh(segment: PlanRouteSegment): boolean {
@@ -618,7 +681,10 @@ function dayTabForDay(day: ItineraryDay): BlueprintDayTabDisplay {
     ...(day.date ? { date: day.date } : {}),
     ...(day.shortLabel ? { shortLabel: day.shortLabel } : {}),
     ...(day.city ? { city: day.city } : {}),
-    ...(day.title ? { title: day.title } : {})
+    ...(day.title ? { title: day.title } : {}),
+    ...(day.summary ? { summary: day.summary } : {}),
+    ...(day.startContext ? { startContext: structuredClone(day.startContext) } : {}),
+    ...(day.endContext ? { endContext: structuredClone(day.endContext) } : {})
   };
 }
 
@@ -656,16 +722,31 @@ function guideStateForPlace(place: PlanPlace, scheduledPlaceIds: Set<string>): G
   return "unscheduled";
 }
 
+function visibleTimelineBlock(block: BlueprintItineraryBlock, place: PlanPlace | undefined, routeAnchor: boolean, requirements: BlueprintActionRequirement[]): boolean {
+  if (block.planRole === "optional" || block.planRole === "replacement") return false;
+  if (block.planRole === "planned" && (block.title?.trim() || block.summary?.trim() || block.startTime || block.durationMinutes)) return true;
+  if (place || routeAnchor || block.eventId) return true;
+  if (block.display?.timeLabel || block.display?.meta || block.display?.routeAnchor !== undefined || block.display?.reorderable !== undefined) return true;
+  if (requirements.length) return true;
+  const text = `${block.kind} ${block.role ?? ""} ${block.title ?? ""} ${block.summary ?? ""}`.toLocaleLowerCase();
+  if (block.kind === "transfer") return /\b(transfer|route|journey|arrival|airport|station|pickup|drop.?off|traffic|licensed|confirmed|meeting point)\b|\btransfer to\b|行程|路线|交通|抵达|机场|车站|接送|集合点/.test(text);
+  if (block.kind === "lodging" || blockImpliesPendingPlace(block)) return /\b(tbd|to be determined|not selected|not confirmed|unconfirmed|choose|select|confirm|pending|reservation|booking|ticket|pickup point|meeting point|check.?out)\b|待定|未定|未选择|未确认|选择|确认|预订|订票|集合点|退房/.test(text);
+  if (block.kind === "meal") return /\b(reservation|booking|ticket|required|fixed|confirm|not selected|tbd|meeting|pickup)\b|预订|确认|待定|未选择|集合/.test(text);
+  if (block.kind === "rest" || block.kind === "flexible") return /\b(required|must|fixed|appointment|medical|medication|health|childcare|work call|meeting|pickup|ticket|booking|reservation)\b|必须|固定|预约|药|医疗|健康|会议|接送|预订|订票/.test(text);
+  return /\b(required|must|fixed|confirmed|reservation|booking|ticket|choose|select|confirm|pending|pickup|meeting point|documents?)\b|必须|固定|确认|预订|订票|选择|待定|集合点|证件/.test(text);
+}
+
 function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay): TimelineBlock[] {
   const placeById = new Map(presentation.places.map((place) => [place.id, place] as const));
   const displayDay = dayTabForDay(day);
-  if (day.blocks?.length) {
+  if (day.blocks) {
     const scheduledPlaceIds = new Set(day.placeIds);
     return [...day.blocks].sort((left, right) => left.order - right.order).flatMap((block, index) => {
       const place = block.placeId ? placeById.get(block.placeId) : undefined;
       if (block.placeId && !place) return [];
       const requirements = place ? requirementsForPlace(presentation, place.id) : [];
       const routeAnchor = block.display?.routeAnchor ?? Boolean(place && scheduledPlaceIds.has(place.id) && block.kind !== "event");
+      if (!visibleTimelineBlock(block, place, routeAnchor, requirements)) return [];
       const reorderable = Boolean(routeAnchor && place && (block.display?.reorderable ?? directMoveAllowed(place, requirements, presentation.bookingConstraints)));
       const routeAfter = routeAnchor && place ? presentation.routeSegments.find((segment) => segment.dayId === day.id && segment.originPlaceId === place.id) : undefined;
       const status = place ? itineraryBlockStatus(place, requirements) : undefined;
@@ -716,7 +797,7 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
 
 function itineraryDisplayForDay(presentation: PlanPresentation, day: ItineraryDay, planSources: SourceReference[] = [], pendingEdit?: PendingItineraryEditDisplay | null): ItineraryDayDisplay {
   const blocks = timelineBlocksForDay(presentation, day);
-  return itineraryDisplayFromBlocks(dayTabForDay(day), blocks, presentation.places, planSources, presentation.sourceCatalog, presentation.travelTips, pendingEdit);
+  return itineraryDisplayFromBlocks(dayTabForDay(day), blocks, dayAlternativesForDay(day), presentation.places, planSources, presentation.sourceCatalog, presentation.travelTips, pendingEdit);
 }
 
 export function itineraryDisplayForWorkspace(workspace: BlueprintWorkspaceDisplay, dayId: string, pendingEdit?: PendingItineraryEditDisplay | PendingItineraryEditDisplay[] | null): ItineraryDayDisplay {
@@ -725,15 +806,18 @@ export function itineraryDisplayForWorkspace(workspace: BlueprintWorkspaceDispla
   return itineraryDisplayWithPending(base, workspace.places, pendingEdit);
 }
 
-function itineraryDisplayFromBlocks(day: BlueprintDayTabDisplay, blocks: TimelineBlock[], places: PlanPlace[], planSources: SourceReference[], sourceCatalog: BlueprintSource[] = [], travelTips: PlanPresentation["travelTips"] = [], pendingEdit?: PendingItineraryEditDisplay | null): ItineraryDayDisplay {
+function itineraryDisplayFromBlocks(day: BlueprintDayTabDisplay, blocks: TimelineBlock[], dayAlternatives: AlternativeDisplay[], places: PlanPlace[], planSources: SourceReference[], sourceCatalog: BlueprintSource[] = [], travelTips: PlanPresentation["travelTips"] = [], pendingEdit?: PendingItineraryEditDisplay | null): ItineraryDayDisplay {
   const routeSegments = blocks.slice(0, -1).flatMap((block) => {
     const routeSegment = block.routeAfter ? routeSegmentDisplayForSegment(block.routeAfter, planSources, sourceCatalog) : undefined;
     return routeSegment ? [routeSegment] : [];
   });
   const routeRefresh = routeRefreshDisplayForDay(day, routeSegments);
+  const dayContext = dayContextDisplayForDay(day, blocks);
   const base = {
     dayId: day.id,
     day,
+    ...(dayContext ? { dayContext } : {}),
+    dayAlternatives,
     items: blocks.map((block) => itineraryCardForBlock(block, places)),
     placementOptions: itineraryPlacementOptions(blocks),
     routePlaces: blocks.flatMap((block) => block.place && block.routeAnchor && validPlaceCoordinates(block.place.coordinates) ? [mapPointForPlace(block.place)] : []),
@@ -753,6 +837,100 @@ function itineraryDisplayFromBlocks(day: BlueprintDayTabDisplay, blocks: Timelin
     })
   };
   return itineraryDisplayWithPending(base, places.map((place) => placeDisplayForPlace(place, travelTips)), pendingEdit);
+}
+
+function dayAlternativesForDay(day: ItineraryDay): AlternativeDisplay[] {
+  return [...(day.blocks ?? [])]
+    .sort((left, right) => left.order - right.order)
+    .flatMap((block) => {
+    if (block.planRole !== "optional" && block.planRole !== "replacement") return [];
+    const title = travelerFacingDefaultText(block.title ?? "");
+    const summary = travelerFacingDefaultText(block.summary ?? "");
+    if (!title && !summary) return [];
+    const kind = block.planRole === "replacement" ? "replacement" : "optional";
+    const replacementFor = travelerFacingDefaultText(block.replacementFor ?? "");
+    const condition = conciseAlternativeCondition(block);
+    return {
+      key: block.id,
+      kind,
+      label: alternativeKindLabel(kind),
+      title: title || "Alternative option",
+      summary,
+      ...(replacementFor ? { replacementFor } : {}),
+      ...(condition ? { condition } : {})
+    };
+  });
+}
+
+function planLevelAlternativesForPresentation(presentation: PlanPresentation): AlternativeDisplay[] {
+  return (presentation.alternatives ?? [])
+    .filter((alternative) => alternative.kind === "excluded")
+    .flatMap((alternative, index) => {
+      const title = travelerFacingDefaultText(alternative.title);
+      const summary = travelerFacingDefaultText(alternative.summary);
+      if (!title && !summary) return [];
+      return [{
+        key: `plan-alternative-${index}`,
+        kind: alternative.kind,
+        label: alternativeKindLabel(alternative.kind),
+        title: title || "Considered option",
+        summary,
+        ...(alternative.replacementFor ? { replacementFor: alternative.replacementFor } : {})
+      }];
+    });
+}
+
+function alternativeKindLabel(kind: BlueprintPlanAlternative["kind"]): string {
+  if (kind === "replacement") return "Could swap";
+  if (kind === "excluded") return "Left out";
+  return "Optional";
+}
+
+function conciseAlternativeCondition(block: BlueprintItineraryBlock): string | undefined {
+  const condition = block.operationalConditions?.map(alternativeConditionText).find(Boolean);
+  return condition || undefined;
+}
+
+function alternativeConditionText(condition: NonNullable<BlueprintItineraryBlock["operationalConditions"]>[number]): string | undefined {
+  if (condition.note?.trim()) return travelerFacingDefaultText(condition.note);
+  if (condition.kind === "weather") return "Weather dependent";
+  if (condition.kind === "route") return "Check route after hotel selection";
+  if (condition.kind === "reservation") return "Reservation dependent";
+  if (condition.kind === "session") return "Session time dependent";
+  if (condition.kind === "access") return "Check current access";
+  if (condition.kind === "traveler_choice") return "Traveler choice";
+  if (condition.kind === "recheck") return "Needs recheck";
+  return undefined;
+}
+
+function dayContextDisplayForDay(day: BlueprintDayTabDisplay, blocks: TimelineBlock[]): DayContextDisplay | undefined {
+  const start = contextLabel(day.startContext?.label);
+  const end = contextLabel(day.endContext?.label);
+  if (!start && !end) return undefined;
+  const hasVisibleTimeline = blocks.length > 0;
+  const contextChanged = Boolean(start && end && normalizeContextLabel(start) !== normalizeContextLabel(end));
+  const transitContext = day.startContext?.status === "transport_node"
+    || day.startContext?.status === "in_transit"
+    || day.endContext?.status === "transport_node"
+    || day.endContext?.status === "in_transit";
+  const dayText = `${day.label} ${day.title ?? ""} ${day.summary ?? ""}`.toLocaleLowerCase();
+  const transitDay = /\b(arrival|arrive|airport|flight|transfer|transit|departure|depart|base change|check.?in|check.?out)\b|抵达|到达|机场|航班|中转|转场|离开|出发|退房/.test(dayText);
+  if (hasVisibleTimeline && !contextChanged && !transitContext) return undefined;
+  if (!hasVisibleTimeline && !contextChanged && !transitContext && !transitDay) return undefined;
+  return {
+    ...(start ? { startLabel: start } : {}),
+    ...(end ? { endLabel: end } : {}),
+    ...(!hasVisibleTimeline && day.summary ? { summary: day.summary } : {})
+  };
+}
+
+function contextLabel(value: string | undefined): string | undefined {
+  const cleaned = travelerFacingDefaultText(value ?? "");
+  return cleaned || undefined;
+}
+
+function normalizeContextLabel(value: string): string {
+  return value.toLocaleLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function itineraryDisplayWithPending(base: ItineraryDayDisplay, places: BlueprintPlaceDisplay[], pendingEdit?: PendingItineraryEditDisplay | PendingItineraryEditDisplay[] | null): ItineraryDayDisplay {
@@ -818,6 +996,7 @@ function guideCardWithPendingItineraryEdit(card: GuideCardDisplay, edit: Pending
       canAdd: true,
       actionLabel: card.actionLabel ?? "Add",
       draftActionLabel: "Undo draft",
+      planFitLabel: `Removed from ${edit.dayLabel} (not saved)`,
       footerNote: `Removed from ${edit.dayLabel} (not saved)`
     };
   }
@@ -827,6 +1006,7 @@ function guideCardWithPendingItineraryEdit(card: GuideCardDisplay, edit: Pending
     state: "scheduled",
     canAdd: false,
     draftActionLabel: "Undo draft",
+    planFitLabel: edit.kind === "move_place_within_day" ? `Moved within ${edit.dayLabel} (not saved)` : `Added to ${edit.dayLabel} (not saved)`,
     footerNote: edit.kind === "move_place_within_day" ? `Moved within ${edit.dayLabel} (not saved)` : `Added to ${edit.dayLabel} (not saved)`,
     timeline: { dayId: edit.dayId, label: edit.dayLabel, timeLabel: edit.kind === "add_place_to_day" ? "Draft" : "Not saved" }
   };
@@ -838,14 +1018,15 @@ function detailWithPendingItineraryEdit(detail: DetailPlaceDisplay, edit: Pendin
     const { priorityBlockedNote: _priorityBlockedNote, removeActionLabel: _removeActionLabel, removeBlockedReason: _removeBlockedReason, ...rest } = detail;
     return {
       ...rest,
-      scheduled: false,
-      canAdd: true,
-      canRemoveFromDay: false,
-      primaryActionLabel: "Add to itinerary",
-      priorityActions: placePriorityActions({ priority: detail.priority }, false),
-      itineraryDraftNote: `Removed from ${edit.dayLabel} (not saved).`,
-      draftActionLabel: "Undo draft"
-    };
+    scheduled: false,
+    canAdd: true,
+    canRemoveFromDay: false,
+    primaryActionLabel: "Add to itinerary",
+    priorityActions: placePriorityActions({ priority: detail.priority }, false),
+    itineraryContext: { title: "In your itinerary", body: `Removed from ${edit.dayLabel} in this draft.`, items: ["Not saved yet."] },
+    itineraryDraftNote: `Removed from ${edit.dayLabel} (not saved).`,
+    draftActionLabel: "Undo draft"
+  };
   }
   const { removeActionLabel: _removeActionLabel, removeBlockedReason: _removeBlockedReason, ...rest } = detail;
   return {
@@ -854,6 +1035,7 @@ function detailWithPendingItineraryEdit(detail: DetailPlaceDisplay, edit: Pendin
     canAdd: false,
     canRemoveFromDay: false,
     primaryActionLabel: "Show in itinerary",
+    itineraryContext: { title: "In your itinerary", body: edit.kind === "move_place_within_day" ? `Moved within ${edit.dayLabel} in this draft.` : `Added to ${edit.dayLabel} in this draft.`, items: ["Not saved yet."] },
     itineraryDraftNote: edit.kind === "move_place_within_day" ? `Moved within ${edit.dayLabel} (not saved).` : `Added to ${edit.dayLabel} (not saved).`,
     draftActionLabel: "Undo draft"
   };
@@ -869,8 +1051,8 @@ function guideCardsForPresentation(presentation: PlanPresentation, planSources: 
   for (const day of presentation.days) {
     for (const block of timelineBlocksForDay(presentation, day)) {
       const place = block.place;
-      if (!place || firstTimelineByPlace.has(place.id)) continue;
-      firstTimelineByPlace.set(place.id, { dayId: day.id, label: day.shortLabel ?? day.date ?? day.label, timeLabel: block.timeLabel });
+      if (!place || !block.routeAnchor || firstTimelineByPlace.has(place.id)) continue;
+      firstTimelineByPlace.set(place.id, { dayId: day.id, label: day.shortLabel ?? day.label ?? day.date, timeLabel: block.timeLabel });
     }
   }
   const placeCards = presentation.places
@@ -879,6 +1061,9 @@ function guideCardsForPresentation(presentation: PlanPresentation, planSources: 
       const state = guideStateForPlace(place, scheduledPlaceIds);
       const requirements = requirementsForPlace(presentation, place.id);
       const image = guideCardImageForPlace(place);
+      const timeline = firstTimelineByPlace.get(place.id);
+      const planFitLabel = guidePlanFitLabel(presentation, place, state, timeline, requirements);
+      const practicalSignal = guidePracticalSignal(place, requirements);
       return {
         placeId: place.id,
         title: displayPlaceName(place),
@@ -886,11 +1071,14 @@ function guideCardsForPresentation(presentation: PlanPresentation, planSources: 
         state,
         summary: shortGuideSummary(place),
         locationLabel: place.locationLabel,
+        typeLabel: guideTypeLabel(place),
+        ...(planFitLabel ? { planFitLabel } : {}),
+        ...(practicalSignal ? { practicalSignal } : {}),
         ...(image ? { image } : {}),
-        tags: guideTags(presentation, place, requirements),
+        tags: guideDecisionTags(presentation, place, requirements, planFitLabel, practicalSignal),
         priorityLabel: placePriorityLabel(place.priority),
-        ...guideCardAction(place, state, firstTimelineByPlace.get(place.id), requirements),
-        ...(firstTimelineByPlace.get(place.id) ? { timeline: firstTimelineByPlace.get(place.id)! } : {})
+        ...guideCardAction(place, state, timeline, requirements),
+        ...(timeline ? { timeline } : {})
       };
     });
   return [
@@ -902,6 +1090,8 @@ function guideCardsForPresentation(presentation: PlanPresentation, planSources: 
       state: "informational" as const,
       summary: topic.summary,
       locationLabel: topic.context ?? topic.label,
+      typeLabel: topic.label,
+      planFitLabel: "Background for this trip",
       tags: [topic.label, topic.context].filter((value): value is string => Boolean(value)).slice(0, 3),
       priorityLabel: "Background",
       canAdd: false,
@@ -932,12 +1122,14 @@ function detailDisplayForPlace(presentation: PlanPresentation, planSources: Sour
   return {
     placeId: place.id,
     title: displayPlaceName(place),
+    heroMeta: detailHeroMeta(place),
     priority: place.priority,
     priorityLabel: placePriorityLabel(place.priority),
     priorityActions: placePriorityActions(place, Boolean(scheduledDay)),
     ...(placePriorityBlockedNote(place, Boolean(scheduledDay)) ? { priorityBlockedNote: placePriorityBlockedNote(place, Boolean(scheduledDay))! } : {}),
     leadTitle: place.guideDisplay?.detailLeadTitle ?? detailLeadTitle(type),
     leadBody,
+    visitFacts: detailVisitFacts(place, requirements),
     ...(image ? { image } : {}),
     ...(planBody ? { planTitle: place.guideDisplay?.detailPlanTitle ?? detailPlanTitle(type), planBody } : {}),
     ...(reservationNote ? { reservationNote } : {}),
@@ -947,6 +1139,7 @@ function detailDisplayForPlace(presentation: PlanPresentation, planSources: Sour
     relatedEvents: relatedEventsForPlace(presentation, planSources, place.id),
     sources: sourceSummariesForPlace(place, planSources, presentation.sourceCatalog, blockEvidenceForPlace(presentation, place.id)),
     ...(place.guideDisplay?.detailSourceTitle?.trim() ? { sourceTitle: place.guideDisplay.detailSourceTitle.trim() } : {}),
+    ...(detailItineraryContext(presentation, place, requirements) ? { itineraryContext: detailItineraryContext(presentation, place, requirements)! } : {}),
     ...(comparisonHeading ? { comparisonTitle: comparisonHeading } : {}),
     comparisonRows: comparisonHeading ? comparisonRows : [],
     primaryActionLabel: detailPrimaryActionLabel(place, Boolean(scheduledDay), canAdd),
@@ -983,11 +1176,13 @@ function detailDisplayForInformationalTopic(presentation: PlanPresentation, topi
   return {
     placeId: topic.id,
     title: topic.title,
+    heroMeta: [topic.label, topic.context].filter((value): value is string => Boolean(value)),
     priority: "archive",
     priorityLabel: "Background",
     priorityActions: [],
     leadTitle: topic.label,
     leadBody: topic.summary,
+    visitFacts: [],
     ...(topic.context ? { planTitle: "How to use it", planBody: topic.context } : {}),
     visitNotes: [],
     detailSections: [],
@@ -1045,22 +1240,30 @@ function comparisonRowsFromRelationshipGraph(presentation: PlanPresentation, sel
   const relationships = presentation.guideRelationshipGraph?.relationships ?? [];
   if (!relationships.length) return [];
   const placeById = new Map(presentation.places.map((place) => [place.id, place] as const));
-  return relationships
-    .flatMap((relationship) => relatedPlaceForRelationship(relationship, selectedPlace.id))
-    .flatMap(({ relationship, placeId }) => {
-      const place = placeById.get(placeId);
-      if (!place || !isGuidePlace(place)) return [];
-      return [{
-        id: place.id,
-        name: displayPlaceName(place),
-        area: place.area ?? place.locationLabel,
-        routeFit: relationshipKindLabel(relationship.kind),
-        timing: relationship.dayIds?.length ? relationship.dayIds.map((dayId) => dayLabelForId(presentation, dayId)).join(", ") : timingLabel(place, requirementsForPlace(presentation, place.id)),
-        effort: travelerFacingComparisonText(relationship.rationale, relationshipKindLabel(relationship.kind)),
-        sourceState: relationshipSourceStateLabel(relationship, place)
-      }];
-    })
-    .slice(0, 5);
+  const relationshipPriority: BlueprintPlaceRelationship["kind"][] = ["rainy_day_alternative", "low_energy_alternative", "alternative", "same_area", "same_direction", "event_link", "supports_anchor", "meal_support", "similar"];
+  const grouped = new Map<string, BlueprintPlaceRelationship[]>();
+  for (const { relationship, placeId } of relationships.flatMap((relationship) => relatedPlaceForRelationship(relationship, selectedPlace.id))) {
+    const place = placeById.get(placeId);
+    if (!place || !isGuidePlace(place)) continue;
+    grouped.set(placeId, [...(grouped.get(placeId) ?? []), relationship]);
+  }
+  return [...grouped.entries()].flatMap(([placeId, placeRelationships]) => {
+    const place = placeById.get(placeId);
+    if (!place) return [];
+    const sorted = [...placeRelationships].sort((left, right) => relationshipPriority.indexOf(left.kind) - relationshipPriority.indexOf(right.kind));
+    const primaryLabel = relationshipKindLabel(sorted[0]!.kind);
+    const dayLabels = uniqueStrings(sorted.flatMap((relationship) => relationship.dayIds ?? []).map((dayId) => dayLabelForId(presentation, dayId))).slice(0, 2);
+    const rationale = sorted.map((relationship) => travelerFacingDefaultText(relationship.rationale)).find(Boolean);
+    return [{
+      id: place.id,
+      name: displayPlaceName(place),
+      area: place.area ?? place.locationLabel,
+      routeFit: primaryLabel || routeFitLabel(place, selectedPlace),
+      timing: dayLabels.length ? dayLabels.join(", ") : timingLabel(place, requirementsForPlace(presentation, place.id)),
+      effort: travelerFacingComparisonText(rationale ?? "", primaryLabel || routeFitLabel(place, selectedPlace)),
+      sourceState: relationshipGroupSourceStateLabel(sorted, place)
+    }];
+  }).slice(0, 5);
 }
 
 function relatedPlaceForRelationship(relationship: BlueprintPlaceRelationship, selectedPlaceId: string): Array<{ relationship: BlueprintPlaceRelationship; placeId: string }> {
@@ -1166,7 +1369,7 @@ function pendingEditPosition(position: ItineraryPlacementOption | undefined): Pe
 }
 
 function emptyItineraryDayDisplay(): ItineraryDayDisplay {
-  return { dayId: "", day: { id: "", label: "" }, items: [], placementOptions: [], routePlaces: [], routeSegments: [], markers: [] };
+  return { dayId: "", day: { id: "", label: "" }, dayAlternatives: [], items: [], placementOptions: [], routePlaces: [], routeSegments: [], markers: [] };
 }
 
 function routeRefreshDisplayForDay(day: BlueprintDayTabDisplay, routeSegments: BlueprintRouteSegmentDisplay[]): ItineraryRouteRefreshDisplay | undefined {
@@ -1574,27 +1777,121 @@ function preparationGroupsForPresentation(plan: Plan, presentation: PlanPresenta
   const places = new Map(presentation.places.map((place) => [place.id, place] as const));
   const completedTaskIds = new Set(plan.stages.flatMap((stage) => stage.tasks.filter((task) => task.status === "completed").map((task) => task.id)));
   const completedRequirementIds = new Set(plan.stages.flatMap((stage) => stage.tasks.flatMap((task) => task.status === "completed" && task.requirementId ? [task.requirementId] : [])));
-  const groups = new Map<BlueprintPreparationGroup, PreparationChecklistItemDisplay[]>();
+  const actionItems = uniquePreparationActionRequirements(presentation.actionRequirements ?? []).map((requirement) => preparationItemForRequirement(requirement, places, completedRequirementIds));
+  const actionFingerprints = actionItems.flatMap(preparationDisplayFingerprints);
+  const generalGroups = new Map<BlueprintPreparationGroup, PreparationChecklistItemDisplay[]>();
   for (const item of canonical) {
     const requirement = item.requirementId ? requirements.get(item.requirementId) : undefined;
-    const place = item.placeId ? places.get(item.placeId) : requirement?.placeId ? places.get(requirement.placeId) : undefined;
-    const title = preparationItemTitle(item.title, requirement);
-    const description = firstUsefulText([item.description, requirement?.description, item.completionCondition, requirement?.completionCondition]);
-    const completion = firstUsefulText([item.completionCondition, requirement?.completionCondition], description);
+    if (requirement || preparationChecklistDuplicatesAction(item, actionFingerprints)) continue;
+    const place = item.placeId ? places.get(item.placeId) : undefined;
+    const description = firstUsefulText([item.description, item.completionCondition]);
+    const title = preparationItemTitle(item.title, undefined, description);
+    const body = preparationBodyDescription(title, description);
+    const completion = firstUsefulText([item.completionCondition], description);
     const context = place ? `For ${displayPlaceName(place)}` : undefined;
-    groups.set(item.group, [...(groups.get(item.group) ?? []), {
+    generalGroups.set(item.group, [...(generalGroups.get(item.group) ?? []), {
       id: item.id,
       title,
-      ...(description ? { description } : {}),
+      ...(body ? { description: body } : {}),
       ...(completion ? { completion } : {}),
       ...(context ? { context } : {}),
+      role: "general" as const,
       checked: completedTaskIds.has(item.id) || Boolean(item.requirementId && completedRequirementIds.has(item.requirementId))
     }]);
   }
-  return preparationGroupOrder.flatMap((group) => {
-    const items = groups.get(group) ?? [];
+  const groups: PreparationGroupDisplay[] = actionItems.length ? [{ title: "Action Required", items: actionItems }] : [];
+  return [
+    ...groups,
+    ...preparationGroupOrder.flatMap((group) => {
+    const items = generalGroups.get(group) ?? [];
     return items.length ? [{ title: preparationGroupLabel(group), items }] : [];
+  })
+  ];
+}
+
+function preparationItemForRequirement(requirement: BlueprintActionRequirement, places: Map<string, PlanPlace>, completedRequirementIds: Set<string>): PreparationChecklistItemDisplay {
+  const place = requirement.placeId ? places.get(requirement.placeId) : undefined;
+  const description = travelerFacingDefaultText(requirement.description);
+  const title = preparationItemTitle(requirement.title, requirement, description);
+  const body = preparationBodyDescription(title, description);
+  const completion = firstUsefulText([requirement.completionCondition], description);
+  const context = [place ? `For ${displayPlaceName(place)}` : undefined, travelerFacingDefaultText(requirement.relevantAt)].filter(Boolean).join(" · ");
+  return {
+    id: requirement.id,
+    title,
+    ...(body ? { description: body } : {}),
+    ...(completion ? { completion } : {}),
+    ...(context ? { context } : {}),
+    role: "action",
+    checked: completedRequirementIds.has(requirement.id)
+  };
+}
+
+function uniquePreparationActionRequirements(requirements: BlueprintActionRequirement[]): BlueprintActionRequirement[] {
+  const unique: BlueprintActionRequirement[] = [];
+  for (const requirement of requirements) {
+    if (requirement.accountableParty === "assistant") continue;
+    if (unique.some((candidate) => equivalentPreparationRequirement(candidate, requirement))) continue;
+    unique.push(requirement);
+  }
+  return unique;
+}
+
+function equivalentPreparationRequirement(left: BlueprintActionRequirement, right: BlueprintActionRequirement): boolean {
+  if (left.id === right.id) return true;
+  const leftKey = preparationRequirementIdentityKey(left);
+  const rightKey = preparationRequirementIdentityKey(right);
+  if (leftKey && rightKey && leftKey === rightKey) return true;
+  const leftText = normalizedPreparationText(`${left.title} ${left.description} ${left.completionCondition}`);
+  const rightText = normalizedPreparationText(`${right.title} ${right.description} ${right.completionCondition}`);
+  if (!leftText || !rightText) return false;
+  if (leftText === rightText || leftText.includes(rightText) || rightText.includes(leftText)) return true;
+  return preparationTokenOverlap(leftText, rightText) >= 0.44;
+}
+
+function preparationRequirementIdentityKey(requirement: BlueprintActionRequirement): string | undefined {
+  const text = normalizedPreparationText(`${requirement.title} ${requirement.description} ${requirement.completionCondition}`);
+  if (/\btresna\b/.test(text)) return "tresna";
+  if (/\blocavore\b/.test(text)) return "locavore";
+  if (/\bkecak\b|\buluwatu\b.*\bperformance\b|\bperformance\b.*\buluwatu\b/.test(text)) return "kecak";
+  if (/\ball indonesia\b|\barrival declaration\b/.test(text)) return "arrival-declaration";
+  if (/\blevy\b|\blove bali\b/.test(text)) return "bali-levy";
+  if (/\bpassport\b|\bvisa\b|\bentry authorization\b|\bindonesian visitor\b/.test(text)) return "entry-authorization";
+  if (/\baccommodation\b|\blodging\b|\bcheck in\b|\bcheck out\b/.test(text)) return "accommodation";
+  if (/\bnusa penida\b/.test(text)) return "nusa-penida";
+  return undefined;
+}
+
+function preparationChecklistDuplicatesAction(item: BlueprintPreparationChecklistItem, actionFingerprints: string[]): boolean {
+  const fingerprints = preparationChecklistFingerprints(item);
+  return fingerprints.some((fingerprint) => actionFingerprints.some((action) => fingerprint === action || fingerprint.includes(action) || action.includes(fingerprint) || preparationTokenOverlap(fingerprint, action) >= 0.44));
+}
+
+function preparationDisplayFingerprints(item: PreparationChecklistItemDisplay): string[] {
+  return [item.title, item.description, item.completion].flatMap((value) => {
+    const normalized = normalizedPreparationText(value ?? "");
+    return normalized ? [normalized] : [];
   });
+}
+
+function preparationChecklistFingerprints(item: BlueprintPreparationChecklistItem): string[] {
+  return [item.title, item.description, item.completionCondition].flatMap((value) => {
+    const normalized = normalizedPreparationText(value ?? "");
+    return normalized ? [normalized] : [];
+  });
+}
+
+function normalizedPreparationText(value: string): string {
+  return travelerFacingDefaultText(value).toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\b(the|a|an|and|or|for|to|of|in|on|with|each|all|current)\b/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function preparationTokenOverlap(left: string, right: string): number {
+  const leftTokens = new Set(left.split(" ").filter((token) => token.length > 3));
+  const rightTokens = new Set(right.split(" ").filter((token) => token.length > 3));
+  if (!leftTokens.size || !rightTokens.size) return 0;
+  let shared = 0;
+  for (const token of leftTokens) if (rightTokens.has(token)) shared += 1;
+  return shared / Math.min(leftTokens.size, rightTokens.size);
 }
 
 function preparationItemsForPlan(plan: Plan): Array<{ task: Task; stageTitle: string }> {
@@ -1606,20 +1903,29 @@ function preparationItemsForPlan(plan: Plan): Array<{ task: Task; stageTitle: st
 function preparationGroupsForPlan(plan: Plan): PreparationGroupDisplay[] {
   return groupPreparationItems(preparationItemsForPlan(plan)).map((group) => ({
     title: group.title,
-    items: group.items.map(({ task }) => ({
-      id: task.id,
-      title: preparationItemTitle(task.title),
-      ...(travelerFacingDefaultText(task.description ?? "") ? { description: travelerFacingDefaultText(task.description ?? "") } : {}),
-      checked: task.status === "completed"
-    }))
+    items: group.items.map(({ task }) => {
+      const title = preparationItemTitle(task.title);
+      const description = preparationBodyDescription(title, travelerFacingDefaultText(task.description ?? ""));
+      return {
+        id: task.id,
+        title,
+        ...(description ? { description } : {}),
+        role: "general" as const,
+        checked: task.status === "completed"
+      };
+    })
   }));
 }
 
-function preparationItemTitle(title: string | undefined, requirement?: BlueprintActionRequirement): string {
+function preparationItemTitle(title: string | undefined, requirement?: BlueprintActionRequirement, fallbackText?: string): string {
   const primary = travelerFacingDefaultText(title);
+  const fallback = firstUsefulSentence(fallbackText ?? "");
+  if (primary && /\.\.\.|…/.test(primary) && fallback) return fallback;
   if (primary && !looksLikePreparationCategoryLabel(primary)) return primary;
   const requirementTitle = travelerFacingDefaultText(requirement?.title);
+  if (requirementTitle && /\.\.\.|…/.test(requirementTitle) && fallback) return fallback;
   if (requirementTitle && !looksLikePreparationCategoryLabel(requirementTitle)) return requirementTitle;
+  if (fallback) return fallback;
   return requirement ? "Travel documents" : "Travel preparation";
 }
 
@@ -1630,6 +1936,14 @@ function firstUsefulText(values: Array<string | undefined>, skip?: string): stri
     if (text && text !== skipped) return text;
   }
   return "";
+}
+
+function preparationBodyDescription(title: string, description: string | undefined): string | undefined {
+  const body = travelerFacingDefaultText(description);
+  if (!body || normalizedPreparationText(body) === normalizedPreparationText(title)) return undefined;
+  if (!body.startsWith(title)) return body;
+  const remainder = body.slice(title.length).replace(/^[\s.!?。！？;；:：-]+/, "").trim();
+  return remainder || undefined;
 }
 
 function looksLikePreparationCategoryLabel(value: string): boolean {
@@ -1732,7 +2046,7 @@ function sourceSummariesForRefs(sourceRefs: string[] | undefined, planSources: S
   return (sourceRefs ?? []).flatMap((sourceRef) => {
     const source = sourceReferenceForRef(sourceRef, planSources, sourceCatalog);
     const url = source?.url ?? (isHttpUrl(sourceRef) ? sourceRef : undefined);
-    return [{ label: "Source", summary: source ? sourceReferenceSummary(source) : sourceRef, ...(url ? { url } : {}) }];
+    return [source ? sourceMarkerForReference(source) : { label: "Source", summary: sourceRef, ...(url ? { url } : {}) }];
   });
 }
 
@@ -1756,17 +2070,38 @@ function sourceSummariesForEvidenceRefs(evidence: BlueprintEvidenceRef[] | undef
     if (!source) return [];
     const refSummary = [sourceReferenceSummary(source), ref.supports?.slice(0, 2).join("; "), evidenceStatusLabel(ref.status), ref.checkedAt ? `checked ${ref.checkedAt}` : undefined].filter(Boolean).join(" · ");
     const contexts = sourceEvidenceContexts(ref, context);
-    return [{ label: "Source", summary: refSummary, url: source.url, ...(contexts.length ? { contexts } : {}) }];
+    const status = sourceMarkerStatus(ref.status);
+    return [{
+      label: "Source",
+      summary: refSummary,
+      url: source.url,
+      title: source.title,
+      publisher: source.authority,
+      retrievedAt: source.retrievedAt,
+      ...(status ? { status } : {}),
+      ...(contexts.length ? { contexts } : {})
+    }];
   });
 }
 
 function sourceMarkersForPlan(plan: Plan, presentation: PlanPresentation): SourceMarkerDisplay[] {
   const sourceCatalog = presentation.sourceCatalog ?? [];
-  const fromPlan = plan.sources.map((source) => ({ label: "Source", summary: sourceReferenceSummary(source), url: source.url }));
-  const fromPlaces = presentation.places.flatMap((place) => place.evidenceSources?.map((source) => ({ label: "Source", summary: [source.title, source.role, source.status && source.status !== "verified" ? "Needs confirmation close to the trip" : undefined, source.checkedAt ? `checked ${source.checkedAt}` : undefined].filter(Boolean).join(" · "), url: source.url, contexts: [`Supports ${displayPlaceName(place)}`] })) ?? []);
+  const fromPlan = plan.sources.map((source) => sourceMarkerForReference(source));
+  const fromPlaces = presentation.places.flatMap((place) => place.evidenceSources?.map((source) => {
+    const status = sourceMarkerStatus(source.status);
+    return {
+      label: "Source",
+      summary: [source.title, source.role, source.status && source.status !== "verified" ? "Needs confirmation close to the trip" : undefined, source.checkedAt ? `checked ${source.checkedAt}` : undefined].filter(Boolean).join(" · "),
+      url: source.url,
+      title: source.title,
+      ...(source.role ? { publisher: source.role } : {}),
+      ...(status ? { status } : {}),
+      contexts: [`Supports ${displayPlaceName(place)}`]
+    };
+  }) ?? []);
   const fromEvents = (presentation.events ?? []).flatMap((event) => sourceSummariesForEvent(event, plan.sources, sourceCatalog, "Supports event timing"));
   const fromPresentation = [
-    ...sourceCatalog.map((source) => ({ label: "Source", summary: sourceReferenceSummary(source), url: source.url })),
+    ...sourceCatalog.map((source) => sourceMarkerForReference(source)),
     ...sourceSummariesForFieldEvidence(presentation.fieldEvidence, sourceCatalog, "Supports trip planning details"),
     ...(presentation.places ?? []).flatMap((place) => sourceSummariesForFieldEvidence(place.fieldEvidence, sourceCatalog, `Supports ${displayPlaceName(place)}`)),
     ...blockEvidenceForPlan(presentation, sourceCatalog),
@@ -1780,6 +2115,27 @@ function sourceMarkersForPlan(plan: Plan, presentation: PlanPresentation): Sourc
     ...(presentation.guideRelationshipGraph?.relationships ?? []).flatMap((relationship) => sourceSummariesForEvidenceRefs(relationship.evidence, sourceCatalog, "Supports place pairing"))
   ];
   return uniqueSourceMarkers([...fromPresentation, ...fromPlan, ...fromPlaces, ...fromEvents]);
+}
+
+function sourceGroupsForPlan(plan: Plan, presentation: PlanPresentation): SourceGroupDisplay[] {
+  const groups = new Map<SourceGroupDisplay["id"], SourceMarkerDisplay[]>([
+    ["needs_recheck", []],
+    ["verified", []],
+    ["other", []]
+  ]);
+  for (const source of sourceMarkersForPlan(plan, presentation)) {
+    const groupId: SourceGroupDisplay["id"] = sourceNeedsRecheck(source) ? "needs_recheck" : sourceIsGrounded(source) ? "verified" : "other";
+    groups.set(groupId, [...(groups.get(groupId) ?? []), source]);
+  }
+  const definitions: Array<Omit<SourceGroupDisplay, "sources">> = [
+    { id: "needs_recheck", title: "Needs recheck / confirmation", description: "Operational details whose evidence says to confirm timing, access, reservations, or rules close to the trip." },
+    { id: "verified", title: "Verified / grounded sources", description: "Structured sources that ground plan facts, places, route notes, preparation, or tips." },
+    { id: "other", title: "Other research sources", description: "Additional references retained from the plan without a current recheck flag." }
+  ];
+  return definitions.flatMap((definition) => {
+    const sources = groups.get(definition.id) ?? [];
+    return sources.length ? [{ ...definition, sources }] : [];
+  });
 }
 
 function blockEvidenceForPlace(presentation: PlanPresentation, placeId: string): SourceMarkerDisplay[] {
@@ -1804,7 +2160,7 @@ function sourceSummariesForFieldEvidence(fieldEvidence: Array<{ evidence: Bluepr
   return (fieldEvidence ?? []).flatMap((field) => sourceSummariesForEvidenceRefs(field.evidence, sourceCatalog, context));
 }
 
-function sourceReferenceForRef(sourceRef: string, planSources: SourceReference[], sourceCatalog: BlueprintSource[]): Pick<SourceReference, "title" | "authority" | "retrievedAt" | "url"> | undefined {
+function sourceReferenceForRef(sourceRef: string, planSources: SourceReference[], sourceCatalog: BlueprintSource[]): Pick<SourceReference, "title" | "authority" | "retrievedAt" | "url"> & { status?: string } | undefined {
   const normalizedRefUrl = isHttpUrl(sourceRef) ? normalizeSourceUrl(sourceRef) : undefined;
   return sourceCatalog.find((candidate) => candidate.id === sourceRef || candidate.url === sourceRef || (normalizedRefUrl && normalizeSourceUrl(candidate.url) === normalizedRefUrl))
     ?? planSources.find((candidate) => candidate.url === sourceRef || (normalizedRefUrl && normalizeSourceUrl(candidate.url) === normalizedRefUrl));
@@ -1820,8 +2176,10 @@ function uniqueSourceMarkers(sources: SourceMarkerDisplay[]): SourceMarkerDispla
       continue;
     }
     const contexts = uniqueStrings([...(existing.contexts ?? []), ...(source.contexts ?? [])]);
+    const status = strongestSourceStatus(existing.status, source.status);
     merged.set(key, {
       ...existing,
+      ...(status ? { status } : {}),
       ...(contexts.length ? { contexts } : {})
     });
   }
@@ -1850,6 +2208,41 @@ function isHttpUrl(value: string): boolean {
 
 function evidenceStatusLabel(status: BlueprintEvidenceRef["status"]): string | undefined {
   return status === "verified" ? undefined : "Needs confirmation close to the trip";
+}
+
+function sourceMarkerForReference(source: Pick<SourceReference, "title" | "authority" | "retrievedAt" | "url"> & { status?: string }): SourceMarkerDisplay {
+  const status = sourceMarkerStatus(source.status);
+  return {
+    label: "Source",
+    summary: sourceReferenceSummary(source),
+    url: source.url,
+    title: source.title,
+    publisher: source.authority,
+    retrievedAt: source.retrievedAt,
+    ...(status ? { status } : {})
+  };
+}
+
+function sourceMarkerStatus(status: string | undefined): SourceMarkerDisplay["status"] {
+  if (status === "verified" || status === "recheck" || status === "stale") return status;
+  return status ? "unknown" : undefined;
+}
+
+function strongestSourceStatus(left: SourceMarkerDisplay["status"], right: SourceMarkerDisplay["status"]): SourceMarkerDisplay["status"] {
+  const rank: Record<NonNullable<SourceMarkerDisplay["status"]>, number> = { stale: 4, recheck: 3, unknown: 2, verified: 1 };
+  if (!left) return right;
+  if (!right) return left;
+  return rank[right] > rank[left] ? right : left;
+}
+
+function sourceNeedsRecheck(source: SourceMarkerDisplay): boolean {
+  const text = `${source.status ?? ""} ${source.summary} ${(source.contexts ?? []).join(" ")}`.toLocaleLowerCase();
+  return /\b(recheck|stale|needs confirmation|confirm close|needs check)\b/.test(text);
+}
+
+function sourceIsGrounded(source: SourceMarkerDisplay): boolean {
+  if (source.status === "verified") return true;
+  return Boolean(source.contexts?.some((context) => /^supports\b/i.test(context)));
 }
 
 function sourceEvidenceContexts(ref: BlueprintEvidenceRef, context?: string): string[] {
@@ -2028,6 +2421,133 @@ function travelerFacingDetailSections(sections: DetailSectionDisplay[]): DetailS
   });
 }
 
+function guideTypeLabel(place: PlanPlace): string {
+  const text = travelerFacingDefaultText(place.category);
+  if (!text) return guideFilterLabel(guideTypeForPlace(place));
+  return text.split(/\s+/).slice(0, 4).map((part) => part.charAt(0).toLocaleUpperCase() + part.slice(1)).join(" ");
+}
+
+function guidePlanFitLabel(presentation: PlanPresentation, place: PlanPlace, state: GuideState, timeline: GuideCardDisplay["timeline"], requirements: BlueprintActionRequirement[] = []): string {
+  if (timeline) return `In your plan · ${[timeline.label, timeline.timeLabel].filter(Boolean).join(", ")}`;
+  if (state === "informational") return "Background for this trip";
+  if (reservationRequirementForPlace(requirements)) return "Add after booking check";
+  if (requirementNeedsRecheck(requirements) || place.priority === "recheck") return "Add after schedule check";
+  if (place.schedulingEligibility?.decision === "high_impact") return "Requires major replanning";
+  const relationshipFit = relationshipPlanFitLabel(presentation, place.id);
+  if (relationshipFit) return relationshipFit;
+  const candidateDay = candidateFitDayForPlace(presentation, place.id);
+  if (candidateDay) return candidateDay.city ? `Fits your ${candidateDay.city} day` : `Option for ${dayLabelForId(presentation, candidateDay.id)}`;
+  return "Not currently in your plan";
+}
+
+function guidePracticalSignal(place: PlanPlace, requirements: BlueprintActionRequirement[] = []): string {
+  if (reservationRequirementForPlace(requirements) || place.reservation?.requirement === "required") return "Reservation required";
+  if (requirementNeedsRecheck(requirements) || place.priority === "recheck" || place.reservation?.verification === "needs_recheck") return "Needs schedule check";
+  const prep = requirements.find((requirement) => requirement.kind === "preparation" || /ticket|entry|permit/i.test(requirement.title));
+  if (prep) return travelerFacingLabel(prep.title, "Check before going");
+  if (place.durationMinutes) return `~${compactTravelDurationLabel(place.durationMinutes)}`;
+  if (place.reservation?.requirement === "recommended") return "Reservation useful";
+  return "";
+}
+
+function guideDecisionTags(presentation: PlanPresentation, place: PlanPlace, requirements: BlueprintActionRequirement[], planFitLabel: string, practicalSignal: string): string[] {
+  const excluded = new Set([place.locationLabel, place.area ?? "", place.city ?? "", guideTypeLabel(place), planFitLabel, practicalSignal].map((value) => value.trim().toLocaleLowerCase()).filter(Boolean));
+  const tags = guideTags(presentation, place, requirements)
+    .filter((tag) => !excluded.has(tag.trim().toLocaleLowerCase()))
+    .filter((tag) => !sameText(tag, placePriorityLabel(place.priority)))
+    .filter((tag) => !tag.toLocaleLowerCase().includes("reservation") || practicalSignal !== "Reservation required");
+  return tags.slice(0, 2);
+}
+
+function relationshipPlanFitLabel(presentation: PlanPresentation, placeId: string): string {
+  const relationships = presentation.guideRelationshipGraph?.relationships ?? [];
+  const rankedKinds: BlueprintPlaceRelationship["kind"][] = ["rainy_day_alternative", "low_energy_alternative", "alternative", "same_area", "same_direction", "event_link", "supports_anchor", "meal_support", "similar"];
+  const relationship = [...relationships]
+    .filter((item) => item.fromPlaceId === placeId || item.toPlaceId === placeId)
+    .sort((left, right) => rankedKinds.indexOf(left.kind) - rankedKinds.indexOf(right.kind))[0];
+  if (!relationship) return "";
+  const dayLabel = relationship.dayIds?.find((dayId) => !isLightLogisticsDay(presentation.days.find((day) => day.id === dayId)));
+  switch (relationship.kind) {
+    case "rainy_day_alternative": return dayLabel ? `Rainy-day option for ${dayLabelForId(presentation, dayLabel)}` : "Rainy-day option";
+    case "low_energy_alternative": return dayLabel ? `Low-energy option for ${dayLabelForId(presentation, dayLabel)}` : "Low-energy option";
+    case "alternative": return dayLabel ? `Alternative for ${dayLabelForId(presentation, dayLabel)}` : "Alternative option";
+    case "same_area": return dayLabel ? `Fits your ${dayLabelForId(presentation, dayLabel)} area` : "Fits the same area";
+    case "same_direction": return "Fits the same direction";
+    case "event_link": return "Conditional event option";
+    case "supports_anchor": return "Supports a main stop";
+    case "meal_support": return "Meal support option";
+    case "similar": return "Similar fit";
+  }
+}
+
+function candidateFitDayForPlace(presentation: PlanPresentation, placeId: string): ItineraryDay | undefined {
+  return presentation.days.find((day) => day.candidates?.includes(placeId) && !isLightLogisticsDay(day));
+}
+
+function isLightLogisticsDay(day: ItineraryDay | undefined): boolean {
+  if (!day) return true;
+  const text = `${day.label} ${day.title ?? ""} ${day.summary ?? ""}`.toLocaleLowerCase();
+  if (/\b(arrival|arrive|airport|flight in|landing|transit|transfer|departure|depart|flight out|check.?out|logistics)\b|抵达|到达|机场|航班|中转|转场|离开|出发|退房/.test(text)) return true;
+  const placeCount = day.placeIds.length;
+  const hasOnlyLogisticsBlocks = Boolean(day.blocks?.length) && day.blocks!.every((block) => block.kind === "transfer" || block.kind === "lodging");
+  return placeCount === 0 || hasOnlyLogisticsBlocks;
+}
+
+function detailHeroMeta(place: PlanPlace): string[] {
+  return uniqueStrings([guideTypeLabel(place), place.area, place.city, place.locationLabel].filter((value): value is string => Boolean(travelerFacingDefaultText(value)))).slice(0, 3);
+}
+
+function detailVisitFacts(place: PlanPlace, requirements: BlueprintActionRequirement[] = []): string[] {
+  const duration = place.durationMinutes ? `Allow ~${compactTravelDurationLabel(place.durationMinutes)}` : "";
+  const practical = guidePracticalSignal(place, requirements);
+  return uniqueStrings([
+    duration,
+    travelerFacingDefaultText(place.visitRole),
+    practical && !sameText(practical, duration.replace(/^Allow /, "")) ? practical : ""
+  ].filter(Boolean)).slice(0, 3);
+}
+
+function detailItineraryContext(presentation: PlanPresentation, place: PlanPlace, requirements: BlueprintActionRequirement[] = []): DetailSectionDisplay | undefined {
+  const scheduledDay = presentation.days.find((day) => day.placeIds.includes(place.id));
+  if (scheduledDay) {
+    const timeline = timelineBlocksForDay(presentation, scheduledDay).find((block) => block.place?.id === place.id);
+    const nextBlock = nextRouteAnchorBlock(presentation, scheduledDay, place.id);
+    const routeAfter = presentation.routeSegments.find((segment) => segment.dayId === scheduledDay.id && segment.originPlaceId === place.id);
+    const items = [
+      place.durationMinutes ? `Planned stay · ~${compactTravelDurationLabel(place.durationMinutes)}` : "",
+      nextBlock ? `Next: ${displayPlaceName(nextBlock.place)}` : "",
+      routeAfter ? routeSegmentShortLabel(routeAfter) : ""
+    ].filter(Boolean);
+    return {
+      title: "In your itinerary",
+      body: [dayLabelForId(presentation, scheduledDay.id), timeline?.timeLabel].filter(Boolean).join(" · "),
+      ...(items.length ? { items } : {})
+    };
+  }
+  const fit = detailPlanFitLabel(presentation, place, requirements);
+  return {
+    title: "In your itinerary",
+    body: "Not currently in your plan",
+    ...(fit && fit !== "Not currently in your plan" ? { items: [`Works well as: ${fit}`] } : {})
+  };
+}
+
+function detailPlanFitLabel(presentation: PlanPresentation, place: PlanPlace, requirements: BlueprintActionRequirement[] = []): string {
+  const fit = guidePlanFitLabel(presentation, place, guideStateForPlace(place, new Set(presentation.days.flatMap((day) => day.placeIds))), undefined, requirements);
+  return fit === "Requires major replanning" ? "Needs a bigger itinerary change" : fit;
+}
+
+function nextRouteAnchorBlock(presentation: PlanPresentation, day: ItineraryDay, placeId: string): (TimelineBlock & { place: PlanPlace }) | undefined {
+  const blocks = timelineBlocksForDay(presentation, day).filter((block): block is TimelineBlock & { place: PlanPlace } => Boolean(block.place && block.routeAnchor));
+  const index = blocks.findIndex((block) => block.place.id === placeId);
+  return index === -1 ? undefined : blocks[index + 1];
+}
+
+function routeSegmentShortLabel(segment: PlanRouteSegment): string {
+  const mode = segment.mode === "walking" ? "walk" : segment.mode === "driving" ? "drive" : segment.mode === "transit" ? "transit" : segment.mode;
+  return [segment.durationMinutes ? `${segment.durationMinutes} min ${mode}` : mode, segment.verification === "verified" ? "verified" : ""].filter(Boolean).join(" · ");
+}
+
 function looksLikeInternalWorkspaceText(value: string): boolean {
   const normalized = value.toLowerCase();
   return [
@@ -2087,7 +2607,7 @@ function guideCardAction(place: PlanPlace, state: GuideState, timeline: GuideCar
       : addBlockedLabel(place);
     return { canAdd: false, footerNote: label, addBlockedReason: label };
   }
-  if (state === "scheduled") return { canAdd: false, ...(timeline ? { footerNote: `${timeline.label} ${timeline.timeLabel}` } : {}) };
+  if (state === "scheduled") return { canAdd: false };
   const footerNote = travelerFacingDefaultText(place.guideDisplay?.footerNote);
   return { canAdd: false, ...(footerNote ? { footerNote } : {}) };
 }
@@ -2286,9 +2806,9 @@ function sourceStateLabel(place: PlanPlace): string {
   return "No source listed";
 }
 
-function relationshipSourceStateLabel(relationship: BlueprintPlaceRelationship, place: PlanPlace): string {
-  if (relationship.evidence.some((ref) => ref.status === "verified")) return "Verified connection";
-  if (relationship.evidence.length) return "Referenced connection";
+function relationshipGroupSourceStateLabel(relationships: BlueprintPlaceRelationship[], place: PlanPlace): string {
+  if (relationships.some((relationship) => relationship.evidence.some((ref) => ref.status === "verified"))) return "Verified connection";
+  if (relationships.some((relationship) => relationship.evidence.length)) return "Referenced connection";
   return sourceStateLabel(place);
 }
 
@@ -2409,7 +2929,7 @@ function relationshipKindLabel(kind: BlueprintPlaceRelationship["kind"]): string
 
 function dayLabelForId(presentation: PlanPresentation, dayId: string): string {
   const day = presentation.days.find((candidate) => candidate.id === dayId);
-  return day?.shortLabel ?? day?.date ?? day?.label ?? dayId;
+  return day?.shortLabel ?? day?.label ?? day?.date ?? dayId;
 }
 
 function sourceReferenceSummary(source: SourceReference): string {

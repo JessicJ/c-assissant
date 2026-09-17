@@ -17,6 +17,8 @@ import {
   type BlueprintLocalProduct,
   type BlueprintModuleIdentity,
   type BlueprintMovement,
+  type BlueprintOperationalFacts,
+  type BlueprintPlanAlternative,
   type BlueprintPlace,
   type BlueprintPlaceImageUsage,
   type BlueprintPlaceRelationship,
@@ -84,6 +86,7 @@ export interface SkillResearchPlaceArtifact {
   experienceUrl?: string;
   sourceUrls?: string[];
   fieldEvidence?: BlueprintFieldEvidence[];
+  operationalFacts?: BlueprintOperationalFacts;
   schedulingEligibility?: BlueprintSchedulingEligibility;
 }
 
@@ -196,6 +199,12 @@ export interface SkillItineraryArtifact {
   startDate: string;
   endDate: string;
   guideTheme?: BlueprintGuideTheme;
+  sources?: BlueprintSource[];
+  travelTips?: BlueprintTravelTip[];
+  preparationChecklist?: BlueprintPreparationChecklistItem[];
+  actionRequirements?: BlueprintActionRequirement[];
+  alternatives?: BlueprintPlanAlternative[];
+  researchGrounding?: string[];
   days: BlueprintItineraryDay[];
   movements: BlueprintMovement[];
 }
@@ -324,6 +333,7 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
       ...optionalHttpsLinks(artifact),
       evidence: evidenceForUrls(artifact.sourceUrls, sourceIdByUrl),
       ...(artifact.fieldEvidence?.length ? { fieldEvidence: remapFieldEvidence(artifact.fieldEvidence, sourceIdByArtifactId, sourceIds) } : {}),
+      ...(artifact.operationalFacts ? { operationalFacts: remapOperationalFacts(artifact.operationalFacts, sourceIdByArtifactId, sourceIds) } : {}),
       ...(schedulingEligibility ? { schedulingEligibility } : {})
     });
   }
@@ -460,8 +470,10 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
 
 export function importSkillItinerary(research: ResearchSet, artifact: SkillItineraryArtifact, context: BlueprintImportContext): TripBlueprint {
   const reasonableItinerary = normalizeItineraryReasonableness(research, artifact);
-  const travelTips = normalizeTravelTips(research, reasonableItinerary.days);
-  const preparationChecklist = normalizePreparationChecklist(research);
+  const travelTips = artifact.travelTips !== undefined ? structuredClone(artifact.travelTips) : normalizeTravelTips(research, reasonableItinerary.days);
+  const preparationChecklist = artifact.preparationChecklist !== undefined ? structuredClone(artifact.preparationChecklist) : normalizePreparationChecklist(research);
+  const sources = mergeBlueprintSources(research.sources, artifact.sources ?? []);
+  const actionRequirements = mergeActionRequirements(research.actionRequirements, artifact.actionRequirements ?? []);
   const blueprint: TripBlueprint = {
     schemaVersion: TRIP_BLUEPRINT_SCHEMA_VERSION,
     id: context.blueprintId,
@@ -481,20 +493,40 @@ export function importSkillItinerary(research: ResearchSet, artifact: SkillItine
     guideRelationshipGraph: normalizeGuideRelationshipGraph(research.guideRelationships, reasonableItinerary.days),
     places: normalizeBlueprintPlaces(research.places, reasonableItinerary.days),
     events: structuredClone(research.events),
-    sources: structuredClone(research.sources),
+    sources,
     days: reasonableItinerary.days,
     movements: reasonableItinerary.movements,
     ...(context.bookingConstraints?.length ? { bookingConstraints: structuredClone(context.bookingConstraints) } : {}),
-    actionRequirements: structuredClone(research.actionRequirements),
+    actionRequirements,
     ...(research.localFoods?.length ? { localFoods: structuredClone(research.localFoods) } : {}),
     ...(research.localProducts?.length ? { localProducts: structuredClone(research.localProducts) } : {}),
     ...(research.experienceThemes?.length ? { experienceThemes: structuredClone(research.experienceThemes) } : {}),
-    ...(research.travelTips !== undefined ? { travelTips } : {}),
-    ...(research.preparationChecklist !== undefined || preparationChecklist.length ? { preparationChecklist } : {}),
+    ...(artifact.travelTips !== undefined || research.travelTips !== undefined ? { travelTips } : {}),
+    ...(artifact.preparationChecklist !== undefined || research.preparationChecklist !== undefined || preparationChecklist.length ? { preparationChecklist } : {}),
+    ...(artifact.alternatives?.length ? { alternatives: structuredClone(artifact.alternatives) } : {}),
+    ...(artifact.researchGrounding?.length ? { researchGrounding: artifact.researchGrounding.map((item) => item.trim()).filter(Boolean) } : {}),
     createdAt: context.createdAt
   };
   assertTripBlueprintIntegrity(blueprint, { expectedResearchPlaceIds: research.places.map((place) => place.id) });
   return blueprint;
+}
+
+function mergeBlueprintSources(researchSources: BlueprintSource[], artifactSources: BlueprintSource[]): BlueprintSource[] {
+  const byId = new Map<string, BlueprintSource>();
+  for (const source of [...researchSources, ...artifactSources]) {
+    if (!source.id.trim()) continue;
+    byId.set(source.id, structuredClone(source));
+  }
+  return [...byId.values()];
+}
+
+function mergeActionRequirements(researchRequirements: BlueprintActionRequirement[], artifactRequirements: BlueprintActionRequirement[]): BlueprintActionRequirement[] {
+  const byId = new Map<string, BlueprintActionRequirement>();
+  for (const requirement of [...researchRequirements, ...artifactRequirements]) {
+    if (!requirement.id.trim()) continue;
+    byId.set(requirement.id, structuredClone(requirement));
+  }
+  return [...byId.values()];
 }
 
 function normalizeItineraryReasonableness(research: ResearchSet, artifact: SkillItineraryArtifact): Pick<SkillItineraryArtifact, "days" | "movements"> {
@@ -513,13 +545,10 @@ function normalizeItineraryReasonableness(research: ResearchSet, artifact: Skill
 }
 
 function normalizeItineraryBlocks(day: BlueprintItineraryDay): BlueprintItineraryBlock[] {
-  const inputBlocks = day.blocks ?? [];
-  if (inputBlocks.length) {
-    return inputBlocks
-      .filter((block) => block.id.trim())
-      .sort((left, right) => left.order - right.order)
-      .map((block, index) => normalizeItineraryBlock(block, index));
-  }
+  if (day.blocks !== undefined) return day.blocks
+    .filter((block) => block.id.trim())
+    .sort((left, right) => left.order - right.order)
+    .map((block, index) => normalizeItineraryBlock(block, index));
   return day.stops.map((stop, index) => ({
     id: `block-${day.id}-${index + 1}`,
     kind: inferItineraryBlockKind(stop.role),
@@ -950,12 +979,14 @@ export function mergeResearchSetCheckpoint(current: ResearchSet | undefined, inc
   }
   if (current.id !== incoming.id || current.generationKey !== incoming.generationKey || JSON.stringify(current.proposalRef) !== JSON.stringify(incoming.proposalRef) || JSON.stringify(current.skillLineage) !== JSON.stringify(incoming.skillLineage)) throw new Error("Research checkpoint does not belong to the current Blueprint Generation.");
   const sourceByUrl = new Map(current.sources.map((source) => [source.url, source]));
+  const sourceById = new Map(current.sources.map((source) => [source.id, source]));
   const incomingSourceRemap = new Map<string, string>();
   for (const source of incoming.sources) {
-    const existing = sourceByUrl.get(source.url);
+    const existing = sourceByUrl.get(source.url) ?? sourceById.get(source.id);
     if (existing) incomingSourceRemap.set(source.id, existing.id);
     else {
       sourceByUrl.set(source.url, source);
+      sourceById.set(source.id, source);
       incomingSourceRemap.set(source.id, source.id);
     }
   }
@@ -963,7 +994,11 @@ export function mergeResearchSetCheckpoint(current: ResearchSet | undefined, inc
   const places = appendUnique(current.places, incoming.places.map((place) => ({
     ...place,
     evidence: remapEvidence(place.evidence),
-    ...(place.guideDisplay ? { guideDisplay: remapGuideDisplayEvidence(place.guideDisplay, remapEvidence) } : {})
+    ...(place.images?.length ? { images: remapMergedPlaceImages(place.images, remapEvidence) } : {}),
+    ...(place.fieldEvidence?.length ? { fieldEvidence: remapMergedFieldEvidence(place.fieldEvidence, remapEvidence) } : {}),
+    ...(place.operationalFacts ? { operationalFacts: remapOperationalFactEvidence(place.operationalFacts, remapEvidence) } : {}),
+    ...(place.guideDisplay ? { guideDisplay: remapGuideDisplayEvidence(place.guideDisplay, remapEvidence) } : {}),
+    ...(place.schedulingEligibility ? { schedulingEligibility: remapMergedSchedulingEligibility(place.schedulingEligibility, remapEvidence) } : {})
   })), (item) => item.id);
   const events = appendUnique(current.events, incoming.events.map((event) => ({ ...event, evidence: remapEvidence(event.evidence) })), (item) => item.id);
   const actionRequirements = appendUnique(current.actionRequirements, incoming.actionRequirements.map((requirement) => ({ ...requirement, evidence: remapEvidence(requirement.evidence) })), (item) => item.id);
@@ -982,7 +1017,7 @@ export function mergeResearchSetCheckpoint(current: ResearchSet | undefined, inc
     batches,
     places,
     events,
-    sources: [...sourceByUrl.values()],
+    sources: [...sourceById.values()],
     ...(localFoods.length ? { localFoods } : {}),
     ...(localProducts.length ? { localProducts } : {}),
     ...(experienceThemes.length ? { experienceThemes } : {}),
@@ -1038,6 +1073,44 @@ function remapFieldEvidence(items: BlueprintFieldEvidence[], sourceIdByArtifactI
       evidence
     };
   });
+}
+
+function remapOperationalFacts(facts: BlueprintOperationalFacts, sourceIdByArtifactId: Map<string, string>, sourceIds: Set<string>): BlueprintOperationalFacts {
+  const remapFact = <T extends { status: BlueprintEvidenceRef["status"]; evidence: BlueprintEvidenceRef[] }>(fact: T): T | undefined => {
+    const evidence = remapEvidenceRefs(fact.evidence, sourceIdByArtifactId, sourceIds);
+    if (!evidence.length) return undefined;
+    return {
+      ...structuredClone(fact),
+      status: fact.status === "verified" && !evidenceIsFullyVerified(evidence) ? "recheck" : fact.status,
+      evidence
+    };
+  };
+  const access = facts.access;
+  const entry = facts.entry;
+  const windows = access?.windows?.map(remapFact).filter(isDefined);
+  const closed = access?.closed?.map(remapFact).filter(isDefined);
+  const lastEntry = access?.lastEntry ? remapFact(access.lastEntry) : undefined;
+  const sessions = facts.sessions?.map(remapFact).filter(isDefined);
+  const reservation = entry?.reservation ? remapFact(entry.reservation) : undefined;
+  const ticket = entry?.ticket ? remapFact(entry.ticket) : undefined;
+  const booking = entry?.booking ? remapFact(entry.booking) : undefined;
+  const capacity = entry?.capacity ? remapFact(entry.capacity) : undefined;
+  const normalizedAccess = {
+    ...(windows?.length ? { windows } : {}),
+    ...(closed?.length ? { closed } : {}),
+    ...(lastEntry ? { lastEntry } : {})
+  };
+  const normalizedEntry = {
+    ...(reservation ? { reservation } : {}),
+    ...(ticket ? { ticket } : {}),
+    ...(booking ? { booking } : {}),
+    ...(capacity ? { capacity } : {})
+  };
+  return {
+    ...(Object.keys(normalizedAccess).length ? { access: normalizedAccess } : {}),
+    ...(sessions?.length ? { sessions } : {}),
+    ...(Object.keys(normalizedEntry).length ? { entry: normalizedEntry } : {})
+  };
 }
 
 function normalizePlaceCoordinates(value: unknown): [number, number] | undefined {
@@ -1168,6 +1241,67 @@ function remapGuideDisplayEvidence(display: NonNullable<BlueprintPlace["guideDis
   };
 }
 
+function remapMergedFieldEvidence(items: BlueprintFieldEvidence[], remapEvidence: (evidence: BlueprintEvidenceRef[]) => BlueprintEvidenceRef[]): BlueprintFieldEvidence[] {
+  return items.map((item) => {
+    const evidence = remapEvidence(item.evidence);
+    return {
+      ...structuredClone(item),
+      status: item.status === "verified" && !evidenceIsFullyVerified(evidence) ? "recheck" : item.status,
+      evidence
+    };
+  });
+}
+
+function remapMergedPlaceImages(images: NonNullable<BlueprintPlace["images"]>, remapEvidence: (evidence: BlueprintEvidenceRef[]) => BlueprintEvidenceRef[]): NonNullable<BlueprintPlace["images"]> {
+  return images.flatMap((image) => {
+    const evidence = remapEvidence([{ sourceId: image.sourceId, status: image.status ?? "recheck" }]);
+    const sourceId = evidence[0]?.sourceId;
+    if (!sourceId) return [];
+    return [{ ...structuredClone(image), sourceId }];
+  });
+}
+
+function remapMergedSchedulingEligibility(eligibility: BlueprintSchedulingEligibility, remapEvidence: (evidence: BlueprintEvidenceRef[]) => BlueprintEvidenceRef[]): BlueprintSchedulingEligibility {
+  return {
+    ...structuredClone(eligibility),
+    ...(eligibility.evidence?.length ? { evidence: remapEvidence(eligibility.evidence) } : {})
+  };
+}
+
+function remapOperationalFactEvidence(facts: BlueprintOperationalFacts, remapEvidence: (evidence: BlueprintEvidenceRef[]) => BlueprintEvidenceRef[]): BlueprintOperationalFacts {
+  const remapFact = <T extends { evidence: BlueprintEvidenceRef[] }>(fact: T): T | undefined => {
+    const evidence = remapEvidence(fact.evidence);
+    if (!evidence.length) return undefined;
+    return { ...structuredClone(fact), evidence };
+  };
+  const access = facts.access;
+  const entry = facts.entry;
+  const windows = access?.windows?.map(remapFact).filter(isDefined);
+  const closed = access?.closed?.map(remapFact).filter(isDefined);
+  const lastEntry = access?.lastEntry ? remapFact(access.lastEntry) : undefined;
+  const sessions = facts.sessions?.map(remapFact).filter(isDefined);
+  const reservation = entry?.reservation ? remapFact(entry.reservation) : undefined;
+  const ticket = entry?.ticket ? remapFact(entry.ticket) : undefined;
+  const booking = entry?.booking ? remapFact(entry.booking) : undefined;
+  const capacity = entry?.capacity ? remapFact(entry.capacity) : undefined;
+  const normalizedAccess = {
+    ...(windows?.length ? { windows } : {}),
+    ...(closed?.length ? { closed } : {}),
+    ...(lastEntry ? { lastEntry } : {})
+  };
+  const normalizedEntry = {
+    ...(reservation ? { reservation } : {}),
+    ...(ticket ? { ticket } : {}),
+    ...(booking ? { booking } : {}),
+    ...(capacity ? { capacity } : {})
+  };
+  return {
+    ...(Object.keys(normalizedAccess).length ? { access: normalizedAccess } : {}),
+    ...(sessions?.length ? { sessions } : {}),
+    ...(Object.keys(normalizedEntry).length ? { entry: normalizedEntry } : {})
+  };
+}
+
 function resolvePlaceId(value: string, imported: Map<string, string>, placeIds: Set<string>): string {
   const resolved = imported.get(value) ?? value;
   if (!placeIds.has(resolved)) throw new Error(`Skill artifact references an unknown place: ${value}`);
@@ -1228,6 +1362,10 @@ function optionalHttpsLinks(input: Pick<SkillResearchPlaceArtifact, "officialUrl
 
 function uniqueFilter<T>(value: T, index: number, all: T[]): boolean {
   return all.indexOf(value) === index;
+}
+
+function isDefined<T>(value: T | undefined): value is T {
+  return value !== undefined;
 }
 
 function uniqueStrings(values: string[]): string[] {

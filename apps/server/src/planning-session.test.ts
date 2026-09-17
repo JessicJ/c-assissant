@@ -51,7 +51,7 @@ test("accepted accommodation bookings add overnight departure continuity to gene
     type: "accommodation",
     status: "confirmed",
     title: "Hotel A",
-    source: "manual",
+    source: "user",
     sourceHash: "hash",
     sourceLabel: "Manual hotel entry",
     importedAt: "2026-08-27T00:00:00.000Z",

@@ -16,6 +16,8 @@ import {
   mergePendingItineraryEdit,
   pendingItineraryDraftSummary,
   scheduledDayIdForPlace,
+  timelineVisualPrimitiveForItem,
+  type AlternativeDisplay,
   type BlueprintMapViewportDisplay,
   type BlueprintMapMarkerDisplay,
   type BlueprintMapPointDisplay,
@@ -23,8 +25,11 @@ import {
   type BlueprintPlaceDisplay,
   type BlueprintWorkspaceArea,
   type BlueprintWorkspaceDisplay,
+  type DetailImageDisplay,
   type DetailPlaceDisplay,
+  type DayContextDisplay,
   type GuideCardDisplay,
+  type GuideCardImageDisplay,
   type GuideFilter,
   type ItineraryCardDisplay,
   type ItineraryRouteRefreshDisplay,
@@ -326,6 +331,7 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
           </button>)}</div>
         </div>
         <div className="blueprint-timeline-list" ref={timelineListRef}>
+          {itinerary.dayContext ? <DayContextNote context={itinerary.dayContext} /> : null}
           {itinerary.items.map((item) => {
             if (item.kind === "pending") return <PendingItineraryCard item={item} selected={selectedPlaceId === item.placeId} onSelect={() => selectPlace(item.placeId)} onUndoDraft={() => undoPendingEdit(item.placeId)} key={item.key} />;
             const displayItem = canReorderSelectedDay ? item : { ...item, reorderable: false };
@@ -338,7 +344,9 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
             </Fragment>;
           })}
           {canReorderSelectedDay ? <ItineraryDropZone dropId="end" active={dragOverDropId === "end"} /> : null}
-          {!itinerary.items.length ? <p className="blueprint-empty-note">No itinerary blocks are available for this day.</p> : null}
+          {itinerary.dayAlternatives.length ? <DayAlternatives alternatives={itinerary.dayAlternatives} /> : null}
+          {workspace.planAlternatives.length ? <PlanAlternatives alternatives={workspace.planAlternatives} /> : null}
+          {!itinerary.items.length && !itinerary.dayContext ? <p className="blueprint-empty-note">No itinerary blocks are available for this day.</p> : null}
         </div>
       </aside>
 
@@ -356,12 +364,11 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
     {area === "preparation" ? <section className="blueprint-page blueprint-preparation" aria-label="Preparation checklist">
       {workspace.preparationGroups.length ? workspace.preparationGroups.map((group) => <section className="blueprint-check-group" key={group.title}>
         <h4>{group.title}</h4>
-        <div>{group.items.map((item) => <details className={item.checked ? "blueprint-check-item checked" : "blueprint-check-item"} key={item.id}>
+        <div>{group.items.map((item) => <details className={`blueprint-check-item role-${item.role}${item.checked ? " checked" : ""}`} key={item.id}>
           <summary>
-            <input aria-label={item.title} type="checkbox" checked={item.checked} onClick={(event) => event.stopPropagation()} onChange={(event) => void onTaskToggle(plan.id, item.id, event.target.checked)} />
-            <span><strong>{item.title}</strong></span>
+            <span className="blueprint-check-marker" aria-hidden="true" />
+            <span><strong>{item.title}</strong>{item.description ? <small>{item.description}</small> : null}</span>
           </summary>
-          {item.description ? <p>{item.description}</p> : null}
           {item.completion ? <small>{item.completion}</small> : null}
           {item.context ? <small>{item.context}</small> : null}
         </details>)}</div>
@@ -379,11 +386,94 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
     </section> : null}
 
     {area === "sources" ? <section className="blueprint-page blueprint-sources" aria-label="Sources">
-      {workspace.sources.length ? <div className="blueprint-source-list">{workspace.sources.map((source) => {
-        const content = <><strong>{source.summary}</strong>{source.contexts?.length ? <span>{source.contexts.join(" · ")}</span> : null}</>;
-        return source.url ? <a href={source.url} target="_blank" rel="noreferrer" key={`${source.url}-${source.summary}`}>{content}</a> : <p key={source.summary}>{content}</p>;
-      })}</div> : <p className="blueprint-empty-note">No sources are listed for this plan yet.</p>}
+      {workspace.sourceGroups.length ? <div className="blueprint-source-groups">{workspace.sourceGroups.map((group) => <section className={`blueprint-source-group group-${group.id}`} key={group.id}>
+        <header><h4>{group.title}</h4><p>{group.description}</p></header>
+        <div className="blueprint-source-list">{group.sources.map((source) => <SourceCard source={source} key={`${source.url ?? "source"}-${source.summary}`} />)}</div>
+      </section>)}</div> : <p className="blueprint-empty-note">No sources are listed for this plan yet.</p>}
+      {(workspace.researchGrounding ?? []).length ? <section className="blueprint-research-grounding" aria-label="Supplemental research context">
+        <h4>Supplemental research context</h4>
+        <p>Unresolved narrative grounding retained separately from structured sources.</p>
+        <ul>{(workspace.researchGrounding ?? []).map((item, index) => <li key={`${index}-${item.slice(0, 24)}`}>{item}</li>)}</ul>
+      </section> : null}
     </section> : null}
+  </section>;
+}
+
+function SourceCard({ source }: { source: BlueprintWorkspaceDisplay["sources"][number] }) {
+  const primary = source.title?.trim() || source.publisher?.trim() || source.summary;
+  const publisher = source.publisher && source.publisher !== primary ? source.publisher : undefined;
+  const supports = source.contexts?.filter((context) => /^supports\b/i.test(context)) ?? [];
+  const status = sourceStatusLabel(source);
+  const statusTone = sourceStatusTone(source);
+  const secondary = [publisher, source.retrievedAt ? `Retrieved ${source.retrievedAt}` : undefined, source.url].filter(Boolean);
+  const heading = source.url ? <a href={source.url} target="_blank" rel="noreferrer">{primary}</a> : <strong>{primary}</strong>;
+  return <article className={`blueprint-source-card${statusTone ? ` status-${statusTone}` : ""}`}>
+    <header>
+      <div>{heading}{publisher ? <small>{publisher}</small> : null}</div>
+      {status ? <span>{status}</span> : null}
+    </header>
+    {supports.length ? <p>{supports.slice(0, 3).join(" · ")}</p> : null}
+    <details>
+      <summary>Details</summary>
+      <div>
+        {secondary.map((item) => <small key={item}>{item}</small>)}
+        <small>{source.summary}</small>
+        {source.contexts?.filter((context) => !supports.includes(context)).map((context) => <small key={context}>{context}</small>)}
+      </div>
+    </details>
+  </article>;
+}
+
+function sourceStatusLabel(source: BlueprintWorkspaceDisplay["sources"][number]): string | undefined {
+  if (source.status === "stale") return "Needs recheck";
+  if (source.status === "recheck") return "Needs confirmation";
+  if (source.contexts?.some((context) => /needs confirmation|recheck|needs check/i.test(context))) return "Needs confirmation";
+  if (source.status === "verified") return "Verified";
+  return undefined;
+}
+
+function sourceStatusTone(source: BlueprintWorkspaceDisplay["sources"][number]): "attention" | "verified" | undefined {
+  if (source.status === "stale" || source.status === "recheck" || source.contexts?.some((context) => /needs confirmation|recheck|needs check/i.test(context))) return "attention";
+  if (source.status === "verified") return "verified";
+  return undefined;
+}
+
+function DayAlternatives({ alternatives }: { alternatives: AlternativeDisplay[] }) {
+  return <section className="blueprint-alternatives" aria-label="Other options for this day">
+    <h4>Other options for this day</h4>
+    <div>{alternatives.map((alternative) => <AlternativeNote alternative={alternative} key={alternative.key} />)}</div>
+  </section>;
+}
+
+function PlanAlternatives({ alternatives }: { alternatives: AlternativeDisplay[] }) {
+  return <details className="blueprint-plan-alternatives">
+    <summary>Why some ideas are left out</summary>
+    <div>{alternatives.map((alternative) => <AlternativeNote alternative={alternative} key={alternative.key} />)}</div>
+  </details>;
+}
+
+function AlternativeNote({ alternative }: { alternative: AlternativeDisplay }) {
+  return <article className={`blueprint-alternative-note kind-${alternative.kind}`}>
+    <header>
+      <span>{alternative.label}</span>
+      <strong>{alternative.title}</strong>
+    </header>
+    {alternative.replacementFor ? <small>Alternative to {alternative.replacementFor}</small> : null}
+    {alternative.condition ? <small>{alternative.condition}</small> : null}
+    {alternative.summary ? <p>{alternative.summary}</p> : null}
+  </article>;
+}
+
+function DayContextNote({ context }: { context: DayContextDisplay }) {
+  const start = context.startLabel ?? "Start context pending";
+  const end = context.endLabel ?? "End context pending";
+  return <section className="blueprint-day-context" aria-label={`Day context: ${start} to ${end}`}>
+    <div className="blueprint-day-context-flow">
+      <span>{start}</span>
+      <b aria-hidden="true">→</b>
+      <span>{end}</span>
+    </div>
+    {context.summary ? <p>{context.summary}</p> : null}
   </section>;
 }
 
@@ -430,26 +520,27 @@ function routeReadoutState(item: ItineraryCardDisplay, routeRefreshBusy: boolean
 }
 
 function ItineraryRouteReadout({ item, label, state }: { item: ItineraryCardDisplay; label: string; state: "confirmed" | "pending" | "checking" }) {
-  return <div className={`blueprint-itinerary-route-readout ${state}`} aria-label={`Next route: ${label}`}>
+  return <div className={`blueprint-itinerary-route-readout primitive-movement ${state}`} aria-label={`Next route: ${label}`}>
     <span className="blueprint-itinerary-transport-rail" aria-hidden="true" />
-    <TransportConnectorContent title={label} mode={item.routeAfterMode} durationLabel={item.routeAfterDurationLabel} detail={item.routeAfterDetail} statusLabel={state === "confirmed" ? undefined : "Needs check"} />
+    <span className="blueprint-itinerary-transport-icon" aria-hidden="true">{transportModeIcon(item.routeAfterMode)}</span>
+    <TransportConnectorContent title={label} durationLabel={item.routeAfterDurationLabel} detail={item.routeAfterDetail} statusLabel={state === "confirmed" ? undefined : "Needs check"} />
   </div>;
 }
 
 function TransportConnector({ item }: { item: ItineraryCardDisplay }) {
-  return <article className="blueprint-itinerary-transport">
+  return <article className={`blueprint-itinerary-transport primitive-${timelineVisualPrimitiveForItem(item)}`}>
     {item.timeLabel ? <time className="blueprint-itinerary-time blueprint-itinerary-time-secondary">{item.timeLabel}</time> : <span className="blueprint-itinerary-time blueprint-itinerary-time-empty" aria-hidden="true" />}
     <span className="blueprint-itinerary-transport-rail" aria-hidden="true" />
-    <TransportConnectorContent title={item.title} mode={item.routeAfterMode} detail={item.meta} statusLabel={item.statusLabel} />
+    <span className="blueprint-itinerary-transport-icon" aria-hidden="true">{transportModeIcon(item.routeAfterMode)}</span>
+    <TransportConnectorContent title={item.title} detail={item.meta} statusLabel={item.statusLabel} />
   </article>;
 }
 
-function TransportConnectorContent({ title, mode, durationLabel, detail, statusLabel }: { title: string; mode?: ItineraryCardDisplay["routeAfterMode"]; durationLabel?: string | undefined; detail?: string | undefined; statusLabel?: string | undefined }) {
+function TransportConnectorContent({ title, durationLabel, detail, statusLabel }: { title: string; durationLabel?: string | undefined; detail?: string | undefined; statusLabel?: string | undefined }) {
   return <div className="blueprint-itinerary-transport-content">
-    <span className="blueprint-itinerary-transport-icon" aria-hidden="true">{transportModeIcon(mode)}</span>
     <div className="blueprint-itinerary-transport-copy">
       <strong>{title}</strong>
-      {durationLabel || statusLabel ? <span className="blueprint-itinerary-transport-meta">{clockIcon()}{durationLabel ? <span>{durationLabel}</span> : null}{statusLabel ? <em>{statusLabel}</em> : null}</span> : null}
+      {durationLabel || statusLabel ? <span className="blueprint-itinerary-transport-meta">{clockIcon()}{durationLabel ? <span>{durationLabel}</span> : null}{statusLabel ? <em className="blueprint-itinerary-status">{statusLabel}</em> : null}</span> : null}
       {detail ? <p>{detail}</p> : null}
     </div>
   </div>;
@@ -463,42 +554,43 @@ function ItineraryBlockCard({ item, selected, dragging, onSelect, onUndoDraft, o
     dragging ? "dragging" : "",
     item.editState === "moved" ? "moved" : "",
     item.image ? "featured" : "compact",
+    `primitive-${timelineVisualPrimitiveForItem(item)}`,
     `role-${item.timelineRole}`,
     `type-${item.type}`
   ].filter(Boolean).join(" ");
   return <article className={className}>
     {item.timeLabel ? <time className="blueprint-itinerary-time">{item.timeLabel}</time> : <span className="blueprint-itinerary-time blueprint-itinerary-time-empty" aria-hidden="true" />}
     <span className="blueprint-itinerary-rail" aria-hidden="true" />
+    <span className="blueprint-itinerary-icon" aria-hidden="true">{itineraryItemIcon(item)}</span>
     {item.reorderable ? <button type="button" className="blueprint-itinerary-drag-handle" aria-label={`Move ${item.title}`} onPointerDown={onDragStart} onPointerMove={onDragMove} onPointerUp={onDragEnd} onPointerCancel={onDragCancel}>⠿</button> : null}
     <button type="button" className="blueprint-itinerary-card-main" onClick={onSelect}>
       {item.image ? <img className="blueprint-itinerary-thumbnail" src={item.image.url} alt={item.image.alt} loading="lazy" referrerPolicy="no-referrer" /> : null}
       <div className="blueprint-itinerary-card-heading">
-        <span className="blueprint-itinerary-icon" aria-hidden="true">{itineraryItemIcon(item)}</span>
         <div className="blueprint-itinerary-card-copy">
           <strong>{item.title}</strong>
           {item.meta ? <small>{item.meta}</small> : null}
         </div>
       </div>
-      {item.statusLabel ? <em>{item.statusLabel}</em> : null}
+      {item.statusLabel ? <em className="blueprint-itinerary-status">{item.statusLabel}</em> : null}
     </button>
     {item.draftActionLabel ? <button type="button" className="blueprint-itinerary-draft-action" onClick={onUndoDraft}>{item.draftActionLabel}</button> : null}
   </article>;
 }
 
 function PendingItineraryCard({ item, selected, onSelect, onUndoDraft }: { item: ItineraryCardDisplay; selected: boolean; onSelect: () => void; onUndoDraft: () => void }) {
-  return <article className={`blueprint-itinerary-block blueprint-itinerary-block-pending ${item.image ? "featured" : "compact"} role-${item.timelineRole} type-${item.type}${selected ? " selected" : ""}`}>
+  return <article className={`blueprint-itinerary-block blueprint-itinerary-block-pending ${item.image ? "featured" : "compact"} primitive-${timelineVisualPrimitiveForItem(item)} role-${item.timelineRole} type-${item.type}${selected ? " selected" : ""}`}>
     <time className="blueprint-itinerary-time">{item.timeLabel}</time>
     <span className="blueprint-itinerary-rail" aria-hidden="true" />
+    <span className="blueprint-itinerary-icon" aria-hidden="true">{itineraryItemIcon(item)}</span>
     <button type="button" className="blueprint-itinerary-card-main" aria-label={`Pending itinerary edit for ${item.title}`} onClick={onSelect}>
       {item.image ? <img className="blueprint-itinerary-thumbnail" src={item.image.url} alt={item.image.alt} loading="lazy" referrerPolicy="no-referrer" /> : null}
       <div className="blueprint-itinerary-card-heading">
-        <span className="blueprint-itinerary-icon" aria-hidden="true">{itineraryItemIcon(item)}</span>
         <div className="blueprint-itinerary-card-copy">
           <strong>{item.title}</strong>
           {item.meta ? <small>{item.meta}</small> : null}
         </div>
       </div>
-      {item.statusLabel ? <em>{item.statusLabel}</em> : null}
+      {item.statusLabel ? <em className="blueprint-itinerary-status">{item.statusLabel}</em> : null}
     </button>
     {item.draftActionLabel ? <button type="button" className="blueprint-itinerary-draft-action" onClick={onUndoDraft}>{item.draftActionLabel}</button> : null}
   </article>;
@@ -769,70 +861,77 @@ function ExplorePanel({ filters, cards, filter, hidden, onFilter, onSelect, onAd
     <div className="blueprint-guide-list">
       {visibleCards.map((card) => <article className="blueprint-guide-card" key={card.placeId}>
         <button type="button" className="blueprint-guide-card-main" onClick={() => onSelect(card.placeId)}>
-          <header><div><strong>{card.title}</strong><small>{card.locationLabel}</small></div><span className="blueprint-priority-pill">{card.priorityLabel}</span></header>
+          <header><div><strong>{card.title}</strong><small>{[card.typeLabel, card.locationLabel].filter(Boolean).join(" · ")}</small></div>{card.practicalSignal ? <span className="blueprint-practical-pill">{card.practicalSignal}</span> : <span className="blueprint-priority-pill">{card.priorityLabel}</span>}</header>
           <p>{card.summary}</p>
-          {card.image ? <img className="blueprint-guide-card-image" src={card.image.url} alt={card.image.alt} loading="lazy" referrerPolicy="no-referrer" /> : nodeCardVisual(card)}
+          <div className="blueprint-guide-fit-row">
+            {card.planFitLabel ? <span>{card.planFitLabel}</span> : null}
+            {!card.practicalSignal && card.priorityLabel ? <small>{card.priorityLabel}</small> : null}
+          </div>
+          {card.image ? <SafeGuideImage image={card.image} /> : null}
           {card.tags.length ? <div className="blueprint-guide-tags">{card.tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
         </button>
-        {(card.footerNote || card.canAdd || card.draftActionLabel) ? <footer>{card.footerNote ? <span>{card.footerNote}</span> : <span />}{card.canAdd && card.actionLabel ? <button type="button" onClick={() => onAdd(card.placeId)}>{card.actionLabel}</button> : null}{card.draftActionLabel ? <button type="button" className="secondary" onClick={() => onUndoDraft(card.placeId)}>{card.draftActionLabel}</button> : null}</footer> : null}
+        {(card.footerNote || card.canAdd || card.draftActionLabel || card.state === "scheduled") ? <footer>{card.footerNote ? <span>{card.footerNote}</span> : card.state === "scheduled" ? <span>Already in plan</span> : <span />}{card.canAdd && card.actionLabel ? <button type="button" onClick={() => onAdd(card.placeId)}>{card.actionLabel}</button> : null}{card.draftActionLabel ? <button type="button" className="secondary" onClick={() => onUndoDraft(card.placeId)}>{card.draftActionLabel}</button> : null}</footer> : null}
       </article>)}
       {!visibleCards.length ? <p className="blueprint-empty-note">No guide cards match these filters.</p> : null}
     </div>
   </div>;
 }
 
-function nodeCardVisual(card: GuideCardDisplay) {
-  if (card.type !== "stay" && card.type !== "transport") return null;
-  return <div className={`blueprint-guide-card-visual visual-${card.type}`} aria-label={`${guideFilterLabel(card.type)} node`}>
-    <span className="blueprint-guide-card-visual-icon" aria-hidden="true">{card.type === "stay" ? itineraryTypeIcon("stay") : transportModeIcon("transit")}</span>
-    <strong>{card.title}</strong>
-    <small>{card.locationLabel}</small>
-  </div>;
+function SafeGuideImage({ image }: { image: GuideCardImageDisplay }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return <img className="blueprint-guide-card-image" src={image.url} alt={image.alt} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />;
+}
+
+function SafeDetailImageFigure({ image }: { image: DetailImageDisplay }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return <figure className="blueprint-detail-image">
+    <img src={image.url} alt={image.alt} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
+    <figcaption>
+      {image.caption ? <span>{image.caption}</span> : null}
+      {image.source.url
+        ? <a className="blueprint-detail-image-source" href={image.source.url} target="_blank" rel="noreferrer" aria-label={`Image source: ${image.source.summary}`}><span>Source</span><small role="tooltip">{image.source.summary}</small></a>
+        : <span className="blueprint-detail-image-source" tabIndex={0} aria-label={`Image source: ${image.source.summary}`}><span>Source</span><small role="tooltip">{image.source.summary}</small></span>}
+    </figcaption>
+  </figure>;
 }
 
 function DetailPanel({ detail, hidden, onBack, onSelect, onAdd, onRemove, onUndoDraft }: { detail: DetailPlaceDisplay; hidden: boolean; onBack: () => void; onSelect: (placeId: string) => void; onAdd: (placeId: string) => void; onRemove: (placeId: string) => void; onUndoDraft: (placeId: string) => void }) {
   return <div className="blueprint-detail-panel blueprint-panel-view" hidden={hidden}>
     <header>
       <button type="button" className="blueprint-detail-back" aria-label="Back to explore" onClick={onBack}><span aria-hidden="true" /></button>
-      <div><h3>{detail.title}</h3></div>
+      <div><h3>{detail.title}</h3>{detail.heroMeta.length ? <p>{detail.heroMeta.join(" · ")}</p> : null}</div>
     </header>
     {detail.itineraryDraftNote ? <p className="blueprint-detail-draft-note">{detail.itineraryDraftNote}</p> : null}
-    {detail.image ? <figure className="blueprint-detail-image">
-      <img src={detail.image.url} alt={detail.image.alt} loading="lazy" referrerPolicy="no-referrer" />
-      <figcaption>
-        {detail.image.caption ? <span>{detail.image.caption}</span> : null}
-        {detail.image.source.url
-          ? <a className="blueprint-detail-image-source" href={detail.image.source.url} target="_blank" rel="noreferrer" aria-label={`Image source: ${detail.image.source.summary}`}><span>Source</span><small role="tooltip">{detail.image.source.summary}</small></a>
-          : <span className="blueprint-detail-image-source" tabIndex={0} aria-label={`Image source: ${detail.image.source.summary}`}><span>Source</span><small role="tooltip">{detail.image.source.summary}</small></span>}
-      </figcaption>
-    </figure> : null}
+    {detail.image ? <SafeDetailImageFigure image={detail.image} /> : null}
     <section><h4>{detail.leadTitle}</h4><p>{detail.leadBody}</p></section>
-    {detail.planTitle && detail.planBody ? <section><h4>{detail.planTitle}</h4><p>{detail.planBody}</p></section> : null}
-    {detail.reservationNote ? <section><h4>Reservation</h4><p>{detail.reservationNote}</p></section> : null}
-    {detail.visitNotes.length ? <section><h4>Before you go</h4><div className="blueprint-detail-visit-notes">{detail.visitNotes.map((note) => <article key={note.id}>
+    {(detail.visitFacts.length || (detail.planTitle && detail.planBody)) ? <section className="blueprint-detail-visit"><h4>Your visit</h4>{detail.visitFacts.length ? <div className="blueprint-detail-facts">{detail.visitFacts.map((fact) => <span key={fact}>{fact}</span>)}</div> : null}{detail.planTitle && detail.planBody ? <p>{detail.planBody}</p> : null}</section> : null}
+    {(detail.reservationNote || detail.visitNotes.length) ? <section><h4>Before you go</h4>{detail.reservationNote ? <p>{detail.reservationNote}</p> : null}{detail.visitNotes.length ? <div className="blueprint-detail-visit-notes">{detail.visitNotes.map((note) => <article key={note.id}>
       <strong>{note.title}</strong>
       <p>{note.body}</p>
       {note.completion ? <small>{note.completion}</small> : null}
-    </article>)}</div></section> : null}
-    {detail.detailSections.map((section) => <section key={section.title}><h4>{section.title}</h4>{section.body ? <p>{section.body}</p> : null}{section.items?.length ? <ul>{section.items.map((item) => <li key={item}>{item}</li>)}</ul> : null}</section>)}
+    </article>)}</div> : null}</section> : null}
+    {detail.itineraryContext ? <section className="blueprint-detail-itinerary-context"><h4>{detail.itineraryContext.title}</h4>{detail.itineraryContext.body ? <p>{detail.itineraryContext.body}</p> : null}{detail.itineraryContext.items?.length ? <ul>{detail.itineraryContext.items.map((item) => <li key={item}>{item}</li>)}</ul> : null}</section> : null}
+    {detail.comparisonTitle ? <section className="blueprint-comparison"><h4>Nearby & alternatives</h4><div role="table" aria-label={detail.comparisonTitle}>
+      <div role="row"><span>Place</span><span>Where</span><span>Fit</span><span>Timing</span><span>Before going</span><span>Reference</span><span /></div>
+      {detail.comparisonRows.map((row) => <div role="row" key={row.id}><strong>{row.name}</strong><span>{row.area}</span><span>{row.routeFit}</span><span>{row.timing}</span><span>{row.effort}</span><span>{row.sourceState}</span><button type="button" onClick={() => onSelect(row.id)}>Open</button></div>)}
+    </div></section> : null}
+    {(detail.detailSections.length || detail.guideContext.length || detail.relatedEvents.length) ? <section className="blueprint-detail-more"><h4>More about this place</h4>
+      {detail.detailSections.map((section) => <article key={section.title}><h5>{section.title}</h5>{section.body ? <p>{section.body}</p> : null}{section.items?.length ? <ul>{section.items.map((item) => <li key={item}>{item}</li>)}</ul> : null}</article>)}
+    </section> : null}
     {detail.guideContext.length ? <section className="blueprint-detail-guide-context"><h4>Worth noticing here</h4><div>{detail.guideContext.map((item) => <article key={`${item.kind}-${item.id}`}>
       <span>{item.label}</span>
       <strong>{item.title}</strong>
       {item.context ? <small>{item.context}</small> : null}
       <p>{item.description}</p>
-      {item.sources.length ? <div>{item.sources.map((source) => source.url ? <a href={source.url} target="_blank" rel="noreferrer" key={`${item.kind}-${item.id}-${source.url}`}>{source.summary}</a> : <span key={`${item.kind}-${item.id}-${source.summary}`}>{source.summary}</span>)}</div> : null}
     </article>)}</div></section> : null}
     {detail.relatedEvents.length ? <section className="blueprint-detail-events"><h4>Timing notes</h4><div>{detail.relatedEvents.map((event) => <article key={event.id}>
       <strong>{event.title}</strong>
       <p>{event.description}</p>
       {(event.dateLabel || event.locationLabel) ? <small>{[event.dateLabel, event.locationLabel].filter(Boolean).join(" · ")}</small> : null}
-      {event.sources.length ? <div>{event.sources.map((source) => source.url ? <a href={source.url} target="_blank" rel="noreferrer" key={`${event.id}-${source.url}`}>{source.summary}</a> : <span key={`${event.id}-${source.summary}`}>{source.summary}</span>)}</div> : null}
     </article>)}</div></section> : null}
-    {detail.sources.length ? <section className="blueprint-detail-sources"><h4>{detail.sourceTitle ?? "Sources"}</h4><div>{detail.sources.map((source) => source.url ? <a href={source.url} target="_blank" rel="noreferrer" key={`${source.url}-${source.summary}`}>{source.summary}</a> : <span key={source.summary}>{source.summary}</span>)}</div></section> : null}
-    {detail.comparisonTitle ? <section className="blueprint-comparison"><h4>{detail.comparisonTitle}</h4><div role="table" aria-label={detail.comparisonTitle}>
-      <div role="row"><span>Place</span><span>Where</span><span>Route</span><span>Timing</span><span>Before going</span><span>Reference</span><span /></div>
-      {detail.comparisonRows.map((row) => <div role="row" key={row.id}><strong>{row.name}</strong><span>{row.area}</span><span>{row.routeFit}</span><span>{row.timing}</span><span>{row.effort}</span><span>{row.sourceState}</span><button type="button" onClick={() => onSelect(row.id)}>Open</button></div>)}
-    </div></section> : null}
+    {detail.sources.length ? <details className="blueprint-detail-sources"><summary>{detail.sourceTitle ?? "Sources & verification"}</summary><div>{detail.sources.map((source) => source.url ? <a href={source.url} target="_blank" rel="noreferrer" key={`${source.url}-${source.summary}`}>{source.summary}</a> : <span key={source.summary}>{source.summary}</span>)}</div></details> : null}
     <section className="blueprint-detail-actions">
       {detail.scheduled || detail.canAdd ? <button type="button" onClick={() => detail.scheduled ? onSelect(detail.placeId) : onAdd(detail.placeId)}>{detail.primaryActionLabel}</button> : <span>{detail.primaryActionLabel}</span>}
       {detail.scheduled && (detail.canRemoveFromDay || detail.removeBlockedReason) ? <button type="button" className="secondary" disabled={!detail.canRemoveFromDay} title={detail.removeBlockedReason} onClick={() => onRemove(detail.placeId)}>{detail.removeActionLabel ?? detail.removeBlockedReason ?? "Remove from day"}</button> : null}
