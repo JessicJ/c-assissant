@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { DestinationArrivalEvent, Plan, PlanChangeSet, PlanReplacementAudit, PlanningSession, TripBlueprint, WorkspaceSnapshot } from "@c-assistant/core";
+import { ArrowRight, MapPin } from "lucide-react";
 import { cancelPlanningGeneration, deletePlanningSession, getWorkspace } from "./api-client.js";
-import { BookingImportPanel } from "./BookingImportPanel.js";
 import { CurrentPlan } from "./CurrentPlanWorkspace.js";
 import { PlanComposer } from "./PlanComposer.js";
 import { HistoricalPlans } from "./PlanSupportingViews.js";
@@ -9,12 +9,12 @@ import type { AgentStatus } from "./ui-types.js";
 
 export type PlanTab = "current" | "history";
 
-export function PlansWorkspace({ currentPlan, activeBlueprint, planningSession, hidePlanningSession, latestPlanChange, latestPlanReplacement, executionPlan, destinationArrivals, history, tab, confirming, onTab, onCreate, onRevise, onDelete, onTaskToggle, onTaskReorder, onUndoChange, onConfirm, onPlanCreated, onStatus, onError, onOperationBusy }: { currentPlan: Plan | null; activeBlueprint?: TripBlueprint | undefined; planningSession?: PlanningSession | undefined; hidePlanningSession: boolean; latestPlanChange?: PlanChangeSet | undefined; latestPlanReplacement?: PlanReplacementAudit | undefined; executionPlan: Plan | null; destinationArrivals: DestinationArrivalEvent[]; history: Plan[]; tab: PlanTab; confirming: boolean; onTab: (tab: PlanTab) => void; onCreate: () => void; onRevise: (message?: string) => void; onDelete: (plan: Plan) => Promise<void>; onTaskToggle: (planId: string, taskId: string, checked: boolean) => Promise<void>; onTaskReorder: (planId: string, taskId: string, direction: "up" | "down") => Promise<void>; onUndoChange: (planId: string, changeId: string) => Promise<void>; onConfirm: (planId: string) => Promise<void>; onPlanCreated: (workspace: WorkspaceSnapshot) => Promise<void>; onStatus: (status: AgentStatus) => void; onError: (message: string) => void; onOperationBusy: (busy: boolean) => void }) {
+export function PlansWorkspace({ currentPlan, activeBlueprint, planningSession, hidePlanningSession, latestPlanChange, latestPlanReplacement, executionPlan, destinationArrivals, history, tab, confirming, onTab, onCreate, onRevise, onDelete, onTaskToggle, onTaskReorder, onUndoChange, onConfirm, onPlanCreated, onStatus, onError, onOperationBusy }: { currentPlan: Plan | null; activeBlueprint?: TripBlueprint | undefined; planningSession?: PlanningSession | undefined; hidePlanningSession: boolean; latestPlanChange?: PlanChangeSet | undefined; latestPlanReplacement?: PlanReplacementAudit | undefined; executionPlan: Plan | null; destinationArrivals: DestinationArrivalEvent[]; history: Plan[]; tab: PlanTab; confirming: boolean; onTab: (tab: PlanTab) => void; onCreate: (prefill?: string) => void; onRevise: (message?: string) => void; onDelete: (plan: Plan) => Promise<void>; onTaskToggle: (planId: string, taskId: string, checked: boolean) => Promise<void>; onTaskReorder: (planId: string, taskId: string, direction: "up" | "down") => Promise<void>; onUndoChange: (planId: string, changeId: string) => Promise<void>; onConfirm: (planId: string) => Promise<void>; onPlanCreated: (workspace: WorkspaceSnapshot) => Promise<void>; onStatus: (status: AgentStatus) => void; onError: (message: string) => void; onOperationBusy: (busy: boolean) => void }) {
   return <div className="page-stack">
     <div className="segmented-tabs" role="tablist" aria-label="Plan type"><button className={tab === "current" ? "active" : ""} onClick={() => onTab("current")}>Current Plan</button><button className={tab === "history" ? "active" : ""} onClick={() => onTab("history")}>Plan History <span>{history.length}</span></button></div>
     {tab === "current" && !currentPlan && planningSession && !["draft_ready", "failed", "abandoned"].includes(planningSession.status) && !hidePlanningSession ? <PlanningSessionPanel session={planningSession} onPlanCreated={onPlanCreated} onStatus={onStatus} onError={onError} /> : null}
     {tab === "current" && executionPlan ? <ExecutionPlanNotice plan={executionPlan} /> : null}
-    {tab === "current" ? currentPlan ? <CurrentPlan plan={currentPlan} blueprint={activeBlueprint} destinationArrivals={destinationArrivals} latestPlanChange={latestPlanChange} latestPlanReplacement={latestPlanReplacement} onRevise={onRevise} onTaskToggle={onTaskToggle} onTaskReorder={onTaskReorder} onUndoChange={onUndoChange} onConfirm={onConfirm} onWorkspace={onPlanCreated} onStatus={onStatus} onError={onError} onOperationBusy={onOperationBusy} confirming={confirming} /> : planningSession || hidePlanningSession ? null : <EmptyPlan onCreate={onCreate} onPlanCreated={onPlanCreated} onStatus={onStatus} onError={onError} /> : <HistoricalPlans plans={history} onDelete={onDelete} />}
+    {tab === "current" ? currentPlan ? <CurrentPlan plan={currentPlan} blueprint={activeBlueprint} destinationArrivals={destinationArrivals} latestPlanChange={latestPlanChange} latestPlanReplacement={latestPlanReplacement} onRevise={onRevise} onTaskToggle={onTaskToggle} onTaskReorder={onTaskReorder} onUndoChange={onUndoChange} onConfirm={onConfirm} onWorkspace={onPlanCreated} onStatus={onStatus} onError={onError} onOperationBusy={onOperationBusy} confirming={confirming} /> : planningSession || hidePlanningSession ? null : <EmptyPlan onCreate={onCreate} /> : <HistoricalPlans plans={history} onDelete={onDelete} />}
   </div>;
 }
 
@@ -77,10 +77,23 @@ function ExecutionPlanNotice({ plan }: { plan: Plan }) {
   return <section className="execution-plan-notice"><div><span>Active plan</span><strong>{plan.title}</strong><p>Reminders and the itinerary timeline still follow this plan. Landi will switch only after you confirm the complete replacement draft below.</p></div><em>Active</em><button type="button" className="execution-plan-notice-close" aria-label="Close active plan notice" onClick={dismiss}><span aria-hidden="true" /></button></section>;
 }
 
-function EmptyPlan({ onCreate, onPlanCreated, onStatus, onError }: { onCreate: () => void; onPlanCreated: (workspace: WorkspaceSnapshot) => Promise<void>; onStatus: (status: AgentStatus) => void; onError: (message: string) => void }) {
+function EmptyPlan({ onCreate }: { onCreate: (prefill?: string) => void }) {
+  const [destination, setDestination] = useState("");
+
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    onCreate(destination.trim());
+  }
+
   return <section className="empty-plan">
-    <div className="empty-plan-copy"><h2>No trip yet.<br />Start with your next departure.</h2></div>
-    <div className="empty-plan-composer"><div><span>Create a new plan</span><strong>Tell Landi where you want to go</strong></div><button className="primary-action" onClick={onCreate}>Start a conversation <span>→</span></button></div>
-    <div className="empty-plan-booking-import"><BookingImportPanel scope={{ type: "planning" }} compact onWorkspace={onPlanCreated} onStatus={onStatus} onError={onError} /></div>
+    <div className="empty-plan-copy">
+      <h1><span>Your next{" "}</span><span>journey starts <em className="hero-emphasis">here.<svg viewBox="0 0 180 24" aria-hidden="true" focusable="false"><path d="M5 19 C 46 3 118 1 175 12" /></svg></em></span></h1>
+    </div>
+    <form className="empty-plan-composer" onSubmit={submit}>
+      <MapPin className="destination-icon" aria-hidden="true" strokeWidth={1.65} />
+      <label className="visually-hidden" htmlFor="hero-destination">Where would you like to go?</label>
+      <input id="hero-destination" value={destination} onChange={(event) => setDestination(event.target.value)} placeholder="Where would you like to go?" autoComplete="off" maxLength={500} />
+      <button type="submit" aria-label="Start planning"><ArrowRight aria-hidden="true" strokeWidth={1.8} /></button>
+    </form>
   </section>;
 }

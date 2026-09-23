@@ -4,13 +4,15 @@ import type { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { createPlanningGenerationService } from "./planning-generation.js";
 import type { RuntimeServices } from "./runtime-services-contract.js";
 import type { SemanticShadowConfig } from "./semantic-shadow.js";
+import type { SemanticDraftCanaryConfig } from "./semantic-draft-canary.js";
 
 export function createRuntimeServices(dependencies: {
   store: SqliteWorkspaceStore;
   semanticShadow: SemanticShadowConfig;
+  semanticDraftCanary: SemanticDraftCanaryConfig;
   logGenerationFailure: (details: Record<string, unknown>, message: string) => void;
 }): RuntimeServices {
-  const { store, semanticShadow, logGenerationFailure } = dependencies;
+  const { store, semanticShadow, semanticDraftCanary, logGenerationFailure } = dependencies;
   const codex = new CodexRuntimeAdapter();
   const claudeCode = new ClaudeCodeRuntimeAdapter();
   let generatingPlan = false;
@@ -18,6 +20,8 @@ export function createRuntimeServices(dependencies: {
     store,
     codex,
     semanticShadow,
+    semanticDraftCanary,
+    plannedPlaceImageEnrichment: true,
     setGeneratingPlan: (running) => { generatingPlan = running; },
     logGenerationFailure
   });

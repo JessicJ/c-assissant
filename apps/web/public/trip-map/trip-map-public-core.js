@@ -18,7 +18,6 @@
     const priorityLabels = trip.priorities || {};
     const cityLabels = trip.cities || {};
     const categoryGlyphs = { hotel: "H", top50: "50", wine: "W", sweet: "S", coffee: "C", food: "F", art: "A", "local-life": "L", sight: "T", event: "E", architecture: "B", history: "H", local: "L", market: "M", nightlife: "N" };
-    const categoryMarkerGlyphs = { hotel: "⌂", top50: "★", wine: "♢", sweet: "◌", coffee: "☕", food: "♨", art: "▧", "local-life": "⌖", sight: "♜", event: "◇", architecture: "▥", history: "♜", local: "⌖", market: "♨", nightlife: "N", transport: "↗" };
     let state = root.TripMapState.createState(trip, loadSavedState());
     let map;
     let markerLayer;
@@ -261,6 +260,14 @@
       const ordered = (state.orders[dayId] || []).filter((id) => pois.get(id)?.category !== "hotel");
       const index = ordered.indexOf(poiId);
       return index >= 0 ? index + 1 : "";
+    }
+
+    function markerRouteRole(dayId, poiId) {
+      const ordered = (state.orders[dayId] || []).filter((id) => pois.has(id) && isPoiOnDay(id, dayId));
+      if (!ordered.includes(poiId)) return "context";
+      if (ordered.length === 1 || poiId === ordered[0]) return "start";
+      if (poiId === ordered[ordered.length - 1]) return "end";
+      return "stop";
     }
 
     function routeStop(day, poiId) {
@@ -722,9 +729,9 @@
       root.L.polyline(points, {
         className: "trip-sequence-guide",
         color: themeValue("--trip-sequence", "#64748b"),
-        weight: 4,
-        opacity: 0.92,
-        dashArray: "6 8",
+        weight: 2,
+        opacity: 0.58,
+        dashArray: "3 7",
         lineCap: "round",
         lineJoin: "round",
         interactive: false,
@@ -789,9 +796,11 @@
         const latLngs = day.routeGeometry.map(([lng, lat]) => [lat, lng]);
         root.L.polyline(latLngs, {
           color: active ? themeValue("--trip-route", "#0f766e") : themeValue("--trip-other-route", "#94a3b8"),
-          weight: active ? 4 : 2,
-          opacity: dirty ? 0.36 : (active ? 0.88 : 0.32),
-          dashArray: dirty ? "8 8" : null,
+          weight: 2,
+          opacity: dirty ? 0.34 : (active ? 0.58 : 0.26),
+          dashArray: "3 7",
+          lineCap: "round",
+          lineJoin: "round",
           interactive: false,
         }).addTo(routeLayer);
         if (active) bounds.push(...latLngs);
@@ -810,19 +819,16 @@
         const isUnassigned = !assignment && !poi.recurring;
         const isSelected = state.view.selectedPoiId === poi.id;
         const dirty = Boolean(assignment && state.dirtyDays[assignment]);
-        const order = activeDayId && assignment === activeDayId ? nonHotelOrder(activeDayId, poi.id) : "";
-        const glyph = categoryMarkerGlyphs[poi.category] || categoryGlyphs[poi.category] || "P";
         const markerLabel = displayName(poi);
-        const statusGlyph = order || (state.priorities[poi.id] === "booked" ? "✓" : "");
-        const classNames = ["trip-marker", `category-${poi.category}`, isOther && "is-other", isUnassigned && "is-unassigned", isSelected && "is-selected", dirty && "is-dirty"].filter(Boolean).join(" ");
+        const role = activeDayId ? markerRouteRole(activeDayId, poi.id) : "context";
+        const classNames = ["trip-marker", `role-${role}`, isOther && "is-other", isUnassigned && "is-unassigned", isSelected && "is-selected", dirty && "is-dirty"].filter(Boolean).join(" ");
         const icon = root.L.divIcon({
           className: "",
-          html: `<span class="${classNames}"><span class="marker-symbol">${escapeHtml(glyph)}</span>${statusGlyph ? `<span class="marker-status">${escapeHtml(statusGlyph)}</span>` : ""}<span class="marker-label">${escapeHtml(markerLabel)}</span></span>`,
-          iconSize: [210, 40],
-          iconAnchor: [18, 20],
+          html: `<span class="${classNames}" aria-label="${escapeHtml(markerLabel)}"><span class="marker-symbol" aria-hidden="true"></span></span>`,
+          iconSize: [28, 28],
+          iconAnchor: [14, 14],
         });
         const marker = root.L.marker(poi.coords, { icon, keyboard: true, title: displayName(poi) })
-          .bindTooltip(escapeHtml(displayName(poi)), { direction: "top", offset: [0, -16] })
           .on("click", () => openPoiDetail(poi.id, { pan: false }))
           .addTo(markerLayers.get(poi.category) || markerLayer);
         markerByPoi.set(poi.id, marker);
@@ -832,14 +838,14 @@
       const mapNote = $("#map-note");
       if (activeDayId && state.dirtyDays[activeDayId] && activeHasVerifiedRoute) {
         mapNote.textContent = sequenceGuideVisible
-          ? "This day changed. The faint line is the last verified route; numbered dashed lines show visit order, not roads."
+          ? "This day changed. The faint line is the last verified route; the thin dashed line shows visit order, not roads."
           : "This day changed. The faint line is the last verified route, and new places are waiting for route verification.";
       } else if (activeDayId && state.dirtyDays[activeDayId]) {
-        mapNote.textContent = "This day changed. Numbered dashed lines show visit order, not roads or live navigation.";
+        mapNote.textContent = "This day changed. The thin dashed line shows visit order, not roads or live navigation.";
       } else if (activeDayId && activeHasVerifiedRoute) {
         mapNote.textContent = "Showing the verified route for this day. The day view focuses on scheduled places, options, and the current place.";
       } else if (activeDayId) {
-        mapNote.textContent = "Numbered dashed lines show the day's visit order and do not represent roads or live navigation.";
+        mapNote.textContent = "The thin dashed line shows the day's visit order and does not represent roads or live navigation.";
       } else {
         mapNote.textContent = "Select a daily route to open the day itinerary, or select a map place for details.";
       }

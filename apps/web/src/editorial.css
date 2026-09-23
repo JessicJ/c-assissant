@@ -1,3 +1,7 @@
+/* Hallmark · macrostructure: Cinematic Marquee Hero · tone: calm Mediterranean editorial · anchor hue: forest green · contrast: pass (40–41) · nav: none · footer: none · slop: pass (42–49) */
+/* Hallmark · pre-emit critique: P5 H5 E4 S5 R5 V4 */
+@import url("../../../tokens.css");
+
 :root {
   --landi-canvas: #f4f0e8;
   --landi-paper: #fffdf8;
@@ -13,26 +17,29 @@
   --landi-sans: Inter, "SF Pro Text", "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
 }
 
-html { background: var(--landi-canvas); }
-body { color: var(--landi-ink); background: var(--landi-canvas); font-family: var(--landi-sans); }
+html { overflow-x: clip; background: var(--landi-canvas); }
+body { overflow-x: clip; color: var(--landi-ink); background: var(--landi-canvas); font-family: var(--landi-sans); }
 button, input, textarea, select { font-family: inherit; }
 .app-shell { min-height: 100vh; background: var(--landi-canvas); }
 .main-stage { padding-bottom: 80px; }
 .app-shell.empty-home {
   min-height: 100vh;
   background:
-    linear-gradient(90deg, rgba(250,247,240,.94) 0%, rgba(250,247,240,.78) 40%, rgba(250,247,240,.28) 68%, rgba(28,39,31,.03) 100%),
-    linear-gradient(180deg, rgba(255,253,248,.12), transparent 58%, rgba(27,37,31,.1)),
+    linear-gradient(90deg, var(--color-hero-overlay-heavy) 0%, var(--color-hero-overlay-medium) 38%, var(--color-hero-overlay-light) 70%, var(--color-hero-overlay-edge) 100%),
+    linear-gradient(180deg, var(--color-hero-overlay-top), transparent 58%, var(--color-hero-overlay-bottom)),
     url("../../../assets/backgrounds/landi-mediterranean-editorial-bg-v2.png") center / cover fixed no-repeat;
 }
-.empty-home .main-stage { min-height: 100vh; background: transparent; }
+.empty-home .main-stage { min-height: 100vh; padding: 0; background: transparent; }
+.empty-home .page-stack { width: 100%; margin: 0; gap: 0; }
 .empty-home .global-header { background: rgba(255,253,248,.9); backdrop-filter: blur(10px); }
 .empty-home .empty-plan {
-  min-height: calc(100vh - 114px);
+  min-height: 100vh;
+  min-height: 100svh;
   background: transparent;
 }
 .empty-home .empty-plan::after { display: none; }
 .planning-home .main-stage { min-height: 100vh; }
+.interaction-page .main-stage { padding-top: clamp(24px,4vw,48px); }
 .planning-home .page-stack { min-height: 0; }
 .planning-home .planning-session-panel { min-height: 0; align-content: start; gap: 28px; padding: clamp(30px,3.4vw,48px); border-color: rgba(203,192,176,.82); background: rgba(255,253,248,.96); box-shadow: 0 24px 80px rgba(46,43,35,.14); }
 .planning-home .planning-session-panel > header { align-items: center; padding-bottom: 20px; border-bottom: 1px solid rgba(203,192,176,.62); }
@@ -118,79 +125,45 @@ button, input, textarea, select { font-family: inherit; }
 .inline-alert { border-color: #dcc8b4; border-radius: 8px; background: #fff9ef; }
 .section-eyebrow { color: var(--landi-gold); font-size: 9px; font-weight: 750; letter-spacing: .19em; }
 
-/* Empty desk */
+/* Empty-plan landing hero */
 .empty-plan {
-  position: relative;
-  min-height: min(720px, calc(100vh - 150px));
-  display: grid;
-  grid-template-columns: minmax(300px,.78fr) minmax(470px,1.05fr);
+  min-height: 100vh;
+  min-height: 100svh;
+  display: flex;
   align-items: center;
-  gap: clamp(46px,6vw,96px);
-  overflow: hidden;
-  padding: 58px clamp(42px,5vw,76px) 64px;
+  flex-direction: column;
+  justify-content: center;
+  justify-items: center;
+  gap: 0;
+  margin: 0;
+  padding: var(--space-2xl) var(--space-lg) var(--space-3xl);
   border: 0;
   border-radius: 0;
-  background:
-    linear-gradient(90deg, rgba(250,247,240,.94) 0%, rgba(250,247,240,.78) 40%, rgba(250,247,240,.28) 68%, rgba(28,39,31,.03) 100%),
-    linear-gradient(180deg, rgba(255,253,248,.08), transparent 56%, rgba(27,37,31,.1)),
-    url("../../../assets/backgrounds/landi-mediterranean-editorial-bg-v2.png") center / cover no-repeat;
-  box-shadow: none;
-  text-align: left;
-}
-.empty-plan::after { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(255,253,248,.03), transparent 58%, rgba(21,31,26,.06)); content: ""; pointer-events: none; }
-.empty-plan-copy { position: relative; z-index: 1; display: grid; justify-items: start; align-content: center; gap: 13px; }
-.empty-plan-copy > span { color: var(--landi-gold); font-size: 9px; font-weight: 750; letter-spacing: .2em; }
-.empty-plan-copy h2 { margin: 0; font-family: var(--landi-serif); font-size: clamp(42px,4.15vw,54px); font-weight: 500; line-height: 1.08; letter-spacing: -.045em; }
-.empty-plan-copy > em { color: #7c766e; font-family: var(--landi-serif); font-size: clamp(22px,2vw,30px); font-style: italic; }
-.empty-plan-copy > i { width: 42px; height: 1px; margin: 16px 0 10px; background: var(--landi-gold); }
-.empty-plan-copy > p { max-width: 440px; margin: 0; color: #655f58; font-size: 13px; line-height: 1.9; }
-.empty-plan-features { width: min(440px,100%); display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); margin-top: 50px; }
-.empty-plan-features article { display: grid; justify-items: center; gap: 5px; padding: 0 13px; border-right: 1px solid rgba(145,124,94,.25); text-align: center; }
-.empty-plan-features article:last-child { border-right: 0; }
-.empty-plan-features b { color: #9e8060; font-family: var(--landi-serif); font-size: 25px; font-weight: 400; }
-.empty-plan-features strong { font-family: var(--landi-serif); font-size: 13px; font-weight: 600; }
-.empty-plan-features small { color: #817b72; font-size: 9px; white-space: nowrap; }
-.empty-plan-composer { position: relative; z-index: 1; width: 100%; max-width: 620px; justify-self: center; overflow: hidden; border: 1px solid rgba(255,255,255,.72); border-radius: 24px; background: rgba(255,253,248,.82); box-shadow: 0 30px 90px rgba(40,38,32,.2); backdrop-filter: blur(18px); text-align: left; }
-.empty-plan-composer > header { display: flex; align-items: flex-start; justify-content: center; gap: 11px; padding: 24px 28px 20px; border-bottom: 1px solid rgba(210,201,187,.62); text-align: center; }
-.empty-plan-composer > header > span { color: var(--landi-gold); font-size: 19px; }
-.empty-plan-composer > header div { display: grid; gap: 5px; }
-.empty-plan-composer > header strong { font-family: var(--landi-serif); font-size: 19px; font-weight: 600; }
-.empty-plan-composer > header small { color: #7c766d; font-size: 10px; }
-.empty-plan-chat { display: grid; gap: 12px; padding: 20px 28px 12px; }
-.empty-plan-chat p { width: fit-content; max-width: 88%; margin: 0; padding: 11px 13px; border: 1px solid rgba(203,194,180,.58); border-radius: 16px; background: rgba(255,255,255,.52); color: #45443f; font-size: 11px; line-height: 1.55; }
-.empty-plan-chat p.user { justify-self: end; border: 0; border-radius: 16px 16px 4px 16px; background: #f1e5d6; }
-.empty-plan-prompts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; padding: 10px 12px; border: 1px solid rgba(203,194,180,.54); border-radius: 14px; background: rgba(255,255,255,.34); }
-.empty-plan-prompts span { color: #736b61; font-size: 10px; }
-.empty-plan-prompts span::before { margin-right: 7px; color: #a18361; content: "○"; }
-.empty-plan-suggestions { display: grid; gap: 8px; padding: 4px 28px 15px; }
-.empty-plan-suggestions small { color: #7e786f; font-size: 10px; }
-.empty-plan-suggestions > div { display: flex; flex-wrap: wrap; gap: 7px; }
-.empty-plan-suggestions span { padding: 7px 11px; border: 1px solid rgba(196,186,171,.65); border-radius: 999px; background: rgba(255,255,255,.34); color: #6f6961; font-size: 9px; }
-.empty-plan-composer > button { width: calc(100% - 28px); min-height: 58px; display: flex; align-items: center; gap: 12px; margin: 0 14px 14px; padding: 10px 12px; border: 1px solid rgba(199,189,174,.72); border-radius: 999px; background: rgba(255,255,255,.72); color: #8a8379; box-shadow: none; text-align: left; }
-.empty-plan-composer > button > span, .empty-plan-composer > button > b { width: 38px; height: 38px; flex: none; display: grid; place-items: center; border-radius: 50%; font-size: 18px; }
-.empty-plan-composer > button > span { border: 1px solid #d5cec3; background: rgba(255,255,255,.55); color: #7a746c; font-weight: 400; }
-.empty-plan-composer > button > strong { min-width: 0; flex: 1; overflow: hidden; font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.empty-plan-composer > button > b { background: var(--landi-forest); color: #fff; font-weight: 500; }
-
-/* Restore the original empty-state composition; the generated landscape is
-   owned by .empty-home and spans the full page. */
-.empty-plan {
-  grid-template-columns: 1fr;
-  align-content: center;
-  justify-items: center;
-  gap: 42px;
-  padding: 72px 48px 92px;
   background: transparent;
+  box-shadow: none;
   text-align: center;
 }
-.empty-plan-copy { justify-items: center; gap: 12px; text-align: center; }
-.empty-plan-copy h2 { font-size: clamp(42px,5vw,70px); line-height: 1.12; }
-.empty-plan-composer { width: min(760px,100%); max-width: none; display: block; justify-self: center; padding: 24px; border: 1px solid rgba(203,192,176,.82); border-radius: 12px; background: rgba(255,253,248,.88); box-shadow: 0 22px 70px rgba(46,43,35,.16); backdrop-filter: blur(12px); }
-.empty-plan-composer > div { display: block; margin-bottom: 20px; }
-.empty-plan-composer > div > span { display: inline; margin-right: 3px; font-family: var(--landi-serif); font-size: 19px; }
-.empty-plan-composer > div > strong { font-size: 14px; }
-.empty-plan-composer > button { width: 100%; min-height: 0; justify-content: space-between; margin: 0; padding: 16px 18px; border: 1px solid var(--landi-line); border-radius: 8px; background: var(--landi-paper); color: #817b71; }
-.empty-plan-composer > button > span { width: 34px; height: 34px; border: 0; background: var(--landi-forest); color: #fff; font-size: 18px; }
+.empty-plan-copy { width: min(100%, 73rem); display: grid; justify-items: center; text-align: center; animation: hero-reveal var(--dur-reveal) var(--ease-out) both; }
+.empty-plan-copy h1 { min-width: 0; margin: 0; color: var(--color-ink); font-family: var(--font-display); font-size: clamp(3.75rem, 5.6vw, 5.5rem); font-weight: 400; line-height: .94; letter-spacing: -.04em; overflow-wrap: anywhere; }
+.empty-plan-copy h1 > span { display: block; }
+.hero-emphasis { position: relative; display: inline-block; font-style: italic; font-weight: 400; }
+.hero-emphasis svg { position: absolute; right: -.03em; bottom: -.2em; width: 1.72em; height: .3em; overflow: visible; color: var(--color-underline); transform: rotate(-3deg); }
+.hero-emphasis path { fill: none; stroke: currentColor; stroke-linecap: round; stroke-width: 2; }
+.empty-plan-composer { width: min(52rem, calc(100vw - 10rem)); height: 5.5rem; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-sm); margin-top: var(--space-xl); padding: var(--space-xs) var(--space-xs) var(--space-xs) var(--space-lg); border: var(--rule-hairline) solid var(--color-rule); border-radius: var(--radius-input); outline: 2px solid transparent; outline-offset: 1px; background: var(--color-paper-soft); box-shadow: 0 10px 40px var(--color-shadow); text-align: left; animation: hero-reveal var(--dur-reveal) var(--ease-out) 100ms both; }
+.empty-plan-composer:hover { border-color: var(--color-underline); }
+.empty-plan-composer:focus-within { border-color: var(--color-focus); outline-color: var(--color-focus); box-shadow: 0 14px 44px var(--color-shadow); }
+.destination-icon { width: 1.75rem; height: 1.75rem; color: var(--color-ink-soft); }
+.empty-plan-composer input { width: 100%; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--color-ink); font-family: var(--font-body); font-size: clamp(1.25rem, 1.7vw, 1.4375rem); font-weight: 400; }
+.empty-plan-composer input::placeholder { color: var(--color-muted); opacity: 1; }
+.empty-plan-composer input:disabled { cursor: not-allowed; color: var(--color-muted); opacity: .55; }
+.empty-plan-composer button { width: 3.75rem; height: 3.75rem; display: grid; flex: none; place-items: center; padding: 0; border: 0; border-radius: var(--radius-pill); background: var(--color-accent); color: var(--color-accent-ink); box-shadow: none; transition: transform var(--dur-short) var(--ease-out), background-color var(--dur-short) var(--ease-out), opacity var(--dur-short) var(--ease-out); }
+.empty-plan-composer button svg { width: 1.75rem; height: 1.75rem; }
+.empty-plan-composer button:hover { background: var(--color-accent-hover); transform: scale(1.04); }
+.empty-plan-composer button:active { background: var(--color-accent-active); transform: scale(.97); }
+.empty-plan-composer button:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 4px; }
+.empty-plan-composer button:disabled { cursor: not-allowed; opacity: .48; transform: none; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+@keyframes hero-reveal { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 
 /* Trip journal */
 .current-plan-card { overflow: visible; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
@@ -349,6 +322,8 @@ body[data-composer-mode="revise_plan"] .editorial-composer { width: min(1120px, 
   .editorial-composer { grid-template-columns: 220px minmax(0,1fr); }
   .composer-intro { padding: 30px 22px; }
   .settings-card { grid-template-columns: 180px minmax(0,1fr); gap: 32px; }
+  .empty-plan { padding-top: clamp(6.5rem, 15vh, 8.5rem); }
+  .empty-plan-composer { width: min(90vw, 56rem); }
 }
 
 @media (max-height: 760px) and (min-width: 821px) {
@@ -358,6 +333,10 @@ body[data-composer-mode="revise_plan"] .editorial-composer { width: min(1120px, 
   .editorial-trip-hero h1 { font-size: clamp(38px, 4vw, 58px); }
   .editorial-trip-meta { margin-top: 2px; }
   .native-trip-workspace { margin-top: 22px; }
+  .empty-plan { justify-content: center; padding-top: var(--space-xl); padding-bottom: var(--space-xl); }
+  .empty-plan-copy h1 { font-size: clamp(4rem, 7vw, 5.5rem); }
+  .empty-plan-composer { height: 6rem; margin-top: var(--space-xl); }
+  .empty-plan-composer button { width: 4rem; height: 4rem; }
 }
 
 @media (max-width: 760px) {
@@ -369,11 +348,14 @@ body[data-composer-mode="revise_plan"] .editorial-composer { width: min(1120px, 
   .global-navigation { gap: 15px; }
   .global-navigation button { font-size: 11px; }
   .profile-mark { display: none; }
-  .empty-plan { min-height: calc(100vh - 130px); padding: 52px 10px 70px; }
-  .empty-plan { grid-template-columns: 1fr; gap: 34px; }
-  .empty-plan-copy { justify-items: center; text-align: center; }
-  .empty-plan-composer { width: min(560px,100%); }
-  .empty-plan-copy h2 { font-size: 42px; }
+  .empty-plan { min-height: 100vh; min-height: 100svh; justify-content: flex-start; padding: clamp(5.5rem, 14vh, 7.5rem) var(--space-sm) var(--space-2xl); }
+  .empty-plan-copy h1 { font-size: var(--text-display-mobile); line-height: .95; }
+  .empty-plan-copy p { margin-top: var(--space-lg); font-size: clamp(1rem, 4.5vw, 1.125rem); line-height: 1.55; letter-spacing: .045em; }
+  .empty-plan-composer { width: calc(100vw - 2rem); height: 4.75rem; gap: var(--space-xs); margin-top: var(--space-xl); padding: var(--space-xs) var(--space-xs) var(--space-xs) var(--space-sm); }
+  .destination-icon { width: 1.625rem; height: 1.625rem; }
+  .empty-plan-composer input { font-size: clamp(1.125rem, 5vw, 1.25rem); }
+  .empty-plan-composer button { width: 3.5rem; height: 3.5rem; }
+  .empty-plan-composer button svg { width: 1.625rem; height: 1.625rem; }
   .editorial-trip-hero { min-height: 150px; align-items: flex-start; flex-direction: column; padding: 24px 0; }
   .editorial-trip-hero h1 { font-size: 39px; }
   .trip-bookings-button { margin-bottom: 0; }
@@ -391,7 +373,11 @@ body[data-composer-mode="revise_plan"] .editorial-composer { width: min(1120px, 
 @media (max-width: 520px) {
   .top-brand small, .global-navigation button:nth-child(2) { display: none; }
   .global-navigation { gap: 12px; }
-  .empty-plan-copy h2 { font-size: 36px; }
-  .empty-plan-composer { padding: 18px; }
+  .app-shell.empty-home { background-position: 64% center; background-attachment: scroll; }
   .destination-weather-card { grid-template-columns: auto minmax(0,1fr); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .empty-plan-copy, .empty-plan-composer { animation-duration: 120ms; transform: none; }
+  .empty-plan-composer button { transition-duration: 120ms; }
 }

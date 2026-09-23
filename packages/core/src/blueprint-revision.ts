@@ -1,4 +1,4 @@
-import { assertTripBlueprintIntegrity, type BlueprintItineraryBlock, type BlueprintItineraryDay, type BlueprintMovement, type BlueprintMovementMode, type BlueprintPlace, type BlueprintPlacePriority, type BlueprintStop, type TripBlueprint } from "./trip-blueprint.js";
+import { assertTripBlueprintIntegrity, effectiveBlueprintSchedulingDecision, type BlueprintItineraryBlock, type BlueprintItineraryDay, type BlueprintMovement, type BlueprintMovementMode, type BlueprintPlace, type BlueprintPlacePriority, type BlueprintStop, type TripBlueprint } from "./trip-blueprint.js";
 
 const DIRECT_EDIT_ROUTE_REFRESH_REASON = "Refresh this route leg after direct itinerary edits.";
 
@@ -292,10 +292,11 @@ function addPlaceToDay(blueprint: TripBlueprint, revision: Extract<DirectBluepri
   if (!day) throw new Error(`Blueprint Revision references unknown day ${revision.dayId}.`);
   if (day.stops.some((stop) => stop.placeId === revision.placeId)) throw new Error(`Place ${revision.placeId} is already scheduled on day ${revision.dayId}.`);
   if (hasFixedBookingConstraint(blueprint, place)) throw directReplanRequirementError(blueprint, revision, "fixed_booking", `${place.name} is tied to a fixed booking, so Landi needs to place it with the right timing.`);
+  const decision = effectiveBlueprintSchedulingDecision(place);
   const eligibility = place.schedulingEligibility;
-  if (eligibility?.decision === "informational") throw directReplanRequirementError(blueprint, revision, "informational_place", `${place.name} is background information, so Landi needs to replan before placing it into ${dayLabel(day, revision.dayId)}.`);
-  if (eligibility?.decision === "blocked") throw directReplanRequirementError(blueprint, revision, "blocked_place", `${place.name} is blocked for direct scheduling, so Landi needs to replan before it can be added to ${dayLabel(day, revision.dayId)}.`);
-  if (eligibility?.decision === "high_impact") throw directReplanRequirementError(blueprint, revision, "high_impact_place", `${place.name} changes the shape of ${dayLabel(day, revision.dayId)}, so Landi needs to replan that day before saving it.`);
+  if (decision === "informational") throw directReplanRequirementError(blueprint, revision, "informational_place", `${place.name} is background information, so Landi needs to replan before placing it into ${dayLabel(day, revision.dayId)}.`);
+  if (decision === "blocked") throw directReplanRequirementError(blueprint, revision, "blocked_place", `${place.name} is blocked for direct scheduling, so Landi needs to replan before it can be added to ${dayLabel(day, revision.dayId)}.`);
+  if (decision === "high_impact") throw directReplanRequirementError(blueprint, revision, "high_impact_place", `${place.name} changes the shape of ${dayLabel(day, revision.dayId)}, so Landi needs to replan that day before saving it.`);
   if (eligibility?.suitableDayIds?.length && !eligibility.suitableDayIds.includes(revision.dayId)) throw directReplanRequirementError(blueprint, revision, "unsuitable_day", `${place.name} is not eligible for ${dayLabel(day, revision.dayId)}, so Landi needs to replan before saving this placement.`);
 
   const previousDay = structuredClone(day);
@@ -336,10 +337,10 @@ function movePlaceWithinDay(blueprint: TripBlueprint, revision: Extract<DirectBl
   const stop = day.stops.find((candidate) => candidate.placeId === revision.placeId);
   if (!stop) throw new Error(`Place ${revision.placeId} is not scheduled on day ${revision.dayId}.`);
   if (place.priority === "booked" || hasReservationRequirement(blueprint, revision.placeId) || hasFixedBookingConstraint(blueprint, place)) throw directReplanRequirementError(blueprint, revision, "fixed_booking", `${place.name} is tied to a booking or reservation, so Landi needs to replan before moving it.`);
-  const eligibility = place.schedulingEligibility;
-  if (eligibility?.decision === "informational") throw directReplanRequirementError(blueprint, revision, "informational_place", `${place.name} is background information, so Landi needs to replan before moving it inside ${dayLabel(day, revision.dayId)}.`);
-  if (eligibility?.decision === "blocked") throw directReplanRequirementError(blueprint, revision, "blocked_place", `${place.name} is blocked for direct scheduling, so Landi needs to replan before moving it.`);
-  if (eligibility?.decision === "high_impact") throw directReplanRequirementError(blueprint, revision, "high_impact_place", `${place.name} changes the shape of ${dayLabel(day, revision.dayId)}, so Landi needs to replan that day before moving it.`);
+  const decision = effectiveBlueprintSchedulingDecision(place);
+  if (decision === "informational") throw directReplanRequirementError(blueprint, revision, "informational_place", `${place.name} is background information, so Landi needs to replan before moving it inside ${dayLabel(day, revision.dayId)}.`);
+  if (decision === "blocked") throw directReplanRequirementError(blueprint, revision, "blocked_place", `${place.name} is blocked for direct scheduling, so Landi needs to replan before moving it.`);
+  if (decision === "high_impact") throw directReplanRequirementError(blueprint, revision, "high_impact_place", `${place.name} changes the shape of ${dayLabel(day, revision.dayId)}, so Landi needs to replan that day before moving it.`);
   if (revision.position.kind === "after" && revision.position.afterPlaceId === revision.placeId) throw new Error("Blueprint Revision cannot move a place after itself.");
 
   const previousDay = structuredClone(day);
@@ -378,10 +379,10 @@ function removePlaceFromDay(blueprint: TripBlueprint, revision: Extract<DirectBl
   if (!day) throw new Error(`Blueprint Revision references unknown day ${revision.dayId}.`);
   if (!day.stops.some((stop) => stop.placeId === revision.placeId)) throw new Error(`Place ${revision.placeId} is not scheduled on day ${revision.dayId}.`);
   if (place.priority === "booked" || hasReservationRequirement(blueprint, revision.placeId) || hasFixedBookingConstraint(blueprint, place)) throw directReplanRequirementError(blueprint, revision, "fixed_booking", `${place.name} is tied to a booking or reservation, so Landi needs to replan before removing it.`);
-  const eligibility = place.schedulingEligibility;
-  if (eligibility?.decision === "informational") throw directReplanRequirementError(blueprint, revision, "informational_place", `${place.name} is background information, so Landi needs to replan before removing it from ${dayLabel(day, revision.dayId)}.`);
-  if (eligibility?.decision === "blocked") throw directReplanRequirementError(blueprint, revision, "blocked_place", `${place.name} is blocked for direct scheduling, so Landi needs to replan before removing it.`);
-  if (eligibility?.decision === "high_impact") throw directReplanRequirementError(blueprint, revision, "high_impact_place", `${place.name} changes the shape of ${dayLabel(day, revision.dayId)}, so Landi needs to replan that day before removing it.`);
+  const decision = effectiveBlueprintSchedulingDecision(place);
+  if (decision === "informational") throw directReplanRequirementError(blueprint, revision, "informational_place", `${place.name} is background information, so Landi needs to replan before removing it from ${dayLabel(day, revision.dayId)}.`);
+  if (decision === "blocked") throw directReplanRequirementError(blueprint, revision, "blocked_place", `${place.name} is blocked for direct scheduling, so Landi needs to replan before removing it.`);
+  if (decision === "high_impact") throw directReplanRequirementError(blueprint, revision, "high_impact_place", `${place.name} changes the shape of ${dayLabel(day, revision.dayId)}, so Landi needs to replan that day before removing it.`);
 
   const previousDay = structuredClone(day);
   const previousMovements = movementsForDay(blueprint, day.id);
@@ -826,19 +827,33 @@ function blockForStopInSlot(
   const startTime = slotBlock?.startTime ?? stop.time;
   const endTime = slotBlock?.endTime;
   const role = stop.role ?? slotBlock?.role ?? sourceBlock?.role;
+  const sourceContent = sourceBlock ? blockContentForDirectRevision(sourceBlock) : {};
   return {
+    ...sourceContent,
     id: uniqueBlockId(baseId, usedIds),
     kind: sourceBlock?.kind && sourceBlock.kind !== "event" ? sourceBlock.kind : "stop",
     order: 0,
     placeId: stop.placeId,
     ...(startTime ? { startTime } : {}),
     ...(endTime ? { endTime } : {}),
-    ...(sourceBlock?.title ? { title: sourceBlock.title } : {}),
-    ...(sourceBlock?.summary ? { summary: sourceBlock.summary } : {}),
-    ...(sourceBlock?.durationMinutes ? { durationMinutes: sourceBlock.durationMinutes } : {}),
     ...(role ? { role } : {}),
     evidence: sourceBlock ? [...sourceBlock.evidence] : []
   };
+}
+
+function blockContentForDirectRevision(block: BlueprintItineraryBlock): Omit<Partial<BlueprintItineraryBlock>, "id" | "kind" | "order" | "placeId" | "startTime" | "endTime" | "role" | "evidence"> {
+  const {
+    id: _id,
+    kind: _kind,
+    order: _order,
+    placeId: _placeId,
+    startTime: _startTime,
+    endTime: _endTime,
+    role: _role,
+    evidence: _evidence,
+    ...content
+  } = structuredClone(block);
+  return content;
 }
 
 function uniqueBlockId(baseId: string, usedIds: Set<string>): string {

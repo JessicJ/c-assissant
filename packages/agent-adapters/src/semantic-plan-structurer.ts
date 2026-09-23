@@ -1,7 +1,9 @@
 import {
   importSkillItinerary,
   type BlueprintActionRequirement,
+  type BlueprintBookingConstraint,
   type BlueprintItineraryBlock,
+  type BlueprintItineraryBlockKind,
   type BlueprintItineraryDay,
   type BlueprintMovement,
   type BlueprintOperationalCondition,
@@ -12,7 +14,7 @@ import {
   type SkillItineraryArtifact,
   type TripBlueprint
 } from "@c-assistant/core";
-import type { SemanticOperationalCondition, SemanticTravelExperience, SemanticTravelPlan } from "./index.js";
+import type { SemanticFixedCommitment, SemanticOperationalCondition, SemanticTravelExperience, SemanticTravelPlan } from "./index.js";
 
 export type FidelityClassification = "PRESERVED" | "REPRESENTED DIFFERENTLY" | "NOT REPRESENTABLE" | "CHANGED" | "DROPPED";
 
@@ -25,15 +27,18 @@ export interface FidelityItem {
 export interface StructurerDiagnostic {
   semanticPlan: SemanticTravelPlan;
   artifact: SkillItineraryArtifact;
+  preservedBookingConstraints: BlueprintBookingConstraint[];
   importedBlueprint?: TripBlueprint;
   fidelity: FidelityItem[];
   representationGaps: FidelityItem[];
 }
 
-interface StructureOptions {
+export interface StructureOptions {
   importBlueprint?: boolean;
   createdAt?: string;
   hardenContract?: boolean;
+  bookingConstraints?: BlueprintBookingConstraint[];
+  destinations?: string[];
 }
 
 type SemanticDay = SemanticTravelPlan["dailyItinerary"][number];
@@ -80,27 +85,25 @@ export function hardenSemanticPlanContract(plan: SemanticTravelPlan): SemanticTr
 export function structureSemanticTravelPlan(plan: SemanticTravelPlan, research: ResearchSet, options: StructureOptions = {}): StructurerDiagnostic {
   const semanticPlan = options.hardenContract === false ? plan : hardenSemanticPlanContract(plan);
   const placeByName = new Map(research.places.map((place) => [normalizeName(place.name), place.id] as const));
+  const coLocatedExperienceKeys = new Set((research.experienceThemes ?? []).flatMap((theme) =>
+    theme.offeringPlaceIds.map((placeId) => coLocatedExperienceKey(placeId, theme.title))
+  ));
   const fidelity: FidelityItem[] = [];
-  const days = semanticPlan.dailyItinerary.map((day, index) => structureDay(day, index, placeByName, fidelity));
+  const days = semanticPlan.dailyItinerary.map((day, index) => structureDay(day, index, placeByName, coLocatedExperienceKeys, fidelity));
   resolveReplacementBlockRefs(days);
+  const destinations = normalizedDestinations(options.destinations, days);
   const artifact: SkillItineraryArtifact = {
     title: semanticPlan.title,
     summary: semanticPlan.tripStrategy,
     language: semanticPlan.language,
-    destinations: ["Bali"],
+    destinations,
     startDate: isoDateFromDay(semanticPlan.dailyItinerary[0]?.date) ?? "",
     endDate: isoDateFromDay(semanticPlan.dailyItinerary.at(-1)?.date) ?? "",
     guideTheme: {
       title: semanticPlan.title,
       narrative: semanticPlan.tripStrategy,
       visitorMode: "balanced-visitor",
-      citySegments: [{
-        id: "segment-bali",
-        city: "Bali",
-        title: "Bali",
-        summary: "Accepted Planner V2.4 semantic strategy represented through the S1.2 itinerary contract.",
-        dayIds: days.map((day) => day.id)
-      }]
+      citySegments: citySegmentsForDays(days)
     },
     sources: sourcesForResearchGrounding(semanticPlan, research),
     preparationChecklist: preparationChecklistForPlan(semanticPlan),
@@ -111,58 +114,131 @@ export function structureSemanticTravelPlan(plan: SemanticTravelPlan, research: 
     days,
     movements: movementsForDays(days)
   };
-  addFidelityV2(semanticPlan, artifact, research, fidelity);
+  const preservedBookingConstraints = preservedBookingConstraintsForPlan(semanticPlan, options.bookingConstraints ?? []);
+  for (const commitment of semanticPlan.fixedCommitments) {
+    const preserved = preservedBookingConstraints.some((constraint) => constraint.id === commitment.bookingConstraintId && constraint.segments.some((segment) => segment.id === commitment.segmentId));
+    fidelity.push({
+      subject: `fixed commitment ${commitment.commitmentId}`,
+      classification: preserved ? "PRESERVED" : "DROPPED",
+      detail: preserved ? "Stable booking and segment identity carried into the structured booking constraint." : "The Semantic commitment did not exactly match an authoritative booking constraint and was not reinserted."
+    });
+  }
+  fidelity.push(...assessSemanticPlanFidelity(semanticPlan, artifact, research));
   const importedBlueprint = options.importBlueprint
     ? importSkillItinerary(research, artifact, {
       blueprintId: "diagnostic-blueprint-semantic-s1-v2",
       blueprintVersion: 1,
-      createdAt: options.createdAt ?? new Date().toISOString()
+      createdAt: options.createdAt ?? new Date().toISOString(),
+      ...(preservedBookingConstraints.length ? { bookingConstraints: preservedBookingConstraints } : {})
     })
     : undefined;
   if (importedBlueprint) addBlueprintFidelity(semanticPlan, importedBlueprint, fidelity);
   const representationGaps = fidelity.filter((item) => item.classification === "NOT REPRESENTABLE");
-  return { semanticPlan, artifact, ...(importedBlueprint ? { importedBlueprint } : {}), fidelity, representationGaps };
+  return { semanticPlan, artifact, preservedBookingConstraints, ...(importedBlueprint ? { importedBlueprint } : {}), fidelity, representationGaps };
 }
 
-function structureDay(day: SemanticDay, index: number, placeByName: Map<string, string>, fidelity: FidelityItem[]): BlueprintItineraryDay {
+function preservedBookingConstraintsForPlan(plan: SemanticTravelPlan, authoritative: BlueprintBookingConstraint[]): BlueprintBookingConstraint[] {
+  const byIdentity = new Map(plan.fixedCommitments.map((commitment) => [commitment.commitmentId, commitment] as const));
+  return authoritative.flatMap((constraint) => {
+    const segments = constraint.segments.filter((segment) => {
+      const commitment = byIdentity.get(`${constraint.id}:${segment.id}`);
+      return commitment ? fixedCommitmentMatches(commitment, constraint, segment) : false;
+    });
+    return segments.length ? [{ ...structuredClone(constraint), segments: structuredClone(segments) }] : [];
+  });
+}
+
+function fixedCommitmentMatches(commitment: SemanticFixedCommitment, constraint: BlueprintBookingConstraint, segment: BlueprintBookingConstraint["segments"][number]): boolean {
+  return commitment.bookingConstraintId === constraint.id
+    && commitment.segmentId === segment.id
+    && commitment.type === constraint.type
+    && commitment.segmentType === segment.segmentType
+    && commitment.status === "confirmed"
+    && commitment.constraintStrength === "hard"
+    && commitment.fixed === true
+    && commitment.title === constraint.title
+    && commitment.segmentTitle === segment.title
+    && commitment.startAtLocal === segment.startAtLocal
+    && commitment.startTimeZone === segment.startTimeZone
+    && commitment.endAtLocal === segment.endAtLocal
+    && commitment.endTimeZone === segment.endTimeZone
+    && commitment.origin === segment.origin
+    && commitment.destination === segment.destination
+    && commitment.location === segment.location;
+}
+
+function structureDay(
+  day: SemanticDay,
+  index: number,
+  placeByName: Map<string, string>,
+  coLocatedExperienceKeys: Set<string>,
+  fidelity: FidelityItem[]
+): BlueprintItineraryDay {
   const stops: BlueprintItineraryDay["stops"] = [];
   const blocks: BlueprintItineraryBlock[] = [];
+  const committedPlaceIds = new Set<string>();
+  let previousPlannedPlaceId: string | undefined;
   for (const item of day.experiences ?? []) {
-    const placeName = item.placeName ?? item.title;
-    const placeId = placeByName.get(normalizeName(placeName));
+    const placeName = semanticPlaceName(item);
+    const resolvedPlaceId = placeName ? placeByName.get(normalizeName(placeName)) : undefined;
+    let blockPlaceId = resolvedPlaceId;
     const blockIdValue = blockId(day.date, item.title);
-    const hasResolvedPlace = Boolean(placeId);
-    if (hasResolvedPlace && item.planRole !== "replacement") {
-      stops.push({ placeId: placeId!, order: stops.length + 1, ...(item.startTime ? { time: item.startTime } : {}), role: item.planRole });
+    if (semanticExperienceCreatesFormalStop(item) && resolvedPlaceId) {
+      if (!committedPlaceIds.has(resolvedPlaceId)) {
+        stops.push({ placeId: resolvedPlaceId, order: stops.length + 1, ...(item.startTime ? { time: item.startTime } : {}), role: item.planRole });
+        committedPlaceIds.add(resolvedPlaceId);
+      } else if (previousPlannedPlaceId === resolvedPlaceId && coLocatedExperienceKeys.has(coLocatedExperienceKey(resolvedPlaceId, item.title))) {
+        // One route stop may host multiple consecutive, explicitly researched experiences.
+      } else if (previousPlannedPlaceId === resolvedPlaceId) {
+        // Preserve the planned experience, but do not treat a repeated placeName as proof of a specific offering.
+        blockPlaceId = undefined;
+      } else {
+        // A -> B -> A cannot be represented by today's unique-stop Blueprint contract.
+        stops.push({ placeId: resolvedPlaceId, order: stops.length + 1, ...(item.startTime ? { time: item.startTime } : {}), role: item.planRole });
+      }
+      previousPlannedPlaceId = blockPlaceId;
+    } else if (item.planRole === "planned") {
+      previousPlannedPlaceId = undefined;
     }
+    const hasResolvedPlace = Boolean(blockPlaceId);
+    const kind = blueprintBlockKind(item, hasResolvedPlace);
     blocks.push({
       id: blockIdValue,
-      kind: hasResolvedPlace && item.planRole !== "replacement" ? "stop" : "flexible",
+      kind,
       order: blocks.length + 1,
-      ...(hasResolvedPlace && item.planRole !== "replacement" ? { placeId: placeId! } : {}),
+      ...(hasResolvedPlace ? { placeId: blockPlaceId! } : {}),
+      ...(!hasResolvedPlace && item.placeName ? { placeName: item.placeName } : {}),
       ...(item.startTime ? { startTime: item.startTime } : {}),
+      ...(item.endTime ? { endTime: item.endTime } : {}),
       title: item.title,
       summary: item.summary,
       ...(item.durationMinutes ? { durationMinutes: item.durationMinutes } : {}),
       role: item.planRole,
       planRole: item.planRole,
+      ...(item.startTime || item.endTime || item.timingStatus ? { display: displayForSemanticExperience(item) } : {}),
       ...(item.primaryExperience === undefined ? {} : { primaryExperience: item.primaryExperience }),
       ...(item.operationalConditions?.length ? { operationalConditions: item.operationalConditions.map(toBlueprintCondition) } : {}),
       ...(item.replacementFor ? { replacementFor: item.replacementFor } : {}),
       evidence: []
     });
-    const identity = hasResolvedPlace ? `resolved to ${placeId}` : "preserved without ResearchSet place identity";
+    const identity = hasResolvedPlace
+      ? `resolved to ${blockPlaceId}${item.planRole === "replacement" ? " without promoting the replacement into the route" : ""}`
+      : item.placeName
+        ? resolvedPlaceId
+          ? `explicit place name ${item.placeName} preserved as unresolved because Research does not establish this consecutive offering at the resolved place`
+          : `explicit place name ${item.placeName} preserved without a ResearchSet place identity`
+        : "descriptive experience preserved without asserting a canonical place identity";
     fidelity.push({ subject: `${isoDateFromDay(day.date) ?? day.date}: ${item.title} existence`, classification: "PRESERVED", detail: identity });
   }
   return {
     id: `day-${index + 1}`,
     date: isoDateFromDay(day.date) ?? day.date,
     kind: stops.length ? "scheduled" : day.startContext.status === "in_transit" || day.endContext.status === "in_transit" ? "transit" : "free_time",
-    city: "Bali",
+    city: day.area,
     title: day.area,
     summary: day.plan,
-    startContext: day.startContext,
-    endContext: day.endContext,
+    startContext: structuredContext(day.startContext, placeByName),
+    endContext: structuredContext(day.endContext, placeByName),
     stops,
     blocks,
     candidatePlaceIds: []
@@ -179,8 +255,10 @@ function resolveReplacementBlockRefs(days: BlueprintItineraryDay[]): void {
   }
 }
 
-function addFidelityV2(plan: SemanticTravelPlan, artifact: SkillItineraryArtifact, research: ResearchSet, fidelity: FidelityItem[]): void {
+export function assessSemanticPlanFidelity(plan: SemanticTravelPlan, artifact: SkillItineraryArtifact, research: ResearchSet): FidelityItem[] {
+  const fidelity: FidelityItem[] = [];
   const dayByDate = new Map(artifact.days.map((day) => [day.date, day] as const));
+  const placeByName = new Map(research.places.map((place) => [normalizeName(place.name), place.id] as const));
   for (const day of plan.dailyItinerary) {
     const date = isoDateFromDay(day.date) ?? day.date;
     const structuredDay = dayByDate.get(date);
@@ -194,9 +272,19 @@ function addFidelityV2(plan: SemanticTravelPlan, artifact: SkillItineraryArtifac
     const blocks = structuredDay.blocks ?? [];
     const expected = day.experiences ?? [];
     for (const [index, item] of expected.entries()) {
-      const block = blocks.find((candidate) => candidate.title === item.title);
-      if (!block) {
-        fidelity.push({ subject: `${date}: ${item.title}`, classification: "DROPPED", detail: "Experience missing from structured itinerary." });
+      // Blocks are emitted one-for-one in semantic order. Compare by position rather
+      // than title: legitimate repeated nodes such as two "Return to base" entries
+      // otherwise both resolve to the first block and create a false order failure.
+      const block = blocks[index];
+      if (!block || block.title !== item.title) {
+        const titledBlock = blocks.find((candidate) => candidate.title === item.title);
+        fidelity.push({
+          subject: `${date}: ${item.title}`,
+          classification: titledBlock ? "CHANGED" : "DROPPED",
+          detail: titledBlock
+            ? `Experience moved from semantic order ${index + 1} to structured order ${titledBlock.order}.`
+            : "Experience missing from structured itinerary."
+        });
         continue;
       }
       if (block.order !== index + 1) fidelity.push({ subject: `${date}: ${item.title} order`, classification: "CHANGED", detail: `Expected ${index + 1}, got ${block.order}.` });
@@ -206,11 +294,16 @@ function addFidelityV2(plan: SemanticTravelPlan, artifact: SkillItineraryArtifac
       compareConditions(`${date}: ${item.title} operationalConditions`, item.operationalConditions ?? [], block.operationalConditions ?? [], fidelity);
       compareScalar(`${date}: ${item.title} replacementFor`, item.replacementFor ?? "", block.replacementFor ?? "", fidelity);
       compareScalar(`${date}: ${item.title} timing`, item.startTime ?? "", block.startTime ?? "", fidelity);
+      compareScalar(`${date}: ${item.title} end timing`, item.endTime ?? "", block.endTime ?? "", fidelity);
       compareNumber(`${date}: ${item.title} duration`, item.durationMinutes, block.durationMinutes, fidelity);
-      const expectedPlace = item.placeName ?? item.title;
-      const resolvedPlaceId = new Map(research.places.map((place) => [normalizeName(place.name), place.id] as const)).get(normalizeName(expectedPlace));
-      if (resolvedPlaceId) compareScalar(`${date}: ${item.title} place identity`, resolvedPlaceId, block.placeId, fidelity);
-      else fidelity.push({ subject: `${date}: ${item.title} place identity`, classification: "REPRESENTED DIFFERENTLY", detail: "No ResearchSet place identity exists; preserved as semantic block without placeId." });
+      if (item.timingStatus) compareScalar(`${date}: ${item.title} timing status`, item.timingStatus, block.display?.timingStatus ?? "", fidelity);
+      const expectedPlace = semanticPlaceName(item);
+      const resolvedPlaceId = expectedPlace ? placeByName.get(normalizeName(expectedPlace)) : undefined;
+      if (resolvedPlaceId && block.placeId) compareScalar(`${date}: ${item.title} place identity`, resolvedPlaceId, block.placeId, fidelity);
+      else if (resolvedPlaceId && item.placeName && block.placeName === item.placeName) fidelity.push({ subject: `${date}: ${item.title} unresolved place identity`, classification: "REPRESENTED DIFFERENTLY", detail: `Explicit place name ${item.placeName} is retained, but the ResearchSet does not establish this distinct experience as a consecutive offering at that place.` });
+      else if (resolvedPlaceId) compareScalar(`${date}: ${item.title} place identity`, resolvedPlaceId, block.placeId, fidelity);
+      else if (item.placeName) compareScalar(`${date}: ${item.title} unresolved place identity`, item.placeName, block.placeName, fidelity);
+      else fidelity.push({ subject: `${date}: ${item.title} place identity`, classification: "REPRESENTED DIFFERENTLY", detail: "Semantic experience has no explicit placeName; its descriptive title is preserved without asserting a ResearchSet identity." });
     }
   }
   compareSection("preparation section identity", plan.preparation.length, artifact.preparationChecklist?.length ?? 0, fidelity);
@@ -219,6 +312,77 @@ function addFidelityV2(plan: SemanticTravelPlan, artifact: SkillItineraryArtifac
   compareSection("alternatives/exclusions identity", expectedAlternativeCount, artifact.alternatives?.length ?? 0, fidelity);
   if ((artifact.sources?.length ?? 0) > 0) fidelity.push({ subject: "research/source grounding", classification: "REPRESENTED DIFFERENTLY", detail: `${artifact.sources?.length ?? 0} existing ResearchSet source(s) carried structurally; narrative supplemental URLs without source IDs remain researchGrounding text.` });
   else fidelity.push({ subject: "research/source grounding", classification: "NOT REPRESENTABLE", detail: "The accepted ResearchSet contains no structural sources to carry; S1.2 did not fabricate source identities from prose URLs." });
+  return fidelity;
+}
+
+function semanticPlaceName(item: SemanticTravelExperience): string | undefined {
+  if (item.placeName?.trim()) return item.placeName.trim();
+  return item.planRole === "planned" && item.title.trim() ? item.title.trim() : undefined;
+}
+
+function blueprintBlockKind(item: SemanticTravelExperience, hasResolvedPlace: boolean): BlueprintItineraryBlockKind {
+  if (hasResolvedPlace && item.planRole === "planned" && (!item.kind || item.kind === "experience")) return "stop";
+  if (item.kind === "event" && !hasResolvedPlace) return "flexible";
+  if (item.kind === "meal" || item.kind === "rest" || item.kind === "transfer" || item.kind === "lodging" || item.kind === "event" || item.kind === "flexible") return item.kind;
+  return "flexible";
+}
+
+function semanticExperienceCreatesFormalStop(item: SemanticTravelExperience): boolean {
+  if (item.planRole !== "planned") return false;
+  return !item.kind || item.kind === "experience" || item.kind === "event";
+}
+
+function displayForSemanticExperience(item: SemanticTravelExperience): NonNullable<BlueprintItineraryBlock["display"]> {
+  const timingStatus = item.timingStatus ?? "planned";
+  return {
+    ...(item.startTime || item.endTime ? { timeLabel: timeLabelForSemanticExperience(item) } : {}),
+    timingStatus,
+    meta: timingStatusLabel(timingStatus),
+    ...(item.kind === "transfer" ? { routeAnchor: false } : {})
+  };
+}
+
+function timeLabelForSemanticExperience(item: SemanticTravelExperience): string {
+  if (item.startTime && item.endTime) return `${item.startTime}–${item.endTime}`;
+  return item.startTime ?? item.endTime ?? "";
+}
+
+function structuredContext(context: SemanticDay["startContext"], placeByName: Map<string, string>): NonNullable<BlueprintItineraryDay["startContext"]> {
+  const placeId = context.placeName ? placeByName.get(normalizeName(context.placeName)) : undefined;
+  return { label: context.label, status: context.status, ...(placeId ? { placeId } : {}) };
+}
+
+function timingStatusLabel(status: NonNullable<SemanticTravelExperience["timingStatus"]>): string {
+  if (status === "confirmed") return "Confirmed time";
+  if (status === "estimated") return "Estimated timing";
+  if (status === "recheck") return "Timing needs recheck";
+  if (status === "unknown") return "Timing unknown";
+  return "Planned time";
+}
+
+function coLocatedExperienceKey(placeId: string, title: string): string {
+  return `${placeId}\u0000${normalizeName(title)}`;
+}
+
+function normalizedDestinations(explicit: string[] | undefined, days: BlueprintItineraryDay[]): string[] {
+  const values = explicit?.map((value) => value.trim()).filter(Boolean) ?? [];
+  const unique = values.filter((value, index) => values.findIndex((candidate) => normalizeName(candidate) === normalizeName(value)) === index);
+  if (unique.length) return unique;
+  return days.map((day) => day.city.trim()).filter((value, index, all) => value && all.findIndex((candidate) => normalizeName(candidate) === normalizeName(value)) === index);
+}
+
+function citySegmentsForDays(days: BlueprintItineraryDay[]): NonNullable<NonNullable<SkillItineraryArtifact["guideTheme"]>["citySegments"]> {
+  const cities = days.map((day) => day.city).filter((city, index, all) => all.findIndex((candidate) => normalizeName(candidate) === normalizeName(city)) === index);
+  return cities.map((city, index) => {
+    const cityDays = days.filter((day) => normalizeName(day.city) === normalizeName(city));
+    return {
+      id: stableId("segment", `${index + 1}:${city}`),
+      city,
+      title: city,
+      summary: cityDays.map((day) => day.title).join("; ") || city,
+      dayIds: cityDays.map((day) => day.id)
+    };
+  });
 }
 
 function addBlueprintFidelity(plan: SemanticTravelPlan, blueprint: TripBlueprint, fidelity: FidelityItem[]): void {
@@ -292,13 +456,24 @@ function sourcesForResearchGrounding(_plan: SemanticTravelPlan, research: Resear
 function movementsForDays(days: BlueprintItineraryDay[]): BlueprintMovement[] {
   const movements: BlueprintMovement[] = [];
   for (const day of days) {
-    for (let index = 0; index < day.stops.length - 1; index += 1) {
+    const ordered = [...(day.blocks ?? [])].sort((left, right) => left.order - right.order);
+    const anchors = ordered
+      .map((block, index) => ({ block, index }))
+      .filter(({ block }) => block.placeId && block.planRole !== "optional" && block.planRole !== "replacement" && block.kind !== "transfer" && block.kind !== "flexible")
+      .filter(({ block }, index, all) => index === 0 || all[index - 1]!.block.placeId !== block.placeId);
+    const physical = anchors.length
+      ? anchors
+      : day.stops.map((stop, index) => ({ block: { placeId: stop.placeId } as BlueprintItineraryBlock, index }));
+    for (let index = 0; index < physical.length - 1; index += 1) {
+      const origin = physical[index]!;
+      const destination = physical[index + 1]!;
+      const betweenText = ordered.slice(origin.index, destination.index + 1).map((block) => `${block.title ?? ""} ${block.summary ?? ""}`).join(" ");
       movements.push({
         id: `movement-${day.id}-${index + 1}`,
         dayId: day.id,
-        originPlaceId: day.stops[index]!.placeId,
-        destinationPlaceId: day.stops[index + 1]!.placeId,
-        mode: "unknown",
+        originPlaceId: origin.block.placeId!,
+        destinationPlaceId: destination.block.placeId!,
+        mode: semanticMovementMode(betweenText),
         status: "recheck",
         label: "Route needs recheck",
         detail: "Planner supplied semantic order only; do not treat this as verified route timing.",
@@ -307,6 +482,15 @@ function movementsForDays(days: BlueprintItineraryDay[]): BlueprintMovement[] {
     }
   }
   return movements;
+}
+
+function semanticMovementMode(value: string): BlueprintMovement["mode"] {
+  if (/\b(private driver|private car|private transfer|driver|taxi|grab|gojek|ride.?hail|car service)\b/i.test(value)) return "driving";
+  if (/\bwalk|walking\b/i.test(value)) return "walking";
+  if (/\btrain|rail\b/i.test(value)) return "rail";
+  if (/\bflight|fly|airport\b/i.test(value)) return "flight";
+  if (/\bbus|transit|shuttle\b/i.test(value)) return "transit";
+  return "unknown";
 }
 
 function compareContext(subject: string, expected: SemanticDay["startContext"], actual: BlueprintItineraryDay["startContext"], fidelity: FidelityItem[]): void {

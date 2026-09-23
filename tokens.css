@@ -1,0 +1,53 @@
+:root {
+  --color-paper: oklch(97% 0.014 84);
+  --color-paper-soft: oklch(99% 0.01 82 / 0.94);
+  --color-ink: oklch(31% 0.045 165);
+  --color-ink-soft: oklch(39% 0.035 165 / 0.78);
+  --color-muted: oklch(53% 0.012 150 / 0.64);
+  --color-accent: oklch(42% 0.105 164);
+  --color-accent-hover: oklch(47% 0.105 164);
+  --color-accent-active: oklch(38% 0.09 164);
+  --color-accent-ink: oklch(99% 0.006 100);
+  --color-underline: oklch(64% 0.035 155);
+  --color-rule: oklch(38% 0.025 160 / 0.12);
+  --color-focus: oklch(48% 0.105 164);
+  --color-focus-halo: oklch(48% 0.105 164 / 0.14);
+  --color-shadow: oklch(24% 0.03 160 / 0.1);
+  --color-hero-overlay-heavy: oklch(97% 0.014 84 / 0.95);
+  --color-hero-overlay-medium: oklch(97% 0.014 84 / 0.78);
+  --color-hero-overlay-light: oklch(97% 0.014 84 / 0.24);
+  --color-hero-overlay-edge: oklch(31% 0.045 165 / 0.03);
+  --color-hero-overlay-top: oklch(99% 0.01 82 / 0.16);
+  --color-hero-overlay-bottom: oklch(24% 0.03 160 / 0.08);
+
+  --font-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, "Songti SC", serif;
+  --font-body: Inter, "SF Pro Text", "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
+
+  --space-3xs: 0.25rem;
+  --space-2xs: 0.5rem;
+  --space-xs: 0.75rem;
+  --space-sm: 1rem;
+  --space-md: 1.5rem;
+  --space-lg: 2rem;
+  --space-xl: 3rem;
+  --space-2xl: 4.5rem;
+  --space-3xl: 7rem;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-md: 1.125rem;
+  --text-lg: 1.375rem;
+  --text-xl: 1.75rem;
+  --text-display: clamp(4.5rem, 7vw, 7rem);
+  --text-display-mobile: clamp(3.25rem, 15vw, 4.125rem);
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-short: 200ms;
+  --dur-reveal: 700ms;
+
+  --rule-hairline: 1px;
+  --radius-pill: 999px;
+  --radius-input: 999px;
+}

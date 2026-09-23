@@ -144,6 +144,7 @@ function fixturePlan(title: string, placeName: string, options: { hotelPending?:
     title: "One-shot repair diagnostic fixture",
     language: "en",
     tripStrategy: "Preserve a two-day compact base strategy and make only the smallest coherent change when a confirmed conflict requires repair.",
+    fixedCommitments: [],
     targetedResearch: [],
     dailyItinerary: [
       {

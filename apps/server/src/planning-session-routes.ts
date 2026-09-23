@@ -21,6 +21,7 @@ export function registerPlanningSessionRoutes(server: FastifyInstance, dependenc
     const snapshot = generationKey ? store.getBlueprintGeneration(generationKey) : undefined;
     return {
       sessionStatus: session.status,
+      ...(session.outputPlanId ? { outputPlanId: session.outputPlanId } : {}),
       generation: job ? generation.publicGenerationJob(job) : snapshot ? generation.publicPersistedGeneration(snapshot) : null,
       snapshot: snapshot ?? null,
       events: generationKey ? store.getBlueprintGenerationEvents(generationKey) : []

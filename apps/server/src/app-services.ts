@@ -5,11 +5,13 @@ import { createGeneratedPlanEvidencePreparer } from "./generated-plan-evidence.j
 import { createMessagingServices } from "./messaging-services.js";
 import { createRuntimeServices } from "./runtime-services.js";
 import type { SemanticShadowConfig } from "./semantic-shadow.js";
+import type { SemanticDraftCanaryConfig } from "./semantic-draft-canary.js";
 
 export function createAppServices(dependencies: {
   projectRoot: string;
   store: SqliteWorkspaceStore;
   semanticShadow: SemanticShadowConfig;
+  semanticDraftCanary: SemanticDraftCanaryConfig;
   uberClientId: () => string | undefined;
   allowedWhatsAppUserNumber: () => string | undefined;
   logGenerationFailure: (details: Record<string, unknown>, message: string) => void;
@@ -20,6 +22,7 @@ export function createAppServices(dependencies: {
     projectRoot,
     store,
     semanticShadow,
+    semanticDraftCanary,
     uberClientId,
     allowedWhatsAppUserNumber,
     logGenerationFailure,
@@ -37,7 +40,7 @@ export function createAppServices(dependencies: {
     japanSourcePreparation,
     resolvePlanCountryPack
   } = countryPackServices;
-  const runtimeServices = createRuntimeServices({ store, semanticShadow, logGenerationFailure });
+  const runtimeServices = createRuntimeServices({ store, semanticShadow, semanticDraftCanary, logGenerationFailure });
   const prepareGeneratedPlanEvidence = createGeneratedPlanEvidencePreparer({
     store,
     getMaps: () => connectorServices.getConnectors().maps,

@@ -9,6 +9,11 @@ export function loadServerConfig(entryModuleUrl: string) {
   if (existsSync(envPath)) process.loadEnvFile(envPath);
   const semanticShadowSampleRate = Number(process.env.LANDI_SEMANTIC_SHADOW_SAMPLE_RATE ?? 1);
   const semanticShadowTimeoutMs = Number(process.env.LANDI_SEMANTIC_SHADOW_TIMEOUT_MS ?? 10 * 60_000);
+  const host = process.env.C_ASSISTANT_HOST ?? "127.0.0.1";
+  const semanticDraftCanarySessionIds = (process.env.LANDI_SEMANTIC_DRAFT_CANARY_SESSION_IDS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
   return {
     projectRoot,
     envPath,
@@ -19,10 +24,15 @@ export function loadServerConfig(entryModuleUrl: string) {
       sampleRate: Number.isFinite(semanticShadowSampleRate) ? Math.min(1, Math.max(0, semanticShadowSampleRate)) : 0,
       timeoutMs: Number.isFinite(semanticShadowTimeoutMs) && semanticShadowTimeoutMs > 0 ? semanticShadowTimeoutMs : 10 * 60_000
     },
+    semanticDraftCanary: {
+      enabled: process.env.LANDI_SEMANTIC_DRAFT_CANARY === "1",
+      localEnvironment: ["127.0.0.1", "localhost", "::1"].includes(host),
+      allowedSessionIds: semanticDraftCanarySessionIds
+    },
     webAssetsPath: resolve(webDistPath, "assets"),
     webTripMapPath: resolve(webDistPath, "trip-map"),
     webIndexPath: resolve(webDistPath, "index.html"),
     port: Number(process.env.C_ASSISTANT_PORT ?? 8787),
-    host: process.env.C_ASSISTANT_HOST ?? "127.0.0.1"
+    host
   };
 }

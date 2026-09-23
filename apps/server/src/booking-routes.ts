@@ -3,6 +3,7 @@ import type { BookingImportInput, TravelBooking } from "@c-assistant/core";
 import type { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { normalizeAcceptedBooking, normalizeImportedBookingText, planningFactsFromBooking, previewBookingImport } from "./booking-import.js";
 import { applyExternalPlanningFacts } from "./planning-session-external-facts.js";
+import { planningAccommodationDestinationConflicts } from "./planning-session-generation.js";
 
 type BookingScope = { planningSessionId?: string; planId?: string };
 
@@ -121,6 +122,19 @@ function applyBookingFactsToPlanningSession(store: SqliteWorkspaceStore, session
   const session = store.getPlanningSessionById(sessionId);
   if (!session) throw new Error("The planning session was not found.");
   const facts = planningFactsFromBooking(booking);
-  if (!facts.length) return;
-  store.savePlanningSession(applyExternalPlanningFacts(session, facts));
+  let next = facts.length ? applyExternalPlanningFacts(session, facts) : session;
+  const conflicts = planningAccommodationDestinationConflicts(next, store.listTravelBookingsForPlanningSession(sessionId));
+  next = {
+    ...next,
+    deferred: [
+      ...next.deferred.filter((item) => item.key !== "accommodation_destination_conflict"),
+      ...(conflicts.length ? [{
+        key: "accommodation_destination_conflict",
+        question: `The confirmed accommodation location (${conflicts[0]}) does not match the confirmed trip destination. Confirm which location belongs to this trip.`,
+        impact: "dependent" as const,
+        status: "deferred" as const
+      }] : [])
+    ]
+  };
+  store.savePlanningSession(next);
 }

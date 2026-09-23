@@ -1,7 +1,8 @@
 import {
   TRIP_BLUEPRINT_SCHEMA_VERSION,
+  MAP_COORDINATES_PENDING_SCHEDULING_REASON,
   assertResearchSetIntegrity,
-  assertTripBlueprintIntegrity,
+  tripBlueprintIntegrityIssues,
   type BlueprintActionRequirement,
   type BlueprintBookingConstraint,
   type BlueprintEvent,
@@ -34,6 +35,19 @@ import {
 } from "./trip-blueprint.js";
 
 export const SKILL_IMPORTER_VERSION = "1.0.0";
+
+export interface BlueprintImportFailureDetails {
+  issues: string[];
+  days: Array<Pick<BlueprintItineraryDay, "id" | "date" | "startContext" | "endContext" | "stops" | "blocks">>;
+  movements: BlueprintMovement[];
+}
+
+export function blueprintImportFailureDetails(error: unknown): BlueprintImportFailureDetails | undefined {
+  if (!(error instanceof Error) || !("blueprintImportFailure" in error)) return undefined;
+  const details = (error as Error & { blueprintImportFailure?: unknown }).blueprintImportFailure;
+  if (!details || typeof details !== "object") return undefined;
+  return details as BlueprintImportFailureDetails;
+}
 
 type SkillGuideDisplayArtifact = Omit<NonNullable<BlueprintPlace["guideDisplay"]>, "comparisonRows"> & {
   comparisonRows?: Array<Omit<BlueprintGuideComparisonDisplay, "evidence"> & { sourceUrls?: string[] }>;
@@ -84,6 +98,13 @@ export interface SkillResearchPlaceArtifact {
   bookingUrl?: string;
   mapUrl?: string;
   experienceUrl?: string;
+  accommodation?: {
+    state: "recommended" | "pending";
+    baseLabel?: string;
+    stayStartDate?: string;
+    stayEndDate?: string;
+    rationale?: string;
+  };
   sourceUrls?: string[];
   fieldEvidence?: BlueprintFieldEvidence[];
   operationalFacts?: BlueprintOperationalFacts;
@@ -331,6 +352,13 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
       ...(artifact.detailSections ? { detailSections: structuredClone(artifact.detailSections) } : {}),
       ...(artifact.images?.length ? { images: normalizePlaceImages(artifact.images, sourceIdByUrl) } : {}),
       ...optionalHttpsLinks(artifact),
+      ...(artifact.accommodation ? { accommodation: {
+        state: artifact.accommodation.state,
+        ...(artifact.accommodation.baseLabel?.trim() ? { baseLabel: artifact.accommodation.baseLabel.trim() } : {}),
+        ...(artifact.accommodation.stayStartDate?.trim() ? { stayStartDate: artifact.accommodation.stayStartDate.trim() } : {}),
+        ...(artifact.accommodation.stayEndDate?.trim() ? { stayEndDate: artifact.accommodation.stayEndDate.trim() } : {}),
+        ...(artifact.accommodation.rationale?.trim() ? { rationale: artifact.accommodation.rationale.trim() } : {})
+      } } : {}),
       evidence: evidenceForUrls(artifact.sourceUrls, sourceIdByUrl),
       ...(artifact.fieldEvidence?.length ? { fieldEvidence: remapFieldEvidence(artifact.fieldEvidence, sourceIdByArtifactId, sourceIds) } : {}),
       ...(artifact.operationalFacts ? { operationalFacts: remapOperationalFacts(artifact.operationalFacts, sourceIdByArtifactId, sourceIds) } : {}),
@@ -507,8 +535,73 @@ export function importSkillItinerary(research: ResearchSet, artifact: SkillItine
     ...(artifact.researchGrounding?.length ? { researchGrounding: artifact.researchGrounding.map((item) => item.trim()).filter(Boolean) } : {}),
     createdAt: context.createdAt
   };
-  assertTripBlueprintIntegrity(blueprint, { expectedResearchPlaceIds: research.places.map((place) => place.id) });
+  const issues = tripBlueprintIntegrityIssues(blueprint, { expectedResearchPlaceIds: research.places.map((place) => place.id) });
+  if (issues.length) {
+    const affectedDayIds = affectedIntegrityDayIds(issues, blueprint);
+    const details: BlueprintImportFailureDetails = {
+      issues,
+      days: blueprint.days.filter((day) => affectedDayIds.has(day.id)).map((day) => ({
+        id: day.id,
+        date: day.date,
+        ...(day.startContext ? { startContext: structuredClone(day.startContext) } : {}),
+        ...(day.endContext ? { endContext: structuredClone(day.endContext) } : {}),
+        stops: structuredClone(day.stops),
+        ...(day.blocks ? { blocks: structuredClone(day.blocks) } : {})
+      })),
+      movements: blueprint.movements.filter((movement) => affectedDayIds.has(movement.dayId)).map((movement) => structuredClone(movement))
+    };
+    throw Object.assign(new Error(`Trip Blueprint failed integrity: ${issues.join("; ")}`), { blueprintImportFailure: details });
+  }
   return blueprint;
+}
+
+/**
+ * Publishes newly researched guide content without asking the itinerary planner
+ * to restate or re-compose the already accepted formal route.
+ */
+export function mergeResearchCatalogIntoBlueprint(blueprint: TripBlueprint, research: ResearchSet, createdAt: string): TripBlueprint {
+  if (blueprint.generationKey !== research.generationKey || blueprint.researchSetId !== research.id) {
+    throw new Error("Explore research does not belong to this Trip Blueprint.");
+  }
+  if (JSON.stringify(blueprint.proposalRef) !== JSON.stringify(research.proposalRef) || JSON.stringify(blueprint.skillLineage) !== JSON.stringify(research.skillLineage)) {
+    throw new Error("Explore research does not match this Trip Blueprint lineage.");
+  }
+  const existingPlaceById = new Map(blueprint.places.map((place) => [place.id, place] as const));
+  const normalizedResearchPlaces = normalizeBlueprintPlaces(research.places, blueprint.days);
+  const next: TripBlueprint = {
+    ...structuredClone(blueprint),
+    version: blueprint.version + 1,
+    createdAt,
+    places: normalizedResearchPlaces.map((place) => existingPlaceById.get(place.id) ? structuredClone(existingPlaceById.get(place.id)!) : place),
+    events: mergeById(blueprint.events, research.events),
+    sources: mergeBlueprintSources(blueprint.sources, research.sources),
+    guideRelationshipGraph: normalizeGuideRelationshipGraph(research.guideRelationships, blueprint.days),
+    actionRequirements: mergeActionRequirements(blueprint.actionRequirements, research.actionRequirements),
+    ...(research.localFoods?.length ? { localFoods: structuredClone(research.localFoods) } : {}),
+    ...(research.localProducts?.length ? { localProducts: structuredClone(research.localProducts) } : {}),
+    ...(research.experienceThemes?.length ? { experienceThemes: structuredClone(research.experienceThemes) } : {}),
+    ...(research.travelTips !== undefined ? { travelTips: mergeById(blueprint.travelTips ?? [], research.travelTips) } : {}),
+    ...(research.preparationChecklist !== undefined ? { preparationChecklist: mergeById(blueprint.preparationChecklist ?? [], research.preparationChecklist) } : {})
+  };
+  const issues = tripBlueprintIntegrityIssues(next, { expectedResearchPlaceIds: research.places.map((place) => place.id) });
+  if (issues.length) throw new Error(`Explore catalog merge failed integrity: ${issues.join("; ")}`);
+  return next;
+}
+
+function mergeById<T extends { id: string }>(current: T[], incoming: T[]): T[] {
+  const byId = new Map(current.map((item) => [item.id, structuredClone(item)] as const));
+  for (const item of incoming) if (!byId.has(item.id)) byId.set(item.id, structuredClone(item));
+  return [...byId.values()];
+}
+
+function affectedIntegrityDayIds(issues: string[], blueprint: TripBlueprint): Set<string> {
+  const ids = new Set<string>();
+  for (const issue of issues) {
+    for (const day of blueprint.days) {
+      if (issue.includes(`day ${day.id}`) || issue.includes(`movement movement-${day.id}-`)) ids.add(day.id);
+    }
+  }
+  return ids.size ? ids : new Set(blueprint.days.map((day) => day.id));
 }
 
 function mergeBlueprintSources(researchSources: BlueprintSource[], artifactSources: BlueprintSource[]): BlueprintSource[] {
@@ -563,6 +656,7 @@ function normalizeItineraryBlocks(day: BlueprintItineraryDay): BlueprintItinerar
 function normalizeItineraryBlock(block: BlueprintItineraryBlock, index: number): BlueprintItineraryBlock {
   return {
     ...structuredClone(block),
+    ...(block.placeName?.trim() ? { placeName: block.placeName.trim() } : {}),
     order: index + 1,
     ...(block.display ? { display: normalizeItineraryBlockDisplay(block.display) } : {}),
     evidence: structuredClone(block.evidence ?? [])
@@ -573,6 +667,7 @@ function normalizeItineraryBlockDisplay(display: NonNullable<BlueprintItineraryB
   return {
     ...(display.timeLabel?.trim() ? { timeLabel: display.timeLabel.trim() } : {}),
     ...(display.meta?.trim() ? { meta: display.meta.trim() } : {}),
+    ...(display.timingStatus && ["confirmed", "planned", "estimated", "unknown", "recheck"].includes(display.timingStatus) ? { timingStatus: display.timingStatus } : {}),
     ...(display.routeAnchor === undefined ? {} : { routeAnchor: display.routeAnchor }),
     ...(display.reorderable === undefined ? {} : { reorderable: display.reorderable })
   };
@@ -678,7 +773,7 @@ function normalizeBlueprintPlaces(places: BlueprintPlace[], days: BlueprintItine
             ? "This place is suitable for the listed itinerary day as an alternative or addition."
             : decision === "schedulable"
               ? "This place has map-ready identity and may be considered during replanning."
-              : "This place lacks map-ready coordinates, so it remains useful written context until its location is verified.",
+              : MAP_COORDINATES_PENDING_SCHEDULING_REASON,
         ...(suitableDayIds.length ? { suitableDayIds } : {})
       }
     };
@@ -727,8 +822,8 @@ function enrichDaySummary(day: BlueprintItineraryDay): string {
   const summary = day.summary.trim();
   if (summary.length > 380 || /\b(candidate|fallback|swap|low-energy|buffer|meal|café|coffee)\b/i.test(summary)) return summary;
   const sentence = day.kind === "scheduled"
-    ? " Treat the scheduled stops as the day’s spine, then use the candidates as meal, café, rainy-day, or low-energy swaps rather than extra obligations."
-    : " Keep this as a light logistics day; use candidates only when timing, luggage, and energy make them easy.";
+    ? " Treat the scheduled stops as the day’s spine, then use other researched options as meal, café, rainy-day, or low-energy swaps rather than extra obligations."
+    : " Keep this as a light logistics day; use other researched options only when timing, luggage, and energy make them easy.";
   return `${summary}${sentence}`;
 }
 
@@ -742,9 +837,10 @@ function normalizeMovementsForReasonableness(movements: BlueprintMovement[], day
     movementByKey.set(movementKey(movement.dayId, movement.originPlaceId, movement.destinationPlaceId), enrichMovement({ ...structuredClone(movement), id }, origin, destination));
   }
   for (const day of days) {
-    for (let index = 0; index < day.stops.length - 1; index += 1) {
-      const originPlaceId = day.stops[index]!.placeId;
-      const destinationPlaceId = day.stops[index + 1]!.placeId;
+    const anchors = committedPhysicalAnchorIds(day);
+    for (let index = 0; index < anchors.length - 1; index += 1) {
+      const originPlaceId = anchors[index]!;
+      const destinationPlaceId = anchors[index + 1]!;
       const key = movementKey(day.id, originPlaceId, destinationPlaceId);
       if (movementByKey.has(key)) continue;
       const origin = placeById.get(originPlaceId);
@@ -763,9 +859,18 @@ function normalizeMovementsForReasonableness(movements: BlueprintMovement[], day
   return [...movementByKey.values()];
 }
 
+function committedPhysicalAnchorIds(day: BlueprintItineraryDay): string[] {
+  const fromBlocks = [...(day.blocks ?? [])]
+    .sort((left, right) => left.order - right.order)
+    .filter((block) => block.placeId && block.planRole !== "optional" && block.planRole !== "replacement" && block.kind !== "transfer" && block.kind !== "flexible")
+    .map((block) => block.placeId!);
+  const anchors = fromBlocks.length ? fromBlocks : [...day.stops].sort((left, right) => left.order - right.order).map((stop) => stop.placeId);
+  return anchors.filter((placeId, index) => index === 0 || anchors[index - 1] !== placeId);
+}
+
 function enrichMovement(movement: BlueprintMovement, origin?: BlueprintPlace, destination?: BlueprintPlace): BlueprintMovement {
   const inferredMode = movement.mode === "unknown" ? inferMovementMode(origin, destination) : movement.mode;
-  const durationMinutes = movement.durationMinutes ?? estimateMovementMinutes(origin, destination, inferredMode);
+  const durationMinutes = movement.durationMinutes ?? (inferredMode === "unknown" ? undefined : estimateMovementMinutes(origin, destination, inferredMode));
   const status = movement.status === "verified" && evidenceIsFullyVerified(movement.evidence) ? "verified" : "recheck";
   const label = movement.label?.trim() || movementLabel(inferredMode, destination);
   const detail = movement.detail?.trim() || movementDetail(inferredMode, durationMinutes);
@@ -833,9 +938,10 @@ function normalizeMovementRefreshScope(scope: NonNullable<BlueprintMovement["dis
 function inferMovementMode(origin?: BlueprintPlace, destination?: BlueprintPlace): BlueprintMovement["mode"] {
   const text = normalizeSearchText(`${origin?.category ?? ""} ${origin?.name ?? ""} ${destination?.category ?? ""} ${destination?.name ?? ""}`);
   if (/\b(airport|flight|terminal|lax|haneda|narita|kansai)\b/.test(text)) return "flight";
-  if (origin?.city && destination?.city && normalizeSearchText(origin.city) !== normalizeSearchText(destination.city)) return "rail";
   if (estimatedDistanceMeters(origin, destination) !== undefined && estimatedDistanceMeters(origin, destination)! <= 1400) return "walking";
-  return "transit";
+  // Geography alone does not prove a transport mode. In particular, a city
+  // label mismatch must never silently become rail.
+  return "unknown";
 }
 
 function estimateMovementMinutes(origin: BlueprintPlace | undefined, destination: BlueprintPlace | undefined, mode: BlueprintMovement["mode"]): number {

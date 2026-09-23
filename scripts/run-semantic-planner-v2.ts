@@ -66,7 +66,7 @@ try {
     gender: profile.gender,
     immigrationStatus: profile.immigration_status
   };
-  const semanticInput = { request, research, profile: profileContext };
+  const semanticInput = { request, research, fixedCommitments: [], profile: profileContext };
   const fullPlannerPrompt = buildSemanticTravelPlanPrompt(semanticInput);
   const result = await adapter.generateSemanticTravelPlan(semanticInput);
 

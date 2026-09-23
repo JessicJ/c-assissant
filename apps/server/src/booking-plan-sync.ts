@@ -45,14 +45,13 @@ export function planningFactsFromBooking(booking: TravelBooking): PlanningFact[]
   if (accommodation) {
     const location = accommodation.location ?? accommodation.destination!;
     facts.push(planningFact("accommodation", `${booking.title} at ${location}`, timestamp));
-    facts.push(planningFact("destination", location, timestamp));
+    facts.push(planningFact("accommodation_location", location, timestamp));
   }
   const transportSegments = usefulSegments.filter((segment) => segment.segmentType === "flight_leg" || segment.segmentType === "train_leg")
     .sort((left, right) => (left.startAtLocal ?? left.endAtLocal ?? "").localeCompare(right.startAtLocal ?? right.endAtLocal ?? ""));
   const firstTransport = transportSegments[0];
   if (firstTransport && (firstTransport.origin || firstTransport.destination || firstTransport.endAtLocal || firstTransport.startAtLocal)) {
     facts.push(planningFact("arrival", bookingSegmentTravelFact(firstTransport), timestamp));
-    if (firstTransport.destination) facts.push(planningFact("destination", firstTransport.destination, timestamp));
   }
   const lastTransport = transportSegments.length > 1 ? transportSegments[transportSegments.length - 1] : undefined;
   if (lastTransport) facts.push(planningFact("departure", bookingSegmentTravelFact(lastTransport), timestamp));

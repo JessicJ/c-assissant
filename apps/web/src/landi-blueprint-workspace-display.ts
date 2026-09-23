@@ -6,11 +6,12 @@ export type BlueprintWorkspaceArea = "itinerary" | "preparation" | "tips" | "sou
 export type GuideFilter = "all" | "attraction" | "dining" | "shopping" | "experience" | "stay" | "transport";
 export type ItineraryTimelineRole = "place" | "transport" | "activity" | "rest" | "pending_place";
 export type TimelineVisualPrimitive = "place" | "movement" | "action";
-export type GuideState = "scheduled" | "unscheduled" | "informational";
+export type TimelineDisplayTimeMode = "point" | "range" | "none";
+export type GuideState = "scheduled" | "unscheduled" | "optional" | "replacement" | "informational";
 export type GuideStateFilter = "all" | GuideState;
 
 const blueprintWorkspaceAreas = ["itinerary", "preparation", "tips", "sources"] as const satisfies readonly BlueprintWorkspaceArea[];
-const blueprintGuideFilters = ["attraction", "dining", "shopping", "experience", "stay", "transport"] as const satisfies readonly Exclude<GuideFilter, "all">[];
+const blueprintGuideFilters = ["attraction", "dining", "shopping", "experience"] as const satisfies readonly Exclude<GuideFilter, "all">[];
 
 export type BlueprintWorkspaceDisplay = {
   title: string;
@@ -20,6 +21,7 @@ export type BlueprintWorkspaceDisplay = {
   mapFallback: BlueprintMapViewportDisplay;
   areas: readonly BlueprintWorkspaceArea[];
   days: BlueprintDayTabDisplay[];
+  placementDays: BlueprintDayTabDisplay[];
   places: BlueprintPlaceDisplay[];
   itineraries: ItineraryDayDisplay[];
   guideFilters: readonly Exclude<GuideFilter, "all">[];
@@ -43,11 +45,14 @@ export type BlueprintMapViewportDisplay = {
 export type BlueprintDayTabDisplay = {
   id: string;
   label: string;
+  tabLabel?: string;
   date?: string;
   shortLabel?: string;
   city?: string;
   title?: string;
   summary?: string;
+  dayIds?: string[];
+  defaultDayId?: string;
   startContext?: NonNullable<PlanPresentation["days"][number]["startContext"]>;
   endContext?: NonNullable<PlanPresentation["days"][number]["endContext"]>;
 };
@@ -105,6 +110,7 @@ type TimelineBlock = {
   status?: string;
   routeAfter?: PlanRouteSegment;
   contextualTip?: string;
+  firstAccommodationAnchor?: boolean;
 };
 
 export type ItineraryCardDisplay = {
@@ -116,11 +122,18 @@ export type ItineraryCardDisplay = {
   type: GuideFilter;
   timelineRole: ItineraryTimelineRole;
   image?: GuideCardImageDisplay;
+  imageCandidates?: GuideCardImageDisplay[];
+  imageFallback?: "text_only";
+  featurePlaceCard?: TimelineFeaturePlaceCardModel;
+  placeMeta?: string;
+  purpose?: string;
+  emphasis?: "primary" | "secondary";
   meta?: string;
   statusLabel?: string;
   routeAfterLabel?: string;
   routeAfterStatusLabel?: string;
   routeAfterMode?: PlanRouteSegment["mode"];
+  routeAfterDestinationPlaceId?: string;
   routeAfterDurationLabel?: string;
   routeAfterDetail?: string;
   routeAnchor?: boolean;
@@ -128,12 +141,72 @@ export type ItineraryCardDisplay = {
   editState?: "moved";
   draftActionLabel?: string;
   contextualTip?: string;
+  externalAction?: { label: "Book" | "Check availability" | "View hotel" | "View booking"; url: string };
 };
+
+export type TimelineFeaturePlaceCardModel = {
+  title: string;
+  typeLabel: string;
+  areaLabel?: string;
+  summary: string;
+  chips: { label: string; kind?: "type" | "attribute" }[];
+  image?: GuideCardImageDisplay;
+  imageCandidates: GuideCardImageDisplay[];
+  imageAvailable: boolean;
+  clickable: boolean;
+};
+
+export type ItineraryTimelineRenderNode =
+  | { kind: "item"; key: string; item: ItineraryCardDisplay }
+  | { kind: "movement"; key: string; item: ItineraryCardDisplay; label: string; state: "confirmed" | "pending" | "checking" };
 
 export function timelineVisualPrimitiveForItem(item: Pick<ItineraryCardDisplay, "timelineRole">): TimelineVisualPrimitive {
   if (item.timelineRole === "transport") return "movement";
   if (item.timelineRole === "activity" || item.timelineRole === "rest") return "action";
   return "place";
+}
+
+export function itineraryTimelineNodesForItems(items: ItineraryCardDisplay[], routeRefreshBusy = false): ItineraryTimelineRenderNode[] {
+  const nodes: ItineraryTimelineRenderNode[] = [];
+  const pendingMovementByDestination = new Map<string, ItineraryTimelineRenderNode & { kind: "movement" }>();
+  const appendMovementForItem = (item: ItineraryCardDisplay) => {
+    const movement = movementRenderNodeForRouteAfter(item, routeRefreshBusy);
+    if (!movement) return;
+    if (item.routeAfterDestinationPlaceId) {
+      pendingMovementByDestination.set(item.routeAfterDestinationPlaceId, movement);
+      return;
+    }
+    nodes.push(movement);
+  };
+  for (const item of items) {
+    if (item.placeId) {
+      const pendingMovement = pendingMovementByDestination.get(item.placeId);
+      if (pendingMovement) {
+        nodes.push(pendingMovement);
+        pendingMovementByDestination.delete(item.placeId);
+      }
+    }
+    nodes.push({ kind: "item", key: `item-${item.key}`, item });
+    appendMovementForItem(item);
+  }
+  nodes.push(...pendingMovementByDestination.values());
+  return nodes;
+}
+
+function movementRenderNodeForRouteAfter(item: ItineraryCardDisplay, routeRefreshBusy: boolean): (ItineraryTimelineRenderNode & { kind: "movement" }) | undefined {
+  if (!item.routeAfterLabel && !item.routeAfterStatusLabel) return undefined;
+  const state = item.routeAfterStatusLabel ? (routeRefreshBusy ? "checking" : "pending") : "confirmed";
+  const label = item.routeAfterStatusLabel && routeRefreshBusy
+    ? "Checking travel time..."
+    : item.routeAfterLabel ?? item.routeAfterStatusLabel ?? "";
+  if (!label) return undefined;
+  return {
+    kind: "movement",
+    key: `movement-after-${item.key}`,
+    item,
+    label,
+    state
+  };
 }
 
 export type BlueprintMapPointDisplay = Pick<BlueprintPlaceDisplay, "id" | "title" | "coordinates"> & {
@@ -169,11 +242,22 @@ export type ItineraryDayDisplay = {
   dayContext?: DayContextDisplay;
   dayAlternatives: AlternativeDisplay[];
   items: ItineraryCardDisplay[];
+  sections?: ItineraryDateSectionDisplay[];
   placementOptions: ItineraryPlacementOption[];
   routePlaces: BlueprintMapPointDisplay[];
   routeSegments: BlueprintRouteSegmentDisplay[];
   routeRefresh?: ItineraryRouteRefreshDisplay;
   markers: BlueprintMapMarkerDisplay[];
+};
+
+export type ItineraryDateSectionDisplay = {
+  key: string;
+  heading: string;
+  dayId: string;
+  day: BlueprintDayTabDisplay;
+  dayContext?: DayContextDisplay;
+  dayAlternatives: AlternativeDisplay[];
+  items: ItineraryCardDisplay[];
 };
 
 export type ItineraryRouteRefreshDisplay = {
@@ -205,6 +289,9 @@ export type GuideCardDisplay = {
   draftActionLabel?: string;
   priorityLabel: string;
   timeline?: { dayId: string; label: string; timeLabel: string };
+  fitDayIds?: string[];
+  suitableDayIds?: string[];
+  replacementFor?: string;
 };
 
 export type GuideCardImageDisplay = {
@@ -353,12 +440,16 @@ export type TipGroupDisplay = {
 
 export type PreparationChecklistItemDisplay = {
   id: string;
+  taskId?: string;
+  requirementId?: string;
+  checklistItemId?: string;
   title: string;
   description?: string;
   completion?: string;
   context?: string;
   role: "action" | "general";
   checked: boolean;
+  checkable: boolean;
 };
 
 export type PreparationGroupDisplay = {
@@ -417,9 +508,24 @@ export function compactPendingItineraryEdits(edits: PendingItineraryEditDisplay[
   return edits.reduce<PendingItineraryEditDisplay[]>((next, edit) => mergePendingItineraryEdit(next, edit), []);
 }
 
-export function guideCardsForWorkspace(workspace: BlueprintWorkspaceDisplay, pendingEdits: PendingItineraryEditDisplay[] = []): GuideCardDisplay[] {
-  if (!pendingEdits.length) return workspace.guideCards;
-  return workspace.guideCards.map((card) => guideCardWithPendingItineraryEdit(card, pendingItineraryEditForPlace(pendingEdits, card.placeId)));
+export function guideCardsForWorkspace(workspace: BlueprintWorkspaceDisplay, pendingEdits: PendingItineraryEditDisplay[] = [], selectedDayId?: string): GuideCardDisplay[] {
+  const cards = pendingEdits.length
+    ? workspace.guideCards.map((card) => guideCardWithPendingItineraryEdit(card, pendingItineraryEditForPlace(pendingEdits, card.placeId)))
+    : workspace.guideCards;
+  return cards.map((card, index) => ({ card, index })).sort((left, right) => {
+    const score = (card: GuideCardDisplay) => {
+      const fitsSelectedDay = Boolean(selectedDayId && (card.timeline?.dayId === selectedDayId || card.fitDayIds?.includes(selectedDayId) || card.suitableDayIds?.includes(selectedDayId)));
+      if (card.state === "unscheduled" && card.canAdd && fitsSelectedDay) return 0;
+      if ((card.state === "optional" || card.state === "replacement") && fitsSelectedDay) return 1;
+      if (card.state === "unscheduled" && card.canAdd) return 2;
+      if (card.state === "optional" || card.state === "replacement") return 3;
+      if (card.state === "unscheduled") return 4;
+      if (card.state === "scheduled" && fitsSelectedDay) return 5;
+      if (card.state === "scheduled") return 6;
+      return 7;
+    };
+    return score(left.card) - score(right.card) || left.index - right.index;
+  }).map(({ card }) => card);
 }
 
 export function detailDisplayForWorkspacePlace(workspace: BlueprintWorkspaceDisplay, placeId: string, pendingEdits: PendingItineraryEditDisplay[] = []): DetailPlaceDisplay | undefined {
@@ -507,16 +613,22 @@ export function pendingItineraryEditBatchRequest(edits: PendingItineraryEditDisp
 
 export function buildBlueprintWorkspaceDisplay(plan: Plan, presentation: PlanPresentation): BlueprintWorkspaceDisplay {
   const tips = tipsForPresentation(plan, presentation);
-  const itineraries = presentation.days.map((day) => itineraryDisplayForDay(presentation, day, plan.sources));
+  const dayTabs = groupedDayTabsForPresentation(presentation);
+  const realDayTabs = presentation.days.map(dayTabForDay);
+  const itineraries = uniqueByKey([
+    ...dayTabs.map((day) => itineraryDisplayForTab(presentation, day, plan.sources)),
+    ...presentation.days.map((day) => itineraryDisplayForDay(presentation, day, plan.sources))
+  ], (itinerary) => itinerary.dayId);
   const informationalTopics = informationalGuideTopics(presentation);
   return {
     title: displayTripTitle(presentation, plan.title),
     dateLabel: blueprintDateLabel(plan, presentation),
-    initialDayId: presentation.days[0]?.id ?? "",
+    initialDayId: dayTabs[0]?.id ?? "",
     initialPlaceId: presentation.days[0]?.placeIds[0] ?? presentation.places[0]?.id ?? informationalTopics[0]?.id ?? "",
     mapFallback: mapFallbackForPlan(plan, presentation),
     areas: workspaceAreasForPresentation(presentation),
-    days: presentation.days.map(dayTabForDay),
+    days: dayTabs,
+    placementDays: realDayTabs,
     places: presentation.places.map((place) => placeDisplayForPlace(place, presentation.travelTips, requirementsForPlace(presentation, place.id), presentation.bookingConstraints)),
     itineraries,
     guideFilters: blueprintGuideFilters,
@@ -533,6 +645,142 @@ export function buildBlueprintWorkspaceDisplay(plan: Plan, presentation: PlanPre
     planAlternatives: planLevelAlternativesForPresentation(presentation),
     researchGrounding: structuredClone(presentation.researchGrounding ?? [])
   };
+}
+
+function groupedDayTabsForPresentation(presentation: PlanPresentation): BlueprintDayTabDisplay[] {
+  const days = presentation.days;
+  const tabs: BlueprintDayTabDisplay[] = [];
+  for (let index = 0; index < days.length;) {
+    const run = transitRunAt(days, index);
+    if (run.length > 1) {
+      tabs.push(dayTabForTransitRun(run));
+      index += run.length;
+      continue;
+    }
+    tabs.push(dayTabForDay(days[index]!));
+    index += 1;
+  }
+  return tabs;
+}
+
+function transitRunAt(days: ItineraryDay[], startIndex: number): ItineraryDay[] {
+  const first = days[startIndex];
+  if (!first || !dayCanStartTransitRun(first)) return [];
+  const run = [first];
+  for (let index = startIndex + 1; index < days.length; index += 1) {
+    const candidate = days[index]!;
+    if (!dayCanJoinTransitRun(candidate)) break;
+    run.push(candidate);
+    if (arrivalSettlingDay(candidate) || completeLocalDay(candidate)) break;
+  }
+  if (run.length < 2) return [];
+  const terminal = run[run.length - 1]!;
+  if (completeLocalDay(terminal)) return run.slice(0, -1).length > 1 ? run.slice(0, -1) : [];
+  return run;
+}
+
+function dayCanStartTransitRun(day: ItineraryDay): boolean {
+  return transitOrLogisticsDay(day) && !completeLocalDay(day) && !substantialLocalDay(day) && !hasSubstantialLocalActivity(day);
+}
+
+function dayCanJoinTransitRun(day: ItineraryDay): boolean {
+  return (transitOrLogisticsDay(day) && !hasSubstantialLocalActivity(day)) || arrivalSettlingDay(day);
+}
+
+function transitOrLogisticsDay(day: ItineraryDay): boolean {
+  if (dayKind(day) === "transit") return true;
+  const startStatus = day.startContext?.status;
+  const endStatus = day.endContext?.status;
+  if (startStatus === "transport_node" || startStatus === "in_transit" || endStatus === "transport_node" || endStatus === "in_transit") return true;
+  const text = dayPurposeText(day);
+  return /\b(transit|in flight|flight|airport|arrival|arrive|departure|depart|transfer|check.?in|settle|journey|date.?line)\b|在途|航班|机场|抵达|到达|出发|中转|转机|接送|入住/.test(text);
+}
+
+function arrivalSettlingDay(day: ItineraryDay): boolean {
+  const text = dayPurposeText(day);
+  if (!/\b(arrival|arrive|airport|check.?in|settle|recovery)\b|抵达|到达|机场|入住|安顿/.test(text)) return false;
+  return !completeLocalDay(day);
+}
+
+function completeLocalDay(day: ItineraryDay): boolean {
+  if (!hasTransitContext(day)) return false;
+  const localBlocks = localActivityBlocks(day);
+  if (localBlocks.length < 2) return false;
+  const localMinutes = localBlocks.reduce((total, block) => total + (block.durationMinutes ?? defaultLocalBlockMinutes(block)), 0);
+  const hasPrimaryLocal = localBlocks.some((block) => block.primaryExperience || block.kind === "stop" || block.kind === "event");
+  return hasPrimaryLocal && localMinutes >= 240;
+}
+
+function substantialLocalDay(day: ItineraryDay): boolean {
+  return !hasTransitContext(day) && localActivityBlocks(day).length >= 2;
+}
+
+function hasSubstantialLocalActivity(day: ItineraryDay): boolean {
+  return localActivityBlocks(day).some((block) => block.kind === "stop" || block.kind === "event" || block.primaryExperience || (block.durationMinutes ?? 0) >= 120);
+}
+
+function hasTransitContext(day: ItineraryDay): boolean {
+  return day.startContext?.status === "transport_node"
+    || day.startContext?.status === "in_transit"
+    || day.endContext?.status === "transport_node"
+    || day.endContext?.status === "in_transit"
+    || dayKind(day) === "transit";
+}
+
+function localActivityBlocks(day: ItineraryDay): BlueprintItineraryBlock[] {
+  return (day.blocks ?? []).filter((block) => {
+    if (block.planRole === "optional" || block.planRole === "replacement") return false;
+    if (block.kind === "transfer" || block.kind === "lodging" || block.kind === "rest") return false;
+    const text = `${block.kind} ${block.role ?? ""} ${block.title ?? ""} ${block.summary ?? ""}`.toLocaleLowerCase();
+    if (/\b(airport|flight|transfer|pickup|drop.?off|check.?in|check.?out|luggage|immigration|customs|declaration|levy|visa|passport|in transit)\b|机场|航班|接送|入境|行李|海关|申报|签证|护照|中转/.test(text)) return false;
+    return Boolean(block.placeId || block.title?.trim() || block.summary?.trim());
+  });
+}
+
+function defaultLocalBlockMinutes(block: BlueprintItineraryBlock): number {
+  if (block.kind === "meal") return 75;
+  if (block.kind === "event") return 120;
+  if (block.kind === "flexible") return 90;
+  return 120;
+}
+
+function dayPurposeText(day: ItineraryDay): string {
+  return `${dayKind(day) ?? ""} ${day.city ?? ""} ${day.title ?? ""} ${day.summary ?? ""} ${day.startContext?.label ?? ""} ${day.endContext?.label ?? ""}`.toLocaleLowerCase();
+}
+
+function dayKind(day: ItineraryDay): string | undefined {
+  return (day as ItineraryDay & { kind?: string }).kind;
+}
+
+function dayTabForTransitRun(days: ItineraryDay[]): BlueprintDayTabDisplay {
+  const first = days[0]!;
+  const last = days[days.length - 1]!;
+  return {
+    id: `tab-${first.id}-to-${last.id}`,
+    label: dateRangeLabel(first, last),
+    tabLabel: "Transit",
+    shortLabel: dateRangeLabel(first, last),
+    city: "Transit",
+    title: "Transit",
+    summary: days.map((day) => day.summary).filter(Boolean).join(" "),
+    dayIds: days.map((day) => day.id),
+    defaultDayId: last.id
+  };
+}
+
+function dateRangeLabel(first: ItineraryDay, last: ItineraryDay): string {
+  const firstLabel = compactMonthDay(first.date || first.shortLabel || first.label);
+  const lastLabel = compactMonthDay(last.date || last.shortLabel || last.label);
+  return firstLabel && lastLabel && firstLabel !== lastLabel ? `${firstLabel}-${lastLabel}` : firstLabel || lastLabel || first.label;
+}
+
+function compactMonthDay(value: string | undefined): string {
+  if (!value) return "";
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (iso) return `${Number(iso[2])}/${Number(iso[3])}`;
+  const slash = /^(\d{1,2})[/-](\d{1,2})$/.exec(value);
+  if (slash) return `${Number(slash[1])}/${Number(slash[2])}`;
+  return value;
 }
 
 function placeDisplayForPlace(place: PlanPlace, travelTips: PlanPresentation["travelTips"] = [], requirements: BlueprintActionRequirement[] = [], bookingConstraints: BlueprintBookingConstraint[] | undefined = []): BlueprintPlaceDisplay {
@@ -691,7 +939,7 @@ function dayTabForDay(day: ItineraryDay): BlueprintDayTabDisplay {
 function guideTypeForPlace(place: Pick<PlanPlace, "category" | "visitRole" | "name" | "display">): GuideFilter {
   const explicit = place.display?.type;
   if (explicit) return explicit;
-  const text = `${place.category} ${place.visitRole ?? ""} ${place.name}`.toLocaleLowerCase();
+  const text = `${place.category} ${place.visitRole ?? ""}`.toLocaleLowerCase();
   if (/\b(hotel|accommodation|lodg|villa|resort|inn|guesthouse|check.?in|check.?out)\b/.test(text)) return "stay";
   if (/\b(airport|station|terminal|flight|rail|train|metro|subway|bus|ferry|transfer|transport|taxi|shuttle)\b/.test(text)) return "transport";
   if (/\b(experience|workshop|class|tour|show|performance|theatre|theater|festival|ceremony|onsen|spa|cruise|ride)\b/.test(text)) return "experience";
@@ -706,14 +954,14 @@ function markerTypeForPlace(place: Pick<PlanPlace, "category" | "visitRole" | "n
 
 function isGuidePlace(place: PlanPlace): boolean {
   if (place.guideDisplay?.showInGuide !== undefined) return place.guideDisplay.showInGuide;
-  if (place.display) return true;
-  const text = `${place.category} ${place.visitRole ?? ""} ${place.name}`.toLocaleLowerCase();
-  if (/hotel|accommodation|lodg|villa|resort|inn|guesthouse|\bairport\b|\bstation\b|\bterminal\b|\bflight\b|\brail\b|\btrain\b|\bmetro\b|\bsubway\b|\bbus\b|\bferry\b|\btransfer\b|\btransport\b/.test(text)) return true;
+  const text = `${place.category} ${place.visitRole ?? ""}`.toLocaleLowerCase();
+  if (/\b(hotel|accommodation|lodging|lodge|villa|resort|inn|guesthouse|airport|station|terminal|flight|rail|train|metro|subway|bus|ferry|transfer|transport)\b/.test(text)) return false;
   return true;
 }
 
-function guideStateForPlace(place: PlanPlace, scheduledPlaceIds: Set<string>): GuideState {
+function guideStateForPlace(place: PlanPlace, scheduledPlaceIds: Set<string>, alternative?: { kind: "optional" | "replacement" }): GuideState {
   if (scheduledPlaceIds.has(place.id)) return "scheduled";
+  if (alternative) return alternative.kind;
   if (place.guideDisplay?.state === "informational") return "informational";
   if (place.guideDisplay?.state === "unscheduled") return "unscheduled";
   if (place.schedulingEligibility?.decision === "informational") return "informational";
@@ -730,10 +978,25 @@ function visibleTimelineBlock(block: BlueprintItineraryBlock, place: PlanPlace |
   if (requirements.length) return true;
   const text = `${block.kind} ${block.role ?? ""} ${block.title ?? ""} ${block.summary ?? ""}`.toLocaleLowerCase();
   if (block.kind === "transfer") return /\b(transfer|route|journey|arrival|airport|station|pickup|drop.?off|traffic|licensed|confirmed|meeting point)\b|\btransfer to\b|行程|路线|交通|抵达|机场|车站|接送|集合点/.test(text);
-  if (block.kind === "lodging" || blockImpliesPendingPlace(block)) return /\b(tbd|to be determined|not selected|not confirmed|unconfirmed|choose|select|confirm|pending|reservation|booking|ticket|pickup point|meeting point|check.?out)\b|待定|未定|未选择|未确认|选择|确认|预订|订票|集合点|退房/.test(text);
-  if (block.kind === "meal") return /\b(reservation|booking|ticket|required|fixed|confirm|not selected|tbd|meeting|pickup)\b|预订|确认|待定|未选择|集合/.test(text);
-  if (block.kind === "rest" || block.kind === "flexible") return /\b(required|must|fixed|appointment|medical|medication|health|childcare|work call|meeting|pickup|ticket|booking|reservation)\b|必须|固定|预约|药|医疗|健康|会议|接送|预订|订票/.test(text);
+  if (block.kind === "lodging" || blockImpliesPendingPlace(block)) return /\b(tbd|to be determined|not selected|not confirmed|unconfirmed|choose|select|confirm|pending|reservation|booking|ticket|pickup point|meeting point|check.?in|check.?out|settle)\b|待定|未定|未选择|未确认|选择|确认|预订|订票|集合点|入住|退房|安顿/.test(text);
+  if (block.kind === "meal") return meaningfulLightTimelineBlock(block) || /\b(reservation|booking|ticket|required|fixed|confirm|not selected|tbd|meeting|pickup)\b|预订|确认|待定|未选择|集合/.test(text);
+  if (block.kind === "rest" || block.kind === "flexible") return meaningfulLightTimelineBlock(block) || /\b(required|must|fixed|appointment|medical|medication|health|childcare|work call|meeting|pickup|ticket|booking|reservation)\b|必须|固定|预约|药|医疗|健康|会议|接送|预订|订票/.test(text);
   return /\b(required|must|fixed|confirmed|reservation|booking|ticket|choose|select|confirm|pending|pickup|meeting point|documents?)\b|必须|固定|确认|预订|订票|选择|待定|集合点|证件/.test(text);
+}
+
+function meaningfulLightTimelineBlock(block: BlueprintItineraryBlock): boolean {
+  if (!block.startTime && !block.endTime && !block.display?.timeLabel) return false;
+  const text = `${block.role ?? ""} ${block.title ?? ""} ${block.summary ?? ""}`.toLocaleLowerCase();
+  if (genericFillerTimelineText(text)) return false;
+  if (block.kind === "meal") return /\b(breakfast|brunch|lunch|dinner|meal|food|restaurant|warung|cafe|coffee|market|near|around|central|base|hotel|lodging|accommodation|airport|station|temple|museum|beach|ubud|jimbaran|kuta|seminyak|sanur|nusa dua|uluwatu|denpasar)\b|早餐|午餐|晚餐|餐|咖啡|餐厅|附近|基地|酒店|机场|车站/.test(text);
+  if (block.kind === "rest") return /\b(rest|recover|recovery|break|pause|cafe|coffee|cool.?down|shower|regroup|luggage|after|before|near|base|hotel|lodging|accommodation|airport|station|heat|rain|child|elder|jet.?lag)\b|休息|恢复|暂停|咖啡|酒店|行李|降温/.test(text);
+  if (block.kind === "flexible") return /\b(window|flexible|buffer|optional|weather|rain|heat|low.?energy|shopping|walk|market|neighborhood|near|around|base|hotel|lodging|accommodation|before|after|between)\b|机动|缓冲|天气|低体力|购物|散步|附近/.test(text);
+  return false;
+}
+
+function genericFillerTimelineText(text: string): boolean {
+  return /\b(free time|flexible time|open time|slow morning|easy morning|quiet evening|free evening|relax|take it easy|leisure time|unhurried time|downtime|enjoy the evening)\b|自由时间|放松|休闲|慢节奏/.test(text)
+    && !/\b(near|around|base|hotel|lodging|accommodation|airport|station|before|after|between|luggage|check.?in|check.?out|meal|breakfast|lunch|dinner|cafe|coffee|market|weather|heat|rain|medical|medication)\b|附近|基地|酒店|机场|行李|入住|退房|早餐|午餐|晚餐|咖啡|天气|医疗/.test(text);
 }
 
 function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay): TimelineBlock[] {
@@ -741,7 +1004,9 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
   const displayDay = dayTabForDay(day);
   if (day.blocks) {
     const scheduledPlaceIds = new Set(day.placeIds);
+    const seenAccommodationPlaceIds = new Set<string>();
     return [...day.blocks].sort((left, right) => left.order - right.order).flatMap((block, index) => {
+      if (semanticTransferCoveredByFormalRoute(block, day.id, presentation.routeSegments, placeById)) return [];
       const place = block.placeId ? placeById.get(block.placeId) : undefined;
       if (block.placeId && !place) return [];
       const requirements = place ? requirementsForPlace(presentation, place.id) : [];
@@ -749,14 +1014,16 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
       if (!visibleTimelineBlock(block, place, routeAnchor, requirements)) return [];
       const reorderable = Boolean(routeAnchor && place && (block.display?.reorderable ?? directMoveAllowed(place, requirements, presentation.bookingConstraints)));
       const routeAfter = routeAnchor && place ? presentation.routeSegments.find((segment) => segment.dayId === day.id && segment.originPlaceId === place.id) : undefined;
-      const status = place ? itineraryBlockStatus(place, requirements) : undefined;
+      const firstAccommodationAnchor = Boolean(place?.accommodation && !seenAccommodationPlaceIds.has(place.id));
+      if (place?.accommodation) seenAccommodationPlaceIds.add(place.id);
+      const status = timelineStatusForBlock(block, place, requirements, firstAccommodationAnchor);
       const contextualTip = place ? contextualTipForPlace(place, presentation.travelTips, { dayId: day.id, blockId: block.id }, requirements) : undefined;
       return [{
         day: displayDay,
         ...(place ? { place } : {}),
         block,
         order: block.order,
-        timeLabel: block.display?.timeLabel?.trim() || roughBlockTimeLabel(block, place, index),
+        timeLabel: deriveTimelineTimeDisplay(block, place, index).label ?? "",
         type: place ? guideTypeForPlace(place) : blockGuideType(block),
         timelineRole: timelineRoleForBlock(block, place),
         ...(blockTitle(block, place) ? { title: blockTitle(block, place)! } : {}),
@@ -764,6 +1031,7 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
         ...(routeAnchor ? { routeAnchor: true } : {}),
         ...(reorderable ? { reorderable: true } : {}),
         ...(status ? { status } : {}),
+        ...(firstAccommodationAnchor ? { firstAccommodationAnchor: true } : {}),
         ...(contextualTip ? { contextualTip } : {}),
         ...(routeAfter ? { routeAfter } : {})
       }];
@@ -795,15 +1063,100 @@ function timelineBlocksForDay(presentation: PlanPresentation, day: ItineraryDay)
   });
 }
 
+function semanticTransferCoveredByFormalRoute(block: BlueprintItineraryBlock, dayId: string, segments: PlanRouteSegment[], placeById: Map<string, PlanPlace>): boolean {
+  if (block.kind !== "transfer") return false;
+  const transferText = normalizedRouteEndpointText(`${block.title ?? ""} ${block.summary ?? ""}`);
+  if (!transferText) return false;
+  return segments.some((segment) => {
+    if (segment.dayId !== dayId || !routeSegmentShowsAsFormalRoute(segment)) return false;
+    const origin = placeById.get(segment.originPlaceId);
+    const destination = placeById.get(segment.destinationPlaceId);
+    if (!origin || !destination) return false;
+    const originName = normalizedRouteEndpointText(displayPlaceName(origin));
+    const destinationName = normalizedRouteEndpointText(displayPlaceName(destination));
+    return originName.length >= 4 && destinationName.length >= 4 && transferText.includes(originName) && transferText.includes(destinationName);
+  });
+}
+
+function normalizedRouteEndpointText(value: string): string {
+  return value.toLocaleLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ").trim();
+}
+
 function itineraryDisplayForDay(presentation: PlanPresentation, day: ItineraryDay, planSources: SourceReference[] = [], pendingEdit?: PendingItineraryEditDisplay | null): ItineraryDayDisplay {
   const blocks = timelineBlocksForDay(presentation, day);
   return itineraryDisplayFromBlocks(dayTabForDay(day), blocks, dayAlternativesForDay(day), presentation.places, planSources, presentation.sourceCatalog, presentation.travelTips, pendingEdit);
+}
+
+function itineraryDisplayForTab(presentation: PlanPresentation, tab: BlueprintDayTabDisplay, planSources: SourceReference[] = []): ItineraryDayDisplay {
+  const dayIds = tab.dayIds?.length ? tab.dayIds : [tab.id];
+  if (dayIds.length <= 1) {
+    const day = presentation.days.find((candidate) => candidate.id === dayIds[0]) ?? presentation.days.find((candidate) => candidate.id === tab.id);
+    return day ? itineraryDisplayForDay(presentation, day, planSources) : emptyItineraryDayDisplay();
+  }
+  const sections = dayIds.flatMap((dayId, index) => {
+    const sourceDay = presentation.days.find((candidate) => candidate.id === dayId);
+    if (!sourceDay) return [];
+    const section = itineraryDisplayForDay(presentation, sourceDay, planSources);
+    return {
+      key: sourceDay.id,
+      heading: sectionHeadingForDay(sourceDay, index, dayIds.length),
+      dayId: sourceDay.id,
+      day: section.day,
+      ...(section.dayContext ? { dayContext: section.dayContext } : {}),
+      dayAlternatives: section.dayAlternatives,
+      items: section.items
+    };
+  });
+  const combinedItems = sections.flatMap((section) => section.items);
+  const combinedAlternatives = sections.flatMap((section) => section.dayAlternatives);
+  const sectionDisplays = dayIds.flatMap((dayId) => {
+    const sourceDay = presentation.days.find((candidate) => candidate.id === dayId);
+    return sourceDay ? [itineraryDisplayForDay(presentation, sourceDay, planSources)] : [];
+  });
+  return {
+    dayId: tab.id,
+    day: tab,
+    dayAlternatives: combinedAlternatives,
+    items: combinedItems,
+    sections,
+    placementOptions: [],
+    routePlaces: uniqueByKey(sectionDisplays.flatMap((section) => section.routePlaces), (place) => place.placeId),
+    routeSegments: sectionDisplays.flatMap((section) => section.routeSegments),
+    markers: uniqueByKey(sectionDisplays.flatMap((section) => section.markers), (marker) => marker.placeId)
+  };
 }
 
 export function itineraryDisplayForWorkspace(workspace: BlueprintWorkspaceDisplay, dayId: string, pendingEdit?: PendingItineraryEditDisplay | PendingItineraryEditDisplay[] | null): ItineraryDayDisplay {
   const base = workspace.itineraries.find((candidate) => candidate.dayId === dayId) ?? workspace.itineraries[0];
   if (!base) return emptyItineraryDayDisplay();
   return itineraryDisplayWithPending(base, workspace.places, pendingEdit);
+}
+
+function sectionHeadingForDay(day: ItineraryDay, index = 0, groupLength = 1): string {
+  const date = compactMonthDay(day.date || day.shortLabel || day.label);
+  const purpose = conciseDayPurposeLabel(day, index, groupLength);
+  return [date, purpose].filter(Boolean).join(" · ");
+}
+
+function conciseDayPurposeLabel(day: ItineraryDay, index = 0, groupLength = 1): string {
+  if (groupLength > 1 && index === 0) return "Departure";
+  if (groupLength > 1 && index === groupLength - 1 && arrivalSettlingDay(day)) return "Arrival";
+  const text = dayPurposeText(day);
+  if (/\bdeparture|depart\b|出发/.test(text)) return "Departure";
+  if (/\barrival|arrive|dps|抵达|到达/.test(text)) return "Arrival";
+  if (/\bin transit|transit|flight|date.?line|中转|在途/.test(text)) return "In transit";
+  if (/\btransfer|base change|接送|转场/.test(text)) return "Transfer";
+  return day.title || day.city || "Trip day";
+}
+
+function uniqueByKey<T>(items: T[], keyForItem: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = keyForItem(item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function itineraryDisplayFromBlocks(day: BlueprintDayTabDisplay, blocks: TimelineBlock[], dayAlternatives: AlternativeDisplay[], places: PlanPlace[], planSources: SourceReference[], sourceCatalog: BlueprintSource[] = [], travelTips: PlanPresentation["travelTips"] = [], pendingEdit?: PendingItineraryEditDisplay | null): ItineraryDayDisplay {
@@ -934,7 +1287,35 @@ function normalizeContextLabel(value: string): string {
 }
 
 function itineraryDisplayWithPending(base: ItineraryDayDisplay, places: BlueprintPlaceDisplay[], pendingEdit?: PendingItineraryEditDisplay | PendingItineraryEditDisplay[] | null): ItineraryDayDisplay {
-  const edits = compactPendingItineraryEdits(Array.isArray(pendingEdit) ? pendingEdit : pendingEdit ? [pendingEdit] : []).filter((edit) => edit.dayId === base.dayId);
+  const compactEdits = compactPendingItineraryEdits(Array.isArray(pendingEdit) ? pendingEdit : pendingEdit ? [pendingEdit] : []);
+  if (base.sections?.length) {
+    const sections = base.sections.map((section) => {
+      const sectionBase: ItineraryDayDisplay = {
+        dayId: section.dayId,
+        day: section.day,
+        ...(section.dayContext ? { dayContext: section.dayContext } : {}),
+        dayAlternatives: section.dayAlternatives,
+        items: section.items,
+        placementOptions: itineraryPlacementOptionsForItems(section.items),
+        routePlaces: [],
+        routeSegments: [],
+        markers: []
+      };
+      const updated = itineraryDisplayWithPending(sectionBase, places, compactEdits);
+      return {
+        ...section,
+        ...(updated.dayContext ? { dayContext: updated.dayContext } : {}),
+        dayAlternatives: updated.dayAlternatives,
+        items: updated.items
+      };
+    });
+    return {
+      ...base,
+      sections,
+      items: sections.flatMap((section) => section.items)
+    };
+  }
+  const edits = compactEdits.filter((edit) => edit.dayId === base.dayId);
   if (!edits.length) return base;
   let items = base.items.map(({ routeAfterLabel: _routeAfterLabel, routeAfterStatusLabel: _routeAfterStatusLabel, ...item }) => item);
   let routePlaces = base.routePlaces;
@@ -975,6 +1356,15 @@ function itineraryDisplayWithPending(base: ItineraryDayDisplay, places: Blueprin
     markers,
     routeRefresh: draftRouteRefreshDisplayForPendingEdits(base, items, places, edits)
   };
+}
+
+function itineraryPlacementOptionsForItems(items: ItineraryCardDisplay[]): ItineraryPlacementOption[] {
+  const placeItems = items.filter((item) => item.kind === "block" && item.placeId && item.routeAnchor);
+  return [
+    { id: "start", label: "At the start of the day", kind: "start" },
+    ...placeItems.map((item) => ({ id: `after-${item.placeId}`, label: `After ${item.title}`, kind: "after" as const, afterPlaceId: item.placeId })),
+    { id: "end", label: "At the end of the day", kind: "end" }
+  ];
 }
 
 function samePendingItineraryEditTarget(left: PendingItineraryEditDisplay, right: PendingItineraryEditDisplay): boolean {
@@ -1042,11 +1432,29 @@ function detailWithPendingItineraryEdit(detail: DetailPlaceDisplay, edit: Pendin
 }
 
 export function scheduledDayIdForPlace(workspace: BlueprintWorkspaceDisplay, placeId: string): string | undefined {
-  return workspace.itineraries.find((itinerary) => itinerary.items.some((item) => item.kind === "block" && item.placeId === placeId && item.routeAnchor))?.dayId;
+  for (const itinerary of workspace.itineraries) {
+    for (const section of itinerary.sections ?? []) {
+      if (section.items.some((item) => item.kind === "block" && item.placeId === placeId && item.routeAnchor)) return section.dayId;
+    }
+    if (workspace.placementDays.some((day) => day.id === itinerary.dayId) && itinerary.items.some((item) => item.kind === "block" && item.placeId === placeId && item.routeAnchor)) return itinerary.dayId;
+  }
+  return undefined;
 }
 
 function guideCardsForPresentation(presentation: PlanPresentation, planSources: SourceReference[] = [], informationalTopics = informationalGuideTopics(presentation)): GuideCardDisplay[] {
   const scheduledPlaceIds = new Set(presentation.days.flatMap((day) => day.placeIds));
+  const alternativeByPlace = new Map<string, { kind: "optional" | "replacement"; dayId: string; dayLabel: string; replacementFor?: string }>();
+  for (const day of presentation.days) {
+    for (const block of day.blocks ?? []) {
+      if (!block.placeId || (block.planRole !== "optional" && block.planRole !== "replacement") || alternativeByPlace.has(block.placeId)) continue;
+      alternativeByPlace.set(block.placeId, {
+        kind: block.planRole,
+        dayId: day.id,
+        dayLabel: day.shortLabel ?? day.label ?? day.date,
+        ...(block.replacementFor ? { replacementFor: block.replacementFor } : {})
+      });
+    }
+  }
   const firstTimelineByPlace = new Map<string, GuideCardDisplay["timeline"]>();
   for (const day of presentation.days) {
     for (const block of timelineBlocksForDay(presentation, day)) {
@@ -1058,12 +1466,18 @@ function guideCardsForPresentation(presentation: PlanPresentation, planSources: 
   const placeCards = presentation.places
     .filter(isGuidePlace)
     .map((place) => {
-      const state = guideStateForPlace(place, scheduledPlaceIds);
+      const alternative = alternativeByPlace.get(place.id);
+      const state = guideStateForPlace(place, scheduledPlaceIds, alternative);
       const requirements = requirementsForPlace(presentation, place.id);
       const image = guideCardImageForPlace(place);
       const timeline = firstTimelineByPlace.get(place.id);
-      const planFitLabel = guidePlanFitLabel(presentation, place, state, timeline, requirements);
+      const planFitLabel = alternative
+        ? alternative.kind === "replacement"
+          ? `Alternative to ${alternative.replacementFor ?? "the planned stop"} · ${alternative.dayLabel}`
+          : `Optional for ${alternative.dayLabel}`
+        : guidePlanFitLabel(presentation, place, state, timeline, requirements);
       const practicalSignal = guidePracticalSignal(place, requirements);
+      const fitDayIds = presentation.days.filter((day) => day.candidates?.includes(place.id)).map((day) => day.id);
       return {
         placeId: place.id,
         title: displayPlaceName(place),
@@ -1078,7 +1492,10 @@ function guideCardsForPresentation(presentation: PlanPresentation, planSources: 
         tags: guideDecisionTags(presentation, place, requirements, planFitLabel, practicalSignal),
         priorityLabel: placePriorityLabel(place.priority),
         ...guideCardAction(place, state, timeline, requirements),
-        ...(timeline ? { timeline } : {})
+        ...(timeline ? { timeline } : {}),
+        ...(fitDayIds.length ? { fitDayIds } : {}),
+        ...(place.schedulingEligibility?.suitableDayIds?.length ? { suitableDayIds: [...place.schedulingEligibility.suitableDayIds] } : {}),
+        ...(alternative?.replacementFor ? { replacementFor: alternative.replacementFor } : {})
       };
     });
   return [
@@ -1112,7 +1529,7 @@ function detailDisplayForPlace(presentation: PlanPresentation, planSources: Sour
   const requirements = requirementsForPlace(presentation, place.id);
   const comparisonRows = comparisonRowsForPlace(presentation, place);
   const comparisonHeading = comparisonRows.length ? place.guideDisplay?.comparisonTitle ?? comparisonTitle(type) : undefined;
-  const canAdd = !scheduledDay && directAddAllowed(place);
+  const canAdd = !scheduledDay && addWorkflowAvailable(place);
   const canRemoveFromDay = Boolean(scheduledDay && directRemoveAllowed(place, requirements, presentation.bookingConstraints));
   const removeBlockedReason = scheduledDay && !canRemoveFromDay ? directRemoveBlockedLabel(place, requirements, presentation.bookingConstraints) : undefined;
   const leadBody = travelerFacingDefaultText(place.whyWorthIt) || travelerFacingDefaultText(place.plan);
@@ -1511,27 +1928,245 @@ function itineraryCardForBlock(block: TimelineBlock, places: PlanPlace[] = []): 
   const routeAfterNeedsCheck = Boolean(block.routeAfter && routeSegmentShowsAsFormalRoute(block.routeAfter) && routeSegmentNeedsRefresh(block.routeAfter));
   const routeAfterLabel = routeAfterNeedsCheck ? undefined : itineraryRouteReadout(block.routeAfter);
   const routeAfterStatusLabel = routeAfterNeedsCheck ? routeCheckReadoutLabel(false) : undefined;
-  const image = block.place ? guideCardImageForPlace(block.place) : undefined;
+  const accommodationIntroduction = accommodationIntroductionBlock(block);
+  const accommodationCard = Boolean(block.place?.accommodation);
+  const imageCandidates = block.place && (!accommodationCard || block.firstAccommodationAnchor) ? timelineImageCandidatesForPlace(block.place) : [];
+  const image = imageCandidates[0];
   const meta = timelineCardMeta(block);
+  const placeMeta = block.place ? accommodationCard ? deriveTimelineAccommodationMeta(block.place) : deriveTimelinePlaceMeta(block.place).label : undefined;
+  const purpose = block.place ? accommodationCard ? deriveTimelineAccommodationPurpose(block.block, block.place) : deriveTimelinePlacePurpose(block.block, block.place) : undefined;
+  const featurePlaceCard = block.place && block.timelineRole === "place" && !accommodationCard && block.type !== "transport" && block.type !== "stay"
+    ? deriveTimelineFeaturePlaceCardModel(block.block, block.place, image)
+    : undefined;
+  const externalAction = block.place && (!block.place.accommodation || accommodationIntroduction) ? accommodationExternalAction(block.place) : undefined;
   return {
     kind: "block",
     key: `${block.day.id}-${block.place?.id ?? block.block?.id ?? block.order}-${block.order}`,
     placeId: block.place?.id ?? "",
-    title: block.place ? displayPlaceName(block.place) : block.title ?? "Flexible time",
+    title: block.title ?? (block.place ? displayPlaceName(block.place) : "Flexible time"),
     timeLabel: block.timeLabel,
     type: block.type,
     timelineRole: block.timelineRole,
-    ...(image ? { image } : {}),
+    ...(image ? { image, imageCandidates, imageFallback: "text_only" as const } : {}),
+    ...(featurePlaceCard ? { featurePlaceCard } : {}),
+    ...(placeMeta ? { placeMeta } : {}),
+    ...(purpose ? { purpose } : {}),
+    ...(block.place && !block.place.accommodation ? { emphasis: block.block?.primaryExperience ? "primary" as const : "secondary" as const } : {}),
     ...(meta ? { meta } : {}),
     ...(block.status ? { statusLabel: block.status } : {}),
     ...(routeAfterLabel ? { routeAfterLabel } : {}),
     ...(routeAfterStatusLabel ? { routeAfterStatusLabel } : {}),
     ...(block.routeAfter?.mode ? { routeAfterMode: block.routeAfter.mode } : block.timelineRole === "transport" ? { routeAfterMode: transportModeFromText(`${block.title ?? ""} ${block.meta ?? ""}`) } : {}),
+    ...(block.routeAfter?.destinationPlaceId ? { routeAfterDestinationPlaceId: block.routeAfter.destinationPlaceId } : {}),
+    ...(block.routeAfter?.durationMinutes ? { routeAfterDurationLabel: compactTravelDurationLabel(block.routeAfter.durationMinutes) } : {}),
     ...(block.routeAfter ? { routeAfterDetail: conciseRouteDetail(block.routeAfter, places) } : {}),
     ...(block.routeAnchor ? { routeAnchor: true } : {}),
     ...(block.place && block.reorderable ? { reorderable: true } : {}),
-    ...(block.contextualTip ? { contextualTip: block.contextualTip } : {})
+    ...(block.contextualTip ? { contextualTip: block.contextualTip } : {}),
+    ...(externalAction ? { externalAction } : {})
   };
+}
+
+export function deriveTimelineFeaturePlaceCardModel(block: BlueprintItineraryBlock | undefined, place: PlanPlace, image = guideCardImageForPlace(place)): TimelineFeaturePlaceCardModel {
+  const meta = deriveTimelinePlaceMeta(place);
+  const imageCandidates = timelineImageCandidatesForPlace(place);
+  const selectedImage = imageCandidates.find((candidate) => candidate.url === image?.url) ?? imageCandidates[0];
+  return {
+    title: travelerFacingDefaultText(place.name) || displayPlaceName(place),
+    typeLabel: meta.typeLabel,
+    ...(meta.areaLabel ? { areaLabel: meta.areaLabel } : {}),
+    summary: deriveTimelinePlacePurpose(block, place),
+    chips: deriveTimelinePlaceChips(place, meta.typeLabel),
+    ...(selectedImage ? { image: selectedImage } : {}),
+    imageCandidates,
+    imageAvailable: imageCandidates.length > 0,
+    clickable: true
+  };
+}
+
+export function deriveTimelinePlaceChips(place: PlanPlace, typeLabel = timelinePlaceTypeLabel(place)): TimelineFeaturePlaceCardModel["chips"] {
+  const category = `${place.category} ${place.visitRole ?? ""}`.toLocaleLowerCase();
+  const labels = [typeLabel];
+  if (/textile|weav|natural.?dye|craft/.test(category)) labels.push("Craft", "Culture");
+  else if (/art museum|painting|woodcarv|museum/.test(category)) labels.push("Art", "Indoor");
+  else if (/cooking class|cooking academy|culinary class/.test(category)) labels.push("Hands-on", "Local food");
+  else if (/restaurant|dining|warung|cafe|food/.test(category)) labels.push("Local food");
+  else if (/dance|performance|show/.test(category)) labels.push("Culture", ...(/sunset/.test(category) ? ["Sunset"] : []));
+  else if (/clifftop.*temple|sea temple/.test(category)) labels.push("Culture", "Scenic spot");
+  else if (/coast|beach/.test(category)) labels.push("Outdoors", "Scenic spot");
+  else if (/temple|shrine/.test(category)) labels.push("Culture", "Scenic spot");
+  else if (/ridge|walk|trail/.test(category)) labels.push("Outdoors", "Scenic spot");
+  else if (/gallery|shop|market/.test(category)) labels.push("Craft", "Shopping");
+  else if (/wildlife|forest|macaque|nature/.test(category)) labels.push("Nature", "Outdoors");
+  const unique = [...new Set(labels)].slice(0, 4);
+  return unique.map((label, index) => ({ label, kind: index === 0 ? "type" : "attribute" }));
+}
+
+export function deriveTimelinePlaceMeta(place: PlanPlace): { typeLabel: string; areaLabel?: string; label: string } {
+  const typeLabel = timelinePlaceTypeLabel(place);
+  const areaLabel = travelerFacingDefaultText(place.area) || travelerFacingDefaultText(place.city);
+  return {
+    typeLabel,
+    ...(areaLabel ? { areaLabel } : {}),
+    label: [typeLabel, areaLabel].filter(Boolean).join(" · ")
+  };
+}
+
+function timelinePlaceTypeLabel(place: PlanPlace): string {
+  const category = `${place.category} ${place.visitRole ?? ""}`.toLocaleLowerCase();
+  if (/textile|weav|natural.?dye/.test(category)) return "Textiles";
+  if (/art museum|painting|woodcarv/.test(category)) return "Art museum";
+  if (/ridge walk|ridge path/.test(category)) return "Ridge walk";
+  if (/cooking class|cooking academy|culinary class/.test(category)) return "Cooking class";
+  if (/wildlife.*temple|temple.*forest|macaque/.test(category)) return "Temple forest";
+  if (/restaurant|dining|warung|cafe|food/.test(category)) return /indonesian/.test(category) ? "Indonesian dining" : "Dining";
+  if (/temple|shrine/.test(category)) return "Temple";
+  if (/beach|coast/.test(category)) return "Beach";
+  if (/gallery|shop|market|craft/.test(category)) return "Shopping";
+  if (/walk|trail/.test(category)) return "Walk";
+  if (/museum/.test(category)) return "Museum";
+  const source = travelerFacingDefaultText(place.category);
+  if (source && source.split(/\s+/).length <= 3) return sentenceCaseLabel(source);
+  const fallback = guideTypeForPlace(place);
+  return fallback === "dining" ? "Dining" : fallback === "shopping" ? "Shopping" : fallback === "experience" ? "Experience" : fallback === "stay" ? "Hotel" : fallback === "transport" ? "Transport" : "Attraction";
+}
+
+function deriveTimelinePlacePurpose(block: BlueprintItineraryBlock | undefined, place: PlanPlace): string {
+  const authored = [place.guideDisplay?.cardSummary, block?.summary]
+    .map((value) => concisePurposeCandidate(value, place))
+    .find(Boolean);
+  if (authored) return authored;
+  const category = `${place.category} ${place.visitRole ?? ""}`.toLocaleLowerCase();
+  if (/textile|weav|natural.?dye/.test(category)) return "Explore Indonesian weaving and natural-dye textiles.";
+  if (/art museum|painting|woodcarv/.test(category)) return "Explore Balinese painting and woodcarving.";
+  if (/ridge walk|ridge path/.test(category)) return "Walk a scenic ridge between river valleys.";
+  if (/cooking class|cooking academy|culinary class/.test(category)) return "Try a hands-on Balinese cooking experience.";
+  if (/wildlife.*temple|temple.*forest|macaque/.test(category)) return "Explore the temple forest and resident macaques.";
+  if (/restaurant|dining|warung|cafe|food/.test(category)) return /indonesian/.test(category) ? "Explore regional Indonesian cooking." : "Pause for a meal along today’s route.";
+  if (/clifftop.*temple|sea temple/.test(category)) return "Explore a clifftop Balinese temple setting.";
+  if (/temple|shrine/.test(category)) return "Explore a Balinese temple setting.";
+  if (/beach|coast/.test(category)) return "Take in the coast and beach setting.";
+  if (/gallery|shop|market|craft/.test(category)) return "Browse local craft and design traditions.";
+  const concise = [place.visitRole, place.plan, place.whyWorthIt]
+    .map((value) => concisePurposeCandidate(value, place))
+    .find(Boolean);
+  if (concise) return concise;
+  return "Explore this stop as part of today’s route.";
+}
+
+function deriveTimelineAccommodationMeta(place: PlanPlace): string {
+  const area = travelerFacingDefaultText(place.accommodation?.baseLabel) || travelerFacingDefaultText(place.area) || travelerFacingDefaultText(place.city);
+  return ["Hotel", area].filter(Boolean).join(" · ");
+}
+
+function deriveTimelineAccommodationPurpose(block: BlueprintItineraryBlock | undefined, place: PlanPlace): string {
+  const text = `${block?.title ?? ""} ${block?.summary ?? ""}`.toLocaleLowerCase();
+  if (/check[ -]?out|luggage handover/.test(text)) return "Check out and hand over luggage.";
+  if (/check[ -]?in|settle|base introduction/.test(text)) return place.accommodation?.state === "confirmed" ? "Check in and recover after arrival." : "Proposed arrival base for luggage and recovery.";
+  if (/breakfast|brunch/.test(text)) {
+    if (/pack|luggage/.test(text)) return "Breakfast and finish packing.";
+    if (/late departure|slow breakfast/.test(text)) return "Slow breakfast, then depart.";
+    if (/light breakfast/.test(text)) return "Light breakfast, then depart.";
+    if (/depart|leave|driver/.test(text)) return "Breakfast, then depart.";
+    if (/quiet|beachfront|free time|morning/.test(text)) return "Breakfast and an unhurried hotel morning.";
+    return "Breakfast at the hotel.";
+  }
+  if (block?.kind === "rest" && /rest|recover|recovery|pool|shower|early night/.test(text)) return "Rest and recover at the hotel.";
+  if (/return|end at|back to/.test(text)) return "Return to the hotel.";
+  if (/rest|recover|recovery|pool|shower|early night/.test(text)) return "Rest and recover at the hotel.";
+  return `Use ${place.name} as the day’s accommodation base.`;
+}
+
+function concisePurposeCandidate(value: string | undefined, place: PlanPlace): string | undefined {
+  const text = travelerFacingDefaultText(value).replace(/\s+/g, " ").trim();
+  if (!text || text.length > 70 || text.includes(";") || sameText(text.replace(/[.!?]$/, ""), place.name)) return undefined;
+  return /[.!?]$/.test(text) ? sentenceCaseLabel(text) : `${sentenceCaseLabel(text)}.`;
+}
+
+function sentenceCaseLabel(value: string): string {
+  return value.replace(/^./u, (character) => character.toLocaleUpperCase());
+}
+
+function accommodationIntroductionBlock(block: TimelineBlock): boolean {
+  if (!block.place?.accommodation || block.block?.kind !== "lodging") return false;
+  if (!/check[ -]?in|arriv|settle|入住|抵达/i.test(block.block.title ?? "")) return false;
+  return block.day.startContext?.placeId !== block.place.id || block.day.startContext?.label !== block.day.endContext?.label;
+}
+
+function timelineStatusForBlock(block: BlueprintItineraryBlock, place: PlanPlace | undefined, requirements: BlueprintActionRequirement[], firstAccommodationAnchor = true): string | undefined {
+  if (place && !place.accommodation) return timelinePlaceOperationalStatus(block, place, requirements);
+  const timingStatus = block.display?.timingStatus;
+  if (timingStatus === "confirmed") return "Confirmed";
+  if (timingStatus === "estimated") return "Estimated";
+  if (timingStatus === "recheck") return "Needs recheck";
+  if (timingStatus === "unknown") return "Time pending";
+  if (place?.accommodation) return firstAccommodationAnchor ? accommodationTimelineStatus(place) : undefined;
+  return place ? itineraryBlockStatus(place, requirements) : undefined;
+}
+
+function timelinePlaceOperationalStatus(block: BlueprintItineraryBlock, place: PlanPlace, requirements: BlueprintActionRequirement[]): string | undefined {
+  const entry = place.operationalFacts?.entry;
+  const reservationRequired = Boolean(reservationRequirementForPlace(requirements))
+    || entry?.reservation?.requirement === "required"
+    || entry?.booking?.requirement === "required"
+    || place.reservation?.requirement === "required";
+  if (entry?.ticket?.requirement === "required") return "Ticket required";
+  if (reservationRequired) return "Reservation required";
+  if (entry?.reservation?.requirement === "recommended"
+    || entry?.booking?.requirement === "recommended"
+    || place.reservation?.requirement === "recommended") return "Reservation recommended";
+
+  const accessNeedsRecheck = block.operationalConditions?.some((condition) => {
+    const note = travelerFacingDefaultText(condition.note).toLocaleLowerCase();
+    return (condition.kind === "access" || condition.kind === "recheck")
+      && /recheck|check|confirm|verify/.test(note)
+      && /hour|open|access|entry/.test(note);
+  }) || place.operationalFacts?.access?.windows?.some((window) => window.status === "recheck" || window.status === "stale");
+  if (accessNeedsRecheck) return "Hours need recheck";
+
+  const generalRecheck = block.display?.timingStatus === "recheck"
+    || block.display?.timingStatus === "unknown"
+    || requirementNeedsRecheck(requirements)
+    || place.priority === "recheck"
+    || place.reservation?.verification === "needs_recheck"
+    || block.operationalConditions?.some((condition) => condition.kind === "recheck");
+  if (generalRecheck) return "Needs recheck";
+  if (block.display?.timingStatus === "confirmed" || place.priority === "booked") return "Confirmed";
+  return undefined;
+}
+
+export function itineraryCardImageForRender(image: GuideCardImageDisplay | undefined, failedUrl?: string): GuideCardImageDisplay | undefined {
+  return image && image.url !== failedUrl ? image : undefined;
+}
+
+export function itineraryCardImageCandidateForRender(images: GuideCardImageDisplay[] | undefined, failedUrls: readonly string[] = []): GuideCardImageDisplay | undefined {
+  const failed = new Set(failedUrls);
+  return images?.find((image) => !failed.has(image.url));
+}
+
+function timelineImageCandidatesForPlace(place: PlanPlace): GuideCardImageDisplay[] {
+  return [...(place.images ?? [])]
+    .map((image, index) => ({ image, index, priority: image.usage?.includes("card") ? 0 : image.status === "verified" ? 1 : 2 }))
+    .sort((left, right) => left.priority - right.priority || left.index - right.index)
+    .map(({ image }) => ({ url: image.url, alt: image.alt }))
+    .filter((image, index, all) => all.findIndex((candidate) => candidate.url === image.url) === index)
+    .slice(0, 3);
+}
+
+function accommodationTimelineStatus(place: PlanPlace): string | undefined {
+  if (!place.accommodation) return undefined;
+  if (place.accommodation.state === "confirmed") return "Confirmed stay";
+  if (place.accommodation.state === "selected") return "Selected · Booking not confirmed";
+  if (place.accommodation.state === "recommended") return "Recommended · Not booked";
+  return "Hotel not selected";
+}
+
+function accommodationExternalAction(place: PlanPlace): ItineraryCardDisplay["externalAction"] | undefined {
+  if (!place.accommodation) return undefined;
+  if (place.accommodation.state === "confirmed") return place.bookingUrl ? { label: "View booking", url: place.bookingUrl } : undefined;
+  if (place.bookingUrl) return { label: "Book", url: place.bookingUrl };
+  if (place.officialUrl) return { label: "Check availability", url: place.officialUrl };
+  return undefined;
 }
 
 function itineraryRouteReadout(segment: PlanRouteSegment | undefined): string | undefined {
@@ -1560,12 +2195,18 @@ function conciseTransportDetail(value: string): string {
 }
 
 function timelineCardMeta(block: TimelineBlock): string | undefined {
+  if (block.block?.display?.timingStatus === "confirmed") {
+    const recheck = block.block.operationalConditions?.find((condition) => condition.kind === "recheck" && condition.note?.trim());
+    if (recheck) return `Recheck operating details: ${recheck.note!.trim()}`;
+  }
   if (block.timelineRole === "transport") return block.meta ? conciseTransportDetail(block.meta) : undefined;
-  if (block.timelineRole === "rest") return undefined;
+  if (block.timelineRole === "rest" || block.timelineRole === "activity") return lightTimelineMeta(block);
   if (block.timelineRole === "pending_place") return pendingPlaceMeta(block);
-  if (block.timelineRole === "activity") return undefined;
   const meta = travelerFacingDefaultText(block.meta);
   if (block.place) {
+    const authoredMeta = travelerFacingDefaultText(block.block?.display?.meta);
+    if (authoredMeta && !timingOnlyMeta(authoredMeta)) return timelineSafePlaceMeta(authoredMeta);
+    if (block.block?.kind === "meal") return mealTimelineLabel(block.block);
     const title = travelerFacingDefaultText(block.block?.title ?? block.title);
     const placeName = displayPlaceName(block.place);
     return firstUsefulText([
@@ -1577,8 +2218,14 @@ function timelineCardMeta(block: TimelineBlock): string | undefined {
   return meta;
 }
 
+function lightTimelineMeta(block: TimelineBlock): string | undefined {
+  if (block.block?.kind === "lodging" && blockImpliesPendingPlace(block.block)) return "Hotel not selected";
+  if (block.meta && (sameText(block.meta, block.block?.title ?? "") || sameText(block.meta, block.title ?? ""))) return undefined;
+  return timelineSafePlaceMeta(block.meta ?? "");
+}
+
 function concisePlaceActionTitle(title: string, place: PlanPlace): string | undefined {
-  if (!title || sameText(title, displayPlaceName(place))) return undefined;
+  if (!title || sameText(title, place.name) || sameText(title, displayPlaceName(place))) return undefined;
   if (/\bcomplete arrival processing|collect luggage|arriv(?:e|al)\b/i.test(title)) return place.city ? `Arrive in ${place.city}` : "Arrival";
   if (/\bcheck[ -]?in|settle\b/i.test(title)) return "Check in";
   if (/\bcheck[ -]?out\b/i.test(title)) return "Check out";
@@ -1588,7 +2235,11 @@ function concisePlaceActionTitle(title: string, place: PlanPlace): string | unde
 function timelineSafePlaceMeta(value: string): string | undefined {
   const text = travelerFacingDefaultText(value);
   if (!text || aiPlanningExplanationText(text)) return undefined;
-  return shorten(text, 72);
+  return text;
+}
+
+function timingOnlyMeta(value: string | undefined): boolean {
+  return /^(?:planned(?: time)?|confirmed(?: time)?|estimated(?: time| timing)?|timing needs recheck|needs recheck|time pending|timing unknown)$/i.test(value?.trim() ?? "");
 }
 
 function pendingPlaceMeta(block: TimelineBlock): string | undefined {
@@ -1777,7 +2428,9 @@ function preparationGroupsForPresentation(plan: Plan, presentation: PlanPresenta
   const places = new Map(presentation.places.map((place) => [place.id, place] as const));
   const completedTaskIds = new Set(plan.stages.flatMap((stage) => stage.tasks.filter((task) => task.status === "completed").map((task) => task.id)));
   const completedRequirementIds = new Set(plan.stages.flatMap((stage) => stage.tasks.flatMap((task) => task.status === "completed" && task.requirementId ? [task.requirementId] : [])));
-  const actionItems = uniquePreparationActionRequirements(presentation.actionRequirements ?? []).map((requirement) => preparationItemForRequirement(requirement, places, completedRequirementIds));
+  const taskByRequirementId = preparationTaskByRequirementId(plan);
+  const taskByChecklistItemId = preparationTaskByChecklistItemId(plan, canonical);
+  const actionItems = uniquePreparationActionRequirements(presentation.actionRequirements ?? []).map((requirement) => preparationItemForRequirement(requirement, places, completedRequirementIds, taskByRequirementId.get(requirement.id)));
   const actionFingerprints = actionItems.flatMap(preparationDisplayFingerprints);
   const generalGroups = new Map<BlueprintPreparationGroup, PreparationChecklistItemDisplay[]>();
   for (const item of canonical) {
@@ -1789,14 +2442,19 @@ function preparationGroupsForPresentation(plan: Plan, presentation: PlanPresenta
     const body = preparationBodyDescription(title, description);
     const completion = firstUsefulText([item.completionCondition], description);
     const context = place ? `For ${displayPlaceName(place)}` : undefined;
+    const task = item.requirementId ? taskByRequirementId.get(item.requirementId) : taskByChecklistItemId.get(item.id);
     generalGroups.set(item.group, [...(generalGroups.get(item.group) ?? []), {
       id: item.id,
+      ...(task ? { taskId: task.id } : {}),
+      ...(item.requirementId ? { requirementId: item.requirementId } : {}),
+      checklistItemId: item.id,
       title,
       ...(body ? { description: body } : {}),
       ...(completion ? { completion } : {}),
       ...(context ? { context } : {}),
       role: "general" as const,
-      checked: completedTaskIds.has(item.id) || Boolean(item.requirementId && completedRequirementIds.has(item.requirementId))
+      checked: Boolean(task ? completedTaskIds.has(task.id) : item.requirementId && completedRequirementIds.has(item.requirementId)),
+      checkable: Boolean(task)
     }]);
   }
   const groups: PreparationGroupDisplay[] = actionItems.length ? [{ title: "Action Required", items: actionItems }] : [];
@@ -1809,7 +2467,7 @@ function preparationGroupsForPresentation(plan: Plan, presentation: PlanPresenta
   ];
 }
 
-function preparationItemForRequirement(requirement: BlueprintActionRequirement, places: Map<string, PlanPlace>, completedRequirementIds: Set<string>): PreparationChecklistItemDisplay {
+function preparationItemForRequirement(requirement: BlueprintActionRequirement, places: Map<string, PlanPlace>, completedRequirementIds: Set<string>, task?: Task): PreparationChecklistItemDisplay {
   const place = requirement.placeId ? places.get(requirement.placeId) : undefined;
   const description = travelerFacingDefaultText(requirement.description);
   const title = preparationItemTitle(requirement.title, requirement, description);
@@ -1818,13 +2476,40 @@ function preparationItemForRequirement(requirement: BlueprintActionRequirement, 
   const context = [place ? `For ${displayPlaceName(place)}` : undefined, travelerFacingDefaultText(requirement.relevantAt)].filter(Boolean).join(" · ");
   return {
     id: requirement.id,
+    ...(task ? { taskId: task.id } : {}),
+    requirementId: requirement.id,
     title,
     ...(body ? { description: body } : {}),
     ...(completion ? { completion } : {}),
     ...(context ? { context } : {}),
     role: "action",
-    checked: completedRequirementIds.has(requirement.id)
+    checked: task ? task.status === "completed" : completedRequirementIds.has(requirement.id),
+    checkable: Boolean(task)
   };
+}
+
+function preparationTaskByRequirementId(plan: Plan): Map<string, Task> {
+  const tasks = new Map<string, Task>();
+  for (const task of plan.stages.flatMap((stage) => stage.tasks)) {
+    if (!task.requirementId || !isUserPreparationTask(task)) continue;
+    if (!tasks.has(task.requirementId)) tasks.set(task.requirementId, task);
+  }
+  return tasks;
+}
+
+function preparationTaskByChecklistItemId(plan: Plan, checklist: BlueprintPreparationChecklistItem[]): Map<string, Task> {
+  const result = new Map<string, Task>();
+  const tasks = plan.stages.flatMap((stage) => stage.tasks).filter(isUserPreparationTask);
+  const tasksById = new Map(tasks.map((task) => [task.id, task] as const));
+  for (const item of checklist) {
+    const direct = tasksById.get(item.id);
+    if (direct) result.set(item.id, direct);
+  }
+  return result;
+}
+
+function isUserPreparationTask(task: Task): boolean {
+  return task.owner === "user" && task.preparationCategory !== undefined && task.preparationCategory !== "not_applicable";
 }
 
 function uniquePreparationActionRequirements(requirements: BlueprintActionRequirement[]): BlueprintActionRequirement[] {
@@ -1838,33 +2523,12 @@ function uniquePreparationActionRequirements(requirements: BlueprintActionRequir
 }
 
 function equivalentPreparationRequirement(left: BlueprintActionRequirement, right: BlueprintActionRequirement): boolean {
-  if (left.id === right.id) return true;
-  const leftKey = preparationRequirementIdentityKey(left);
-  const rightKey = preparationRequirementIdentityKey(right);
-  if (leftKey && rightKey && leftKey === rightKey) return true;
-  const leftText = normalizedPreparationText(`${left.title} ${left.description} ${left.completionCondition}`);
-  const rightText = normalizedPreparationText(`${right.title} ${right.description} ${right.completionCondition}`);
-  if (!leftText || !rightText) return false;
-  if (leftText === rightText || leftText.includes(rightText) || rightText.includes(leftText)) return true;
-  return preparationTokenOverlap(leftText, rightText) >= 0.44;
-}
-
-function preparationRequirementIdentityKey(requirement: BlueprintActionRequirement): string | undefined {
-  const text = normalizedPreparationText(`${requirement.title} ${requirement.description} ${requirement.completionCondition}`);
-  if (/\btresna\b/.test(text)) return "tresna";
-  if (/\blocavore\b/.test(text)) return "locavore";
-  if (/\bkecak\b|\buluwatu\b.*\bperformance\b|\bperformance\b.*\buluwatu\b/.test(text)) return "kecak";
-  if (/\ball indonesia\b|\barrival declaration\b/.test(text)) return "arrival-declaration";
-  if (/\blevy\b|\blove bali\b/.test(text)) return "bali-levy";
-  if (/\bpassport\b|\bvisa\b|\bentry authorization\b|\bindonesian visitor\b/.test(text)) return "entry-authorization";
-  if (/\baccommodation\b|\blodging\b|\bcheck in\b|\bcheck out\b/.test(text)) return "accommodation";
-  if (/\bnusa penida\b/.test(text)) return "nusa-penida";
-  return undefined;
+  return left.id === right.id;
 }
 
 function preparationChecklistDuplicatesAction(item: BlueprintPreparationChecklistItem, actionFingerprints: string[]): boolean {
   const fingerprints = preparationChecklistFingerprints(item);
-  return fingerprints.some((fingerprint) => actionFingerprints.some((action) => fingerprint === action || fingerprint.includes(action) || action.includes(fingerprint) || preparationTokenOverlap(fingerprint, action) >= 0.44));
+  return fingerprints.some((fingerprint) => actionFingerprints.some((action) => fingerprint === action || fingerprint.includes(action) || action.includes(fingerprint)));
 }
 
 function preparationDisplayFingerprints(item: PreparationChecklistItemDisplay): string[] {
@@ -1885,15 +2549,6 @@ function normalizedPreparationText(value: string): string {
   return travelerFacingDefaultText(value).toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\b(the|a|an|and|or|for|to|of|in|on|with|each|all|current)\b/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function preparationTokenOverlap(left: string, right: string): number {
-  const leftTokens = new Set(left.split(" ").filter((token) => token.length > 3));
-  const rightTokens = new Set(right.split(" ").filter((token) => token.length > 3));
-  if (!leftTokens.size || !rightTokens.size) return 0;
-  let shared = 0;
-  for (const token of leftTokens) if (rightTokens.has(token)) shared += 1;
-  return shared / Math.min(leftTokens.size, rightTokens.size);
-}
-
 function preparationItemsForPlan(plan: Plan): Array<{ task: Task; stageTitle: string }> {
   return plan.stages.flatMap((stage) => stage.tasks
     .filter((task) => task.owner === "user" && task.preparationCategory !== undefined && task.preparationCategory !== "not_applicable")
@@ -1908,10 +2563,12 @@ function preparationGroupsForPlan(plan: Plan): PreparationGroupDisplay[] {
       const description = preparationBodyDescription(title, travelerFacingDefaultText(task.description ?? ""));
       return {
         id: task.id,
+        taskId: task.id,
         title,
         ...(description ? { description } : {}),
         role: "general" as const,
-        checked: task.status === "completed"
+        checked: task.status === "completed",
+        checkable: true
       };
     })
   }));
@@ -1976,6 +2633,39 @@ function roughBlockTimeLabel(block: BlueprintItineraryBlock, place: PlanPlace | 
   return roughTimeLabel(block.startTime, block.role, place ?? { category: block.kind, name: block.title ?? block.kind }, index);
 }
 
+export function deriveTimelineTimeDisplay(block: BlueprintItineraryBlock, place?: PlanPlace, index = 0): { mode: TimelineDisplayTimeMode; label?: string } {
+  if (block.kind === "transfer" && !timelinePointAnchor(block, place)) return { mode: "none" };
+  const start = /^\d{2}:\d{2}$/.test(block.startTime ?? "") ? block.startTime : undefined;
+  const end = /^\d{2}:\d{2}$/.test(block.endTime ?? "") ? block.endTime : undefined;
+  const authoredLabel = block.display?.timeLabel?.trim();
+  if (authoredLabel && !/^\d{2}:\d{2}(?:\s*[-–]\s*\d{2}:\d{2})?$/.test(authoredLabel)) return { mode: "point", label: authoredLabel };
+  if (!start) {
+    const fallback = roughBlockTimeLabel(block, place, index);
+    return fallback ? { mode: "point", label: fallback } : { mode: "none" };
+  }
+  const range = Boolean(end && timelineDurationIsDecisionUseful(block, place));
+  return range ? { mode: "range", label: `${start}–${end}` } : { mode: "point", label: start };
+}
+
+function timelineDurationIsDecisionUseful(block: BlueprintItineraryBlock, place: PlanPlace | undefined): boolean {
+  if (timelinePointAnchor(block, place)) return false;
+  if (block.kind === "stop" || block.kind === "event") return true;
+  if (block.kind === "lodging" || block.kind === "rest") return false;
+  const semanticText = `${block.role ?? ""} ${block.title ?? ""} ${place?.category ?? ""} ${place?.visitRole ?? ""} ${place?.name ?? ""}`.toLocaleLowerCase();
+  if (block.kind === "meal") {
+    return (block.durationMinutes ?? 0) >= 120 && /\b(tasting|degustation|chef.?s menu|set menu|dining experience|cooking class|culinary experience)\b/.test(semanticText);
+  }
+  if (block.kind === "flexible") {
+    return Boolean(place && (block.durationMinutes ?? 0) >= 90 && /\b(experience|class|workshop|spa|session|performance|show|tour|cruise|tasting)\b/.test(semanticText));
+  }
+  return false;
+}
+
+function timelinePointAnchor(block: BlueprintItineraryBlock, place: PlanPlace | undefined): boolean {
+  const text = `${block.role ?? ""} ${block.title ?? ""} ${place?.category ?? ""} ${place?.visitRole ?? ""}`.toLocaleLowerCase();
+  return /\b(arriv(?:e|al)|depart(?:ure)?|flight|airport processing|check[ -]?(?:in|out)|luggage handover|formalities)\b/.test(text);
+}
+
 function blockGuideType(block: BlueprintItineraryBlock): GuideFilter {
   if (block.kind === "meal") return "dining";
   if (block.kind === "event") return "experience";
@@ -1985,10 +2675,9 @@ function blockGuideType(block: BlueprintItineraryBlock): GuideFilter {
 }
 
 function timelineRoleForBlock(block: BlueprintItineraryBlock, place: PlanPlace | undefined): ItineraryTimelineRole {
-  if (place) return "place";
   if (block.kind === "transfer") return "transport";
-  if (block.kind === "rest") return "rest";
-  if (block.kind === "lodging") return "pending_place";
+  if ((block.kind === "lodging" || block.kind === "rest") && (!place || place.accommodation)) return "rest";
+  if (place) return "place";
   if (block.kind === "meal") return blockImpliesPendingPlace(block) ? "pending_place" : "activity";
   return "activity";
 }
@@ -2006,20 +2695,71 @@ function blockImpliesPendingPlace(block: BlueprintItineraryBlock): boolean {
 }
 
 function blockTitle(block: BlueprintItineraryBlock, place: PlanPlace | undefined): string | undefined {
-  if (place) return displayPlaceName(place);
+  return deriveTimelineTitle(block, place);
+}
+
+export function deriveTimelineTitle(block: BlueprintItineraryBlock, place?: PlanPlace): string | undefined {
+  const semanticTitle = block.title?.trim() ?? "";
+  const text = `${block.role ?? ""} ${semanticTitle} ${block.summary ?? ""} ${block.display?.meta ?? ""}`.toLocaleLowerCase();
+  if (place?.accommodation && block.kind !== "transfer") return place.name;
+  if (block.kind === "rest") {
+    if (/\bmedication|medical|health\b/.test(text)) return "Medication rest";
+    if (/\bbreakfast|brunch\b/.test(text)) return /\bfree time|quiet|morning|beachfront\b/.test(text) ? "Breakfast & free time" : "Breakfast";
+    return place?.accommodation || /\bhotel|lodg|accommodation|base\b/.test(text) ? "Hotel rest" : "Rest";
+  }
+  if (/\binternational check[ -]?in|security|departure processing|airport processing|formalities\b/.test(text)) return "Airport processing";
+  if (block.kind === "event" && /\bdepart(?:ure)?\b/.test(text)) return semanticTitle.replace(/^confirmed\s+/i, "") || "Departure";
+  if (block.kind === "event" && /\barriv(?:e|al)\b/.test(text)) return semanticTitle.replace(/^confirmed\s+/i, "") || "Arrival";
+  if (block.kind === "transfer") {
+    if (/\bdepart(?:ure)?\b/.test(text) && semanticTitle.length <= 32) return semanticTitle;
+    if (/\b(?:airport|dps|lax)\b.*\barrival\b|\barrival\b.*\b(?:airport|dps|lax)\b/.test(text)) return semanticTitle.replace(/\s+and\s+pickup.*$/i, "");
+    if (/\bpickup|meeting arrangement\b/.test(text) && semanticTitle.length <= 32) return semanticTitle;
+    const destination = semanticTitle.match(/\b(?:to|toward|for)\s+([A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,2})/u)?.[1];
+    const arrivalDestination = destination ?? semanticTitle.match(/\b(?:at|into)\s+([A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,2})/u)?.[1];
+    if (/\badmission|arrival procedures|entry procedures\b/.test(text) && arrivalDestination) return `${arrivalDestination} arrival`;
+    if (destination) return `Transfer to ${destination}`;
+    if (/\bairport|dps|lax\b/.test(text) || /\bairport|terminal\b/.test(`${place?.category ?? ""} ${place?.visitRole ?? ""}`.toLocaleLowerCase())) return "Airport transfer";
+    if (place?.accommodation?.baseLabel) return `Transfer to ${place.accommodation.baseLabel}`;
+    if (place) return `Transfer to ${place.name}`;
+    return "Transfer";
+  }
+  if (place) return place.name;
+  if (block.kind === "meal") {
+    const label = mealTimelineLabel(block);
+    return label === "Breakfast" && /\bfree time|quiet|morning\b/.test(text) ? "Breakfast & free time" : label;
+  }
+  if (/\bpacking|pack\b/.test(text)) return "Packing";
+  if (/\bconnection|connect\b/.test(text)) return "Connection";
+  if (/\bin transit|transit\b/.test(text)) return "In transit";
+  if (semanticTitle) return semanticTitle;
   if (block.kind === "lodging") return "Accommodation";
-  if (block.title?.trim()) return block.title;
-  if (block.kind === "meal") return "Meal window";
-  if (block.kind === "rest") return "Rest";
-  if (block.kind === "transfer") return "Transfer";
   if (block.kind === "event") return "Timed event";
   if (block.kind === "flexible") return "Flexible time";
   return undefined;
 }
 
+function mealTimelineLabel(block: BlueprintItineraryBlock): string {
+  const text = `${block.role ?? ""} ${block.title ?? ""} ${block.summary ?? ""}`.toLocaleLowerCase();
+  if (/\btasting|degustation|chef.?s menu\b/.test(text)) return "Tasting menu";
+  if (/\bbreakfast|brunch\b/.test(text)) {
+    if (/post[- ]walk|after the walk/.test(text)) return "Post-walk breakfast";
+    if (/recover|recovery|hydration/.test(text)) return "Breakfast & recovery";
+    return "Breakfast";
+  }
+  if (/\bdinner|supper\b/.test(text)) return "Dinner";
+  if (/\blunch|midday\b/.test(text)) return "Lunch";
+  const hour = Number.parseInt(block.startTime?.slice(0, 2) ?? "", 10);
+  if (Number.isFinite(hour)) return hour < 11 ? "Breakfast" : hour < 16 ? "Lunch" : "Dinner";
+  return "Meal";
+}
+
 function blockMeta(block: BlueprintItineraryBlock): string | undefined {
-  if (block.display?.meta?.trim()) return block.display.meta.trim();
-  return block.summary ?? block.role ?? (block.durationMinutes ? `${block.durationMinutes} min` : undefined);
+  const displayMeta = travelerFacingDefaultText(block.display?.meta);
+  if (displayMeta && !timingOnlyMeta(displayMeta)) return displayMeta;
+  const summary = travelerFacingDefaultText(block.summary);
+  if (summary) return summary;
+  const role = travelerFacingDefaultText(block.role);
+  return role || (block.durationMinutes ? `${block.durationMinutes} min` : undefined);
 }
 
 function sourceSummariesForPlace(place: Pick<PlanPlace, "evidenceSources" | "fieldEvidence" | "sourceRefs">, planSources: SourceReference[], sourceCatalog: BlueprintSource[] = [], blockEvidence: SourceMarkerDisplay[] = []): SourceMarkerDisplay[] {
@@ -2576,7 +3316,8 @@ function looksLikeInternalWorkspaceText(value: string): boolean {
     /\bbefore execution\b/,
     /\bneeds? replanning\b/,
     /\breplans?\b/,
-    /\breplanning\b/
+    /\breplanning\b/,
+    /\bdirect[_ -]?addition\b/
   ].some((pattern) => pattern.test(normalized));
 }
 
@@ -2595,13 +3336,13 @@ function guideTags(presentation: PlanPresentation, place: PlanPlace, requirement
 }
 
 function guideCardAction(place: PlanPlace, state: GuideState, timeline: GuideCardDisplay["timeline"], requirements: BlueprintActionRequirement[] = []): Pick<GuideCardDisplay, "canAdd" | "actionLabel" | "footerNote" | "addBlockedReason"> {
-  if (state === "unscheduled" && directAddAllowed(place)) {
+  if ((state === "unscheduled" || state === "optional" || state === "replacement") && addWorkflowAvailable(place)) {
     return {
       canAdd: true,
       actionLabel: travelerFacingLabel(place.guideDisplay?.addActionLabel ?? place.guideDisplay?.primaryActionLabel, "Add")
     };
   }
-  if (state === "unscheduled") {
+  if (state === "unscheduled" || state === "optional" || state === "replacement") {
     const label = validPlaceCoordinates(place.coordinates)
       ? travelerFacingLabel(place.guideDisplay?.addBlockedLabel ?? place.guideDisplay?.blockedActionLabel, requirementCardNote(requirements) || addBlockedLabel(place))
       : addBlockedLabel(place);
@@ -2620,17 +3361,27 @@ function detailPrimaryActionLabel(place: PlanPlace, scheduled: boolean, canAdd: 
   return travelerFacingLabel(place.guideDisplay?.blockedActionLabel ?? place.guideDisplay?.addBlockedLabel, addBlockedLabel(place));
 }
 
-function directAddAllowed(place: Pick<PlanPlace, "coordinates" | "schedulingEligibility">): boolean {
+function addWorkflowAvailable(place: Pick<PlanPlace, "coordinates" | "schedulingEligibility">): boolean {
   if (!validPlaceCoordinates(place.coordinates)) return false;
-  const decision = place.schedulingEligibility?.decision;
-  return decision === undefined || decision === "schedulable";
+  const decision = effectiveWorkspaceSchedulingDecision(place);
+  return decision === undefined || decision === "schedulable" || decision === "high_impact";
 }
 
 function directMoveAllowed(place: Pick<PlanPlace, "priority" | "schedulingEligibility" | "reservation" | "display" | "id" | "name" | "localizedName" | "locationLabel">, requirements: BlueprintActionRequirement[] = [], bookingConstraints: BlueprintBookingConstraint[] | undefined = []): boolean {
   const reservationSignal = place.display?.workspaceSignals?.reservation;
   if (place.priority === "booked" || Boolean(fixedBookingConstraintForPlace(bookingConstraints, place)) || reservationSignal === "required" || (!reservationSignal && (reservationRequirementForPlace(requirements) || place.reservation?.requirement === "required"))) return false;
-  const decision = place.schedulingEligibility?.decision;
+  const decision = effectiveWorkspaceSchedulingDecision(place);
   return decision === undefined || decision === "schedulable";
+}
+
+export const MAP_COORDINATES_PENDING_WORKSPACE_REASON = "This place lacks map-ready coordinates, so it remains useful written context until its location is verified.";
+
+function effectiveWorkspaceSchedulingDecision(place: Pick<PlanPlace, "coordinates" | "schedulingEligibility">): BlueprintSchedulingEligibility["decision"] | undefined {
+  const eligibility = place.schedulingEligibility;
+  if (eligibility?.decision === "informational"
+    && eligibility.reason === MAP_COORDINATES_PENDING_WORKSPACE_REASON
+    && validPlaceCoordinates(place.coordinates)) return "schedulable";
+  return eligibility?.decision;
 }
 
 function directRemoveAllowed(place: Pick<PlanPlace, "priority" | "schedulingEligibility" | "reservation" | "display" | "id" | "name" | "localizedName" | "locationLabel">, requirements: BlueprintActionRequirement[] = [], bookingConstraints: BlueprintBookingConstraint[] | undefined = []): boolean {

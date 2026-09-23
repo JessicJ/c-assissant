@@ -14,6 +14,7 @@ import {
   createPlanFromRequest,
   createDefaultPlanConfiguration,
   compileTripBlueprint,
+  effectiveBlueprintSchedulingDecision,
   isPreDepartureChecklistTask,
   type CreatePlanInput,
   type CountryPackSkillRun,
@@ -79,6 +80,7 @@ import {
 interface ProfileRow {
   display_name: string;
   preferred_language: string;
+  travel_preferences: string;
   nationality: string;
   gender: ProfileGender;
   immigration_status: ImmigrationStatus;
@@ -428,7 +430,7 @@ const TASK_REMINDER_RETRY_DELAYS_MS = [60_000, 5 * 60_000] as const;
 const ITINERARY_REMINDER_CATCH_UP_MS = 20 * 60_000;
 const ITINERARY_REMINDER_ATTEMPT_LEASE_MS = 60_000;
 const ITINERARY_REMINDER_RETRY_DELAYS_MS = [60_000, 5 * 60_000] as const;
-const CURRENT_SCHEMA_VERSION = 19;
+const CURRENT_SCHEMA_VERSION = 20;
 
 export interface DatabaseMaintenanceStatus {
   schemaVersion: number;
@@ -530,7 +532,7 @@ export class SqliteWorkspaceStore {
   }
 
   getWorkspace(): WorkspaceSnapshot {
-    const profile = this.database.prepare("SELECT display_name, preferred_language, nationality, gender, immigration_status, status FROM profiles WHERE id = 1").get() as ProfileRow | undefined;
+    const profile = this.database.prepare("SELECT display_name, preferred_language, travel_preferences, nationality, gender, immigration_status, status FROM profiles WHERE id = 1").get() as ProfileRow | undefined;
     const runtime = this.database.prepare("SELECT selected_runtime FROM runtime_settings WHERE id = 1").get() as RuntimeSettingsRow | undefined;
     const activePlan = this.getCurrentPlan();
     if (!profile || !runtime || !activePlan) throw new Error("The local workspace is not initialized.");
@@ -546,6 +548,7 @@ export class SqliteWorkspaceStore {
       profile: {
         displayName: profile.display_name,
         preferredLanguage: profile.preferred_language,
+        travelPreferences: profile.travel_preferences,
         nationality: profile.nationality,
         gender: profile.gender,
         immigrationStatus: profile.immigration_status,
@@ -841,6 +844,36 @@ export class SqliteWorkspaceStore {
       throw error;
     }
     return this.getResearchSet(research.id)!;
+  }
+
+  saveResearchSetAndTripBlueprint(research: ResearchSet, blueprint: TripBlueprint): { research: ResearchSet; blueprint: TripBlueprint } {
+    assertResearchSetIntegrity(research);
+    const generation = this.getBlueprintGeneration(research.generationKey);
+    if (!generation) throw new Error("Save Blueprint Generation before its Research Set.");
+    if (generation.proposalRef.sessionId !== research.proposalRef.sessionId || generation.proposalRef.proposalVersion !== research.proposalRef.proposalVersion) throw new Error("Research Set does not match its confirmed Proposal.");
+    if (generation.skillLineage.skillId !== research.skillLineage.skillId || generation.skillLineage.skillVersion !== research.skillLineage.skillVersion) throw new Error("Research Set does not match its Skill lineage.");
+    if (blueprint.researchSetId !== research.id || blueprint.generationKey !== research.generationKey) throw new Error("Trip Blueprint does not belong to the supplied Research Set.");
+    assertTripBlueprintIntegrity(blueprint, { expectedResearchPlaceIds: research.places.map((place) => place.id) });
+    this.database.exec("BEGIN");
+    try {
+      this.database.prepare(`INSERT INTO research_sets (id, generation_key, schema_version, status, content_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET status = excluded.status, content_json = excluded.content_json, updated_at = excluded.updated_at`).run(
+        research.id, research.generationKey, research.schemaVersion, research.status, JSON.stringify(research), research.createdAt, research.updatedAt
+      );
+      this.database.prepare(`INSERT INTO trip_blueprints (id, version, generation_key, research_set_id, schema_version, content_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id, version) DO UPDATE SET content_json = excluded.content_json`).run(
+        blueprint.id, blueprint.version, blueprint.generationKey, blueprint.researchSetId, blueprint.schemaVersion, JSON.stringify(blueprint), blueprint.createdAt
+      );
+      this.database.prepare("UPDATE blueprint_generations SET research_set_id = ?, blueprint_id = ?, blueprint_version = ?, stage = 'compile', updated_at = ? WHERE generation_key = ?")
+        .run(research.id, blueprint.id, blueprint.version, blueprint.createdAt, blueprint.generationKey);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return { research: this.getResearchSet(research.id)!, blueprint: this.getTripBlueprint(blueprint.id, blueprint.version)! };
   }
 
   getResearchSet(id: string): ResearchSet | undefined {
@@ -1145,12 +1178,9 @@ export class SqliteWorkspaceStore {
       } satisfies PlanRouteSegment] as const;
     }));
     const scheduleConflictDayIds = new Set<string>();
-    const shiftedStopsByDay = new Map<string, NonNullable<ItineraryDay["stops"]>>();
     for (const day of presentation.days) {
       const stops = (day.stops ?? []).map((stop) => ({ ...stop }));
       if (stops.length < 2 || stops.some((stop) => itineraryMinute(stop.time) === undefined)) continue;
-      const originalStops = stops.map((stop) => ({ ...stop }));
-      let conflict = false;
       for (let index = 0; index < stops.length - 1; index += 1) {
         const current = stops[index]!;
         const next = stops[index + 1]!;
@@ -1162,17 +1192,8 @@ export class SqliteWorkspaceStore {
         const earliest = itineraryMinute(current.time)! + (origin.durationMinutes ?? 0) + refreshed.durationMinutes;
         const nextMinute = itineraryMinute(next.time)!;
         if (earliest <= nextMinute) continue;
-        if (fixedItineraryStop(next.role, destination.priority) || earliest >= 24 * 60) {
-          conflict = true;
-          break;
-        }
-        next.time = itineraryTime(earliest);
-      }
-      if (conflict) {
         scheduleConflictDayIds.add(day.id);
-        shiftedStopsByDay.set(day.id, originalStops);
-      } else {
-        shiftedStopsByDay.set(day.id, stops);
+        break;
       }
     }
     presentation.routeSegments = presentation.routeSegments.map((segment) => {
@@ -1191,11 +1212,9 @@ export class SqliteWorkspaceStore {
       const daySegments = presentation.routeSegments.filter((segment) => segment.dayId === day.id);
       const geometries = daySegments.map((segment) => routeById.get(segment.id)?.geometry).filter((geometry): geometry is Array<[number, number]> => Boolean(geometry?.length));
       const scheduleConflict = scheduleConflictDayIds.has(day.id);
-      const stops = shiftedStopsByDay.get(day.id) ?? day.stops;
       const conflictConstraint = "Google Maps found a travel-time conflict with a fixed itinerary time; this day must be replanned before execution.";
       if (!daySegments.length || geometries.length !== daySegments.length) return {
         ...day,
-        ...(stops ? { stops } : {}),
         ...(scheduleConflict ? { routeReview: { ...day.routeReview, fixedConstraints: [...new Set([...(day.routeReview?.fixedConstraints ?? []), conflictConstraint])] } } : {})
       };
       const routeGeometry = geometries.flatMap((geometry, index) => index === 0 ? geometry : geometry.slice(1));
@@ -1204,7 +1223,6 @@ export class SqliteWorkspaceStore {
       const reviewedAt = daySegments.map((segment) => segment.checkedAt).filter((value): value is string => Boolean(value)).sort().at(-1);
       return {
         ...day,
-        ...(stops ? { stops } : {}),
         routeGeometry,
         routeGeometryMode: modes.size === 1 ? daySegments[0]!.mode : "mixed",
         ...(reviewedAt ? { routeGeometryReviewedAt: reviewedAt } : {}),
@@ -1253,7 +1271,18 @@ export class SqliteWorkspaceStore {
         const originRoute = input.routes.find((route) => segmentById.get(route.segmentId)?.originPlaceId === place.id);
         const destinationRoute = input.routes.find((route) => segmentById.get(route.segmentId)?.destinationPlaceId === place.id);
         const coordinates = originRoute ? providerCoordinatesToPlanCoordinates(originRoute.originCoordinates) : destinationRoute ? providerCoordinatesToPlanCoordinates(destinationRoute.destinationCoordinates) : undefined;
-        return coordinates ? { ...place, coordinates } : place;
+        if (!coordinates) return place;
+        const refreshed = { ...place, coordinates };
+        return effectiveBlueprintSchedulingDecision(refreshed) === "schedulable" && place.schedulingEligibility?.decision === "informational"
+          ? {
+            ...refreshed,
+            schedulingEligibility: {
+              ...place.schedulingEligibility,
+              decision: "schedulable",
+              reason: "Verified route coordinates now support direct itinerary editing for this place."
+            }
+          }
+          : refreshed;
       }),
       movements: blueprint.movements.map((movement) => {
         const route = routeById.get(movement.id);
@@ -1277,15 +1306,9 @@ export class SqliteWorkspaceStore {
           }]
         } satisfies BlueprintMovement;
       }),
-      days: blueprint.days.map((day) => {
-        const displayDay = presentation.days.find((candidate) => candidate.id === day.id);
-        if (!displayDay?.stops) return day;
-        return {
-          ...day,
-          stops: displayDay.stops.map((stop) => ({ placeId: stop.placeId, order: stop.order, ...(stop.time ? { time: stop.time } : {}), ...(stop.role ? { role: stop.role } : {}) })),
-          ...(day.blocks ? { blocks: updateBlueprintBlocksFromStops(day, displayDay.stops) } : {})
-        };
-      })
+      // Route refresh owns route facts only. It must never reschedule itinerary
+      // occurrences or rewrite stop/block projections.
+      days: structuredClone(blueprint.days)
     };
     const saved = this.saveTripBlueprint(nextBlueprint);
     const nextPresentation = blueprintPresentation(saved);
@@ -1537,7 +1560,11 @@ export class SqliteWorkspaceStore {
   getExecutionPlan(): Plan | undefined {
     const plan = this.database.prepare(`SELECT id, version, title, location, dates, status, known_information_json, assumptions_json, next_action, configuration_json, sources_json, presentation_json, created_at
       FROM plans WHERE is_execution = 1 ORDER BY created_at DESC LIMIT 1`).get() as PlanRow | undefined;
-    return plan ? this.planFromRow(plan) : undefined;
+    if (!plan) return undefined;
+    const restored = this.planFromRow(plan);
+    const lineage = this.getPlanBlueprintLineage(restored.id);
+    const blueprint = lineage ? this.getTripBlueprint(lineage.blueprintId, lineage.blueprintVersion) : undefined;
+    return blueprint ? { ...restored, presentation: blueprintPresentation(blueprint) } : restored;
   }
 
   getTelegramPairingStatus(): TelegramPairingStatus {
@@ -2355,16 +2382,18 @@ export class SqliteWorkspaceStore {
   updateProfile(input: ProfileUpdate): WorkspaceSnapshot {
     const displayName = input.displayName.trim();
     const preferredLanguage = input.preferredLanguage.trim();
+    const travelPreferences = input.travelPreferences?.trim() ?? "";
     const nationality = input.nationality.trim();
     if (!displayName || !preferredLanguage || !nationality) throw new Error("Name, preferred language, and nationality are required.");
-    if (displayName.length > 80 || preferredLanguage.length > 80 || nationality.length > 100) throw new Error("Keep each Profile text field concise.");
+    if (displayName.length > 80 || preferredLanguage.length > 80 || nationality.length > 100 || travelPreferences.length > 300) throw new Error("Keep each Profile text field concise.");
     if (!["not_specified", "woman", "man", "nonbinary", "prefer_not_to_say"].includes(input.gender)) throw new Error("Choose a supported gender setting.");
     if (!["unknown", "no_visa", "short_term_visitor", "tourist_visa", "student_visa", "work_visa", "residence_permit", "other"].includes(input.immigrationStatus)) throw new Error("Choose a supported immigration status setting.");
 
-    const status = nationality.toLocaleLowerCase() !== "to be confirmed" && input.immigrationStatus !== "unknown" ? "ready" : "incomplete";
-    this.database.prepare("UPDATE profiles SET display_name = ?, preferred_language = ?, nationality = ?, gender = ?, immigration_status = ?, status = ?, updated_at = ? WHERE id = 1").run(
+    const status = input.immigrationStatus !== "unknown" ? "ready" : "incomplete";
+    this.database.prepare("UPDATE profiles SET display_name = ?, preferred_language = ?, travel_preferences = ?, nationality = ?, gender = ?, immigration_status = ?, status = ?, updated_at = ? WHERE id = 1").run(
       displayName,
       preferredLanguage,
+      travelPreferences,
       nationality,
       input.gender,
       input.immigrationStatus,
@@ -2823,6 +2852,7 @@ export class SqliteWorkspaceStore {
         id INTEGER PRIMARY KEY CHECK (id = 1),
         display_name TEXT NOT NULL,
         preferred_language TEXT NOT NULL,
+        travel_preferences TEXT NOT NULL DEFAULT '',
         nationality TEXT NOT NULL,
         gender TEXT NOT NULL DEFAULT 'not_specified',
         immigration_status TEXT NOT NULL DEFAULT 'unknown',
@@ -3257,6 +3287,7 @@ export class SqliteWorkspaceStore {
     const profileColumns = this.database.prepare("PRAGMA table_info(profiles)").all() as unknown as Array<{ name: string }>;
     if (!profileColumns.some((column) => column.name === "gender")) this.database.exec("ALTER TABLE profiles ADD COLUMN gender TEXT NOT NULL DEFAULT 'not_specified'");
     if (!profileColumns.some((column) => column.name === "immigration_status")) this.database.exec("ALTER TABLE profiles ADD COLUMN immigration_status TEXT NOT NULL DEFAULT 'unknown'");
+    if (!profileColumns.some((column) => column.name === "travel_preferences")) this.database.exec("ALTER TABLE profiles ADD COLUMN travel_preferences TEXT NOT NULL DEFAULT ''");
     const locationIntentColumns = this.database.prepare("PRAGMA table_info(telegram_location_intent)").all() as unknown as Array<{ name: string }>;
     if (!locationIntentColumns.some((column) => column.name === "transport_override")) this.database.exec("ALTER TABLE telegram_location_intent ADD COLUMN transport_override TEXT CHECK (transport_override IN ('taxi', 'public_transit', 'walking'))");
     const locationIntentSchema = this.database.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'telegram_location_intent'").get() as { sql: string } | undefined;
@@ -3316,6 +3347,7 @@ export class SqliteWorkspaceStore {
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (17, 'telegram-uber-handoff-test', ?)").run(migrationTime);
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (18, 'telegram-movement-go-location-intent', ?)").run(migrationTime);
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (19, 'trip-blueprint-direct-revision-versions', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (20, 'profile-travel-preferences', ?)").run(migrationTime);
   }
 
   private migrateTripBlueprintGenerationKeyUniqueness(): void {
@@ -3353,9 +3385,10 @@ export class SqliteWorkspaceStore {
     if (profile) return;
 
     const workspace = createInitialWorkspace();
-    this.database.prepare("INSERT INTO profiles (id, display_name, preferred_language, nationality, gender, immigration_status, status, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?)").run(
+    this.database.prepare("INSERT INTO profiles (id, display_name, preferred_language, travel_preferences, nationality, gender, immigration_status, status, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)").run(
       workspace.profile.displayName,
       workspace.profile.preferredLanguage,
+      workspace.profile.travelPreferences ?? "",
       workspace.profile.nationality,
       workspace.profile.gender,
       workspace.profile.immigrationStatus,
@@ -3822,25 +3855,6 @@ function routeRefreshAssumptions(assumptions: string[], blueprint: TripBlueprint
   const factLabel = recheckCount === 1 ? "fact" : "facts";
   const detailLabel = recheckCount === 1 ? "detail" : "details";
   return [`${recheckCount} travel ${factLabel} or map ${detailLabel} remain marked for recheck.`, ...retained];
-}
-
-function updateBlueprintBlocksFromStops(day: TripBlueprint["days"][number], stops: NonNullable<ItineraryDay["stops"]>): BlueprintItineraryBlock[] {
-  const scheduledPlaceIds = new Set(day.stops.map((stop) => stop.placeId));
-  let routeIndex = 0;
-  return [...(day.blocks ?? [])].sort((left, right) => left.order - right.order).flatMap((block) => {
-    if (!block.placeId || !scheduledPlaceIds.has(block.placeId) || block.kind === "event") return [{ ...block, evidence: [...block.evidence] }];
-    const stop = stops[routeIndex];
-    routeIndex += 1;
-    if (!stop) return [];
-    const { startTime: _startTime, role: _role, ...base } = block;
-    return [{
-      ...base,
-      placeId: stop.placeId,
-      ...(stop.time ? { startTime: stop.time } : block.startTime ? { startTime: block.startTime } : {}),
-      ...(stop.role ? { role: stop.role } : block.role ? { role: block.role } : {}),
-      evidence: [...block.evidence]
-    }];
-  }).map((block, index) => ({ ...block, order: index + 1 }));
 }
 
 function taskRemindersEqual(left: TaskReminder, right: TaskReminder): boolean {

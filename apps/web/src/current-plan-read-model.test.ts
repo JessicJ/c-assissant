@@ -69,6 +69,7 @@ test("Current Plan read model uses the active Blueprint over stale Plan presenta
   assert.equal(model.presentationSource, "blueprint");
   assert.equal(model.presentationVersion, 3);
   assert.equal(model.presentationKey, "blueprint:blueprint-1:3");
+  assert.equal(model.workspaceKey, "plan:plan-1");
   assert.deepEqual(model.mutationVersion, { expectedVersion: 1, expectedBlueprintVersion: 3 });
   assert.equal(model.plan.id, original.id);
   assert.equal(model.plan.version, original.version);
@@ -77,13 +78,38 @@ test("Current Plan read model uses the active Blueprint over stale Plan presenta
   assert.deepEqual(model.presentation?.days[0]?.placeIds, ["a", "b"]);
 });
 
+test("Blueprint-first read model preserves accommodation state for the real Timeline", () => {
+  const source = blueprint();
+  source.places[0]!.accommodation = {
+    state: "recommended",
+    baseLabel: "Tokyo",
+    stayStartDate: "2026-10-04",
+    stayEndDate: "2026-10-05",
+    rationale: "A sourced provisional route anchor."
+  };
+  source.places[0]!.officialUrl = "https://hotel.example/";
+
+  const model = currentPlanReadModel(plan(), source);
+
+  assert.deepEqual(model.presentation?.places[0]?.accommodation, source.places[0]!.accommodation);
+  assert.equal(model.presentation?.places[0]?.officialUrl, "https://hotel.example/");
+});
+
 test("Current Plan read model changes identity when the Blueprint version changes", () => {
   const original = plan();
   const earlier = currentPlanReadModel(original, blueprint({ version: 3 }));
   const later = currentPlanReadModel(original, blueprint({ version: 4, days: [{ id: "day-1", date: "2026-10-04", kind: "scheduled", city: "Tokyo", title: "Day", summary: "New order.", stops: [{ placeId: "b", order: 1 }, { placeId: "a", order: 2 }], candidatePlaceIds: [] }] }));
   assert.notEqual(later.presentationKey, earlier.presentationKey);
+  assert.equal(later.workspaceKey, earlier.workspaceKey);
   assert.equal(later.presentationVersion, 4);
   assert.deepEqual(later.presentation?.days[0]?.placeIds, ["b", "a"]);
+});
+
+test("Current Plan workspace identity changes only when the plan changes", () => {
+  const current = currentPlanReadModel(plan(), blueprint());
+  const replacement = currentPlanReadModel({ ...plan(), id: "plan-2", version: 1 }, blueprint({ version: 1 }));
+
+  assert.notEqual(replacement.workspaceKey, current.workspaceKey);
 });
 
 test("Current Plan read model keeps legacy presentation when no Blueprint exists", () => {

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { LANDI_BLUEPRINT_SKILL, type SemanticTravelPlan } from "@c-assistant/agent-adapters";
+import { LANDI_BLUEPRINT_SKILL, semanticFixedCommitmentsFromBookingConstraints, type SemanticFixedCommitment, type SemanticTravelPlan } from "@c-assistant/agent-adapters";
 import { TRIP_BLUEPRINT_SCHEMA_VERSION, type BlueprintEvidenceRef, type Plan, type ResearchSet, type TripBlueprint } from "@c-assistant/core";
+import { buildPlannedExperienceReadinessTrace, readinessTraceAvailability } from "./semantic-readiness-trace.js";
 import { runSemanticShadow, type SemanticShadowSnapshot } from "./semantic-shadow.js";
 
 const now = "2026-09-14T00:00:00.000Z";
@@ -39,15 +40,15 @@ test("semantic shadow records fixed accommodation preservation trace without req
   const report = await shadowReport(hotelStayPlan(), [hotelBookingConstraint()], research({ hotel: true }));
   const trace = report.commitmentPreservation[0];
   assert.equal(trace.commitmentId, "booking-hotel:segment-hotel");
-  assert.equal(trace.plannerInput.directlyProvidedAsBookingConstraint, false);
+  assert.equal(trace.plannerInput.directlyProvidedAsBookingConstraint, true);
   assert.equal(trace.plannerInput.representedInResearch, true);
   assert.equal(trace.plannerInput.researchPlaceId, "hotel-saint-germain");
   assert.equal(trace.semantic.observed, true);
   assert.equal(trace.semantic.classification, "PRESERVED");
-  assert.deepEqual([...trace.semantic.representationKinds].sort(), ["end_context", "start_context"]);
+  assert.deepEqual([...trace.semantic.representationKinds].sort(), ["end_context", "semantic_fixed_commitment", "start_context"]);
   assert.equal(trace.structurer.observed, true);
   assert.equal(trace.structurer.classification, "PRESERVED");
-  assert.deepEqual([...trace.structurer.representationKinds].sort(), ["end_context", "start_context"]);
+  assert.deepEqual([...trace.structurer.representationKinds].sort(), ["end_context", "start_context", "structured_booking_constraint"]);
   assert.equal(trace.comparator.currentResult, "not_missing");
   assert.equal(report.comparison.missingConfirmedCommitmentCount, 0);
 });
@@ -78,13 +79,63 @@ test("fixed commitment comparator rejects same-date wrong hotel context", async 
 });
 
 test("fixed commitment comparator preserves booked event as planned experience", async () => {
-  const report = await shadowReport(plan({ title: "Theatre ticket", placeName: "Theatre ticket" }), [eventBookingConstraint()]);
+  const booking = eventBookingConstraint();
+  const report = await shadowReport(plan({ title: "Theatre ticket", placeName: "Theatre ticket", fixedCommitments: semanticFixedCommitmentsFromBookingConstraints([booking]) }), [booking]);
   const trace = report.commitmentPreservation[0];
   assert.equal(trace.semantic.observed, true);
-  assert.deepEqual(trace.semantic.representationKinds, ["semantic_experience"]);
+  assert.deepEqual(trace.semantic.representationKinds, ["semantic_fixed_commitment", "semantic_experience"]);
   assert.equal(trace.structurer.observed, true);
-  assert.deepEqual(trace.structurer.representationKinds, ["structured_block"]);
+  assert.deepEqual(trace.structurer.representationKinds, ["structured_booking_constraint", "structured_block"]);
   assert.equal(report.comparison.missingConfirmedCommitmentCount, 0);
+});
+
+test("semantic shadow passes two confirmed flights to Planner and preserves both structurally without a hotel", async () => {
+  const bookings = flightBookingConstraints();
+  const fixedCommitments = semanticFixedCommitmentsFromBookingConstraints(bookings);
+  const semanticPlan = plan({
+    fixedCommitments,
+    startLabel: "Tokyo Haneda",
+    endLabel: "Tokyo Haneda"
+  });
+  const saved: unknown[] = [];
+  let plannerInput: SemanticFixedCommitment[] | undefined;
+  await runSemanticShadow(snapshot(semanticPlan, research(), bookings), {
+    config: { enabled: true, sampleRate: 1, timeoutMs: 5_000 },
+    store: { saveDiagnosticArtifact: (input) => { saved.push(JSON.parse(input.rawResponse)); return "artifact-flights"; } },
+    codex: {
+      generateSemanticTravelPlan: async (input) => {
+        plannerInput = input.fixedCommitments;
+        return { rawJson: "{}", plan: semanticPlan };
+      },
+      generateSemanticTravelPlanRepair: async () => ({ rawJson: "{}", plan: semanticPlan })
+    },
+    logGenerationFailure: () => {}
+  });
+  assert.deepEqual(plannerInput, fixedCommitments);
+  const report = saved[0] as Record<string, any>;
+  assert.equal(report.comparison.fixedCommitmentCount, 2);
+  assert.equal(report.comparison.missingConfirmedCommitmentCount, 0);
+  assert.equal(report.commitmentPreservation.length, 2);
+  for (const trace of report.commitmentPreservation) {
+    assert.equal(trace.plannerInput.directlyProvidedAsBookingConstraint, true);
+    assert.equal(trace.semantic.classification, "PRESERVED");
+    assert.equal(trace.semantic.representationKinds.includes("semantic_fixed_commitment"), true);
+    assert.equal(trace.structurer.classification, "PRESERVED");
+    assert.equal(trace.structurer.representationKinds.includes("structured_booking_constraint"), true);
+    assert.equal(trace.comparator.currentResult, "not_missing");
+  }
+});
+
+test("fixed commitment comparator rejects exact airport context without flight identity time and direction", async () => {
+  const bookings = flightBookingConstraints();
+  const report = await shadowReport(plan({ startLabel: "Tokyo Haneda", endLabel: "Tokyo Haneda" }), bookings);
+  assert.equal(report.comparison.fixedCommitmentCount, 2);
+  assert.equal(report.comparison.missingConfirmedCommitmentCount, 2);
+  for (const trace of report.commitmentPreservation) {
+    assert.equal(trace.semantic.classification, "NOT_OBSERVED");
+    assert.equal(trace.structurer.classification, "NOT_OBSERVED");
+    assert.equal(trace.comparator.currentResult, "missing_confirmed_commitment");
+  }
 });
 
 test("fixed commitment comparator does not satisfy events via hotel-like context", async () => {
@@ -124,6 +175,176 @@ test("semantic shadow repairs exactly once for repair_required findings", async 
   assert.equal(report.repair.attempted, true);
   assert.equal(report.repair.modelCallCount, 1);
   assert.equal(report.repair.postRepairValidationResult, "pass");
+  assert.equal(report.validator.finalResult, "pass");
+  assert.equal(report.readinessTrace.counts.plannedExperienceCount, 1);
+  assert.equal(report.readinessTrace.counts.traceEntryCount, 1);
+  assert.equal(report.readinessTrace.occurrences[0].experienceName, "Open Museum");
+  assert.equal(report.readinessTrace.occurrences.some((item: any) => item.experienceName === "Fixture Place"), false);
+});
+
+test("readiness trace records specific confirmed booking support without requiring duplicate operational facts", async () => {
+  const booking = eventBookingConstraint();
+  const report = await shadowReport(plan({
+    title: "Theatre ticket",
+    placeName: "Theatre ticket",
+    fixedCommitments: semanticFixedCommitmentsFromBookingConstraints([booking])
+  }), [booking]);
+  const occurrence = report.readinessTrace.occurrences[0];
+  assert.equal(report.readinessTrace.counts.plannedExperienceCount, 1);
+  assert.equal(report.readinessTrace.counts.traceEntryCount, 1);
+  assert.equal(occurrence.bookingSupport.length, 1);
+  assert.equal(occurrence.bookingSupport[0].commitmentId, "booking-event:segment-event");
+  assert.equal(occurrence.bookingSupport[0].conditionSupported, "confirmed_fixed_commitment");
+  assert.equal(occurrence.bookingSupport[0].auditLabel, "C");
+});
+
+test("readiness trace does not present evidence outside the travel date as applicable", () => {
+  const researched = research();
+  researched.places[0]!.operationalFacts = {
+    access: { closed: [{ pattern: "Closed on another date", status: "verified", appliesTo: { date: "2026-10-07" }, evidence }] }
+  };
+  const trace = buildPlannedExperienceReadinessTrace({
+    finalPlan: plan(),
+    research: researched,
+    bookingConstraints: [],
+    finalReport: { result: "pass", findings: [] }
+  });
+  const closure = trace.occurrences[0]!.operationalFactChecks.find((check) => check.kind === "closure")!;
+  assert.equal(closure.dateApplicability, "does_not_apply");
+  assert.equal(closure.checkStatus, "not_applicable");
+  assert.deepEqual(closure.auditLabels, ["C"]);
+});
+
+test("readiness trace retains unmatched planned experiences and does not fabricate facts", () => {
+  const trace = buildPlannedExperienceReadinessTrace({
+    finalPlan: plan({ title: "Unknown Gallery", placeName: "Unknown Gallery" }),
+    research: research(),
+    bookingConstraints: [],
+    finalReport: { result: "pass", findings: [] }
+  });
+  assert.equal(trace.counts.plannedExperienceCount, 1);
+  assert.equal(trace.counts.traceEntryCount, 1);
+  assert.equal(trace.occurrences[0]!.identity.status, "unresolved");
+  assert.equal(trace.occurrences[0]!.operationalFactChecks[0]!.checkStatus, "not_performed");
+  assert.deepEqual(trace.occurrences[0]!.auditLabels, ["D"]);
+});
+
+test("readiness trace treats missing closure information as unknown rather than confirmed open", () => {
+  const trace = buildPlannedExperienceReadinessTrace({
+    finalPlan: plan(), research: research(), bookingConstraints: [], finalReport: { result: "pass", findings: [] }
+  });
+  const closure = trace.occurrences[0]!.operationalFactChecks.find((check) => check.checkKey === "closure:not_established")!;
+  assert.equal(closure.checkStatus, "not_performed");
+  assert.equal(closure.dateApplicability, "indeterminate");
+  assert.match(closure.reason!, /does not establish.*open/i);
+  assert.deepEqual(closure.auditLabels, ["D"]);
+});
+
+test("readiness trace links same-named occurrences only on the exact finding date", () => {
+  const samePlacePlan = plan();
+  samePlacePlan.dailyItinerary.push({ ...structuredClone(samePlacePlan.dailyItinerary[0]!), date: "2026-10-07" });
+  const trace = buildPlannedExperienceReadinessTrace({
+    finalPlan: samePlacePlan,
+    research: research(),
+    bookingConstraints: [],
+    finalReport: {
+      result: "pass_with_rechecks",
+      findings: [{ date: "2026-10-07", experience: "Fixture Place", category: "access_recheck", explanation: "Recheck only the second visit.", requiresPlannerRepair: false }]
+    }
+  });
+  assert.equal(trace.counts.traceEntryCount, 2);
+  assert.equal(trace.occurrences[0]!.finalFindings.length, 0);
+  assert.equal(trace.occurrences[1]!.finalFindings.length, 1);
+  assert.equal(trace.counts.linkedFindingCount, 1);
+});
+
+test("readiness trace keeps partial support and unknown checks separate", () => {
+  const researched = research();
+  researched.places[0]!.operationalFacts = {
+    entry: { reservation: { requirement: "required", status: "verified", evidence } }
+  };
+  const finding = { date: "2026-10-06", experience: "Fixture Place", category: "booking_requirement" as const, explanation: "Reservation required.", evidenceRefs: [`official · verified · ${now}`], requiresPlannerRepair: false };
+  const trace = buildPlannedExperienceReadinessTrace({
+    finalPlan: plan(), research: researched, bookingConstraints: [], finalReport: { result: "pass_with_rechecks", findings: [finding] }
+  });
+  const occurrence = trace.occurrences[0]!;
+  assert.deepEqual(occurrence.operationalFactChecks.find((check) => check.kind === "reservation")!.auditLabels, ["B"]);
+  assert.deepEqual(occurrence.operationalFactChecks.find((check) => check.checkKey === "closure:not_established")!.auditLabels, ["D"]);
+  assert.deepEqual(occurrence.auditLabels, ["B", "D"]);
+});
+
+test("readiness trace does not cross-link plan-condition and fact findings by category alone", () => {
+  const finalPlan = plan();
+  finalPlan.dailyItinerary[0]!.experiences![0]!.operationalConditions = [{ kind: "reservation", note: "Choose a ticket if needed." }];
+  const researched = research();
+  researched.places[0]!.operationalFacts = { entry: { reservation: { requirement: "recommended", status: "verified", evidence } } };
+  const trace = buildPlannedExperienceReadinessTrace({
+    finalPlan,
+    research: researched,
+    bookingConstraints: [],
+    finalReport: {
+      result: "pass_with_rechecks",
+      findings: [
+        { date: "2026-10-06", experience: "Fixture Place", category: "booking_requirement", explanation: "Fact finding.", evidenceRefs: [`official · verified · ${now}`], requiresPlannerRepair: false },
+        { date: "2026-10-06", experience: "Fixture Place", category: "booking_requirement", explanation: "Choose a ticket if needed.", requiresPlannerRepair: false }
+      ]
+    }
+  });
+  const occurrence = trace.occurrences[0]!;
+  assert.deepEqual(occurrence.operationalFactChecks.find((check) => check.kind === "reservation")!.finalFindingIndexes, [0]);
+  assert.deepEqual(occurrence.conditionChecks[0]!.finalFindingIndexes, [1]);
+});
+
+test("readiness trace reports old artifacts as historical diagnostic gaps without backfill", () => {
+  const oldArtifact = { type: "semantic_shadow_v1", semantic: { plannedExperienceCount: 9 }, validator: { initialResult: "pass_with_rechecks" } };
+  const before = structuredClone(oldArtifact);
+  const availability = readinessTraceAvailability(oldArtifact);
+  assert.equal(availability.status, "historical_diagnostic_gap");
+  assert.match(availability.reason, /cannot be reconstructed/i);
+  assert.deepEqual(oldArtifact, before);
+  assert.equal("readinessTrace" in oldArtifact, false);
+});
+
+test("readiness trace retains plan and day findings once as unlinked", () => {
+  const trace = buildPlannedExperienceReadinessTrace({
+    finalPlan: plan({ pendingHotel: true }),
+    research: research(),
+    bookingConstraints: [],
+    finalReport: {
+      result: "pass_with_rechecks",
+      findings: [{ date: "2026-10-06", category: "unresolved_dependency", explanation: "Start location is not exact yet.", requiresPlannerRepair: false }]
+    }
+  });
+  assert.equal(trace.counts.unlinkedFindingCount, 1);
+  assert.equal(trace.unlinkedFindings[0]!.reason, "plan_or_day_level");
+  assert.equal(trace.occurrences[0]!.finalFindings.length, 0);
+});
+
+test("readiness trace explains findings that belong to final non-planned occurrences", () => {
+  const finalPlan = plan();
+  finalPlan.dailyItinerary[0]!.experiences![0]!.planRole = "optional";
+  const trace = buildPlannedExperienceReadinessTrace({
+    finalPlan,
+    research: research(),
+    bookingConstraints: [],
+    finalReport: {
+      result: "pass_with_rechecks",
+      findings: [{ date: "2026-10-06", experience: "Fixture Place", category: "access_recheck", explanation: "Optional visit needs recheck.", requiresPlannerRepair: false }]
+    }
+  });
+  assert.equal(trace.counts.plannedExperienceCount, 0);
+  assert.equal(trace.counts.optionalExperienceCount, 1);
+  assert.equal(trace.unlinkedFindings[0]!.reason, "non_planned_occurrence");
+});
+
+test("readiness trace generation does not mutate any validation input", () => {
+  const finalPlan = plan();
+  const researched = research({ closed: true });
+  const bookings = [hotelBookingConstraint()];
+  const finalReport = { result: "repair_required" as const, findings: [{ date: "2026-10-06", experience: "Fixture Place", category: "hard_conflict" as const, explanation: "Closed.", requiresPlannerRepair: true }] };
+  const before = structuredClone({ finalPlan, researched, bookings, finalReport });
+  buildPlannedExperienceReadinessTrace({ finalPlan, research: researched, bookingConstraints: bookings, finalReport });
+  assert.deepEqual({ finalPlan, researched, bookings, finalReport }, before);
 });
 
 test("semantic shadow timeout persists failure diagnostic only", async () => {
@@ -172,11 +393,12 @@ async function shadowReport(semanticPlan: SemanticTravelPlan, bookingConstraints
   return saved[0] as Record<string, any>;
 }
 
-function plan(options: { pendingHotel?: boolean; title?: string; placeName?: string; startLabel?: string; endLabel?: string; date?: string; markdownMention?: string } = {}): SemanticTravelPlan {
+function plan(options: { pendingHotel?: boolean; title?: string; placeName?: string; startLabel?: string; endLabel?: string; date?: string; markdownMention?: string; fixedCommitments?: SemanticFixedCommitment[] } = {}): SemanticTravelPlan {
   return {
     title: "Fixture semantic plan",
     language: "en",
     tripStrategy: "Use a compact fixture strategy.",
+    fixedCommitments: options.fixedCommitments ?? [],
     targetedResearch: [],
     dailyItinerary: [{
       date: options.date ?? "2026-10-06",
@@ -202,8 +424,9 @@ On 2026-10-06 the traveler starts at the fixture base, visits the selected fixtu
 }
 
 function hotelStayPlan(): SemanticTravelPlan {
+  const booking = hotelBookingConstraint();
   return {
-    ...plan(),
+    ...plan({ fixedCommitments: semanticFixedCommitmentsFromBookingConstraints([booking]) }),
     dailyItinerary: [
       day("2026-10-06", "Paris Charles de Gaulle Airport", "Hotel Saint-Germain"),
       day("2026-10-07", "Hotel Saint-Germain", "Hotel Saint-Germain"),
@@ -211,6 +434,55 @@ function hotelStayPlan(): SemanticTravelPlan {
       day("2026-10-09", "Hotel Saint-Germain", "Paris Charles de Gaulle Airport")
     ]
   };
+}
+
+function flightBookingConstraints(): SemanticShadowSnapshot["bookingConstraints"] {
+  return [
+    {
+      id: "booking-arrival-flight",
+      type: "flight",
+      title: "Arrival flight to Haneda",
+      status: "confirmed",
+      sourceLabel: "Fixture booking",
+      importedAt: now,
+      constraintStrength: "hard",
+      segments: [{
+        id: "segment-arrival-flight",
+        segmentType: "flight_leg",
+        title: "Arrival flight to Haneda",
+        startAtLocal: "2026-10-06T07:25",
+        startTimeZone: "Asia/Tokyo",
+        endAtLocal: "2026-10-06T07:25",
+        endTimeZone: "Asia/Tokyo",
+        origin: "Shanghai",
+        destination: "Tokyo Haneda",
+        constraintStrength: "hard",
+        fixedCommitment: true,
+        needsReviewReasons: []
+      }]
+    },
+    {
+      id: "booking-departure-flight",
+      type: "flight",
+      title: "Departure flight from Haneda",
+      status: "confirmed",
+      sourceLabel: "Fixture booking",
+      importedAt: now,
+      constraintStrength: "hard",
+      segments: [{
+        id: "segment-departure-flight",
+        segmentType: "flight_leg",
+        title: "Departure flight from Haneda",
+        startAtLocal: "2026-10-06T23:10",
+        startTimeZone: "Asia/Tokyo",
+        origin: "Tokyo Haneda",
+        destination: "Shanghai",
+        constraintStrength: "hard",
+        fixedCommitment: true,
+        needsReviewReasons: []
+      }]
+    }
+  ];
 }
 
 function day(date: string, startLabel: string, endLabel: string): SemanticTravelPlan["dailyItinerary"][number] {

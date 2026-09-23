@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { planPresentationIntegrityIssues, type GeneratedPlanDraft, type ImmigrationStatus, type PlanningSession, type PlanPresentation, type ProfileGender, type ResearchSet, type SkillItineraryArtifact, type SkillResearchBatchArtifact, type SkillLineage } from "@c-assistant/core";
+import { planPresentationIntegrityIssues, type BlueprintBookingConstraint, type BlueprintBookingSegmentType, type BlueprintBookingType, type BlueprintPlace, type GeneratedPlanDraft, type ImmigrationStatus, type PlanningSession, type PlanPresentation, type ProfileGender, type ResearchSet, type SkillItineraryArtifact, type SkillResearchBatchArtifact, type SkillLineage } from "@c-assistant/core";
 import { blueprintPolicyKind, LANDI_BLUEPRINT_GENERATION_RULES, LANDI_BLUEPRINT_SKILL, LANDI_BLUEPRINT_SOURCE_RULES } from "./landi-blueprint-policy.js";
 export { blueprintPolicyKind, LANDI_BLUEPRINT_SKILL, LEGACY_BLUEPRINT_SKILL } from "./landi-blueprint-policy.js";
 export * from "./semantic-validator.js";
@@ -71,12 +71,34 @@ export interface SkillItineraryRequest extends CodexPlanRequest {
 
 export interface SemanticTravelPlanRequest extends CodexPlanRequest {
   research: ResearchSet;
+  fixedCommitments: SemanticFixedCommitment[];
+}
+
+export interface SemanticFixedCommitment {
+  commitmentId: string;
+  bookingConstraintId: string;
+  segmentId: string;
+  type: BlueprintBookingType;
+  segmentType: BlueprintBookingSegmentType;
+  status: "confirmed";
+  constraintStrength: "hard";
+  fixed: true;
+  title: string;
+  segmentTitle: string;
+  startAtLocal?: string;
+  startTimeZone?: string;
+  endAtLocal?: string;
+  endTimeZone?: string;
+  origin?: string;
+  destination?: string;
+  location?: string;
 }
 
 export interface SemanticTravelPlan {
   title: string;
   language: string;
   tripStrategy: string;
+  fixedCommitments: SemanticFixedCommitment[];
   targetedResearch: SemanticTargetedResearch[];
   dailyItinerary: Array<{
     date: string;
@@ -92,6 +114,32 @@ export interface SemanticTravelPlan {
   researchGrounding: string[];
   followUpChecks: string[];
   markdown: string;
+}
+
+export function semanticFixedCommitmentsFromBookingConstraints(bookingConstraints: BlueprintBookingConstraint[]): SemanticFixedCommitment[] {
+  return bookingConstraints
+    .filter((constraint) => constraint.status === "confirmed" && constraint.constraintStrength === "hard")
+    .flatMap((constraint) => constraint.segments
+      .filter((segment) => segment.fixedCommitment && segment.constraintStrength === "hard")
+      .map((segment): SemanticFixedCommitment => ({
+        commitmentId: `${constraint.id}:${segment.id}`,
+        bookingConstraintId: constraint.id,
+        segmentId: segment.id,
+        type: constraint.type,
+        segmentType: segment.segmentType,
+        status: "confirmed",
+        constraintStrength: "hard",
+        fixed: true,
+        title: constraint.title,
+        segmentTitle: segment.title,
+        ...(segment.startAtLocal ? { startAtLocal: segment.startAtLocal } : {}),
+        ...(segment.startTimeZone ? { startTimeZone: segment.startTimeZone } : {}),
+        ...(segment.endAtLocal ? { endAtLocal: segment.endAtLocal } : {}),
+        ...(segment.endTimeZone ? { endTimeZone: segment.endTimeZone } : {}),
+        ...(segment.origin ? { origin: segment.origin } : {}),
+        ...(segment.destination ? { destination: segment.destination } : {}),
+        ...(segment.location ? { location: segment.location } : {})
+      })));
 }
 
 export interface SemanticTravelPlanResult {
@@ -111,6 +159,8 @@ export interface SemanticTargetedResearch {
 
 export type SemanticPlanRole = "planned" | "optional" | "replacement";
 export type SemanticOperationalConditionKind = "reservation" | "session" | "weather" | "route" | "access" | "traveler_choice" | "recheck";
+export type SemanticTravelExperienceKind = "experience" | "meal" | "rest" | "transfer" | "lodging" | "event" | "flexible";
+export type SemanticTimingStatus = "confirmed" | "planned" | "estimated" | "unknown" | "recheck";
 
 export interface SemanticOperationalCondition {
   kind: SemanticOperationalConditionKind;
@@ -121,25 +171,38 @@ export interface SemanticTravelExperience {
   title: string;
   planRole: SemanticPlanRole;
   summary: string;
+  kind?: SemanticTravelExperienceKind;
   placeName?: string;
   primaryExperience?: boolean;
   operationalConditions?: SemanticOperationalCondition[];
   replacementFor?: string;
   startTime?: string;
+  endTime?: string;
   durationMinutes?: number;
+  timingStatus?: SemanticTimingStatus;
 }
 
-export type SemanticDayContextStatus = "confirmed_property" | "planned_base_pending_property" | "unresolved_base" | "transport_node" | "in_transit";
+export type SemanticDayContextStatus = "confirmed_property" | "selected_property" | "recommended_property" | "planned_base_pending_property" | "unresolved_base" | "transport_node" | "in_transit";
 
 export interface SemanticDayContext {
   label: string;
   status: SemanticDayContextStatus;
+  placeName?: string;
 }
 
-interface SkillImageEnrichmentArtifact {
+export interface SkillImageEnrichmentArtifact {
   sources: SkillResearchBatchArtifact["sources"];
   images: Array<NonNullable<SkillResearchBatchArtifact["places"][number]["images"]>[number] & { placeId: string; sourceUrl: string }>;
   omitted: Array<{ placeId: string; reason: string }>;
+}
+
+export interface PlannedPlaceImageEnrichmentRequest {
+  request: string;
+  scopeLabel: string;
+  places: BlueprintPlace[];
+  profile: SkillResearchBatchRequest["profile"];
+  completedAt?: string;
+  signal?: AbortSignal;
 }
 
 export interface RuntimeProcessResult {
@@ -258,8 +321,41 @@ export class CodexRuntimeAdapter {
       if (command.aborted) throw new RuntimeAdapterError("cancelled", "Blueprint research was cancelled. Saved batches remain available.");
       if (command.timedOut) throw new RuntimeAdapterError("timed_out", `Research for ${input.batch.scopeLabel} timed out. Earlier saved batches remain available.`);
       if (command.code !== 0) throw codexRuntimeFailure(command);
-      const artifact = parseSkillResearchBatchArtifact(await readCodexStructuredOutput(outputPath, command, "research"), input.batch, input.completedAt ?? new Date().toISOString());
-      return await this.enrichSkillResearchBatchImages(input, artifact, runDirectory);
+      return parseSkillResearchBatchArtifact(await readCodexStructuredOutput(outputPath, command, "research"), input.batch, input.completedAt ?? new Date().toISOString());
+    } finally {
+      await rm(runDirectory, { recursive: true, force: true });
+    }
+  }
+
+  async generatePlannedPlaceImageEnrichment(input: PlannedPlaceImageEnrichmentRequest): Promise<SkillImageEnrichmentArtifact> {
+    const places = input.places.slice(0, 32);
+    if (!input.request.trim() || !input.scopeLabel.trim() || !places.length) throw new RuntimeAdapterError("invalid_request", "Planned-place image enrichment needs a confirmed request, scope, and at least one place.");
+    const health = await this.check();
+    if (!health.installed) throw new RuntimeAdapterError("not_installed", health.message ?? "Codex CLI is not available.");
+    if (!health.authenticated) throw new RuntimeAdapterError("not_authenticated", health.message ?? "Codex login is required.");
+    const runDirectory = await mkdtemp(join(tmpdir(), "c-assistant-planned-place-images-"));
+    const schemaPath = join(runDirectory, "planned-place-images.schema.json");
+    const outputPath = join(runDirectory, "planned-place-images.json");
+    try {
+      await writeFile(schemaPath, JSON.stringify(codexStrictOutputSchema(skillImageEnrichmentSchema)), "utf8");
+      const promptInput: SkillResearchBatchRequest = {
+        request: input.request,
+        batch: { id: "planned-place-images", scopeLabel: input.scopeLabel },
+        profile: input.profile,
+        ...(input.completedAt ? { completedAt: input.completedAt } : {}),
+        ...(input.signal ? { signal: input.signal } : {})
+      };
+      const artifact = imageEnrichmentPromptArtifact(places, input.scopeLabel, input.completedAt ?? new Date().toISOString());
+      const command = await this.run("codex", ["--search", "exec", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "--output-schema", schemaPath, "--output-last-message", outputPath, buildSkillImageEnrichmentPrompt(promptInput, artifact)], {
+        cwd: runDirectory,
+        env: scrubbedEnvironment(this.environment),
+        timeoutMs: CODEX_IMAGE_ENRICHMENT_TIMEOUT_MS,
+        ...(input.signal ? { signal: input.signal } : {})
+      });
+      if (command.aborted) throw new RuntimeAdapterError("cancelled", "Planned-place image enrichment was cancelled.");
+      if (command.timedOut) throw new RuntimeAdapterError("timed_out", "Planned-place image enrichment timed out.");
+      if (command.code !== 0) throw codexRuntimeFailure(command);
+      return parseSkillImageEnrichmentArtifact(await readCodexStructuredOutput(outputPath, command, "research"), new Set(places.map((place) => place.id)));
     } finally {
       await rm(runDirectory, { recursive: true, force: true });
     }
@@ -941,6 +1037,12 @@ function isSkillResearchPlace(value: unknown): boolean {
     && (value.schedulingEligibility === undefined || isSchedulingEligibility(value.schedulingEligibility))
     && (value.fieldEvidence === undefined || (Array.isArray(value.fieldEvidence) && value.fieldEvidence.every(isFieldEvidence)))
     && (value.operationalFacts === undefined || isOperationalFacts(value.operationalFacts))
+    && (value.accommodation === undefined || (isRecord(value.accommodation)
+      && (value.accommodation.state === "recommended" || value.accommodation.state === "pending")
+      && (value.accommodation.baseLabel === undefined || isString(value.accommodation.baseLabel))
+      && (value.accommodation.stayStartDate === undefined || isString(value.accommodation.stayStartDate))
+      && (value.accommodation.stayEndDate === undefined || isString(value.accommodation.stayEndDate))
+      && (value.accommodation.rationale === undefined || isString(value.accommodation.rationale))))
     && (value.images === undefined || (Array.isArray(value.images) && value.images.every(isSkillPlaceImage)))
     && (value.sourceUrls === undefined || (Array.isArray(value.sourceUrls) && value.sourceUrls.every((url) => isString(url) && url.startsWith("https://"))))
     && (value.detailSections === undefined || (Array.isArray(value.detailSections) && value.detailSections.every((section) => isRecord(section) && isString(section.title))));
@@ -1290,7 +1392,8 @@ export function parseSemanticTravelPlan(value: string): SemanticTravelPlan {
     || !["title", "language", "tripStrategy", "markdown"].every((key) => isString(parsed[key]))
     || !Array.isArray(parsed.dailyItinerary)
     || !["unresolvedExperiences", "preparation", "tips", "researchGrounding", "followUpChecks"].every((key) => Array.isArray(parsed[key]) && (parsed[key] as unknown[]).every(isString))
-    || !Array.isArray(parsed.targetedResearch)) {
+    || !Array.isArray(parsed.targetedResearch)
+    || !Array.isArray(parsed.fixedCommitments)) {
     throw new RuntimeAdapterError("invalid_output", "The semantic planner did not match the Semantic Travel Plan contract.");
   }
   const targetedResearch = parsed.targetedResearch
@@ -1313,6 +1416,7 @@ export function parseSemanticTravelPlan(value: string): SemanticTravelPlan {
     title: String(parsed.title).trim(),
     language: String(parsed.language).trim(),
     tripStrategy: String(parsed.tripStrategy).trim(),
+    fixedCommitments: normalizeSemanticFixedCommitments(parsed.fixedCommitments),
     targetedResearch,
     dailyItinerary,
     unresolvedExperiences: (parsed.unresolvedExperiences as string[]).map((item) => item.trim()),
@@ -1324,6 +1428,44 @@ export function parseSemanticTravelPlan(value: string): SemanticTravelPlan {
   };
 }
 
+function normalizeSemanticFixedCommitments(values: unknown[]): SemanticFixedCommitment[] {
+  return values
+    .filter((value): value is Record<string, unknown> => isRecord(value)
+      && ["commitmentId", "bookingConstraintId", "segmentId", "type", "segmentType", "status", "constraintStrength", "title", "segmentTitle"].every((key) => isString(value[key]))
+      && value.fixed === true
+      && value.status === "confirmed"
+      && value.constraintStrength === "hard"
+      && ["accommodation", "flight", "train", "rental_car", "event", "tour", "ticket", "restaurant", "other"].includes(String(value.type))
+      && ["flight_leg", "train_leg", "hotel_stay", "rental_pickup", "rental_return", "event_window", "other"].includes(String(value.segmentType)))
+    .map((value): SemanticFixedCommitment => ({
+      commitmentId: String(value.commitmentId).trim(),
+      bookingConstraintId: String(value.bookingConstraintId).trim(),
+      segmentId: String(value.segmentId).trim(),
+      type: String(value.type) as BlueprintBookingType,
+      segmentType: String(value.segmentType) as BlueprintBookingSegmentType,
+      status: "confirmed",
+      constraintStrength: "hard",
+      fixed: true,
+      title: String(value.title).trim(),
+      segmentTitle: String(value.segmentTitle).trim(),
+      ...semanticFixedCommitmentOptionalString(value, "startAtLocal"),
+      ...semanticFixedCommitmentOptionalString(value, "startTimeZone"),
+      ...semanticFixedCommitmentOptionalString(value, "endAtLocal"),
+      ...semanticFixedCommitmentOptionalString(value, "endTimeZone"),
+      ...semanticFixedCommitmentOptionalString(value, "origin"),
+      ...semanticFixedCommitmentOptionalString(value, "destination"),
+      ...semanticFixedCommitmentOptionalString(value, "location")
+    }))
+    .filter((commitment) => commitment.commitmentId && commitment.bookingConstraintId && commitment.segmentId && commitment.title && commitment.segmentTitle);
+}
+
+function semanticFixedCommitmentOptionalString<K extends "startAtLocal" | "startTimeZone" | "endAtLocal" | "endTimeZone" | "origin" | "destination" | "location">(
+  value: Record<string, unknown>,
+  key: K
+): Partial<Pick<SemanticFixedCommitment, K>> {
+  return isString(value[key]) && value[key].trim() ? { [key]: value[key].trim() } as Partial<Pick<SemanticFixedCommitment, K>> : {};
+}
+
 function normalizeSemanticExperiences(values: unknown[]): SemanticTravelExperience[] {
   return values
     .filter((value): value is Record<string, unknown> => isRecord(value) && isString(value.title) && isString(value.planRole) && isString(value.summary))
@@ -1332,12 +1474,15 @@ function normalizeSemanticExperiences(values: unknown[]): SemanticTravelExperien
       title: String(value.title).trim(),
       planRole: String(value.planRole) as SemanticPlanRole,
       summary: String(value.summary).trim(),
+      ...(isString(value.kind) && ["experience", "meal", "rest", "transfer", "lodging", "event", "flexible"].includes(value.kind) ? { kind: value.kind as SemanticTravelExperienceKind } : {}),
       ...(isString(value.placeName) && value.placeName.trim() ? { placeName: value.placeName.trim() } : {}),
       ...(typeof value.primaryExperience === "boolean" ? { primaryExperience: value.primaryExperience } : {}),
       ...(Array.isArray(value.operationalConditions) ? { operationalConditions: normalizeSemanticOperationalConditions(value.operationalConditions) } : {}),
       ...(isString(value.replacementFor) && value.replacementFor.trim() ? { replacementFor: value.replacementFor.trim() } : {}),
       ...(isString(value.startTime) && value.startTime.trim() ? { startTime: value.startTime.trim() } : {}),
-      ...(Number.isInteger(value.durationMinutes) && Number(value.durationMinutes) > 0 ? { durationMinutes: Number(value.durationMinutes) } : {})
+      ...(isString(value.endTime) && value.endTime.trim() ? { endTime: value.endTime.trim() } : {}),
+      ...(Number.isInteger(value.durationMinutes) && Number(value.durationMinutes) > 0 ? { durationMinutes: Number(value.durationMinutes) } : {}),
+      ...(isString(value.timingStatus) && ["confirmed", "planned", "estimated", "unknown", "recheck"].includes(value.timingStatus) ? { timingStatus: value.timingStatus as SemanticTimingStatus } : {})
     }));
 }
 
@@ -1351,18 +1496,19 @@ function normalizeSemanticOperationalConditions(values: unknown[]): SemanticOper
 }
 
 function isSemanticDayContext(value: unknown): value is Record<string, unknown> {
-  return isRecord(value) && isString(value.label) && semanticDayContextStatuses.has(String(value.status));
+  return isRecord(value) && isString(value.label) && semanticDayContextStatuses.has(String(value.status)) && (value.placeName === undefined || isString(value.placeName));
 }
 
 function normalizeSemanticDayContext(value: unknown): SemanticDayContext {
   const context = value as Record<string, unknown>;
   return {
     label: String(context.label).trim(),
-    status: String(context.status) as SemanticDayContextStatus
+    status: String(context.status) as SemanticDayContextStatus,
+    ...(isString(context.placeName) && context.placeName.trim() ? { placeName: context.placeName.trim() } : {})
   };
 }
 
-const semanticDayContextStatuses = new Set<string>(["confirmed_property", "planned_base_pending_property", "unresolved_base", "transport_node", "in_transit"]);
+const semanticDayContextStatuses = new Set<string>(["confirmed_property", "selected_property", "recommended_property", "planned_base_pending_property", "unresolved_base", "transport_node", "in_transit"]);
 
 function normalizeSkillItineraryDay(value: unknown, knownPlaceIds: Set<string>, knownSourceIds: Set<string>, knownEventIds: Set<string>, index: number): SkillItineraryArtifact["days"][number] | undefined {
   if (!isRecord(value) || !["date", "city", "title", "summary"].every((key) => isString(value[key])) || !Array.isArray(value.stops) || !isStringArray(value.candidatePlaceIds)) return undefined;
@@ -1432,8 +1578,26 @@ function normalizeSkillItineraryBlocks(values: unknown[], knownPlaceIds: Set<str
       ...(Array.isArray(block.operationalConditions) ? { operationalConditions: normalizeSkillOperationalConditions(block.operationalConditions) } : {}),
       ...(isString(block.replacementFor) && block.replacementFor.trim() ? { replacementFor: block.replacementFor.trim() } : {}),
       ...(isString(block.replacementForBlockId) && block.replacementForBlockId.trim() ? { replacementForBlockId: block.replacementForBlockId.trim() } : {}),
+      ...normalizedBlockDisplayProperty(block),
       evidence: Array.isArray(block.evidence) ? block.evidence.filter((ref): ref is NonNullable<SkillItineraryArtifact["days"][number]["blocks"]>[number]["evidence"][number] => isRecord(ref) && isString(ref.sourceId) && knownSourceIds.has(ref.sourceId) && ["verified", "recheck", "stale"].includes(String(ref.status))).map((ref) => ({ sourceId: ref.sourceId, status: ref.status, ...(isString(ref.checkedAt) ? { checkedAt: ref.checkedAt } : {}), ...(Array.isArray(ref.supports) && ref.supports.every(isString) ? { supports: ref.supports } : {}) })) : []
     }));
+}
+
+function normalizedBlockDisplayProperty(block: Record<string, unknown>): { display?: NonNullable<NonNullable<SkillItineraryArtifact["days"][number]["blocks"]>[number]["display"]> } {
+  if (!isRecord(block.display)) return {};
+  const display = normalizeItineraryBlockDisplay(block.display);
+  return display ? { display } : {};
+}
+
+function normalizeItineraryBlockDisplay(value: Record<string, unknown>): NonNullable<NonNullable<SkillItineraryArtifact["days"][number]["blocks"]>[number]["display"]> | undefined {
+  const display = {
+    ...(isString(value.timeLabel) && value.timeLabel.trim() ? { timeLabel: value.timeLabel.trim() } : {}),
+    ...(isString(value.meta) && value.meta.trim() ? { meta: value.meta.trim() } : {}),
+    ...(isString(value.timingStatus) && ["confirmed", "planned", "estimated", "unknown", "recheck"].includes(value.timingStatus) ? { timingStatus: value.timingStatus as "confirmed" | "planned" | "estimated" | "unknown" | "recheck" } : {}),
+    ...(typeof value.routeAnchor === "boolean" ? { routeAnchor: value.routeAnchor } : {}),
+    ...(typeof value.reorderable === "boolean" ? { reorderable: value.reorderable } : {})
+  };
+  return Object.keys(display).length ? display : undefined;
 }
 
 function normalizeSkillOperationalConditions(values: unknown[]): NonNullable<NonNullable<SkillItineraryArtifact["days"][number]["blocks"]>[number]["operationalConditions"]> {
@@ -1449,6 +1613,7 @@ function lowValueVisibleItineraryBlock(block: Record<string, unknown>): boolean 
   const kind = String(block.kind);
   const text = itineraryBlockText(block);
   if (!text.trim()) return false;
+  if (executionUsefulItineraryBlock(block, text)) return false;
   if (concreteOrConstrainedItineraryBlock(block, text)) return false;
   if (plannerAlternativeBlock(block, text)) return true;
   if (genericMealBlock(block, text)) return true;
@@ -1457,6 +1622,18 @@ function lowValueVisibleItineraryBlock(block: Record<string, unknown>): boolean 
   if (!["rest", "flexible"].includes(kind)) return false;
   return /\b(slow|easy|quiet|free|flexible|optional|neighborhood|hotel rest|hotel pause|afternoon rest|relax|take it easy|jet-?lag|unhurried|leisure|early night|open window|keep time open|open time|recovery time)\b/.test(text)
     || /自由活动|轻松|休息|慢节奏|早睡|随意/.test(text);
+}
+
+function executionUsefulItineraryBlock(block: Record<string, unknown>, text: string): boolean {
+  const kind = String(block.kind);
+  const hasTime = isString(block.startTime) || isString(block.endTime) || Number.isInteger(block.durationMinutes)
+    || (isRecord(block.display) && (isString(block.display.timeLabel) || isString(block.display.timingStatus)));
+  if (!hasTime) return false;
+  if (kind === "meal") return /\b(breakfast|lunch|dinner|brunch|meal|coffee|cafe|restaurant|food|snack)\b|早餐|午餐|晚餐|咖啡|餐/.test(text);
+  if (kind === "lodging") return /\b(accommodation|lodging|hotel|base|check[ -]?in|check[ -]?out|luggage|bag(?:gage)?|return|depart|start)\b|住宿|酒店|入住|退房|行李|返回|出发/.test(text);
+  if (kind === "transfer") return /\b(from .+ to|between|transfer|depart|return|route|journey|ride|drive|walk|taxi|airport|station|base|accommodation|hotel)\b|转场|交通|出发|返回|机场|车站|住宿/.test(text);
+  if (kind === "rest") return /\b(rest|pause|break|buffer|recover|cool down|shade|siesta)\b|休息|缓冲|恢复|避暑/.test(text);
+  return false;
 }
 
 function itineraryBlockText(block: Record<string, unknown>): string {
@@ -2064,7 +2241,7 @@ export const skillResearchBatchSchema = {
       id: { type: "string", maxLength: 100 }, title: { type: "string", minLength: 1, maxLength: 240 }, authority: { type: "string", minLength: 1, maxLength: 200 }, url: { type: "string", pattern: "^https://" }, retrievedAt: { type: "string", minLength: 1, maxLength: 40 }, status: { type: "string", enum: ["verified", "recheck", "stale"] }, official: { type: "boolean" }
     } } },
     places: { type: "array", maxItems: 240, items: { type: "object", additionalProperties: false, required: ["name", "locationLabel", "category", "display", "schedulingEligibility", "whyWorthIt", "plan"], properties: {
-      id: { type: "string", maxLength: 100 }, externalIdentity: { type: "string", maxLength: 200 }, name: { type: "string", minLength: 1, maxLength: 200 }, localizedName: { type: "string", maxLength: 200 }, locationLabel: { type: "string", minLength: 1, maxLength: 240 }, city: { type: "string", maxLength: 160 }, area: { type: "string", maxLength: 160 }, category: { type: "string", minLength: 1, maxLength: 100 }, priority: { type: "string", enum: ["must", "preferred", "nearby", "archive", "pending", "recheck", "booked"] }, coordinates: { anyOf: [{ type: "array", minItems: 2, maxItems: 2, items: { type: "number" } }, { type: "null" }] }, display: { type: "object", additionalProperties: false, required: ["type"], properties: { type: { type: "string", enum: ["attraction", "dining", "shopping", "experience"] }, markerKind: { type: "string", enum: ["attraction", "dining", "shopping", "experience"] } } }, guideDisplay: skillGuideDisplaySchema, schedulingEligibility: skillSchedulingEligibilitySchema, contentTier: { type: "string", enum: ["deep", "standard", "compact"] }, visitRole: { type: "string", maxLength: 160 }, durationMinutes: { type: "integer", minimum: 1, maximum: 10080 }, whyWorthIt: { type: "string", minLength: 1, maxLength: 1200 }, plan: { type: "string", minLength: 1, maxLength: 1200 }, tip: { type: "string", maxLength: 800 }, detailSections: { type: "array", maxItems: 8, items: { type: "object", additionalProperties: false, required: ["title", "body", "items"], properties: { title: { type: "string", minLength: 1, maxLength: 120 }, body: { type: "string", maxLength: 1200 }, items: { type: "array", maxItems: 8, items: { type: "string", maxLength: 500 } } } } }, images: { type: "array", maxItems: 4, items: skillPlaceImageSchema }, fieldEvidence: { type: "array", maxItems: 24, items: { type: "object", additionalProperties: false, required: ["path", "status", "evidence"], properties: { path: { type: "string", minLength: 1, maxLength: 160 }, status: { type: "string", enum: ["verified", "recheck", "stale"] }, evidence: { type: "array", maxItems: 12, items: skillEvidenceRefSchema } } } }, operationalFacts: skillOperationalFactsSchema, officialUrl: { type: "string", pattern: "^https://" }, bookingUrl: { type: "string", pattern: "^https://" }, mapUrl: { type: "string", pattern: "^https://" }, experienceUrl: { type: "string", pattern: "^https://" }, sourceUrls: { type: "array", maxItems: 12, items: { type: "string", pattern: "^https://" } }
+      id: { type: "string", maxLength: 100 }, externalIdentity: { type: "string", maxLength: 200 }, name: { type: "string", minLength: 1, maxLength: 200 }, localizedName: { type: "string", maxLength: 200 }, locationLabel: { type: "string", minLength: 1, maxLength: 240 }, city: { type: "string", maxLength: 160 }, area: { type: "string", maxLength: 160 }, category: { type: "string", minLength: 1, maxLength: 100 }, priority: { type: "string", enum: ["must", "preferred", "nearby", "archive", "pending", "recheck", "booked"] }, coordinates: { anyOf: [{ type: "array", minItems: 2, maxItems: 2, items: { type: "number" } }, { type: "null" }] }, display: { type: "object", additionalProperties: false, required: ["type"], properties: { type: { type: "string", enum: ["attraction", "dining", "shopping", "experience"] }, markerKind: { type: "string", enum: ["attraction", "dining", "shopping", "experience"] } } }, guideDisplay: skillGuideDisplaySchema, schedulingEligibility: skillSchedulingEligibilitySchema, contentTier: { type: "string", enum: ["deep", "standard", "compact"] }, visitRole: { type: "string", maxLength: 160 }, durationMinutes: { type: "integer", minimum: 1, maximum: 10080 }, whyWorthIt: { type: "string", minLength: 1, maxLength: 1200 }, plan: { type: "string", minLength: 1, maxLength: 1200 }, tip: { type: "string", maxLength: 800 }, detailSections: { type: "array", maxItems: 8, items: { type: "object", additionalProperties: false, required: ["title", "body", "items"], properties: { title: { type: "string", minLength: 1, maxLength: 120 }, body: { type: "string", maxLength: 1200 }, items: { type: "array", maxItems: 8, items: { type: "string", maxLength: 500 } } } } }, images: { type: "array", maxItems: 4, items: skillPlaceImageSchema }, fieldEvidence: { type: "array", maxItems: 24, items: { type: "object", additionalProperties: false, required: ["path", "status", "evidence"], properties: { path: { type: "string", minLength: 1, maxLength: 160 }, status: { type: "string", enum: ["verified", "recheck", "stale"] }, evidence: { type: "array", maxItems: 12, items: skillEvidenceRefSchema } } } }, operationalFacts: skillOperationalFactsSchema, accommodation: { type: "object", additionalProperties: false, required: ["state"], properties: { state: { type: "string", enum: ["recommended", "pending"] }, baseLabel: { type: "string", maxLength: 160 }, stayStartDate: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" }, stayEndDate: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" }, rationale: { type: "string", maxLength: 800 } } }, officialUrl: { type: "string", pattern: "^https://" }, bookingUrl: { type: "string", pattern: "^https://" }, mapUrl: { type: "string", pattern: "^https://" }, experienceUrl: { type: "string", pattern: "^https://" }, sourceUrls: { type: "array", maxItems: 12, items: { type: "string", pattern: "^https://" } }
     } } },
     events: { type: "array", maxItems: 120, items: { type: "object", additionalProperties: false, required: ["title", "description"], properties: {
       id: { type: "string", maxLength: 100 }, title: { type: "string", minLength: 1, maxLength: 240 }, startDate: { type: "string", maxLength: 40 }, endDate: { type: "string", maxLength: 40 }, locationLabel: { type: "string", maxLength: 240 }, placeId: { type: "string", maxLength: 100 }, description: { type: "string", minLength: 1, maxLength: 1200 }, sourceUrls: { type: "array", maxItems: 12, items: { type: "string", pattern: "^https://" } }
@@ -2144,11 +2321,39 @@ export const skillItinerarySchema = {
 export const semanticTravelPlanSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["title", "language", "tripStrategy", "targetedResearch", "dailyItinerary", "unresolvedExperiences", "preparation", "tips", "researchGrounding", "followUpChecks", "markdown"],
+  required: ["title", "language", "tripStrategy", "fixedCommitments", "targetedResearch", "dailyItinerary", "unresolvedExperiences", "preparation", "tips", "researchGrounding", "followUpChecks", "markdown"],
   properties: {
     title: { type: "string", minLength: 1, maxLength: 200 },
     language: { type: "string", minLength: 2, maxLength: 40 },
     tripStrategy: { type: "string", minLength: 120, maxLength: 6000 },
+    fixedCommitments: {
+      type: "array",
+      maxItems: 80,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["commitmentId", "bookingConstraintId", "segmentId", "type", "segmentType", "status", "constraintStrength", "fixed", "title", "segmentTitle"],
+        properties: {
+          commitmentId: { type: "string", minLength: 1, maxLength: 240 },
+          bookingConstraintId: { type: "string", minLength: 1, maxLength: 160 },
+          segmentId: { type: "string", minLength: 1, maxLength: 160 },
+          type: { type: "string", enum: ["accommodation", "flight", "train", "rental_car", "event", "tour", "ticket", "restaurant", "other"] },
+          segmentType: { type: "string", enum: ["flight_leg", "train_leg", "hotel_stay", "rental_pickup", "rental_return", "event_window", "other"] },
+          status: { type: "string", enum: ["confirmed"] },
+          constraintStrength: { type: "string", enum: ["hard"] },
+          fixed: { type: "boolean", enum: [true] },
+          title: { type: "string", minLength: 1, maxLength: 240 },
+          segmentTitle: { type: "string", minLength: 1, maxLength: 240 },
+          startAtLocal: { type: "string", minLength: 1, maxLength: 80 },
+          startTimeZone: { type: "string", minLength: 1, maxLength: 100 },
+          endAtLocal: { type: "string", minLength: 1, maxLength: 80 },
+          endTimeZone: { type: "string", minLength: 1, maxLength: 100 },
+          origin: { type: "string", minLength: 1, maxLength: 240 },
+          destination: { type: "string", minLength: 1, maxLength: 240 },
+          location: { type: "string", minLength: 1, maxLength: 240 }
+        }
+      }
+    },
     targetedResearch: {
       type: "array",
       maxItems: 4,
@@ -2179,7 +2384,8 @@ export const semanticTravelPlanSchema = {
             required: ["label", "status"],
             properties: {
               label: { type: "string", minLength: 1, maxLength: 240 },
-              status: { type: "string", enum: ["confirmed_property", "planned_base_pending_property", "unresolved_base", "transport_node", "in_transit"] }
+              status: { type: "string", enum: ["confirmed_property", "selected_property", "recommended_property", "planned_base_pending_property", "unresolved_base", "transport_node", "in_transit"] },
+              placeName: { type: "string", minLength: 1, maxLength: 200 }
             }
           },
           endContext: {
@@ -2188,7 +2394,8 @@ export const semanticTravelPlanSchema = {
             required: ["label", "status"],
             properties: {
               label: { type: "string", minLength: 1, maxLength: 240 },
-              status: { type: "string", enum: ["confirmed_property", "planned_base_pending_property", "unresolved_base", "transport_node", "in_transit"] }
+              status: { type: "string", enum: ["confirmed_property", "selected_property", "recommended_property", "planned_base_pending_property", "unresolved_base", "transport_node", "in_transit"] },
+              placeName: { type: "string", minLength: 1, maxLength: 200 }
             }
           },
           plan: { type: "string", minLength: 120, maxLength: 6000 },
@@ -2202,6 +2409,7 @@ export const semanticTravelPlanSchema = {
               required: ["title", "planRole", "summary"],
               properties: {
                 title: { type: "string", minLength: 1, maxLength: 200 },
+                kind: { type: "string", enum: ["experience", "meal", "rest", "transfer", "lodging", "event", "flexible"] },
                 placeName: { type: "string", minLength: 1, maxLength: 200 },
                 planRole: { type: "string", enum: ["planned", "optional", "replacement"] },
                 primaryExperience: { type: "boolean" },
@@ -2221,7 +2429,9 @@ export const semanticTravelPlanSchema = {
                 },
                 replacementFor: { type: "string", minLength: 1, maxLength: 200 },
                 startTime: { type: "string", minLength: 1, maxLength: 40 },
-                durationMinutes: { type: "integer", minimum: 1, maximum: 1440 }
+                endTime: { type: "string", minLength: 1, maxLength: 40 },
+                durationMinutes: { type: "integer", minimum: 1, maximum: 1440 },
+                timingStatus: { type: "string", enum: ["confirmed", "planned", "estimated", "unknown", "recheck"] }
               }
             }
           }
@@ -2452,6 +2662,14 @@ Geographic scope: ${input.batch.scopeLabel}
 Batch rules:
 ${legacy ? "- Follow the Skill's source-verification and applicable Regional Source Pack rules, including multilingual discovery followed by source verification." : LANDI_BLUEPRINT_SOURCE_RULES}
 - Research this geographic scope deeply enough to preserve useful scheduled, replacement, food/rest, evening, rain, closure, and low-energy choices.
+- Build one shared local-content pool for two purposes: a selective formal itinerary and a useful Explore guide after that itinerary is chosen. Do not assume every strong researched place should become a scheduled stop.
+- Cover the trip's actual activity and lodging areas with meaningfully different choices that fit the traveler, party, pace, and interests. Include supporting dining, local experiences, light activities, and practical weather or energy alternatives where they add real choice. Shopping is optional and should be researched only when it fits the request.
+- Keep enough sourced, map-ready alternatives that the planner can make real tradeoffs without exhausting the guide catalog. Judge coverage by useful roles and primary-area choice, not by a universal place-count quota.
+- Map-ready means the concrete place has a verified identity and valid latitude/longitude in coordinates. Include coordinates for ordinary schedulable and high-impact places whenever they can be verified; never label a coordinate-less place map-ready and never guess coordinates. Coordinate-less informational context may be retained, but it does not count as an addable Explore choice.
+- Airports, accommodation, and pure transport nodes may be retained when operationally necessary, but they do not count as Explore choice coverage.
+- Accommodation research is a bounded itinerary-anchor decision, not a new Explore category. When the confirmed request does not name a selected or confirmed property, research a small set of credible, specific, map-ready lodging candidates for each planned overnight base (usually 2-4, but use fewer when evidence quality is stronger than quantity). Set accommodation.state to recommended, baseLabel to the base it can anchor, and include a concise itinerary-geography rationale. Keep guideDisplay.showInGuide false so hotels never create Stay or Transport tabs.
+- A recommended accommodation must be a real identifiable property supported by returned sourceUrls and should have coordinates. Include officialUrl when supported. Include bookingUrl only for a real direct booking/provider URL; an official homepage is not automatically a booking URL. Never include a price or availability claim without current value-level evidence, and never mark a researched candidate selected, booked, or confirmed.
+- Use accommodation.state pending only for a generic area fallback when no reliable specific property can be obtained after this bounded pass. A precise identity, coordinates, official URL, or booking URL never changes recommended into confirmed.
 - Do not import from Xiaohongshu and do not ask the traveler for links or notes from it.
 - Do not reduce or cap valid distinct places because of output length. Coverage targets are guidance, never a validity quota.
 - Keep nearby Discovery Areas as candidates; do not silently promote them into primary destinations.
@@ -2505,14 +2723,51 @@ ${JSON.stringify(places.map((place) => ({
   })))}
 
 Image rules:
-- Try to return one strong detail image per listed place when a safe sourced image exists.
+- This is one bounded, content-only pass over only the listed places. Return at most three strong candidates per place and do not retry omitted places.
+- Preserve exact place identity. An image of the same category, neighborhood, or destination is not an image of the named place; omit it when the match cannot be established.
 - Prefer official place, official tourism, museum/institution, merchant, venue, or Wikimedia Commons file pages. Third-party platforms are allowed only when the image is clearly about the named place and has a source page that can be cited.
 - Do not use Xiaohongshu, search result pages, AI-generated image pages, generic stock photos, maps/screenshots, logos, or images that only depict a broad destination rather than the named place.
 - image.url must be a direct HTTPS image URL suitable for an <img> tag.
 - image.sourceUrl must be the HTTPS page that documents or hosts that image, and the same normalized URL must also appear in the returned sources array. Do not return an image without its source metadata.
-- Use alt text that names what is visible, not keyword stuffing. Set usage to ["detail"] and status to verified only when the source page clearly supports the image-place match; otherwise use recheck.
+- Use alt text that names what is visible, not keyword stuffing. Set usage to ["card", "detail"] and status to verified only when the source page clearly supports the exact image-place match; otherwise omit the image.
 - If no compliant image is found for a place, omit the image and add one omitted item with the placeId and a short reason.
 - Return only sources, images, and omitted. Do not change place text, coordinates, itinerary days, route order, or preparation content.`;
+}
+
+function imageEnrichmentPromptArtifact(places: BlueprintPlace[], scopeLabel: string, completedAt: string): SkillResearchBatchArtifact {
+  return {
+    id: "planned-place-images",
+    scopeLabel,
+    completedAt,
+    sources: [],
+    places: places.map((place) => ({
+      id: place.id,
+      name: place.name,
+      ...(place.localizedName ? { localizedName: place.localizedName } : {}),
+      locationLabel: place.locationLabel,
+      ...(place.city ? { city: place.city } : {}),
+      ...(place.area ? { area: place.area } : {}),
+      category: place.category,
+      priority: place.priority,
+      ...(place.coordinates ? { coordinates: place.coordinates } : {}),
+      ...(place.display ? { display: place.display } : {}),
+      ...(place.contentTier ? { contentTier: place.contentTier } : {}),
+      ...(place.visitRole ? { visitRole: place.visitRole } : {}),
+      whyWorthIt: place.whyWorthIt,
+      plan: place.plan,
+      ...(place.officialUrl ? { officialUrl: place.officialUrl } : {}),
+      ...(place.mapUrl ? { mapUrl: place.mapUrl } : {}),
+      ...(place.experienceUrl ? { experienceUrl: place.experienceUrl } : {}),
+      sourceUrls: []
+    })),
+    events: [],
+    relationships: [],
+    localFoods: [],
+    localProducts: [],
+    experienceThemes: [],
+    travelTips: [],
+    actionRequirements: []
+  };
 }
 
 function placesNeedingImageEnrichment(artifact: SkillResearchBatchArtifact): SkillResearchBatchArtifact["places"] {
@@ -2558,14 +2813,14 @@ Rules:
 - Schedule a practical subset; every unscheduled Research Set place remains in the Blueprint automatically and does not need to be repeated in every day's candidates.
 - Candidate IDs are alternatives for that day and cannot also be scheduled stops. Use them as direct replacements, meal/café/rest stops, rainy-day options, low-energy options, or nearby extensions, not as extra obligations.
 - Stops use contiguous order starting at 1 and only represent concrete places scheduled into the formal route. Times are optional planning advice with a clear basis: booking, flight, train, opening or last-entry constraint, reservation, user preference, route-derived schedule, or a deliberate itinerary anchor. Do not add tidy exact times merely to make the day look complete.
-- Every day must include a blocks array for the visible Web workspace day sequence, but [] is valid and often correct. Only add blocks that pass the visible itinerary admission test; unscheduled time is represented by the absence of blocks, never by a block that says nothing is scheduled. Use stop only for scheduled concrete places, meal only for a concrete dining place or an execution-relevant meal constraint, rest only for explicit or constraint-driven recovery/buffer windows, transfer only for real movement between meaningful plan nodes, lodging only for a concrete base or actionable lodging status, flexible only for a user-requested or constraint-driven open window, and event only for supplied Research Set events.
+- Every day must include a blocks array for the visible Web workspace day sequence, but [] is valid only when there is intentionally no useful visible sequence. Only add blocks that pass the visible itinerary admission test. Use stop only for scheduled concrete places. Use meal, rest, transfer, lodging, flexible, and event for non-place day nodes when they help the traveler understand and execute the day, even when they do not have a concrete placeId.
 - Do not create filler blocks merely to fill blank time, express a relaxed pace, or complete morning/afternoon/evening structure. Omit standalone blocks titled or summarized like Slow morning, Easy morning, Early night, Quiet evening, Free time, Flexible time, Flexible afternoon, Optional neighborhood time, Hotel rest, Afternoon rest, Relax at hotel, Take it easy, Jet-lag recovery, Unhurried time, or Leisure time unless the block carries a material constraint or next action.
 - Before emitting any visible day.block, apply this test: it must represent at least one of a concrete place or concrete experience, a necessary movement between meaningful plan nodes, a fixed commitment or constraint such as a flight, train, reservation, booking, check-in, check-out, appointment, ticket, or explicit user requirement, an actionable dependency or unresolved execution decision such as hotel not selected, reservation required, ticket required, meeting point pending, pickup pending, transfer pending, or route pending, or another user-executable activity. If deleting the block would not reduce the traveler's ability to understand or execute the day, omit it.
 - When a concrete place exists, make that place the center of the block. Prefer a restaurant, hotel, airport, station, attraction, cafe, shop, pier, venue, or meeting point over generic titles like Arrive, Check in, Visit temple, Lunch, or Dinner.
-- For meals without a selected restaurant, do not create a default visible block. Only include the meal if it has a reservation, fixed commitment, explicit dietary or traveler constraint, or other execution dependency. Generic Breakfast, Lunch, Dinner, lunch near lodging, dinner near venue, or light dinner if wanted belongs in unscheduled time, not in day.blocks.
+- Meals without a selected restaurant may be visible when the meal window is part of the executable day rhythm, for example "12:30 Lunch in Central Ubud" or "18:30 Dinner near Jimbaran base." Do not invent a restaurant, booking, address, or placeId. Omit meals that are merely generic filler with no time, context, purpose, or relationship to the surrounding route.
 - Omit optional unknown or unsupported fields. Do not output Time TBD, Duration TBD, Distance TBD, Address TBD, Image unavailable, Opening hours unknown, Restaurant TBD, Hotel TBD, Route TBD, Duration unknown, or similar placeholders. Use concise actionable statuses only when the unknown affects execution, such as Hotel not selected, Reservation required, Pickup point not confirmed, or Route needs recheck.
-- When accepted accommodation bookingConstraints include hotel_stay dates and a concrete place, location, or destination, make each covered morning depart from the accommodation occupied the previous night. Add a lodging block or same-day stop only when it represents a concrete accommodation or an actionable dependency such as hotel not selected, check-in/check-out, baggage storage, or a user-required hotel return. Do not create generic Depart selected lodging, Return to lodging and rest, Check in and settle, or Return for packing blocks. If no accommodation is imported or the hotel date/location is missing, skip this rule without asking for hotel details.
-- Transfers must have real action value. Do not create transfer blocks for heading back toward lodging, relaxing nearby, wandering, or other movement that does not connect meaningful plan nodes or execution constraints.
+- When accepted accommodation bookingConstraints include hotel_stay dates and a concrete place, location, or destination, make each covered morning depart from the accommodation occupied the previous night. Add a lodging block or same-day stop when it represents a concrete accommodation, an actionable dependency such as hotel not selected, check-in/check-out, baggage storage, or a visible day-flow node such as departing from or returning to the planned base area. Do not invent a property, address, booking, or verified pickup time. If no accommodation is imported or the hotel date/location is missing, use the planned base area when the broader plan establishes one instead of leaving the day without origin/end context.
+- Transfers must have real action value. Create transfer blocks for airport movement, base changes, first departure from a base, movement between meaningful plan nodes, and returning to the base when omitting the return would make the day hard to follow. Do not create transfer blocks for wandering, vague relaxation, or movement with no surrounding plan relationship.
 - Keep options separate from the formal plan. Alternatives, rainy-day candidates, low-energy candidates, and backup places remain candidates unless selected into the route or tied to an actionable dependency.
 - A stop block with placeId must correspond to a same-day stop; non-stop blocks may reference an existing place when useful, or use title/summary when the block is contextual. Event blocks must reference an existing eventId. Preserve traveler-facing title, summary, startTime, endTime, durationMinutes, and role when they help the left-column itinerary.
 ${legacy ? "- Every adjacent pair of scheduled stops needs exactly one movement. A route may use mode unknown and status recheck when reliable details are unavailable; do not invent verified duration or geometry. If exact routing is unavailable, include a conservative planned duration and detail that live routing must be refreshed before execution." : "- Every adjacent pair of scheduled stops needs exactly one movement. This stage has no live routing tool: use supplied verified route facts only when they support the exact leg, otherwise retain unknown mode or recheck status and omit unsupported duration and geometry. Explain that travel time remains to be checked. Cite supplied source identities only where they support the specific claim; do not promote discovery evidence into verified routing."}
@@ -2591,6 +2846,14 @@ Planner V2.4 responsibilities:
 - Provide useful preparation, practical guidance, meaningful alternatives/exclusions, and recheck notes.
 - Preserve the SemanticTravelPlan structure, whole-trip review, base strategy, daily start/end context, unresolved lodging semantics, Preparation, Tips, and clean generation without any gold itinerary.
 
+Confirmed hard commitments:
+- The supplied fixedCommitments are immutable confirmed booking constraints, not suggestions, research facts, or optional experiences.
+- Copy every supplied fixedCommitment into the output fixedCommitments array exactly. Do not omit it, move its confirmed time, change its origin/destination, replace it, or downgrade it.
+- Plan the surrounding itinerary around these commitments. Surface an unresolved transfer dependency when necessary rather than changing the commitment.
+- A flight or train is transport structure, not a sightseeing experience and must not be turned into a Place Card or attraction solely to show preservation.
+- For an arrival transport commitment, use the corresponding transport node and time to shape the arrival-day context and downstream base dependency. For a departure commitment, shape the route from the prior base to the departure node around the confirmed time.
+- Do not invent carrier, flight number, booking reference, arrival time, timezone, or any other booking detail that is absent from fixedCommitments.
+
 Meaningful day richness:
 - RELAXED is not EMPTY. Relaxed means low unnecessary movement, sensible pacing, sufficient buffers, fewer stressful fixed commitments, and geographically compact days.
 - Relaxed does not automatically mean one short attraction, generic cafe time, generic shopping, generic spa, browsing around, free morning, optional local walk, or most of the sightseeing day unused.
@@ -2613,16 +2876,19 @@ Research behavior:
 Daily base and start/end context:
 - Every dailyItinerary item must answer where the traveler starts that day and where the traveler ends or sleeps that night.
 - Use startContext and endContext as semantic travel-planning anchors, not presentation instructions. Do not create Web place cards, blocks, stops, movements, IDs, Telegram fields, or execution route anchors from them.
-- Context status meanings: confirmed_property means the traveler has a specific confirmed hotel/property; planned_base_pending_property means the base area is decided but the exact lodging is pending; unresolved_base means even the lodging area/base remains unresolved; transport_node means an airport, station, pier, or similar travel node; in_transit means the traveler is on a long-haul/overnight travel segment rather than sleeping at a destination base.
+- Context status meanings: confirmed_property means the traveler has a specific confirmed hotel/property; selected_property means the traveler explicitly selected a property but booking/payment is not proven; recommended_property means Landi selected a researched property as a provisional, not-booked route anchor; planned_base_pending_property means the base area is decided but no reliable exact lodging is available; unresolved_base means even the lodging area/base remains unresolved; transport_node means an airport, station, pier, or similar travel node; in_transit means the traveler is on a long-haul/overnight travel segment rather than sleeping at a destination base.
 - If a confirmed hotel/property exists in the request or research, use its real name as the applicable daily start/end anchor.
-- If the base area is known but the property is not, preserve an explicit anchor such as "Ubud accommodation - exact property pending" or "South Bali accommodation - Jimbaran preferred, final property pending." Do not invent hotel names.
+- If the user has not selected a hotel, choose one specific accommodation candidate from the supplied ResearchSet for each overnight base, set the context to recommended_property, copy its exact ResearchSet name into label and placeName, and treat it as Recommended / Not booked. Choose by itinerary geography, party practicality, and repeated-transfer reduction. A URL, coordinates, or exact identity never means booked. Never invent a hotel outside the ResearchSet.
+- Use planned_base_pending_property only when the ResearchSet contains no credible specific accommodation candidate for that base, with an explicit label such as "Ubud accommodation - exact property pending." Do not invent hotel names.
 - If the base area is unresolved, name the dependency directly and explain how the choice affects later route decisions when relevant.
 - For ordinary sightseeing days, start and end at the same lodging context. For base-change days, start and end must be different lodging contexts. For arrival days, start at the arrival airport/station and end at lodging. For departure days, start at lodging and end at the departure airport/station. For overnight excursions, end at the excursion overnight location.
 - Use the day's start and end context when judging regional coherence, first-stop distance, backtracking, return burden, fixed evening activities, hotel-change logistics, luggage, check-in, and check-out. This remains travel-advisor reasoning; do not introduce deterministic routing algorithms or fabricated travel times.
 
 Explicit daily experience metadata:
-- In each dailyItinerary item, fill experiences with the concrete traveler experiences from the day's plan. This is semantic metadata for downstream preservation, not UI, routing, or execution.
+- In each dailyItinerary item, fill experiences with the concrete traveler experiences and execution-relevant day nodes from the day's plan. This is semantic metadata for downstream preservation, not UI, routing, or execution.
+- Use kind to preserve the travel function: experience for attractions/activities, meal for useful breakfast/lunch/dinner windows, rest for meaningful recovery/buffer windows, transfer for movement between plan nodes, lodging for check-in/check-out/luggage/base departure or return, event for fixed events, and flexible only for a purposeful open window.
 - For each experience, set planRole from travel intent only: planned means part of the intended itinerary, optional means an add-on if conditions fit, and replacement means it substitutes for another named experience.
+- Use timingStatus to distinguish confirmed commitments from suggested plan times and route estimates. Confirmed means a booking/fixed commitment; planned means the advisor's recommended start/end; estimated means approximate travel or duration; unknown/recheck means unreliable or needs refreshing. Do not mark route durations verified when no route provider has checked them.
 - Use primaryExperience true only for the day's principal anchor or anchors. Do not invent scores or density labels.
 - Use operationalConditions for readiness or uncertainty such as reservation, session, weather, route, access, traveler_choice, or recheck. Operational uncertainty must not change planRole. For example, a planned Kecak performance can require session and reservation confirmation; a planned terrace walk can have weather sensitivity.
 - Use replacementFor as a human-readable experience name such as "Waterbom Bali" when planRole is replacement. Do not create IDs.
@@ -2630,6 +2896,10 @@ Explicit daily experience metadata:
 
 Daily travel shape:
 - For a normal full sightseeing day, think: lodging/start context -> meaningful experience(s) -> meals/rest/navigation as realistic capacity -> nearby or complementary experience when appropriate -> lodging/end context.
+- The traveler should be able to follow a normal day from morning to night: where they start, approximate start time, how they leave, morning plan, lunch/rest, afternoon plan, dinner/evening when useful, and where they end.
+- When no user hotel is known, prefer a ResearchSet accommodation candidate as the recommended provisional anchor. Fall back to an accommodation area with exact property pending only when bounded research did not provide a credible candidate. Do not invent a property, address, booking status, or verified hotel-to-place travel time.
+- For each normal destination day, include a compact lodging experience at the planned departure time and another at the planned return time, both using the context's placeName when it is a concrete property. On arrival, base-change, and departure days include the applicable check-in/check-out/luggage lodging nodes instead. These are supporting nodes, not duplicate full hotel attraction cards.
+- Do not suppress useful life logistics merely because they are not attractions. Preserve meals, transfers, check-in/check-out, luggage, return-to-base, and rest when deleting them would make the day harder to understand or execute.
 - Do not enforce minimum stop counts. A full-day experience may stand alone, but a 1-2 hour attraction should not normally consume an otherwise open full sightseeing day without a real reason.
 - Use useful approximate timing where context supports it, such as leave hotel around 09:00, visit 09:30-11:00, return around 19:30-20:00. Do not invent minute-level precision when route or lodging information is unresolved.
 - Include human transport guidance by day where helpful: walking, ride-hailing, hotel transport, private driver, base-transfer vehicle, or airport transfer. Do not produce execution/reminder schemas.
@@ -2640,6 +2910,13 @@ Whole-trip coherence process:
 - During the review, ask whether the base sequence and regional logic make sense, whether any major experience is being visited from the wrong base, whether a long-distance day could move earlier or later to reduce backtracking, whether fixed-time experiences shape nearby time correctly, whether similar experiences are repetitive, whether slow days are genuinely justified, and whether each day contributes something meaningful.
 - During the review, also verify that every day has a real-world start and end context, that base-change days distinguish old lodging from new lodging, and that optional stops make sense for the actual origin-to-destination transfer.
 - During the richness review, ask whether a normal sightseeing day with substantial generic soft time is intentionally light or merely under-informed. If it is under-informed, perform targeted research before finalizing. Protect legitimate light days: arrival, departure, base change, long/full-day experience, demanding previous/next context, explicit rest request, and fixed late-day experience that benefits from a lighter morning.
+- Daily Completeness Check before final output:
+  - For an ordinary local sightseeing day, the structured daily experiences should let the traveler answer: where the day starts, approximate start/departure time, morning plan, lunch plan, afternoon plan, major transfers or walking sequence, meaningful rest/cafe/flexible recovery when useful, dinner or evening arrangement, and where the day ends. This does not require the same number of items every day and does not require filling every hour.
+  - For an arrival day, check for the arrival event, immigration/baggage/customs or other arrival processing when applicable, transfer toward the base, check-in/luggage handling or accommodation-pending handling, a realistic dinner/rest or very light activity decision, and a clear end context.
+  - For a base-change day, check for breakfast, check-out/luggage, departure from the old base, transfer, optional en-route activity only when reasonable, lunch, arrival/check-in at the new base, dinner/evening, and end context.
+  - For a departure day, check for morning start, breakfast, check-out/luggage, optional light activity only if time allows, transfer to the airport/station, an appropriate departure buffer, and the confirmed transport commitment.
+  - If a day contains only a one- or two-hour experience while most of a normal day remains available, revise it into a complete day or clearly make it intentionally light with meal/rest/evening/base context. Do not mark an actually sparse day complete merely because it has one researched attraction.
+  - Preserve meaningful meal, rest, transfer, lodging, and flexible experiences in final JSON. They are not filler when they have useful timing, context, purpose, or a relationship to other plan nodes.
 - Revise the final plan after this review so the delivered itinerary reads as one coherent journey, not a sequence of locally plausible days.
 
 Do not do these things:
@@ -2652,6 +2929,7 @@ Do not do these things:
 Content expectations:
 - Trip Strategy: explain the base/area logic, why the route is arranged this way, and the overall pace.
 - Daily Itinerary: each day should include date, area, Start, Experiences, End, intended experience/theme, useful approximate timing, expected duration, transport mode, why experiences belong together, constraints, and meaningful intentional open time when useful. In markdown, make the daily start/end context obvious with concise "Start:", "Experiences:", and "End:" labels.
+- Daily experience JSON: include startTime, durationMinutes, and timingStatus wherever they are useful to follow the day. Use confirmed only for bookings or fixed commitments, planned for advisor-recommended activity/meal/rest times, estimated for transfers and approximate travel windows, and unknown/recheck only when timing cannot be reliable yet. Do not turn a planned base-area departure or estimated transfer duration into a confirmed route.
 - Preparation: reservations, transport preparation, lodging-related preparation, ticketing, unresolved traveler actions, and other meaningful before-trip work.
 - Tips: destination-specific practical guidance, transport, culture/etiquette, food, and local logistics.
 - Alternatives/exclusions: explain the most important options intentionally left out or left as replacements.
@@ -2687,6 +2965,10 @@ export function buildSemanticTravelPlanPrompt(input: SemanticTravelPlanRequest):
       category: place.category,
       priority: place.priority,
       durationMinutes: place.durationMinutes,
+      coordinates: place.coordinates,
+      officialUrl: place.officialUrl,
+      bookingUrl: place.bookingUrl,
+      accommodation: place.accommodation,
       whyWorthIt: place.whyWorthIt,
       plan: place.plan,
       tip: place.tip,
@@ -2711,7 +2993,10 @@ Profile context:
 ${JSON.stringify(input.profile)}
 
 Reference research data, for grounding and inspiration:
-${JSON.stringify(compactResearch)}`;
+${JSON.stringify(compactResearch)}
+
+Confirmed immutable fixed commitments:
+${JSON.stringify(input.fixedCommitments)}`;
 }
 
 export function buildPlanResearchPrompt(input: CodexPlanRequest): string {

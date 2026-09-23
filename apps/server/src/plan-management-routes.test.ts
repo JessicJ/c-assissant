@@ -182,6 +182,17 @@ test("direct Blueprint Revision route adds a place without using assisted replan
       reason: "These direct itinerary edits are saved, but affected routes and timing still need refresh before execution."
     });
     assert.equal(store.getPlanBlueprintLineage(workspace.activePlan.id)?.blueprintVersion, 2);
+    const refreshedWorkspace = store.getWorkspace();
+    assert.deepEqual(refreshedWorkspace.activeBlueprint?.days[0]?.stops.map((stop) => stop.placeId), ["a", "b"]);
+
+    const duplicateAddResponse = await server.inject({
+      method: "POST",
+      url: `/api/plans/${workspace.activePlan.id}/blueprint-revisions/direct`,
+      payload: { kind: "add_place_to_day", expectedVersion: workspace.activePlan.version, expectedBlueprintVersion: 2, placeId: "b", dayId: "d1", position: { kind: "after", afterPlaceId: "a" } }
+    });
+    assert.equal(duplicateAddResponse.statusCode, 409, duplicateAddResponse.body);
+    assert.match(duplicateAddResponse.json().error, /already scheduled/i);
+    assert.equal(store.getWorkspace().activeBlueprint?.version, 2);
 
     const priorityResponse = await server.inject({
       method: "POST",

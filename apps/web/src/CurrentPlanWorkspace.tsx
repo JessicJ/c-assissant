@@ -302,7 +302,7 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
   if (presentation?.kind === "itinerary" && presentation.places.length) {
     return <article className="current-plan-card native-trip-plan">
       {latestPlanReplacement ? <PlanReplacementNotice audit={latestPlanReplacement} active={plan.status === "active"} onUndo={undoReplacement} /> : null}
-      <LandiBlueprintWorkspace key={planReadModel.presentationKey} plan={plan} presentation={presentation} onTaskToggle={onTaskToggle} onApplyItineraryEdits={applyBlueprintItineraryEdits} onRequestRouteRefresh={refreshItineraryRoutes} onUpdatePlacePriority={updateBlueprintPlacePriority} itineraryEditBusy={applyingItineraryEdits} routeRefreshBusy={refreshingRoutes} priorityUpdateBusyPlaceId={updatingPlacePriorityId} />
+      <LandiBlueprintWorkspace key={planReadModel.workspaceKey} plan={plan} presentation={presentation} onTaskToggle={onTaskToggle} onApplyItineraryEdits={applyBlueprintItineraryEdits} onRequestRouteRefresh={refreshItineraryRoutes} onUpdatePlacePriority={updateBlueprintPlacePriority} itineraryEditBusy={applyingItineraryEdits} routeRefreshBusy={refreshingRoutes} priorityUpdateBusyPlaceId={updatingPlacePriorityId} />
       <footer className="plan-footer actions-only"><div className="plan-footer-actions">{plan.status === "draft" ? discardControl() : abandonControl()}<button className="secondary-action" onClick={() => onRevise()}>Adjust in conversation</button>{plan.status === "draft" ? <button className="primary-action" disabled={confirming} onClick={() => void onConfirm(plan.id)}>{confirming ? "Confirming…" : "Confirm and activate"}</button> : null}</div></footer>
     </article>;
   }

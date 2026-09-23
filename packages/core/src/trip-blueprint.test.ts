@@ -467,3 +467,30 @@ test("Trip Blueprint enforces exact Research Set place identity preservation", (
   const issues = tripBlueprintIntegrityIssues(value, { expectedResearchPlaceIds: ["a", "b", "c"] });
   assert.ok(issues.includes("blueprint lost research place c"));
 });
+
+test("Trip Blueprint enforces one canonical occurrence schedule and chronological physical adjacency", () => {
+  const value = blueprint();
+  value.days[0] = {
+    ...value.days[0]!,
+    stops: [{ placeId: "a", order: 1, time: "09:00" }, { placeId: "b", order: 2, time: "14:00" }],
+    blocks: [
+      { id: "a-stop", kind: "stop", order: 1, placeId: "a", startTime: "09:00", endTime: "10:00", durationMinutes: 60, planRole: "planned", display: { timeLabel: "09:00–10:00", timingStatus: "planned" }, evidence: [] },
+      { id: "meal-c", kind: "meal", order: 2, placeId: "c", startTime: "12:00", endTime: "13:00", durationMinutes: 60, planRole: "planned", display: { timeLabel: "12:00–13:00", timingStatus: "planned" }, evidence: [] },
+      { id: "b-stop", kind: "stop", order: 3, placeId: "b", startTime: "14:00", endTime: "15:00", durationMinutes: 60, planRole: "planned", display: { timeLabel: "14:00–15:00", timingStatus: "planned" }, evidence: [] }
+    ]
+  };
+  value.movements = [
+    { id: "a-c", dayId: "d1", originPlaceId: "a", destinationPlaceId: "c", mode: "unknown", status: "recheck", evidence: [] },
+    { id: "c-b", dayId: "d1", originPlaceId: "c", destinationPlaceId: "b", mode: "unknown", status: "recheck", evidence: [] }
+  ];
+  assert.deepEqual(tripBlueprintIntegrityIssues(value), []);
+
+  value.movements = [{ id: "fake-a-b", dayId: "d1", originPlaceId: "a", destinationPlaceId: "b", mode: "unknown", status: "recheck", evidence: [] }];
+  value.days[0].blocks![2] = { ...value.days[0].blocks![2]!, startTime: "14:10", endTime: "15:00", durationMinutes: 60, display: { timeLabel: "14:00–15:00", timingStatus: "planned" } };
+  const issues = tripBlueprintIntegrityIssues(value);
+  assert.ok(issues.some((issue) => issue.includes("must connect adjacent committed physical occurrences")));
+  assert.ok(issues.some((issue) => issue.includes("missing movement a -> c")));
+  assert.ok(issues.some((issue) => issue.includes("start/end/duration are inconsistent")));
+  assert.ok(issues.some((issue) => issue.includes("display.timeLabel does not match start/end")));
+  assert.ok(issues.some((issue) => issue.includes("stop b time must equal block b-stop startTime")));
+});

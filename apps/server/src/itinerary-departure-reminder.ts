@@ -47,8 +47,9 @@ export function dueItineraryDepartureReminders(
       const place = places.get(stop.placeId);
       if (!place || !isKeyStop(place, stop.role)) return [];
       const route = routes.get(`${day.id}\0${stop.placeId}`);
-      const firstStopTravel = index === 0 ? day.accommodationDeparture?.durationMinutes : undefined;
-      const travelMinutes = route?.durationMinutes ?? firstStopTravel;
+      const verifiedRouteTravel = route?.verification === "verified" ? route.durationMinutes : undefined;
+      const verifiedFirstStopTravel = index === 0 && day.accommodationDeparture?.verification === "verified" ? day.accommodationDeparture.durationMinutes : undefined;
+      const travelMinutes = verifiedRouteTravel ?? verifiedFirstStopTravel;
       if (!travelMinutes || travelMinutes < 1) return [];
 
       const scheduledAt = localDateTimeInstant(`${day.date}T${stop.time}`, timeZone);
@@ -103,8 +104,7 @@ function isKeyStop(place: PlanPlace, role?: string): boolean {
   return place.priority === "booked"
     || place.reservation?.requirement === "required"
     || place.reservation?.requirement === "recommended"
-    || KEY_STOP_ROLE.test(role ?? "")
-    || KEY_STOP_ROLE.test(place.visitRole ?? "");
+    || KEY_STOP_ROLE.test(role ?? "");
 }
 
 function localClock(value: Date, timeZone: string): string {

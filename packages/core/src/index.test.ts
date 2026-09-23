@@ -63,6 +63,40 @@ test("Blueprint presentation preserves explicit empty tips and preparation check
   assert.deepEqual(presentation.preparationChecklist, []);
 });
 
+test("Blueprint presentation projects itinerary city from structured visit places and preserves saved sequence rationale", () => {
+  const blueprint: TripBlueprint = {
+    schemaVersion: 1,
+    id: "blueprint-day-city",
+    version: 1,
+    generationKey: "generation-day-city",
+    proposalRef: { sessionId: "session-day-city", proposalVersion: 1 },
+    skillLineage: { skillId: "landi-trip-blueprint", skillVersion: "1.0.0" },
+    researchSetId: "research-day-city",
+    title: "Porto",
+    summary: "Porto visit.",
+    language: "en",
+    destinations: ["Porto, Portugal"],
+    startDate: "2026-11-12",
+    endDate: "2026-11-12",
+    sources: [],
+    places: [
+      { id: "market", name: "Market", locationLabel: "Porto", city: "Porto", category: "market", priority: "must", coordinates: [41.14, -8.61], durationMinutes: 60, whyWorthIt: "Local market", plan: "Visit", evidence: [] },
+      { id: "airport", name: "Airport", locationLabel: "Maia", city: "Maia", category: "Airport and transport node", priority: "booked", whyWorthIt: "Departure", plan: "Depart", evidence: [] }
+    ],
+    events: [],
+    days: [{ id: "day-1", date: "2026-11-12", kind: "scheduled", city: "Bolhão, Batalha and Porto Airport", title: "Departure day", summary: "Visit the market before the fixed airport departure.", stops: [{ placeId: "market", order: 1, time: "08:30" }, { placeId: "airport", order: 2, time: "13:15" }], candidatePlaceIds: [] }],
+    movements: [{ id: "route-1", dayId: "day-1", originPlaceId: "market", destinationPlaceId: "airport", mode: "transit", status: "recheck", durationMinutes: 45, label: "Airport transit", detail: "Recheck before departure.", evidence: [] }],
+    actionRequirements: [],
+    createdAt: "2026-09-18T00:00:00.000Z"
+  };
+
+  const presentation = blueprintPresentation(blueprint);
+  assert.equal(presentation.days[0]?.city, "Porto");
+  assert.equal(presentation.places.find((place) => place.id === "airport")?.city, "Maia");
+  assert.equal(presentation.days[0]?.routeReview?.sequenceRationale, blueprint.days[0]?.summary);
+  assert.deepEqual(planPresentationIntegrityIssues(presentation), ["scheduled place airport needs persistent coordinates", "scheduled place airport does not match day day-1 city"]);
+});
+
 test("Blueprint presentation preserves sourced place images for Web detail surfaces", () => {
   const blueprint: TripBlueprint = {
     schemaVersion: 1,

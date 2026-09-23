@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import Fastify from "fastify";
 import type { ConnectorResult, GeocodedPlaceFact, RouteFact } from "@c-assistant/connectors";
-import { compileTripBlueprint, TRIP_BLUEPRINT_SCHEMA_VERSION, type ResearchSet, type TripBlueprint } from "@c-assistant/core";
+import { compileTripBlueprint, MAP_COORDINATES_PENDING_SCHEDULING_REASON, TRIP_BLUEPRINT_SCHEMA_VERSION, type ResearchSet, type TripBlueprint } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
 import { registerPlanPresentationRoutes } from "./plan-presentation-routes.js";
 import type { PlanRouteMaps } from "./plan-route-refresh.js";
@@ -198,6 +198,8 @@ function compiledBlueprintRoutePlan(store: SqliteWorkspaceStore) {
     actionRequirements: [],
     createdAt: "2026-08-26T00:02:00.000Z"
   };
+  delete blueprint.places[0]!.coordinates;
+  blueprint.places[0]!.schedulingEligibility = { decision: "informational", reason: MAP_COORDINATES_PENDING_SCHEDULING_REASON };
   store.saveTripBlueprint(blueprint);
   const compiled = store.createCompiledBlueprintPlan(compileTripBlueprint(blueprint, { createdAt: "2026-08-26T00:02:01.000Z" })).activePlan;
   return store.applyDirectBlueprintRevision({
@@ -354,6 +356,7 @@ test("presentation route refresh endpoint writes route facts back to the Trip Bl
     assert.equal(payload.workspace.activeBlueprint.movements[0].evidence[0].sourceId, "google_maps");
     assert.equal(payload.workspace.activePlan.presentation.routeSegments[0].verification, "verified");
     assert.equal(payload.workspace.activePlan.presentation.routeSegments[0].display.mapLineState, "formal");
+    assert.equal(payload.workspace.activeBlueprint.places.find((place: { id: string }) => place.id === "a").schedulingEligibility.decision, "schedulable");
     assert.equal(store.getPlanBlueprintLineage(plan.id)?.blueprintVersion, 3);
   } finally {
     await server.close();

@@ -362,5 +362,5 @@ test("Skill importer output reaches the Landi-native Web workspace read model", 
   assert.ok(workspace.tipGroups.some((group) => group.tips.some((tip) => /voices low/.test(tip.body))));
   assert.ok(workspace.preparationGroups.some((group) => group.items.some((item) => item.title === "Prepare Japan arrival information")));
   assert.ok(workspace.sources.some((source) => source.summary === "Tokyo official guide · Tokyo tourism · 2026-08-26"));
-  assert.equal(/candidate|candidates|default recommendation|source attached|authorization/i.test(JSON.stringify(workspace)), false);
+  assert.equal(JSON.stringify(workspace).match(/candidate|candidates|default recommendation|source attached|authorization/i)?.[0], undefined);
 });
