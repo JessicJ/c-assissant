@@ -10,7 +10,11 @@ import { buildProposal } from "./planning-session-proposal.js";
 export function applyExternalPlanningFacts(session: PlanningSession, facts: PlanningFact[], now = new Date()): PlanningSession {
   const timestamp = now.toISOString();
   let nextFacts = session.facts;
-  for (const item of facts) nextFacts = upsertFact(nextFacts, { ...item, confirmed: true, updatedAt: timestamp });
+  for (const item of facts) {
+    const existing = nextFacts.find((fact) => fact.key === item.key);
+    if (item.source === "inferred" && existing?.source === "user" && (item.key === "destination" || item.key === "travel_dates")) continue;
+    nextFacts = upsertFact(nextFacts, { ...item, confirmed: true, updatedAt: timestamp });
+  }
   nextFacts = completeArrivalFromPartialFacts(nextFacts, timestamp);
   const previousVersion = session.proposal?.version ?? 0;
   const next: PlanningSession = { ...session, facts: nextFacts, updatedAt: timestamp };

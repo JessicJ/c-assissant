@@ -10,8 +10,17 @@ export async function startServerLifecycle(dependencies: {
   pollTelegram: () => Promise<void>;
   activePlanMonitoring: ActivePlanMonitoringService;
   abortGenerationJobs: () => void;
+  scheduler?: {
+    setInterval(callback: () => void, intervalMs: number): unknown;
+    clearInterval(handle: unknown): void;
+  };
+  installSignalHandlers?: boolean;
 }) {
   const { server, store, port, host, pollTelegram, activePlanMonitoring, abortGenerationJobs } = dependencies;
+  const scheduler = dependencies.scheduler ?? {
+    setInterval: (callback: () => void, intervalMs: number) => setInterval(callback, intervalMs),
+    clearInterval: (handle: unknown) => clearInterval(handle as ReturnType<typeof setInterval>)
+  };
 
   try {
     await server.listen({ port, host });
@@ -23,40 +32,48 @@ export async function startServerLifecycle(dependencies: {
   if (interruptedGenerationRecovery.runs || interruptedGenerationRecovery.sessions) {
     server.log.warn({ interruptedGenerationRecovery }, "Recovered interrupted Plan generation state");
   }
-  const telegramPollTimer = setInterval(() => void pollTelegram(), 1_000);
-  const arrivalReminderTimer = setInterval(() => void activePlanMonitoring.runArrivalReminder(), 15_000);
-  const routeHandoffGuidanceTimer = setInterval(() => void activePlanMonitoring.runRouteHandoffGuidance(), 15_000);
-  const taskReminderTimer = setInterval(() => void activePlanMonitoring.runTaskReminders(), 15_000);
-  const itineraryDepartureReminderTimer = setInterval(() => void activePlanMonitoring.runItineraryDepartureReminders(), 60_000);
-  const planWeatherTimer = setInterval(() => void activePlanMonitoring.runPlanWeatherMonitor(), 20 * 60_000);
-  const planVenueTimer = setInterval(() => void activePlanMonitoring.runPlanVenueMonitor(), 6 * 60 * 60_000);
-  const arrivalLocationPromptTimer = setInterval(() => void activePlanMonitoring.runArrivalLocationPrompt(), 15_000);
-  void pollTelegram();
-  void activePlanMonitoring.runArrivalReminder();
-  void activePlanMonitoring.runRouteHandoffGuidance();
-  void activePlanMonitoring.runTaskReminders();
-  void activePlanMonitoring.runItineraryDepartureReminders();
-  activePlanMonitoring.startActivePlanMonitoring();
-  void activePlanMonitoring.runArrivalLocationPrompt();
+  const pending = new Set<Promise<void>>();
+  const run = (operation: () => Promise<void>) => {
+    const promise = operation().catch((error) => server.log.warn({ error }, "Scheduled operation failed")).finally(() => pending.delete(promise));
+    pending.add(promise);
+  };
+  const timers = [
+    scheduler.setInterval(() => run(pollTelegram), 1_000),
+    scheduler.setInterval(() => run(activePlanMonitoring.runArrivalReminder), 15_000),
+    scheduler.setInterval(() => run(activePlanMonitoring.runRouteHandoffGuidance), 15_000),
+    scheduler.setInterval(() => run(activePlanMonitoring.runTaskReminders), 15_000),
+    scheduler.setInterval(() => run(activePlanMonitoring.runItineraryDepartureReminders), 60_000),
+    scheduler.setInterval(() => run(activePlanMonitoring.runPlanWeatherMonitor), 20 * 60_000),
+    scheduler.setInterval(() => run(activePlanMonitoring.runPlanVenueMonitor), 6 * 60 * 60_000),
+    scheduler.setInterval(() => run(activePlanMonitoring.runArrivalLocationPrompt), 15_000)
+  ];
+  run(pollTelegram);
+  run(activePlanMonitoring.runArrivalReminder);
+  run(activePlanMonitoring.runRouteHandoffGuidance);
+  run(activePlanMonitoring.runTaskReminders);
+  run(activePlanMonitoring.runItineraryDepartureReminders);
+  run(activePlanMonitoring.runPlanWeatherMonitor);
+  run(activePlanMonitoring.runPlanVenueMonitor);
+  run(activePlanMonitoring.runArrivalLocationPrompt);
 
   let shuttingDown = false;
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.on(signal, () => {
-      if (shuttingDown) return;
-      shuttingDown = true;
-      clearInterval(telegramPollTimer);
-      clearInterval(arrivalReminderTimer);
-      clearInterval(routeHandoffGuidanceTimer);
-      clearInterval(taskReminderTimer);
-      clearInterval(itineraryDepartureReminderTimer);
-      clearInterval(planWeatherTimer);
-      clearInterval(planVenueTimer);
-      clearInterval(arrivalLocationPromptTimer);
-      abortGenerationJobs();
-      void server.close().finally(() => {
-        store.close();
-        process.exit(0);
-      });
-    });
+  const signalHandlers = new Map<NodeJS.Signals, () => void>();
+  async function stop(): Promise<void> {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    for (const timer of timers) scheduler.clearInterval(timer);
+    abortGenerationJobs();
+    await Promise.allSettled([...pending]);
+    await server.close();
+    store.close();
+    for (const [signal, handler] of signalHandlers) process.off(signal, handler);
   }
+  if (dependencies.installSignalHandlers !== false) {
+    for (const signal of ["SIGINT", "SIGTERM"] as const) {
+      const handler = () => { void stop().finally(() => process.exit(0)); };
+      signalHandlers.set(signal, handler);
+      process.on(signal, handler);
+    }
+  }
+  return { stop };
 }

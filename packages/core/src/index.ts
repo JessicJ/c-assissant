@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PlanCompilationOrigin } from "./plan-compiler.js";
 import type { DestinationArrivalEvent } from "./current-destination.js";
-import type { BlueprintActionRequirement, BlueprintBookingConstraint, BlueprintEvidenceRef, BlueprintExperienceTheme, BlueprintFieldEvidence, BlueprintGuideRelationshipGraph, BlueprintGuideTheme, BlueprintItineraryBlock, BlueprintLocalFood, BlueprintLocalProduct, BlueprintModuleIdentity, BlueprintMovementDisplayIntent, BlueprintOperationalCondition, BlueprintOperationalFacts, BlueprintPlanAlternative, BlueprintPlaceDisplayIntent, BlueprintPlaceGuideDisplay, BlueprintPlaceImage, BlueprintPreparationChecklistItem, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelContext, BlueprintTravelTip, TripBlueprint } from "./trip-blueprint.js";
+import type { BlueprintAccommodationState, BlueprintActionRequirement, BlueprintBookingConstraint, BlueprintEvidenceRef, BlueprintExperienceTheme, BlueprintFieldEvidence, BlueprintGuideRelationshipGraph, BlueprintGuideTheme, BlueprintItineraryBlock, BlueprintLocalFood, BlueprintLocalProduct, BlueprintModuleIdentity, BlueprintMovementDisplayIntent, BlueprintOperationalCondition, BlueprintOperationalFacts, BlueprintPlanAlternative, BlueprintPlaceDisplayIntent, BlueprintPlaceGuideDisplay, BlueprintPlaceImage, BlueprintPreparationChecklistItem, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelContext, BlueprintTravelTip, TripBlueprint } from "./trip-blueprint.js";
 
 export { recommendPlanTransport, type TransportMode, type TransportRecommendation, type TransportRouteFact } from "./transport.js";
 export { assessPolicyPreparation, type PolicyPreparationAssessment, type PolicyPreparationItem, type PolicyPreparationStatus } from "./policy-applicability.js";
@@ -30,10 +30,13 @@ export {
 } from "./blueprint-revision.js";
 export {
   SKILL_IMPORTER_VERSION,
+  blueprintImportFailureDetails,
   importSkillItinerary,
   importSkillResearchBatches,
+  mergeResearchCatalogIntoBlueprint,
   mergeResearchSetCheckpoint,
   type BlueprintImportContext,
+  type BlueprintImportFailureDetails,
   type ResearchImportContext,
   type SkillActionRequirementArtifact,
   type SkillExperienceThemeArtifact,
@@ -50,11 +53,14 @@ export {
 } from "./skill-importer.js";
 export {
   TRIP_BLUEPRINT_SCHEMA_VERSION,
+  MAP_COORDINATES_PENDING_SCHEDULING_REASON,
   assertResearchSetIntegrity,
   assertTripBlueprintIntegrity,
+  effectiveBlueprintSchedulingDecision,
   researchSetIntegrityIssues,
   tripBlueprintIntegrityIssues,
   type BlueprintActionRequirement,
+  type BlueprintAccommodationState,
   type BlueprintBookingConstraint,
   type BlueprintBookingConstraintStrength,
   type BlueprintBookingSegment,
@@ -256,6 +262,13 @@ export interface PlanPlace {
   images?: BlueprintPlaceImage[];
   officialUrl?: string;
   bookingUrl?: string;
+  accommodation?: {
+    state: BlueprintAccommodationState;
+    baseLabel?: string;
+    stayStartDate?: string;
+    stayEndDate?: string;
+    rationale?: string;
+  };
   /** Venue admission decision researched by Landi; the user only owns slot selection and payment. */
   reservation?: {
     requirement: "required" | "recommended" | "not_required" | "unknown";
@@ -381,6 +394,7 @@ export interface PlanPresentation {
 export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentation {
   const sources = new Map(blueprint.sources.map((source) => [source.id, source]));
   const placeIds = new Set(blueprint.places.map((place) => place.id));
+  const blueprintPlaceById = new Map(blueprint.places.map((place) => [place.id, place] as const));
   const requirementsByPlace = new Map<string, TripBlueprint["actionRequirements"]>();
   for (const requirement of blueprint.actionRequirements) {
     if (!requirement.placeId) continue;
@@ -393,17 +407,19 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
       .map((stop, index) => ({ ...stop, order: index + 1 }));
     const scheduled = new Set(stops.map((stop) => stop.placeId));
     const candidates = day.candidatePlaceIds.filter((id, index, all) => placeIds.has(id) && !scheduled.has(id) && all.indexOf(id) === index);
+    const itineraryCity = projectedItineraryCity(stops.map((stop) => blueprintPlaceById.get(stop.placeId)).filter((place): place is TripBlueprint["places"][number] => Boolean(place)), day.city);
     return {
       id: day.id,
       label: day.date,
       placeIds: stops.map((stop) => stop.placeId),
       date: day.date,
       shortLabel: day.date.slice(5),
-      city: day.city,
+      city: itineraryCity,
       title: day.title,
       summary: day.summary,
       candidates,
       stops,
+      ...(stops.length > 1 && day.summary.trim() ? { routeReview: { sequenceRationale: day.summary } } : {}),
       ...(day.startContext ? { startContext: structuredClone(day.startContext) } : {}),
       ...(day.endContext ? { endContext: structuredClone(day.endContext) } : {}),
       ...(day.blocks ? { blocks: structuredClone(day.blocks) } : {})
@@ -490,6 +506,7 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
         ...(place.images?.length ? { images: structuredClone(place.images) } : {}),
         ...(place.officialUrl ? { officialUrl: place.officialUrl } : {}),
         ...(place.bookingUrl ? { bookingUrl: place.bookingUrl } : {}),
+        ...(place.accommodation ? { accommodation: structuredClone(place.accommodation) } : {}),
         ...(place.mapUrl ? { mapUrl: place.mapUrl } : {}),
         ...(place.experienceUrl ? { experienceUrl: place.experienceUrl } : {}),
         ...(reservation ? { reservation: { requirement: "required" as const, verification: reservation.evidence.some((item) => item.status === "verified") ? "verified" as const : "needs_recheck" as const, note: reservation.description } } : {}),
@@ -516,6 +533,14 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
     days,
     routeSegments
   };
+}
+
+function projectedItineraryCity(places: TripBlueprint["places"], fallback: string): string {
+  const visitCities = places.filter((place) => placeRequiresVisitDuration(place)).flatMap((place) => place.city?.trim() ? [place.city.trim()] : []);
+  const candidateCities = visitCities.length ? visitCities : places.flatMap((place) => place.city?.trim() ? [place.city.trim()] : []);
+  if (!candidateCities.length) return fallback;
+  const normalized = new Set(candidateCities.map((city) => normalizedLocation(city)));
+  return normalized.size === 1 ? candidateCities[0]! : fallback;
 }
 
 /** Returns structural defects that make an itinerary unsafe to publish as a formal Plan. */
@@ -608,7 +633,7 @@ export function planPresentationIntegrityIssues(presentation: PlanPresentation, 
   return [...new Set(issues)];
 }
 
-function placeRequiresVisitDuration(place: PlanPlace): boolean {
+function placeRequiresVisitDuration(place: Pick<PlanPlace, "category" | "visitRole">): boolean {
   return !/(?:accommodation|hotel|transport|airport|station)/i.test(`${place.category} ${place.visitRole ?? ""}`);
 }
 
@@ -860,6 +885,7 @@ export interface InboxItem {
 export interface Profile {
   displayName: string;
   preferredLanguage: string;
+  travelPreferences?: string;
   nationality: string;
   gender: ProfileGender;
   immigrationStatus: ImmigrationStatus;
@@ -985,6 +1011,7 @@ export interface CreatePlanInput {
 export interface ProfileUpdate {
   displayName: string;
   preferredLanguage: string;
+  travelPreferences?: string;
   nationality: string;
   gender: ProfileGender;
   immigrationStatus: ImmigrationStatus;
@@ -1052,6 +1079,7 @@ export function createInitialWorkspace(): WorkspaceSnapshot {
     profile: {
       displayName: "New explorer",
       preferredLanguage: "English",
+      travelPreferences: "",
       nationality: "To be confirmed",
       gender: "not_specified",
       immigrationStatus: "unknown",

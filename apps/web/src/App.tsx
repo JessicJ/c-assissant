@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RuntimeCheck } from "@c-assistant/agent-adapters";
 import type { Plan, WorkspaceSnapshot } from "@c-assistant/core";
 import { InlineComposerWorkspace, type ComposerMode } from "./PlanComposer.js";
 import { PlansWorkspace, type PlanTab } from "./PlansWorkspace.js";
-import { ProfileOnboardingDialog } from "./ProfileOnboardingDialog.js";
+import { FirstRunTour, shouldShowFirstRunTour } from "./FirstRunTour.js";
 import { SettingsWorkspace } from "./SettingsWorkspace.js";
 import { confirmPlan, deleteHistoricalPlan as deleteHistoricalPlanRequest, getSettingsSnapshot, getWorkspace, listPlanHistory, reorderPlanTask as reorderPlanTaskRequest, setPlanTaskChecked, undoPlanChange as undoPlanChangeRequest, type LocalConfiguration } from "./api-client.js";
 import { isStarterPlan } from "./plan-display.js";
@@ -33,8 +33,19 @@ export default function App() {
   const [composerMode, setComposerMode] = useState<ComposerMode>("new_plan");
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerPrefill, setComposerPrefill] = useState("");
+  const [firstRunTourOpen, setFirstRunTourOpen] = useState(false);
   const [confirmingPlan, setConfirmingPlan] = useState(false);
   const [planOperationBusy, setPlanOperationBusy] = useState(false);
+  const workspaceRef = useRef<WorkspaceSnapshot | null>(null);
+  const viewRef = useRef<View>("plans");
+  const planTabRef = useRef<PlanTab>("current");
+  const composerOpenRef = useRef(false);
+  const handledGenerationOpenRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => { workspaceRef.current = workspace; }, [workspace]);
+  useEffect(() => { viewRef.current = view; }, [view]);
+  useEffect(() => { planTabRef.current = planTab; }, [planTab]);
+  useEffect(() => { composerOpenRef.current = composerOpen; }, [composerOpen]);
 
   async function initializeWorkspace(options: InitializeWorkspaceOptions = {}) {
     const { resetAutoRetry = true, cancelled = () => false } = options;
@@ -45,6 +56,8 @@ export default function App() {
       const workspaceSnapshot = await getWorkspace();
       if (cancelled()) return;
       setWorkspace(workspaceSnapshot);
+      const previewFirstRunTour = new URLSearchParams(window.location.search).get("onboarding") === "1";
+      setFirstRunTourOpen(shouldShowFirstRunTour(workspaceSnapshot.profile, previewFirstRunTour));
       const [historyResult, settingsResult] = await Promise.allSettled([listPlanHistory(), getSettingsSnapshot()]);
       if (cancelled()) return;
       if (historyResult.status === "fulfilled" && historyResult.value) setHistory(historyResult.value);
@@ -87,14 +100,42 @@ export default function App() {
 
   const generatingSessionId = workspace?.planningSession?.status === "generating" ? workspace.planningSession.id : undefined;
   useEffect(() => {
+    const session = workspace?.planningSession;
+    if (view !== "plans" || planTab !== "current" || !composerOpen || composerMode !== "new_plan") return;
+    if (session?.status !== "draft_ready" || !session.outputPlanId || workspace?.activePlan.id !== session.outputPlanId) return;
+    handledGenerationOpenRef.current.add(`${session.id}:${session.outputPlanId}`);
+    setComposerOpen(false);
+    setComposerPrefill("");
+  }, [workspace, view, planTab, composerOpen, composerMode]);
+
+  useEffect(() => {
     if (!generatingSessionId) return;
     let cancelled = false;
     const poll = async () => {
       try {
         const next = await getWorkspace({ cache: "no-store" });
         if (cancelled) return;
+        const previous = workspaceRef.current;
+        const outputPlanId = next.planningSession?.id === generatingSessionId && next.planningSession.status === "draft_ready" ? next.planningSession.outputPlanId : undefined;
+        const currentWaitStillVisible = viewRef.current === "plans" && planTabRef.current === "current" && (
+          composerOpenRef.current || (!previous || (!isStarterPlan(previous.activePlan) ? false : previous.planningSession?.id === generatingSessionId))
+        );
+        const shouldOpenGeneratedPlan = Boolean(
+          outputPlanId
+          && next.activePlan.id === outputPlanId
+          && currentWaitStillVisible
+          && !handledGenerationOpenRef.current.has(`${generatingSessionId}:${outputPlanId}`)
+        );
         setWorkspace(next);
-        if (next.planningSession?.status === "draft_ready" || next.activePlan.id !== workspace?.activePlan.id) await loadHistory();
+        workspaceRef.current = next;
+        if (shouldOpenGeneratedPlan && outputPlanId) {
+          handledGenerationOpenRef.current.add(`${generatingSessionId}:${outputPlanId}`);
+          setView("plans");
+          setPlanTab("current");
+          setComposerOpen(false);
+          setComposerPrefill("");
+        }
+        if (next.planningSession?.status === "draft_ready" || next.activePlan.id !== previous?.activePlan.id) void loadHistory().catch(() => undefined);
       } catch { /* Keep the current page stable and try again on the next interval. */ }
     };
     void poll();
@@ -108,6 +149,15 @@ export default function App() {
     setPlanTab("current");
     setComposerMode(mode);
     setComposerPrefill(prefill);
+    setComposerOpen(true);
+  }
+
+  function completeFirstRunTour() {
+    setFirstRunTourOpen(false);
+    setView("plans");
+    setPlanTab("current");
+    setComposerMode("new_plan");
+    setComposerPrefill("");
     setComposerOpen(true);
   }
 
@@ -181,12 +231,13 @@ export default function App() {
     : undefined;
   const visibleHistory = history.filter((plan) => !isStarterPlan(plan));
 
+  const interactionPage = view === "plans" && planTab === "current" && composerOpen && workspace.profile.status === "ready";
   const emptyHome = view === "plans" && planTab === "current" && !currentPlan && !resumablePlanningSession;
   const planningHome = view === "plans" && planTab === "current" && !currentPlan && (Boolean(resumablePlanningSession) || (composerOpen && composerMode === "new_plan"));
 
-  return <main className={`app-shell${emptyHome || planningHome ? " empty-home" : ""}${planningHome ? " planning-home" : ""}`}>
+  return <main className={`app-shell${emptyHome || planningHome ? " empty-home" : ""}${planningHome ? " planning-home" : ""}${interactionPage ? " interaction-page" : ""}`}>
     <section className="main-stage">
-      <header className="global-header">
+      {!interactionPage && !emptyHome ? <header className="global-header">
         <button className="top-brand" onClick={() => { setView("plans"); setPlanTab("current"); }} aria-label="Return to current plan"><span><strong>LANDI</strong><small>Managed by MAH</small></span></button>
         <nav className="global-navigation" aria-label="Main navigation">
           <button className={view === "plans" && planTab === "current" ? "active" : ""} onClick={() => { setView("plans"); setPlanTab("current"); }}>Plan</button>
@@ -196,11 +247,13 @@ export default function App() {
         <div className="header-actions">
           <button className="new-plan-button" onClick={() => openComposer("new_plan")} disabled={planOperationBusy}><span>＋</span>{planOperationBusy ? "Creating" : "Create Plan"}</button>
         </div>
-      </header>
+      </header> : null}
       {error ? <div className="inline-alert">{error}<button onClick={() => setError(null)}>Close</button></div> : null}
-      {view === "plans" ? composerOpen && planTab === "current" && workspace.profile.status === "ready" ? <InlineComposerWorkspace mode={composerMode} currentPlan={currentPlan} planningSession={composerMode === "new_plan" ? resumablePlanningSession : undefined} initialMessage={composerPrefill} onClose={() => { setComposerOpen(false); setComposerPrefill(""); }} onPlanCreated={handlePlanCreated} onStatus={ignoreAgentStatus} onError={setError} /> : <PlansWorkspace currentPlan={currentPlan} activeBlueprint={workspace.activeBlueprint} planningSession={resumablePlanningSession} hidePlanningSession={Boolean(currentPlan)} latestPlanChange={workspace.latestPlanChange} latestPlanReplacement={workspace.latestPlanReplacement} executionPlan={workspace.executionPlan ?? null} destinationArrivals={workspace.destinationArrivals} history={visibleHistory} tab={planTab} confirming={confirmingPlan} onTab={setPlanTab} onCreate={() => openComposer("new_plan")} onRevise={(message) => openComposer("revise_plan", message)} onDelete={deleteHistoricalPlan} onTaskToggle={togglePlanTask} onTaskReorder={reorderPlanTask} onUndoChange={undoPlanChange} onConfirm={confirmCurrentPlan} onPlanCreated={handlePlanCreated} onStatus={ignoreAgentStatus} onError={setError} onOperationBusy={setPlanOperationBusy} /> : null}
+      {view === "plans" ? composerOpen && planTab === "current" && workspace.profile.status === "ready" ? <InlineComposerWorkspace mode={composerMode} currentPlan={currentPlan} planningSession={composerMode === "new_plan" ? resumablePlanningSession : undefined} initialMessage={composerPrefill} onClose={() => { setComposerOpen(false); setComposerPrefill(""); }} onPlanCreated={handlePlanCreated} onStatus={ignoreAgentStatus} onError={setError} /> : <PlansWorkspace currentPlan={currentPlan} activeBlueprint={workspace.activeBlueprint} planningSession={resumablePlanningSession} hidePlanningSession={Boolean(currentPlan)} latestPlanChange={workspace.latestPlanChange} latestPlanReplacement={workspace.latestPlanReplacement} executionPlan={workspace.executionPlan ?? null} destinationArrivals={workspace.destinationArrivals} history={visibleHistory} tab={planTab} confirming={confirmingPlan} onTab={setPlanTab} onCreate={(prefill) => openComposer("new_plan", prefill)} onRevise={(message) => openComposer("revise_plan", message)} onDelete={deleteHistoricalPlan} onTaskToggle={togglePlanTask} onTaskReorder={reorderPlanTask} onUndoChange={undoPlanChange} onConfirm={confirmCurrentPlan} onPlanCreated={handlePlanCreated} onStatus={ignoreAgentStatus} onError={setError} onOperationBusy={setPlanOperationBusy} /> : null}
       {view === "settings" ? <SettingsWorkspace workspace={workspace} configuration={configuration} checks={runtimeChecks} onWorkspace={setWorkspace} onConfiguration={setConfiguration} onChecks={setRuntimeChecks} onError={setError} /> : null}
     </section>
-    {workspace.profile.status !== "ready" ? <ProfileOnboardingDialog profile={workspace.profile} onSaved={setWorkspace} onError={setError} /> : null}
+    {firstRunTourOpen || workspace.profile.status !== "ready"
+      ? <FirstRunTour profile={workspace.profile} onProfileSaved={setWorkspace} onComplete={completeFirstRunTour} onError={setError} />
+      : null}
   </main>;
 }

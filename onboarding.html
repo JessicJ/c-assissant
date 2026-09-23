@@ -1,0 +1,775 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wanderly Onboarding</title>
+  <style>
+    /* Hallmark · pre-emit critique: P5 H5 E4 S5 R5 V4 */
+    :root {
+      --color-canvas: #fbfbfc;
+      --color-surface: #ffffff;
+      --color-chrome: #f7f8f9;
+      --color-ink: #0c1424;
+      --color-copy: #3d4654;
+      --color-muted: #89909d;
+      --color-faint: #eef1f5;
+      --color-line: #e4e7ec;
+      --color-line-strong: #d9dde4;
+      --color-blue: #147bff;
+      --color-blue-deep: #0769eb;
+      --color-green: #25b767;
+      --color-warning: #f2a23b;
+      --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+      --shadow-window: 0 18px 48px rgba(22, 31, 48, 0.11), 0 2px 8px rgba(22, 31, 48, 0.05);
+      --shadow-card: 0 9px 26px rgba(31, 43, 67, 0.055);
+      --shadow-small: 0 5px 14px rgba(31, 43, 67, 0.065);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-width: 320px; min-height: 100%; overflow-x: clip; }
+    body {
+      margin: 0;
+      color: var(--color-ink);
+      background: var(--color-canvas);
+      font-family: var(--font-ui);
+      -webkit-font-smoothing: antialiased;
+    }
+    button { font: inherit; }
+
+    .page-shell {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 34px 24px;
+    }
+
+    .scale-stage {
+      width: 720px;
+      height: 810px;
+      position: relative;
+      flex: none;
+    }
+
+    .browser-window {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 720px;
+      height: 810px;
+      overflow: hidden;
+      border: 1px solid var(--color-line-strong);
+      border-radius: 10px;
+      background: var(--color-surface);
+      box-shadow: var(--shadow-window);
+    }
+
+    .browser-body {
+      height: 100%;
+      padding: 61px 31px 62px;
+      background: #fdfdfd;
+    }
+
+    .onboarding-card {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      border: 1px solid #eceef1;
+      border-radius: 28px;
+      background: var(--color-surface);
+      box-shadow: var(--shadow-card);
+    }
+
+    .slides { position: absolute; inset: 0; }
+    .slide {
+      position: absolute;
+      inset: 0;
+      visibility: hidden;
+      opacity: 0;
+      transform: translateX(14px);
+      transition: opacity 260ms ease, transform 260ms ease, visibility 0s linear 260ms;
+      pointer-events: none;
+    }
+    .slide.active {
+      visibility: visible;
+      opacity: 1;
+      transform: translateX(0);
+      transition-delay: 0s;
+      pointer-events: auto;
+    }
+    .slide.exit-left { transform: translateX(-14px); }
+
+    .slide h1 {
+      width: 100%;
+      margin: 0;
+      padding: 48px 28px 0;
+      color: var(--color-ink);
+      font-size: 29px;
+      font-style: normal;
+      font-weight: 700;
+      letter-spacing: 0;
+      line-height: 1.16;
+      text-align: center;
+      overflow-wrap: anywhere;
+    }
+
+    .slide-content {
+      position: absolute;
+      top: 124px;
+      right: 31px;
+      bottom: 124px;
+      left: 31px;
+      display: grid;
+      align-items: center;
+    }
+
+    .pagination {
+      position: absolute;
+      z-index: 8;
+      bottom: 82px;
+      left: 50%;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      transform: translateX(-50%);
+    }
+    .dot {
+      width: 9px;
+      height: 9px;
+      padding: 0;
+      border: 0;
+      border-radius: 50%;
+      background: #d9dde4;
+      cursor: pointer;
+      transition: background 200ms ease, transform 200ms ease;
+    }
+    .dot:hover { transform: scale(1.18); }
+    .dot:focus-visible { outline: 3px solid rgba(20, 123, 255, 0.22); outline-offset: 3px; }
+    .dot.active { background: var(--color-blue); }
+
+    .next-button {
+      position: absolute;
+      z-index: 8;
+      bottom: 25px;
+      left: 50%;
+      width: 265px;
+      height: 48px;
+      border: 0;
+      border-radius: 13px;
+      background: var(--color-blue);
+      box-shadow: 0 7px 17px rgba(20, 123, 255, 0.19);
+      color: #fff;
+      font-size: 15px;
+      font-weight: 600;
+      transform: translateX(-50%);
+      cursor: pointer;
+      transition: background 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+    }
+    .next-button:hover { background: var(--color-blue-deep); box-shadow: 0 9px 20px rgba(20, 123, 255, 0.24); }
+    .next-button:active { transform: translateX(-50%) translateY(1px); }
+    .next-button:focus-visible { outline: 3px solid rgba(20, 123, 255, 0.24); outline-offset: 3px; }
+    .next-button.success { background: var(--color-green); box-shadow: 0 7px 17px rgba(37, 183, 103, 0.2); }
+
+    .image-placeholder {
+      position: relative;
+      overflow: hidden;
+      background: #eef1f5;
+      color: #a0a7b2;
+    }
+    .image-placeholder::before {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: #a7aeb8;
+      content: "IMAGE";
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+    }
+    .mini-image::before { font-size: 6px; }
+
+    .japan-cover,
+    .senso-image,
+    .tsukiji-image,
+    .teamlab-image,
+    .shibuya-image,
+    .japan-destination,
+    .london-destination,
+    .singapore-destination,
+    .rain-update,
+    .indoor-update,
+    .ride-image,
+    .reservation-image,
+    .food-image,
+    .route-image {
+      background-repeat: no-repeat;
+      background-position: center;
+      background-size: cover;
+    }
+    .japan-cover::before,
+    .senso-image::before,
+    .tsukiji-image::before,
+    .teamlab-image::before,
+    .shibuya-image::before,
+    .japan-destination::before,
+    .london-destination::before,
+    .singapore-destination::before,
+    .rain-update::before,
+    .indoor-update::before,
+    .ride-image::before,
+    .reservation-image::before,
+    .food-image::before,
+    .route-image::before { display: none; }
+    .japan-cover { background-image: url("onboarding-assets/tokyo-tower.png"); background-position: center 47%; }
+    .senso-image { background-image: url("onboarding-assets/sensoji-temple.png"); }
+    .ueno-image { background: url("onboarding-assets/ueno-park.png") center / cover no-repeat; }
+    .ueno-image::before { display: none; }
+    .ueno-plan-image { background: url("onboarding-assets/ueno-park-plan-v2.png") center / cover no-repeat; }
+    .ueno-plan-image::before { display: none; }
+    .skytree-image { background: url("onboarding-assets/tokyo-skytree.png") center 42% / cover no-repeat; }
+    .skytree-image::before { display: none; }
+    .asakusa-lunch-image { background: url("onboarding-assets/asakusa-lunch.png") center / cover no-repeat; }
+    .asakusa-lunch-image::before { display: none; }
+    .tsukiji-image { background-image: url("onboarding-assets/tsukiji-outer-market.png"); }
+    .teamlab-image { background-image: url("onboarding-assets/teamlab-planets.png"); }
+    .shibuya-image { background-image: url("onboarding-assets/shibuya-crossing.png"); background-position: center; }
+    .japan-destination { background-image: url("onboarding-assets/destination-japan-tokyo-tower.png"); }
+    .london-destination { background-image: url("onboarding-assets/destination-london.png"); }
+    .singapore-destination { background-image: url("onboarding-assets/singapore-marina-bay.png"); }
+    .rain-update { background-image: url("onboarding-assets/teamlab-day2-rain.png"); }
+    .indoor-update { background-image: url("onboarding-assets/teamlab-rain-update.png"); }
+    .ride-image { background-image: url("onboarding-assets/airport-ride.png"); }
+    .reservation-image { background-image: url("onboarding-assets/sushi-reservation.png"); }
+    .food-image { background-image: url("onboarding-assets/tokyo-ramen.png"); }
+    .route-image { background-image: url("onboarding-assets/tokyo-map.png"); }
+
+    .ricky-avatar {
+      background: #dce3eb;
+    }
+    .ricky-avatar::before {
+      top: 20%;
+      right: auto;
+      bottom: auto;
+      left: 50%;
+      width: 34%;
+      aspect-ratio: 1;
+      display: block;
+      border-radius: 50%;
+      background: #8793a3;
+      content: "";
+      transform: translateX(-50%);
+    }
+    .ricky-avatar::after {
+      position: absolute;
+      right: 16%;
+      bottom: 10%;
+      left: 16%;
+      height: 38%;
+      border-radius: 50% 50% 34% 34%;
+      background: #8793a3;
+      content: "";
+    }
+
+    .soft-card {
+      border: 1px solid var(--color-line);
+      border-radius: 13px;
+      background: var(--color-surface);
+      box-shadow: var(--shadow-small);
+    }
+
+    /* Page 1 */
+    .page-one .slide-content {
+      grid-template-columns: 1fr 38px 1.06fr;
+      gap: 10px;
+      padding: 0 9px 17px;
+    }
+    .chat-preview { position: relative; min-height: 248px; }
+    .assistant-orb {
+      position: absolute;
+      top: 30px;
+      left: 0;
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      border-radius: 50%;
+      background: #fbf7ef;
+      box-shadow: 0 5px 13px rgba(16, 49, 78, 0.16);
+    }
+    .assistant-orb img { width: 152%; height: 152%; max-width: none; object-fit: cover; }
+    .message {
+      position: absolute;
+      left: 48px;
+      width: 204px;
+      margin: 0;
+      padding: 13px 15px;
+      border-radius: 13px;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .message.user-message { top: 29px; background: #f2f3f5; color: var(--color-copy); }
+    .message.ai-message { top: 128px; left: 34px; background: var(--color-blue); color: #fff; box-shadow: 0 8px 18px rgba(20,123,255,.16); }
+    .conversion-arrow { width: 36px; height: 26px; overflow: visible; }
+    .handdrawn-arrow { filter: url(#handdrawn-arrow); overflow: visible; }
+    .inline-sketch-arrow { width: 18px; height: 9px; margin: 0 2px; overflow: visible; vertical-align: 0; }
+    .trip-card { overflow: hidden; }
+    .japan-cover { height: 158px; margin: 12px 12px 0; border-radius: 11px; }
+    .trip-card .japan-cover {
+      background-image: url("onboarding-assets/japan-trip-fuji.png");
+      background-position: center 58%;
+    }
+    .trip-card-copy { display: grid; gap: 12px; padding: 15px 17px 18px; }
+    .trip-card-copy h2 { margin: 0 0 2px; font-size: 18px; line-height: 1.2; }
+    .meta-row { display: flex; align-items: center; gap: 9px; color: #4d5664; font-size: 12px; }
+    .meta-icon { width: 18px; color: #808895; font-size: 17px; text-align: center; }
+
+    /* Page 2 */
+    .page-two .slide-content { grid-template-columns: 1.08fr .92fr; gap: 18px; padding-bottom: 9px; }
+    .itinerary-card { height: 363px; overflow: hidden; padding-top: 17px; }
+    .itinerary-heading { padding: 0 21px 10px; }
+    .itinerary-heading strong { display: block; font-size: 17px; }
+    .itinerary-heading small { display: block; margin-top: 4px; color: var(--color-muted); font-size: 11px; }
+    .itinerary-list { display: grid; padding: 0 8px; }
+    .itinerary-item {
+      min-height: 67px;
+      display: grid;
+      grid-template-columns: 19px 47px minmax(0,1fr);
+      align-items: center;
+      gap: 9px;
+      padding: 7px 11px;
+      border: 1.5px solid transparent;
+      border-radius: 11px;
+      background: var(--color-surface);
+      cursor: grab;
+      transition: border-color 180ms ease, box-shadow 180ms ease, opacity 180ms ease;
+    }
+    .itinerary-item.selected { border-color: var(--color-blue); box-shadow: 0 4px 12px rgba(20,123,255,.08); }
+    .itinerary-item.dragging { opacity: .48; box-shadow: 0 8px 18px rgba(31,43,67,.14); }
+    .drag-handle { color: #9da5b1; font-size: 16px; letter-spacing: -2px; }
+    .mini-image { width: 47px; height: 43px; border-radius: 8px; }
+    .itinerary-copy { min-width: 0; display: grid; gap: 4px; }
+    .itinerary-copy strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .itinerary-copy small { color: #7f8793; font-size: 9px; white-space: nowrap; }
+    .map-card {
+      position: relative;
+      height: 363px;
+      overflow: hidden;
+      border-radius: 14px;
+      background: #edf1f4 url("onboarding-assets/tokyo-itinerary-map.png") center / cover no-repeat;
+    }
+    .map-card > * { display: none; }
+    .map-grid {
+      position: absolute;
+      inset: 0;
+      opacity: .82;
+      background-image: linear-gradient(28deg, transparent 44%, #fff 45%, #fff 49%, transparent 50%), linear-gradient(95deg, transparent 44%, #fff 45%, #fff 48%, transparent 49%), linear-gradient(154deg, transparent 45%, #dbe8df 46%, #dbe8df 52%, transparent 53%);
+      background-size: 76px 69px, 93px 84px, 142px 119px;
+    }
+    .map-river { position: absolute; top: -8px; right: 10px; width: 42px; height: 390px; border-radius: 50%; background: #cde7fa; transform: rotate(6deg); }
+    .route-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .map-label { position: absolute; z-index: 2; color: #273443; font-size: 9px; font-weight: 700; }
+    .map-label.tokyo { top: 143px; left: 45px; font-size: 19px; }
+    .map-label.senso { top: 27px; right: 25px; }
+    .map-label.tsukiji { top: 199px; right: 9px; }
+    .map-label.teamlab { right: 20px; bottom: 58px; }
+    .map-label.shibuya { left: 17px; bottom: 29px; }
+
+    /* Page 3 */
+    .page-three .slide-content { grid-template-columns: 282px minmax(0, 1fr); gap: 18px; padding: 0 0 8px; }
+    .profile-card { height: 320px; overflow: hidden; padding: 0; }
+    .profile-heading { height: 74px; display: flex; align-items: center; gap: 15px; padding: 0 19px; border-bottom: 1px solid #e8ebef; }
+    .avatar-placeholder { width: 48px; height: 48px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; background: #77869d; color: #fff; font-size: 15px; font-weight: 700; }
+    .profile-heading strong { font-size: 17px; }
+    .profile-fields { display: grid; grid-template-rows: 72px 72px 101px; }
+    .profile-field { display: grid; grid-template-columns: 34px minmax(0,1fr) auto 12px; align-items: center; gap: 8px; padding: 0 17px; border-bottom: 1px solid #e8ebef; }
+    .profile-field:last-child { border-bottom: 0; }
+    .profile-field > .profile-icon { color: #8390a5; font-size: 23px; line-height: 1; text-align: center; }
+    .profile-field.preferences > .profile-icon { color: #ff4b48; font-size: 25px; }
+    .profile-field strong { color: #252d39; font-size: 11px; }
+    .profile-field p { max-width: 112px; margin: 0; color: #60718d; font-size: 11px; line-height: 1.4; text-align: right; }
+    .field-chevron { color: #8997aa; font-size: 21px; line-height: 1; }
+    .recommendations { position: relative; height: 320px; }
+    .destination-card {
+      position: absolute;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,.7);
+      border-radius: 18px;
+      background-repeat: no-repeat;
+      background-position: center;
+      background-size: cover;
+    }
+    .destination-card::after {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(15,25,40,.28), rgba(15,25,40,.05) 35%, transparent 55%);
+      content: "";
+    }
+    .destination-card.japan-destination {
+      z-index: 3;
+      top: 0;
+      left: 0;
+      width: 160px;
+      height: 300px;
+      background-position: center;
+      box-shadow: 0 10px 26px rgba(20,40,70,.12);
+    }
+    .destination-card.london-destination {
+      z-index: 2;
+      top: 14px;
+      left: 96px;
+      width: 128px;
+      height: 272px;
+      background-position: 76% center;
+      box-shadow: 0 8px 20px rgba(20,40,70,.09);
+    }
+    .destination-card.singapore-destination {
+      z-index: 1;
+      top: 28px;
+      left: 180px;
+      width: 108px;
+      height: 244px;
+      background-position: 50% center;
+      box-shadow: 0 6px 16px rgba(20,40,70,.07);
+    }
+    .destination-copy { position: relative; z-index: 2; padding: 17px; text-shadow: 0 1px 3px rgba(10,22,38,.28); }
+    .london-destination .destination-copy { padding: 17px 5px 17px 66px; }
+    .singapore-destination .destination-copy { padding: 17px 4px 17px 48px; }
+    .destination-copy strong { display: block; margin-bottom: 4px; color: #fff; font-size: 14px; font-weight: 650; }
+    .destination-copy small { display: block; color: rgba(255,255,255,.9); font-size: 10px; font-weight: 450; line-height: 1.25; }
+    .japan-destination .destination-copy strong { font-size: 21px; }
+    .japan-destination .destination-copy small { font-size: 13px; }
+    .singapore-destination .destination-copy strong { font-size: 11px; }
+
+    /* Page 4 */
+    .page-four .slide-content { grid-template-columns: 336px minmax(0,1fr); gap: 20px; padding: 0 0 3px; }
+    .change-summary { display: grid; grid-template-rows: 88px 82px 82px; gap: 11px; }
+    .flight-change { display: grid; grid-template-columns: 82px minmax(0,1fr) 106px; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 14px; }
+    .flight-visual { width: 82px; height: 70px; border-radius: 11px; background: #dbeeff url("onboarding-assets/airport-ride.png") 75% 17% / 600% auto no-repeat; }
+    .flight-meta { display: grid; gap: 2px; }
+    .flight-meta strong { color: #19212e; font-size: 15px; }
+    .flight-meta span, .flight-meta small { color: #61708a; font-size: 10px; }
+    .delay-copy { align-self: stretch; display: grid; align-content: center; justify-items: center; gap: 6px; text-align: center; }
+    .delay-copy strong { padding: 7px 8px; border-radius: 8px; background: #ffe6e8; color: #ef4b55; font-size: 10px; }
+    .delay-copy span { color: #4f5f77; font-size: 9px; }
+    .weather-change { position: relative; display: block; overflow: hidden; padding: 0; border-radius: 14px; background: transparent; box-shadow: 0 6px 15px rgba(41,65,91,.14); }
+    .weather-card-image {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+      object-position: center;
+    }
+    .weather-symbol { position: relative; width: 42px; height: 25px; margin-left: 6px; border-radius: 18px; background: rgba(255,255,255,.94); box-shadow: 13px 2px 0 -2px rgba(255,255,255,.94); }
+    .weather-symbol::before { position: absolute; top: -10px; left: 9px; width: 22px; height: 22px; border-radius: 50%; background: rgba(255,255,255,.94); content: ""; }
+    .weather-symbol::after { position: absolute; top: 30px; left: 8px; width: 4px; height: 11px; border-radius: 4px; background: #73c8ff; box-shadow: 12px 3px #73c8ff, 24px 0 #73c8ff; content: ""; transform: rotate(18deg); }
+    .weather-place { display: grid; gap: 3px; }
+    .weather-place strong { font-size: 15px; }
+    .weather-place span { font-size: 11px; }
+    .rain-badge { display: grid; gap: 4px; padding: 9px 7px; border-radius: 10px; background: rgba(240,247,255,.75); color: #233652; text-align: center; }
+    .rain-badge strong { font-size: 10px; }
+    .rain-badge small { font-size: 8px; }
+    .moved-event { width: 270px; display: grid; grid-template-columns: 68px minmax(0,1fr); align-items: center; gap: 10px; padding: 7px 9px; border-radius: 14px; }
+    .moved-event-image { width: 68px; height: 68px; border-radius: 9px; }
+    .moved-event-copy { display: grid; gap: 4px; }
+    .moved-event-copy strong { font-size: 11px; line-height: 1.25; }
+    .moved-event-copy del { color: #788294; font-size: 9px; }
+    .moved-event-copy b { color: var(--color-blue); font-size: 11px; }
+    .updated-plan { height: 292px; overflow: hidden; padding: 0; border-radius: 17px; }
+    .updated-plan-header { height: 52px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px 0 15px; border-bottom: 1px solid #e6ebf1; }
+    .updated-plan-header strong { font-size: 16px; }
+    .updated-plan-header span { color: #65748b; font-size: 8px; white-space: nowrap; }
+    .plan-timeline { display: grid; grid-template-rows: repeat(4, 58px); padding: 3px 8px; }
+    .plan-row { display: grid; grid-template-columns: 44px 16px minmax(0,1fr); align-items: center; gap: 8px; min-width: 0; }
+    .plan-row time { color: #66768e; font-size: 10px; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+    .timeline-axis { position: relative; align-self: stretch; }
+    .timeline-axis::before { position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; background: #d8e4f2; content: ""; transform: translateX(-50%); }
+    .timeline-axis::after { position: absolute; top: 50%; left: 50%; width: 8px; height: 8px; border: 2px solid #cfe0f2; border-radius: 50%; background: #fff; content: ""; transform: translate(-50%,-50%); }
+    .plan-row:first-child .timeline-axis::before { top: 50%; }
+    .plan-row:last-child .timeline-axis::before { bottom: 50%; }
+    .plan-content { min-width: 0; display: grid; grid-template-columns: 42px minmax(0,1fr); align-items: center; gap: 10px; height: 52px; padding: 5px 6px; border-radius: 10px; }
+    .plan-thumb { width: 42px; height: 42px; margin: 0; border-radius: 8px; }
+    .plan-content strong { min-width: 0; color: #303b4c; font-size: 10px; line-height: 1.35; overflow-wrap: anywhere; }
+    .plan-row.highlight .plan-content { background: #e5f2ff; }
+    .plan-row.highlight time { color: var(--color-blue); font-weight: 700; }
+    .plan-row.highlight .timeline-axis::after { border-color: var(--color-blue); background: var(--color-blue); }
+
+    /* Page 5 */
+    .page-five h1 { padding-top: 42px; font-size: 26px; }
+    .page-five .slide-content { top: 113px; grid-template-columns: 1.08fr .92fr; gap: 18px; padding: 0 5px 3px; }
+    .service-stack { align-self: center; display: grid; gap: 25px; padding: 0 4px 25px 8px; }
+    .service-card { min-height: 72px; display: grid; grid-template-columns: 64px minmax(0,1fr); gap: 17px; align-items: center; }
+    .service-icon { width: 64px; height: 64px; display: grid; place-items: center; border-radius: 50%; background: #eaf4ff; color: var(--color-blue); }
+    .service-icon svg { width: 31px; height: 31px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+    .service-copy { min-width: 0; }
+    .service-copy strong { display: block; margin-bottom: 6px; color: #172033; font-size: 16px; }
+    .service-copy small { display: block; color: #66738a; font-size: 11px; line-height: 1.4; }
+    .phone-wrap { align-self: end; display: grid; place-items: end; }
+    .phone {
+      position: relative;
+      width: 276px;
+      height: 401px;
+      overflow: visible;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    .phone::after { display: none; }
+    .phone-image {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: contain;
+      object-position: center;
+      -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 8%, #000 92%, transparent 100%);
+      mask-image: linear-gradient(to right, transparent 0%, #000 8%, #000 92%, transparent 100%);
+    }
+    .dynamic-island { position: absolute; z-index: 3; top: 8px; left: 50%; width: 92px; height: 24px; border-radius: 15px; background: #020305; transform: translateX(-50%); }
+    .phone-status { position: relative; z-index: 2; display: flex; justify-content: space-between; padding: 16px 17px 0; color: #fff; font-size: 8px; }
+    .phone-time { position: relative; z-index: 2; margin-top: 29px; color: #fff; text-align: center; }
+    .phone-time b { display: block; font-size: 36px; font-weight: 400; line-height: 1; }
+    .phone-time span { display: block; margin-top: 5px; font-size: 9px; }
+    .notifications { position: relative; z-index: 2; display: grid; gap: 7px; margin: 29px 10px 0; }
+    .notification { min-height: 50px; display: grid; grid-template-columns: 25px minmax(0,1fr); gap: 7px; align-items: center; padding: 7px 8px; border: 1px solid rgba(255,255,255,.42); border-radius: 10px; background: rgba(244,248,252,.84); box-shadow: 0 2px 5px rgba(9,18,28,.12); }
+    .notification-icon { width: 25px; height: 25px; display: grid; place-items: center; border-radius: 7px; background: var(--color-blue); color: #fff; font-size: 11px; }
+    .notification-copy strong { display: block; color: #27313e; font-size: 7px; line-height: 1.25; }
+    .notification-copy small { display: block; margin-top: 2px; color: #525e6c; font-size: 6px; line-height: 1.25; }
+
+    @media (max-width: 780px), (max-height: 880px) { .page-shell { padding: 14px; } }
+    @media (prefers-reduced-motion: reduce) {
+      .slide, .dot, .next-button { transition-duration: 0.01ms; }
+    }
+  </style>
+</head>
+<body>
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute">
+    <defs>
+      <filter id="handdrawn-arrow" x="-20%" y="-20%" width="140%" height="140%">
+        <feTurbulence type="fractalNoise" baseFrequency="0.035 0.12" numOctaves="1" seed="8" result="noise"/>
+        <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.8" xChannelSelector="R" yChannelSelector="G"/>
+      </filter>
+    </defs>
+  </svg>
+  <main class="page-shell">
+    <div class="scale-stage">
+      <section class="browser-window" aria-label="Wanderly onboarding demo">
+        <div class="browser-body">
+          <section class="onboarding-card">
+            <div class="slides" aria-live="polite">
+              <article class="slide page-one active" data-page="0" aria-hidden="false">
+                <h1>Tell me where you want to go.</h1>
+                <div class="slide-content">
+                  <div class="chat-preview">
+                    <span class="assistant-orb"><img src="assets/branding/landi-round-otter-earth-icon-final.png" alt="Landi"></span>
+                    <p class="message user-message">I'm thinking of a trip to Japan for 10 days. I love food, culture and modern cities.</p>
+                    <p class="message ai-message">Sounds amazing! I'll create a personalized plan for you.</p>
+                  </div>
+                  <svg class="conversion-arrow handdrawn-arrow" viewBox="0 0 36 26" aria-hidden="true">
+                    <path d="M2 11 C10 9 19 10 27 11 L23 5 C28 7 32 10 35 13 C31 16 27 20 22 22 L27 15 C18 15 10 14 2 15 C1 14 1 12 2 11 Z" fill="#8f98a5"/>
+                    <path d="M5 12.5 C12 11.8 20 12.8 27 12.5" fill="none" stroke="#fff" stroke-width="1" stroke-linecap="round" opacity=".32"/>
+                  </svg>
+                  <section class="trip-card soft-card">
+                    <div class="image-placeholder japan-cover" role="img" aria-label="Japan trip cover placeholder"></div>
+                    <div class="trip-card-copy">
+                      <h2>Japan Trip</h2>
+                      <div class="meta-row"><span class="meta-icon">⌖</span><span>Tokyo, Osaka</span></div>
+                      <div class="meta-row"><span class="meta-icon">▣</span><span>Apr 5 – Apr 14, 2025</span></div>
+                    </div>
+                  </section>
+                </div>
+              </article>
+
+              <article class="slide page-two" data-page="1" aria-hidden="true">
+                <h1>Fine-tune it your way.</h1>
+                <div class="slide-content">
+                  <section class="itinerary-card soft-card">
+                    <div class="itinerary-heading"><strong>Tokyo</strong><small>Apr 5 · Day 1</small></div>
+                    <div class="itinerary-list" id="itinerary-list">
+                      <div class="itinerary-item" draggable="true"><span class="drag-handle">⠿</span><div class="image-placeholder mini-image senso-image"></div><div class="itinerary-copy"><strong>Senso-ji Temple</strong><small>9:00 AM – 11:00 AM</small></div></div>
+                      <div class="itinerary-item selected" draggable="true"><span class="drag-handle">⠿</span><div class="image-placeholder mini-image tsukiji-image"></div><div class="itinerary-copy"><strong>Tsukiji Outer Market</strong><small>11:00 AM – 1:00 PM</small></div></div>
+                      <div class="itinerary-item" draggable="true"><span class="drag-handle">⠿</span><div class="image-placeholder mini-image teamlab-image"></div><div class="itinerary-copy"><strong>TeamLab Planets</strong><small>2:00 PM – 4:00 PM</small></div></div>
+                      <div class="itinerary-item" draggable="true"><span class="drag-handle">⠿</span><div class="image-placeholder mini-image shibuya-image"></div><div class="itinerary-copy"><strong>Shibuya Crossing</strong><small>5:00 PM – 7:00 PM</small></div></div>
+                    </div>
+                  </section>
+                  <section class="map-card" aria-label="Tokyo route map illustration">
+                    <div class="map-grid"></div><div class="map-river"></div>
+                    <svg class="route-svg" viewBox="0 0 260 363" aria-hidden="true">
+                      <path d="M174 31 C166 60 150 77 158 104 S192 151 172 177 S131 219 145 249 S137 296 73 326" fill="none" stroke="#147bff" stroke-width="5" stroke-linecap="round"/>
+                      <g fill="#fff" stroke="#147bff" stroke-width="5"><circle cx="174" cy="31" r="8"/><circle cx="158" cy="104" r="8"/><circle cx="172" cy="177" r="8"/><circle cx="145" cy="249" r="8"/><circle cx="73" cy="326" r="8"/></g>
+                    </svg>
+                    <span class="map-label senso">Senso-ji</span><span class="map-label tokyo">Tokyo</span><span class="map-label tsukiji">Tsukiji Market</span><span class="map-label teamlab">TeamLab</span><span class="map-label shibuya">Shibuya</span>
+                  </section>
+                </div>
+              </article>
+
+              <article class="slide page-three" data-page="2" aria-hidden="true">
+                <h1>Tell me once, and that’s enough.</h1>
+                <div class="slide-content">
+                  <section class="profile-card soft-card">
+                    <div class="profile-heading"><div class="avatar-placeholder">R</div><strong>Ricky</strong></div>
+                    <div class="profile-fields">
+                      <div class="profile-field"><span class="profile-icon">◎</span><strong>Language</strong><p>English</p><span class="field-chevron">›</span></div>
+                      <div class="profile-field"><span class="profile-icon">♟</span><strong>Nationality</strong><p>Singaporean</p><span class="field-chevron">›</span></div>
+                      <div class="profile-field preferences"><span class="profile-icon">♥</span><strong>Travel preferences</strong><p>Food, culture, nature,<br>modern cities</p><span class="field-chevron">›</span></div>
+                    </div>
+                  </section>
+                  <div class="recommendations">
+                    <article class="destination-card japan-destination"><div class="destination-copy"><strong>Japan</strong><small>Oct 2025</small></div></article>
+                    <article class="destination-card london-destination"><div class="destination-copy"><strong>London</strong><small>Apr 2026</small></div></article>
+                    <article class="destination-card singapore-destination"><div class="destination-copy"><strong>Singapore</strong><small>Aug 2026</small></div></article>
+                  </div>
+                </div>
+              </article>
+
+              <article class="slide page-four" data-page="3" aria-hidden="true">
+                <h1>Stay ahead of every change.</h1>
+                <div class="slide-content">
+                  <div class="change-summary">
+                    <article class="flight-change soft-card">
+                      <div class="flight-visual" role="img" aria-label="Airplane"></div>
+                      <div class="flight-meta"><strong>JL 708</strong><span>HND → ITM</span><small>Oct 12, 10:20</small></div>
+                      <div class="delay-copy"><strong>Flight delayed</strong><span>Now departs 11:50</span></div>
+                    </article>
+                    <article class="weather-change">
+                      <img class="weather-card-image" src="onboarding-assets/tokyo-rain-card-final.png" alt="Tokyo weather: rain at 3 PM, high 18 degrees, low 14 degrees">
+                    </article>
+                    <article class="moved-event soft-card">
+                      <div class="image-placeholder moved-event-image ueno-image"></div>
+                      <div class="moved-event-copy"><strong>Ueno Park<br>(National Museum)</strong><del>Originally 3:00 PM</del><b>Move to 5:00 PM</b></div>
+                    </article>
+                  </div>
+                  <section class="updated-plan soft-card">
+                    <div class="updated-plan-header"><strong>Updated Plan</strong><span>Mon, Oct 13</span></div>
+                    <div class="plan-timeline">
+                      <div class="plan-row"><time>10:00</time><span class="timeline-axis" aria-hidden="true"></span><div class="plan-content"><div class="image-placeholder plan-thumb skytree-image"></div><strong>Tokyo Skytree</strong></div></div>
+                      <div class="plan-row"><time>12:30</time><span class="timeline-axis" aria-hidden="true"></span><div class="plan-content"><div class="image-placeholder plan-thumb asakusa-lunch-image"></div><strong>Lunch at Asakusa</strong></div></div>
+                      <div class="plan-row"><time>15:00</time><span class="timeline-axis" aria-hidden="true"></span><div class="plan-content"><div class="image-placeholder plan-thumb indoor-update"></div><strong>Free time (indoor)</strong></div></div>
+                      <div class="plan-row highlight"><time>17:00</time><span class="timeline-axis" aria-hidden="true"></span><div class="plan-content"><div class="image-placeholder plan-thumb ueno-plan-image"></div><strong>Ueno Park<br>(National Museum)</strong></div></div>
+                    </div>
+                  </section>
+                </div>
+              </article>
+
+              <article class="slide page-five" data-page="4" aria-hidden="true">
+                <h1>A personal assistant for your entire journey.</h1>
+                <div class="slide-content">
+                  <div class="service-stack">
+                    <article class="service-card">
+                      <span class="service-icon"><svg viewBox="0 0 32 32" aria-hidden="true"><rect x="7" y="7" width="18" height="20" rx="2"/><path d="M11 4v6M21 4v6M7 12h18M11 17h4M18 17h3M11 22h3"/></svg></span>
+                      <div class="service-copy"><strong>Plan the day</strong><small>Keep your trip organized.</small></div>
+                    </article>
+                    <article class="service-card">
+                      <span class="service-icon"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 20 9.5 12a3 3 0 0 1 2.9-2h7.2a3 3 0 0 1 2.9 2L25 20"/><rect x="5" y="18" width="22" height="8" rx="2"/><path d="M9 26v2M23 26v2M9 22h2M21 22h2"/></svg></span>
+                      <div class="service-copy"><strong>Get a ride</strong><small>Quick help with taxis and routes.</small></div>
+                    </article>
+                    <article class="service-card">
+                      <span class="service-icon"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M8 5v9M12 5v9M8 10h4M10 14v13M21 5c-3 3-4 8-2 12h4v10M23 5v12"/></svg></span>
+                      <div class="service-copy"><strong>Find food</strong><small>Nearby places to eat, when you need them.</small></div>
+                    </article>
+                  </div>
+                  <div class="phone-wrap">
+                    <div class="phone">
+                      <img class="phone-image" src="onboarding-assets/landi-phone-notifications-v2.png" alt="iPhone showing Landi ride and food notifications">
+                    </div>
+                  </div>
+                </div>
+              </article>
+            </div>
+
+            <nav class="pagination" aria-label="Onboarding pages">
+              <button class="dot active" type="button" aria-label="Go to page 1" aria-current="step"></button>
+              <button class="dot" type="button" aria-label="Go to page 2"></button>
+              <button class="dot" type="button" aria-label="Go to page 3"></button>
+              <button class="dot" type="button" aria-label="Go to page 4"></button>
+              <button class="dot" type="button" aria-label="Go to page 5"></button>
+            </nav>
+            <button class="next-button" type="button">Next</button>
+          </section>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const slides = Array.from(document.querySelectorAll('.slide'));
+    const dots = Array.from(document.querySelectorAll('.dot'));
+    const nextButton = document.querySelector('.next-button');
+    const stage = document.querySelector('.scale-stage');
+    const browserWindow = document.querySelector('.browser-window');
+    let currentPage = 0;
+    let successTimer;
+
+    function resizeStage() {
+      const availableWidth = Math.max(292, window.innerWidth - 28);
+      const availableHeight = Math.max(400, window.innerHeight - 28);
+      const scale = Math.min(1, availableWidth / 720, availableHeight / 810);
+      stage.style.width = `${720 * scale}px`;
+      stage.style.height = `${810 * scale}px`;
+      browserWindow.style.transform = `scale(${scale})`;
+      browserWindow.style.transformOrigin = 'top left';
+    }
+
+    resizeStage();
+    window.addEventListener('resize', resizeStage);
+
+    function showPage(nextPage) {
+      if (nextPage === currentPage || nextPage < 0 || nextPage >= slides.length) return;
+      const previousPage = currentPage;
+      slides[previousPage].classList.toggle('exit-left', nextPage > previousPage);
+      slides[previousPage].classList.remove('active');
+      slides[previousPage].setAttribute('aria-hidden', 'true');
+      currentPage = nextPage;
+      slides[currentPage].classList.remove('exit-left');
+      slides[currentPage].classList.add('active');
+      slides[currentPage].setAttribute('aria-hidden', 'false');
+      dots.forEach((dot, index) => {
+        dot.classList.toggle('active', index === currentPage);
+        if (index === currentPage) dot.setAttribute('aria-current', 'step');
+        else dot.removeAttribute('aria-current');
+      });
+      nextButton.classList.remove('success');
+      nextButton.textContent = currentPage === slides.length - 1 ? 'Create My First Plan' : 'Next';
+      window.clearTimeout(successTimer);
+    }
+
+    dots.forEach((dot, index) => dot.addEventListener('click', () => showPage(index)));
+    nextButton.addEventListener('click', () => {
+      if (currentPage < slides.length - 1) {
+        showPage(currentPage + 1);
+        return;
+      }
+      nextButton.classList.add('success');
+      nextButton.textContent = 'Plan Created ✓';
+      successTimer = window.setTimeout(() => {
+        nextButton.classList.remove('success');
+        nextButton.textContent = 'Create My First Plan';
+      }, 2200);
+    });
+
+    const list = document.getElementById('itinerary-list');
+    let draggedItem = null;
+    list.addEventListener('dragstart', (event) => {
+      draggedItem = event.target.closest('.itinerary-item');
+      if (!draggedItem) return;
+      draggedItem.classList.add('dragging');
+      event.dataTransfer.effectAllowed = 'move';
+    });
+    list.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      if (!draggedItem) return;
+      const hovered = event.target.closest('.itinerary-item');
+      if (!hovered || hovered === draggedItem) return;
+      const box = hovered.getBoundingClientRect();
+      const after = event.clientY > box.top + box.height / 2;
+      list.insertBefore(draggedItem, after ? hovered.nextSibling : hovered);
+    });
+    list.addEventListener('dragend', () => {
+      if (draggedItem) draggedItem.classList.remove('dragging');
+      draggedItem = null;
+    });
+  </script>
+</body>
+</html>

@@ -148,6 +148,22 @@ This readable prototype deliberately keeps semantic accommodation anchors in the
     title: "Bali at an Easy Rhythm",
     language: "en",
     tripStrategy: "Use Ubud first, then South Bali, so culture and rice landscape days start from the inland base while Uluwatu and departure are easier from the southern base. Lodging uncertainty stays explicit until exact properties are selected.",
+    fixedCommitments: [{
+      commitmentId: "booking-flight:segment-flight",
+      bookingConstraintId: "booking-flight",
+      segmentId: "segment-flight",
+      type: "flight",
+      segmentType: "flight_leg",
+      status: "confirmed",
+      constraintStrength: "hard",
+      fixed: true,
+      title: "Confirmed arrival flight",
+      segmentTitle: "Shanghai to Tokyo Haneda",
+      startAtLocal: "2026-10-05T07:25",
+      startTimeZone: "Asia/Tokyo",
+      origin: "Shanghai",
+      destination: "Tokyo Haneda"
+    }],
     targetedResearch: [{ question: "Need one meaningful same-area companion experience near Ubud.", outcome: "Museum Puri Lukisan remains the best low-transfer companion to central Ubud." }],
     dailyItinerary: [
       {
@@ -162,7 +178,12 @@ This readable prototype deliberately keeps semantic accommodation anchors in the
         area: "Central Ubud",
         startContext: { label: "Ubud accommodation - exact property pending", status: "planned_base_pending_property" },
         endContext: { label: "Ubud accommodation - exact property pending", status: "planned_base_pending_property" },
-        plan: "Use the Ubud base for nearby forest and museum experiences, with open time kept close to the same accommodation context so the first complete sightseeing day does not require regional backtracking."
+        plan: "Use the Ubud base for nearby forest and museum experiences, with open time kept close to the same accommodation context so the first complete sightseeing day does not require regional backtracking.",
+        experiences: [
+          { title: "Breakfast near the Ubud base", kind: "meal", planRole: "planned", summary: "Start close to the suggested accommodation area before the first route leg.", startTime: "08:00", endTime: "08:45", timingStatus: "planned" },
+          { title: "Transfer from Ubud base to Monkey Forest", kind: "transfer", planRole: "planned", summary: "Use local transport from the accommodation area; exact hotel pickup timing needs recheck after property selection.", startTime: "09:00", durationMinutes: 20, timingStatus: "estimated" },
+          { title: "Return to Ubud accommodation area", kind: "lodging", planRole: "planned", summary: "End back at the selected Ubud base area; exact property remains pending.", startTime: "20:00", timingStatus: "planned" }
+        ]
       }
     ],
     unresolvedExperiences: ["Exact Ubud accommodation property remains unresolved."],
@@ -176,10 +197,17 @@ This readable prototype deliberately keeps semantic accommodation anchors in the
   assert.equal(parsed.dailyItinerary[0]?.startContext.status, "transport_node");
   assert.equal(parsed.dailyItinerary[0]?.endContext.label, "Ubud accommodation - exact property pending");
   assert.equal(parsed.dailyItinerary[1]?.startContext.status, "planned_base_pending_property");
+  assert.deepEqual(parsed.dailyItinerary[1]?.experiences?.map((item) => [item.kind, item.startTime, item.endTime, item.durationMinutes, item.timingStatus]), [
+    ["meal", "08:00", "08:45", undefined, "planned"],
+    ["transfer", "09:00", undefined, 20, "estimated"],
+    ["lodging", "20:00", undefined, undefined, "planned"]
+  ]);
+  assert.equal(parsed.fixedCommitments[0]?.commitmentId, "booking-flight:segment-flight");
   assert.throws(() => parseSemanticTravelPlan(JSON.stringify({ ...parsed, dailyItinerary: [{ date: "2026-10-05", area: "Ubud", plan: "A day without anchors is incomplete for this semantic contract." }], markdown })), RuntimeAdapterError);
 
   const prompt = buildSemanticTravelPlanPrompt({
     request: "Plan Bali.",
+    fixedCommitments: parsed.fixedCommitments,
     research: {
       schemaVersion: 1,
       id: "research-1",
@@ -200,6 +228,8 @@ This readable prototype deliberately keeps semantic accommodation anchors in the
   });
   assert.match(prompt, /Every dailyItinerary item must answer where the traveler starts/i);
   assert.match(prompt, /planned_base_pending_property/);
+  assert.match(prompt, /recommended_property/);
+  assert.match(prompt, /Recommended \/ Not booked/);
   assert.match(prompt, /ResearchSet as high-quality known local context, not as a closed world/i);
   assert.match(prompt, /at most four concrete, plan-serving research gaps/i);
   assert.match(prompt, /RELAXED is not EMPTY/i);
@@ -207,11 +237,39 @@ This readable prototype deliberately keeps semantic accommodation anchors in the
   assert.match(prompt, /small initial ResearchSet is not evidence of completeness/i);
   assert.match(prompt, /fewer than about 18 concrete places/i);
   assert.match(prompt, /which candidate\(s\) were selected, which were rejected, and why/i);
+  assert.match(prompt, /Confirmed immutable fixed commitments/i);
+  assert.match(prompt, /booking-flight:segment-flight/);
+  assert.match(prompt, /Do not omit it, move its confirmed time, change its origin\/destination/i);
   assert.match(prompt, /Start:", "Experiences:", and "End:" labels/);
+  assert.match(prompt, /kind to preserve the travel function/i);
+  assert.match(prompt, /timingStatus to distinguish confirmed commitments/i);
+  assert.match(prompt, /prefer a ResearchSet accommodation candidate as the recommended provisional anchor/i);
+  assert.match(prompt, /Do not suppress useful life logistics/i);
+  assert.match(prompt, /Daily Completeness Check before final output/i);
+  assert.match(prompt, /breakfast, check-out\/luggage, departure from the old base/i);
+  assert.match(prompt, /If a day contains only a one- or two-hour experience/i);
+  assert.match(prompt, /Preserve meaningful meal, rest, transfer, lodging, and flexible experiences/i);
+  assert.match(prompt, /Use confirmed only for bookings or fixed commitments/i);
   assert.equal(semanticTravelPlanSchema.properties.dailyItinerary.items.required.includes("startContext"), true);
   assert.equal(semanticTravelPlanSchema.properties.dailyItinerary.items.required.includes("endContext"), true);
   assert.equal(semanticTravelPlanSchema.required.includes("targetedResearch"), true);
+  assert.equal(semanticTravelPlanSchema.required.includes("fixedCommitments"), true);
   assert.equal(semanticTravelPlanSchema.required.includes("unresolvedExperiences"), true);
+});
+
+test("research and semantic prompts keep lodging recommendations bounded, sourced, and not booked", () => {
+  const researchPrompt = buildSkillResearchBatchPrompt({
+    request: "Plan an eight-day Bali trip; accommodation is not set.",
+    batch: { id: "bali", scopeLabel: "Bali" },
+    profile: { preferredLanguage: "English", nationality: "USA", gender: "not_specified", immigrationStatus: "not_obtained" },
+    skillLineage: LANDI_BLUEPRINT_SKILL,
+    completedAt: "2026-09-21T00:00:00.000Z"
+  });
+  assert.match(researchPrompt, /small set of credible, specific, map-ready lodging candidates/i);
+  assert.match(researchPrompt, /never mark a researched candidate selected, booked, or confirmed/i);
+  assert.match(researchPrompt, /price or availability claim without current value-level evidence/i);
+  assert.match(researchPrompt, /guideDisplay\.showInGuide false/i);
+  assert.deepEqual(skillResearchBatchSchema.properties.places.items.properties.accommodation.properties.state.enum, ["recommended", "pending"]);
 });
 
 test("Codex Adapter removes structured-output nulls from optional Task fields", () => {
@@ -415,14 +473,14 @@ test("Skill image enrichment prompt and parser require source-bound direct image
   assert.deepEqual(parsed.omitted, []);
 });
 
-test("Skill research image enrichment fills missing images before import", async () => {
+test("planned-place image enrichment runs only after itinerary selection asks for exact places", async () => {
   const prompts: string[] = [];
   const adapter = new CodexRuntimeAdapter({ run: async (_command, args) => {
     if (args.includes("--version")) return { code: 0, stdout: "codex test", stderr: "" };
     if (args[0] === "login") return { code: 0, stdout: "logged in", stderr: "" };
     prompts.push(args.at(-1)!);
     const outputPath = args[args.indexOf("--output-last-message") + 1]!;
-    if (outputPath.endsWith("skill-image-enrichment.json")) {
+    if (outputPath.endsWith("skill-image-enrichment.json") || outputPath.endsWith("planned-place-images.json")) {
       await writeFile(outputPath, JSON.stringify({
         sources: [{ id: "commons-palace", title: "Ubud Palace image", authority: "Wikimedia Commons", url: "https://commons.wikimedia.org/wiki/File:Ubud_Palace.jpg", retrievedAt: "2026-09-08", status: "verified", official: false }],
         images: [{ placeId: "bali-palace", url: "https://upload.wikimedia.org/wikipedia/commons/1/11/Ubud_Palace.jpg", alt: "Courtyard at Ubud Palace", caption: "Ubud Palace courtyard", sourceUrl: "https://commons.wikimedia.org/wiki/File:Ubud_Palace.jpg", usage: ["detail"], status: "verified" }],
@@ -438,12 +496,13 @@ test("Skill research image enrichment fills missing images before import", async
   } });
   const input = { request: "Plan Bali.", batch: { id: "bali", scopeLabel: "Ubud" }, completedAt: "2026-09-08T00:00:00.000Z", profile: { preferredLanguage: "English", nationality: "Canada", gender: "not_specified" as const, immigrationStatus: "not_obtained" as const } };
   const artifact = await adapter.generateSkillResearchBatch(input);
+  assert.equal(prompts.length, 1);
+  assert.equal(artifact.places[0]?.images, undefined);
+  const research = importSkillResearchBatches([artifact], { researchSetId: "r", generationKey: "g", proposalRef: { sessionId: "s", proposalVersion: 1 }, skillLineage: LANDI_BLUEPRINT_SKILL, createdAt: "2026-09-08T00:00:00Z", updatedAt: "2026-09-08T00:00:00Z" });
+  const enrichment = await adapter.generatePlannedPlaceImageEnrichment({ request: input.request, scopeLabel: input.batch.scopeLabel, places: [{ ...research.places[0]!, id: "bali-palace" }], profile: input.profile, completedAt: input.completedAt });
   assert.equal(prompts.length, 2);
   assert.match(prompts[1]!, /Find sourced place images/i);
-  assert.deepEqual(artifact.imageDiagnostics, { requestedPlaceCount: 1, acceptedImageCount: 1, omitted: [] });
-  assert.equal(artifact.places[0]?.images?.[0]?.url, "https://upload.wikimedia.org/wikipedia/commons/1/11/Ubud_Palace.jpg");
-  const research = importSkillResearchBatches([artifact], { researchSetId: "r", generationKey: "g", proposalRef: { sessionId: "s", proposalVersion: 1 }, skillLineage: LANDI_BLUEPRINT_SKILL, createdAt: "2026-09-08T00:00:00Z", updatedAt: "2026-09-08T00:00:00Z" });
-  assert.equal(research.places[0]?.images?.[0]?.sourceId, research.sources.find((source) => source.url === "https://commons.wikimedia.org/wiki/File:Ubud_Palace.jpg")?.id);
+  assert.equal(enrichment.images[0]?.url, "https://upload.wikimedia.org/wikipedia/commons/1/11/Ubud_Palace.jpg");
 });
 
 test("research invocations carry the selected policy and unsupported versions never invoke the runtime", async () => {
@@ -1123,14 +1182,15 @@ test("Skill itinerary prompt uses a compact Research Set and forbids Plan execut
   assert.match(prompt, /Use only the supplied stable place IDs/i);
   assert.match(prompt, /Include guideTheme/i);
   assert.match(prompt, /Every day must include a blocks array/i);
-  assert.match(prompt, /\[\] is valid and often correct/i);
+  assert.match(prompt, /\[\] is valid only when there is intentionally no useful visible sequence/i);
   assert.doesNotMatch(prompt, /Every day must include typed day\.blocks/i);
   assert.match(prompt, /Do not create filler blocks merely to fill blank time/i);
-  assert.match(prompt, /Generic Breakfast, Lunch, Dinner/i);
+  assert.match(prompt, /Meals without a selected restaurant may be visible/i);
+  assert.match(prompt, /Do not invent a restaurant, booking, address, or placeId/i);
   assert.match(prompt, /If deleting the block would not reduce the traveler's ability to understand or execute the day, omit it/i);
   assert.match(prompt, /Do not output Time TBD, Duration TBD, Distance TBD/i);
   assert.match(prompt, /make each covered morning depart from the accommodation occupied the previous night/i);
-  assert.match(prompt, /skip this rule without asking for hotel details/i);
+  assert.match(prompt, /use the planned base area when the broader plan establishes one/i);
   assert.match(prompt, /stop block with placeId must correspond to a same-day stop/i);
   assert.match(prompt, /"display":\{"type":"attraction","markerKind":"attraction"\}/i);
   assert.match(prompt, /Do not return place records, sources, Plan Stages, Tasks, Reminders/i);

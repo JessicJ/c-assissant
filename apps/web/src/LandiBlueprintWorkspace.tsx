@@ -12,6 +12,9 @@ import {
   guideCardsForWorkspace,
   guideFilterLabel,
   itineraryDisplayForWorkspace,
+  itineraryCardImageCandidateForRender,
+  itineraryCardImageForRender,
+  itineraryTimelineNodesForItems,
   compactPendingItineraryEdits,
   mergePendingItineraryEdit,
   pendingItineraryDraftSummary,
@@ -66,7 +69,8 @@ declare const __LANDI_GOOGLE_MAPS_API_KEY__: string;
 
 let leafletStylesMounted = false;
 let googleMapsLoader: Promise<GoogleMapsNamespace> | null = null;
-const MAP_MARKER_ANCHOR = { x: 16, y: 38 } as const;
+const MAP_MARKER_ANCHOR = { x: 14, y: 14 } as const;
+type BlueprintMapMarkerRole = "start" | "stop" | "end" | "context";
 
 export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onApplyItineraryEdits, onRequestRouteRefresh, onUpdatePlacePriority, itineraryEditBusy = false, routeRefreshBusy = false, priorityUpdateBusyPlaceId = "" }: {
   plan: Plan;
@@ -92,10 +96,13 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
   const [pendingEdits, setPendingEdits] = useState<PendingItineraryEditDisplay[]>([]);
   const [draggedPlaceId, setDraggedPlaceId] = useState("");
   const [dragOverDropId, setDragOverDropId] = useState("");
+  const [savingPreparationItemId, setSavingPreparationItemId] = useState("");
+  const [preparationSaveError, setPreparationSaveError] = useState<{ itemId: string; message: string } | null>(null);
   const timelineListRef = useRef<HTMLDivElement>(null);
   const itineraryDragRef = useRef<{ pointerId: number; placeId: string; activeDropId: string } | null>(null);
   const selectedDay = workspace.days.find((day) => day.id === selectedDayId) ?? workspace.days[0];
-  const guideCards = guideCardsForWorkspace(workspace, pendingEdits);
+  const selectedActualDayId = selectedDay?.dayIds?.length ? selectedDay.defaultDayId ?? selectedDay.dayIds[selectedDay.dayIds.length - 1] : selectedDay?.id;
+  const guideCards = guideCardsForWorkspace(workspace, pendingEdits, selectedActualDayId);
   const selectedDetail = detailDisplayForWorkspacePlace(workspace, selectedPlaceId, pendingEdits);
   const itinerary = itineraryDisplayForWorkspace(workspace, selectedDay?.id ?? "", pendingEdits);
   const autoRouteRefreshAttemptedRef = useRef<Set<string>>(new Set());
@@ -122,7 +129,7 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
   function selectPlace(placeId: string, mode: BlueprintPanelMode = "detail") {
     setSelectedPlaceId(placeId);
     const dayId = scheduledDayIdForPlace(workspace, placeId);
-    if (dayId) setSelectedDayId(dayId);
+    if (dayId) setSelectedDayId(tabIdForActualDay(workspace, dayId));
     setPanelMode(mode);
   }
 
@@ -133,7 +140,7 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
   }
 
   function stageRemoveFromDay(placeId: string) {
-    const dayId = scheduledDayIdForPlace(workspace, placeId) ?? selectedDay?.id;
+    const dayId = scheduledDayIdForPlace(workspace, placeId) ?? selectedActualDayId;
     if (!dayId) return;
     const edit = buildPendingItineraryRemoveForWorkspace(workspace, { dayId, placeId });
     if (!edit) return;
@@ -142,7 +149,7 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
 
   function stagePendingEdit(edit: PendingItineraryEditDisplay) {
     setPendingEdits((current) => mergePendingItineraryEdit(current, edit));
-    setSelectedDayId(edit.dayId);
+    setSelectedDayId(tabIdForActualDay(workspace, edit.dayId));
     setSelectedPlaceId(edit.placeId);
     setPanelMode("explore");
   }
@@ -257,6 +264,19 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
     setSelectedPlaceId(placeId);
   }
 
+  async function togglePreparationItem(itemId: string, taskId: string | undefined, checked: boolean) {
+    if (!taskId || savingPreparationItemId) return;
+    setSavingPreparationItemId(itemId);
+    setPreparationSaveError(null);
+    try {
+      await onTaskToggle(plan.id, taskId, checked);
+    } catch (caught) {
+      setPreparationSaveError({ itemId, message: caught instanceof Error ? caught.message : "Checklist status could not be saved." });
+    } finally {
+      setSavingPreparationItemId("");
+    }
+  }
+
   async function confirmPendingEdits() {
     if (!pendingEdits.length || itineraryEditBusy || !onApplyItineraryEdits) return;
     try {
@@ -310,7 +330,21 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
   }
 
   const movableItineraryItemCount = itinerary.items.filter((item) => item.kind === "block" && item.routeAnchor && item.reorderable && item.placeId).length;
-  const canReorderSelectedDay = movableItineraryItemCount > 1;
+  const canReorderSelectedDay = !itinerary.sections?.length && movableItineraryItemCount > 1;
+  function renderItineraryItems(items: ItineraryCardDisplay[]) {
+    return itineraryTimelineNodesForItems(items, routeRefreshBusy).map((node) => {
+      if (node.kind === "movement") return <ItineraryRouteReadout item={node.item} label={node.label} state={node.state} key={node.key} />;
+      const item = node.item;
+      if (item.kind === "pending") return <PendingItineraryCard item={item} selected={selectedPlaceId === item.placeId} onSelect={() => selectPlace(item.placeId)} onUndoDraft={() => undoPendingEdit(item.placeId)} key={item.key} />;
+      const displayItem = canReorderSelectedDay ? item : { ...item, reorderable: false };
+      return <Fragment key={item.key}>
+        {displayItem.reorderable ? <ItineraryDropZone dropId={`before-${displayItem.key}`} active={dragOverDropId === `before-${displayItem.key}`} /> : null}
+        {displayItem.timelineRole === "transport"
+          ? <TransportConnector item={displayItem} />
+          : <ItineraryBlockCard item={displayItem} dragging={Boolean(displayItem.placeId) && draggedPlaceId === displayItem.placeId} selected={Boolean(displayItem.placeId) && selectedPlaceId === displayItem.placeId} onSelect={() => displayItem.placeId ? selectPlace(displayItem.placeId) : undefined} onUndoDraft={() => undoPendingEdit(displayItem.placeId)} onDragStart={(event) => startItineraryCardDrag(event, displayItem)} onDragMove={moveItineraryCardDrag} onDragEnd={endItineraryCardDrag} onDragCancel={cancelItineraryCardDrag} />}
+      </Fragment>;
+    });
+  }
 
   return <section className="blueprint-workspace" aria-label="Landi Blueprint workspace">
     <header className="blueprint-topbar">
@@ -327,24 +361,20 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
         <div className="blueprint-day-tabs">
           <div className="blueprint-day-strip" aria-label="Itinerary days" ref={dayStripRef} onPointerDown={startDayTabDrag} onPointerMove={moveDayTabDrag} onPointerUp={endDayTabDrag} onPointerCancel={endDayTabDrag} onPointerLeave={endDayTabDrag}>{workspace.days.map((day) => <button type="button" className={day.id === selectedDay?.id ? "active" : ""} key={day.id} onClick={(event) => handleDayTabClick(event, day.id)}>
             <strong>{day.shortLabel ?? day.date ?? day.label}</strong>
-            <span>{day.city ?? day.title ?? "Trip day"}</span>
+            <span>{day.tabLabel ?? day.city ?? day.title ?? "Trip day"}</span>
           </button>)}</div>
         </div>
         <div className="blueprint-timeline-list" ref={timelineListRef}>
-          {itinerary.dayContext ? <DayContextNote context={itinerary.dayContext} /> : null}
-          {itinerary.items.map((item) => {
-            if (item.kind === "pending") return <PendingItineraryCard item={item} selected={selectedPlaceId === item.placeId} onSelect={() => selectPlace(item.placeId)} onUndoDraft={() => undoPendingEdit(item.placeId)} key={item.key} />;
-            const displayItem = canReorderSelectedDay ? item : { ...item, reorderable: false };
-            return <Fragment key={item.key}>
-              {displayItem.reorderable ? <ItineraryDropZone dropId={`before-${displayItem.key}`} active={dragOverDropId === `before-${displayItem.key}`} /> : null}
-              {displayItem.timelineRole === "transport"
-                ? <TransportConnector item={displayItem} />
-                : <ItineraryBlockCard item={displayItem} dragging={Boolean(displayItem.placeId) && draggedPlaceId === displayItem.placeId} selected={Boolean(displayItem.placeId) && selectedPlaceId === displayItem.placeId} onSelect={() => displayItem.placeId ? selectPlace(displayItem.placeId) : undefined} onUndoDraft={() => undoPendingEdit(displayItem.placeId)} onDragStart={(event) => startItineraryCardDrag(event, displayItem)} onDragMove={moveItineraryCardDrag} onDragEnd={endItineraryCardDrag} onDragCancel={cancelItineraryCardDrag} />}
-              {item.routeAfterLabel || (routeRefreshBusy && item.routeAfterStatusLabel) ? <ItineraryRouteReadout item={item} label={routeReadoutLabel(item, routeRefreshBusy)} state={routeReadoutState(item, routeRefreshBusy)} /> : null}
-            </Fragment>;
-          })}
+          {itinerary.sections?.length ? itinerary.sections.map((section) => <section className="blueprint-itinerary-date-section" aria-label={section.heading} key={section.key}>
+            <h4>{section.heading}</h4>
+            {section.dayContext ? <DayContextNote context={section.dayContext} /> : null}
+            {renderItineraryItems(section.items)}
+            {!section.items.length && !section.dayContext ? <p className="blueprint-empty-note">No itinerary blocks are available for this date.</p> : null}
+          </section>) : <>
+            {itinerary.dayContext ? <DayContextNote context={itinerary.dayContext} /> : null}
+            {renderItineraryItems(itinerary.items)}
+          </>}
           {canReorderSelectedDay ? <ItineraryDropZone dropId="end" active={dragOverDropId === "end"} /> : null}
-          {itinerary.dayAlternatives.length ? <DayAlternatives alternatives={itinerary.dayAlternatives} /> : null}
           {workspace.planAlternatives.length ? <PlanAlternatives alternatives={workspace.planAlternatives} /> : null}
           {!itinerary.items.length && !itinerary.dayContext ? <p className="blueprint-empty-note">No itinerary blocks are available for this day.</p> : null}
         </div>
@@ -356,7 +386,7 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
         <div className="blueprint-panel-body">
           <ExplorePanel filters={workspace.guideFilters} cards={guideCards} filter={guideFilter} hidden={panelMode !== "explore"} onFilter={setGuideFilter} onSelect={selectPlace} onAdd={openPlacement} onUndoDraft={undoPendingEdit} />
           {selectedDetail ? <DetailPanel detail={selectedDetail} hidden={panelMode !== "detail"} onBack={() => setPanelMode("explore")} onSelect={selectPlace} onAdd={openPlacement} onRemove={stageRemoveFromDay} onUndoDraft={undoPendingEdit} /> : <p className="blueprint-empty-note" hidden={panelMode !== "detail"}>Select an itinerary block or guide card to open details.</p>}
-          {placementPlaceId ? <PlacementPanel key={placementPlaceId} workspace={workspace} place={workspace.places.find((place) => place.id === placementPlaceId)} hidden={panelMode !== "placement"} selectedDayId={selectedDay?.id} onBack={() => setPanelMode("explore")} onPreview={stagePendingEdit} /> : null}
+          {placementPlaceId ? <PlacementPanel key={placementPlaceId} workspace={workspace} place={workspace.places.find((place) => place.id === placementPlaceId)} hidden={panelMode !== "placement"} selectedDayId={selectedActualDayId} onBack={() => setPanelMode("explore")} onPreview={stagePendingEdit} /> : null}
         </div>
       </aside>
     </div> : null}
@@ -364,14 +394,18 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
     {area === "preparation" ? <section className="blueprint-page blueprint-preparation" aria-label="Preparation checklist">
       {workspace.preparationGroups.length ? workspace.preparationGroups.map((group) => <section className="blueprint-check-group" key={group.title}>
         <h4>{group.title}</h4>
-        <div>{group.items.map((item) => <details className={`blueprint-check-item role-${item.role}${item.checked ? " checked" : ""}`} key={item.id}>
+        <div>{group.items.map((item) => {
+          const saving = savingPreparationItemId === item.id;
+          const error = preparationSaveError?.itemId === item.id ? preparationSaveError.message : "";
+          return <details className={`blueprint-check-item role-${item.role}${item.checked ? " checked" : ""}${item.checkable ? " checkable" : ""}`} key={`${group.title}-${item.id}`}>
           <summary>
-            <span className="blueprint-check-marker" aria-hidden="true" />
-            <span><strong>{item.title}</strong>{item.description ? <small>{item.description}</small> : null}</span>
+            {item.checkable ? <input type="checkbox" checked={item.checked} disabled={saving} onClick={(event) => event.stopPropagation()} onChange={(event) => void togglePreparationItem(item.id, item.taskId, event.target.checked)} aria-label={`Complete ${item.title}`} /> : <span className="blueprint-check-marker" aria-hidden="true" />}
+            <span><strong>{item.title}</strong>{item.description ? <small>{item.description}</small> : null}{saving ? <small>Saving...</small> : null}{error ? <small className="blueprint-check-error">{error}</small> : null}</span>
           </summary>
           {item.completion ? <small>{item.completion}</small> : null}
           {item.context ? <small>{item.context}</small> : null}
-        </details>)}</div>
+        </details>;
+        })}</div>
       </section>) : <p className="blueprint-empty-note">No explicit travel preparation checklist is available for this plan.</p>}
     </section> : null}
 
@@ -438,13 +472,6 @@ function sourceStatusTone(source: BlueprintWorkspaceDisplay["sources"][number]):
   return undefined;
 }
 
-function DayAlternatives({ alternatives }: { alternatives: AlternativeDisplay[] }) {
-  return <section className="blueprint-alternatives" aria-label="Other options for this day">
-    <h4>Other options for this day</h4>
-    <div>{alternatives.map((alternative) => <AlternativeNote alternative={alternative} key={alternative.key} />)}</div>
-  </section>;
-}
-
 function PlanAlternatives({ alternatives }: { alternatives: AlternativeDisplay[] }) {
   return <details className="blueprint-plan-alternatives">
     <summary>Why some ideas are left out</summary>
@@ -509,22 +536,12 @@ function ItineraryDropZone({ dropId, active }: { dropId: string; active: boolean
   return <div className={active ? "blueprint-itinerary-drop-zone active" : "blueprint-itinerary-drop-zone"} data-drop-id={dropId} />;
 }
 
-function routeReadoutLabel(item: ItineraryCardDisplay, routeRefreshBusy: boolean): string {
-  if (item.routeAfterStatusLabel && routeRefreshBusy) return "Checking travel time...";
-  return item.routeAfterLabel ?? item.routeAfterStatusLabel ?? "";
-}
-
-function routeReadoutState(item: ItineraryCardDisplay, routeRefreshBusy: boolean): "confirmed" | "pending" | "checking" {
-  if (item.routeAfterStatusLabel && routeRefreshBusy) return "checking";
-  return item.routeAfterStatusLabel ? "pending" : "confirmed";
-}
-
 function ItineraryRouteReadout({ item, label, state }: { item: ItineraryCardDisplay; label: string; state: "confirmed" | "pending" | "checking" }) {
-  return <div className={`blueprint-itinerary-route-readout primitive-movement ${state}`} aria-label={`Next route: ${label}`}>
+  return <article className={`blueprint-itinerary-route-readout primitive-movement ${state}`} aria-label={`Next route: ${label}`}>
     <span className="blueprint-itinerary-transport-rail" aria-hidden="true" />
     <span className="blueprint-itinerary-transport-icon" aria-hidden="true">{transportModeIcon(item.routeAfterMode)}</span>
     <TransportConnectorContent title={label} durationLabel={item.routeAfterDurationLabel} detail={item.routeAfterDetail} statusLabel={state === "confirmed" ? undefined : "Needs check"} />
-  </div>;
+  </article>;
 }
 
 function TransportConnector({ item }: { item: ItineraryCardDisplay }) {
@@ -547,13 +564,21 @@ function TransportConnectorContent({ title, durationLabel, detail, statusLabel }
 }
 
 function ItineraryBlockCard({ item, selected, dragging, onSelect, onUndoDraft, onDragStart, onDragMove, onDragEnd, onDragCancel }: { item: ItineraryCardDisplay; selected: boolean; dragging: boolean; onSelect: () => void; onUndoDraft: () => void; onDragStart: (event: PointerEvent<HTMLElement>) => void; onDragMove: (event: PointerEvent<HTMLElement>) => void; onDragEnd: (event: PointerEvent<HTMLElement>) => void; onDragCancel: (event: PointerEvent<HTMLElement>) => void }) {
+  const [failedImageUrls, setFailedImageUrls] = useState<string[]>([]);
+  const [loadedImageUrl, setLoadedImageUrl] = useState("");
+  const image = itineraryCardImageCandidateForRender(item.imageCandidates ?? (item.image ? [item.image] : []), failedImageUrls);
+  const imageClassName = `blueprint-itinerary-thumbnail${image?.url === loadedImageUrl ? " loaded" : " loading"}`;
+  const failImage = () => { if (!image) return; setLoadedImageUrl(""); setFailedImageUrls((current) => current.includes(image.url) ? current : [...current, image.url]); };
+  const featurePlaceCard = item.featurePlaceCard;
   const className = [
     "blueprint-itinerary-block",
     item.reorderable ? "reorderable" : "static",
     selected ? "selected" : "",
     dragging ? "dragging" : "",
     item.editState === "moved" ? "moved" : "",
-    item.image ? "featured" : "compact",
+    featurePlaceCard ? "feature-place-card" : image ? "featured" : "compact",
+    featurePlaceCard ? image ? "with-image" : "text-only" : "",
+    item.emphasis ? `emphasis-${item.emphasis}` : "",
     `primitive-${timelineVisualPrimitiveForItem(item)}`,
     `role-${item.timelineRole}`,
     `type-${item.type}`
@@ -564,26 +589,47 @@ function ItineraryBlockCard({ item, selected, dragging, onSelect, onUndoDraft, o
     <span className="blueprint-itinerary-icon" aria-hidden="true">{itineraryItemIcon(item)}</span>
     {item.reorderable ? <button type="button" className="blueprint-itinerary-drag-handle" aria-label={`Move ${item.title}`} onPointerDown={onDragStart} onPointerMove={onDragMove} onPointerUp={onDragEnd} onPointerCancel={onDragCancel}>⠿</button> : null}
     <button type="button" className="blueprint-itinerary-card-main" onClick={onSelect}>
-      {item.image ? <img className="blueprint-itinerary-thumbnail" src={item.image.url} alt={item.image.alt} loading="lazy" referrerPolicy="no-referrer" /> : null}
-      <div className="blueprint-itinerary-card-heading">
-        <div className="blueprint-itinerary-card-copy">
-          <strong>{item.title}</strong>
-          {item.meta ? <small>{item.meta}</small> : null}
+      {featurePlaceCard ? <>
+        {image ? <img className={imageClassName} src={image.url} alt={image.alt} loading="lazy" referrerPolicy="no-referrer" onLoad={() => setLoadedImageUrl(image.url)} onError={failImage} /> : null}
+        <div className="blueprint-itinerary-feature-content">
+          <strong>{featurePlaceCard.title}</strong>
+          <small className="blueprint-itinerary-place-meta">{locationPinIcon()}<span>{[featurePlaceCard.typeLabel, featurePlaceCard.areaLabel].filter(Boolean).join(" · ")}</span></small>
+          <span className="blueprint-itinerary-place-purpose">{featurePlaceCard.summary}</span>
+          <span className="blueprint-itinerary-place-chips" aria-label="Place tags">
+            {featurePlaceCard.chips.map((chip) => <span className={`blueprint-itinerary-place-chip kind-${chip.kind ?? "attribute"}`} key={chip.label}>{chip.label}</span>)}
+          </span>
         </div>
-      </div>
-      {item.statusLabel ? <em className="blueprint-itinerary-status">{item.statusLabel}</em> : null}
+      </> : <>
+        {image ? <img className={imageClassName} src={image.url} alt={image.alt} loading="lazy" referrerPolicy="no-referrer" onLoad={() => setLoadedImageUrl(image.url)} onError={failImage} /> : null}
+        <div className="blueprint-itinerary-card-heading">
+          <div className="blueprint-itinerary-card-copy">
+            <strong>{item.title}</strong>
+            {item.placeMeta ? <small className="blueprint-itinerary-place-meta">{item.placeMeta}</small> : null}
+            {item.purpose ? <span className="blueprint-itinerary-place-purpose">{item.purpose}</span> : null}
+            {item.meta && !item.placeMeta ? <small>{item.meta}</small> : null}
+          </div>
+        </div>
+        {item.statusLabel ? <em className="blueprint-itinerary-status">{item.statusLabel}</em> : null}
+      </>}
     </button>
+    {!featurePlaceCard && item.externalAction ? <a className="blueprint-itinerary-external-action" href={item.externalAction.url} target="_blank" rel="noreferrer">{item.externalAction.label}</a> : null}
     {item.draftActionLabel ? <button type="button" className="blueprint-itinerary-draft-action" onClick={onUndoDraft}>{item.draftActionLabel}</button> : null}
   </article>;
 }
 
+function locationPinIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-5.1 7-11a7 7 0 0 0-14 0c0 5.9 7 11 7 11Z" /><circle cx="12" cy="10" r="2" /></svg>;
+}
+
 function PendingItineraryCard({ item, selected, onSelect, onUndoDraft }: { item: ItineraryCardDisplay; selected: boolean; onSelect: () => void; onUndoDraft: () => void }) {
-  return <article className={`blueprint-itinerary-block blueprint-itinerary-block-pending ${item.image ? "featured" : "compact"} primitive-${timelineVisualPrimitiveForItem(item)} role-${item.timelineRole} type-${item.type}${selected ? " selected" : ""}`}>
+  const [failedImageUrl, setFailedImageUrl] = useState("");
+  const image = itineraryCardImageForRender(item.image, failedImageUrl);
+  return <article className={`blueprint-itinerary-block blueprint-itinerary-block-pending ${image ? "featured" : "compact"} primitive-${timelineVisualPrimitiveForItem(item)} role-${item.timelineRole} type-${item.type}${selected ? " selected" : ""}`}>
     <time className="blueprint-itinerary-time">{item.timeLabel}</time>
     <span className="blueprint-itinerary-rail" aria-hidden="true" />
     <span className="blueprint-itinerary-icon" aria-hidden="true">{itineraryItemIcon(item)}</span>
     <button type="button" className="blueprint-itinerary-card-main" aria-label={`Pending itinerary edit for ${item.title}`} onClick={onSelect}>
-      {item.image ? <img className="blueprint-itinerary-thumbnail" src={item.image.url} alt={item.image.alt} loading="lazy" referrerPolicy="no-referrer" /> : null}
+      {image ? <img className="blueprint-itinerary-thumbnail" src={image.url} alt={image.alt} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailedImageUrl(image.url)} /> : null}
       <div className="blueprint-itinerary-card-heading">
         <div className="blueprint-itinerary-card-copy">
           <strong>{item.title}</strong>
@@ -646,6 +692,7 @@ function GoogleBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers,
   const routeLatLngs = routePlaces.filter((place) => validCoordinates(place.coordinates)).map((place) => googleLatLngForCoordinates(place.coordinates!));
   const fitLatLngs = routeLatLngs.length ? routeLatLngs : points.map((marker) => googleLatLngForCoordinates(marker.coordinates!));
   const fallbackLatLng = googleLatLngForCoordinates(fallbackViewport.center);
+  const markerRoles = useMemo(() => mapMarkerRoles(routePlaces), [routePlaces]);
   const hasFitTargets = fitLatLngs.length > 0;
   const fitKey = [
     routePlaces.filter((place) => validCoordinates(place.coordinates)).map((place) => `route:${place.placeId}:${place.coordinates!.join(",")}`).join("|"),
@@ -720,7 +767,7 @@ function GoogleBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers,
     }
 
     for (const marker of points) {
-      nextLayers.push(createGoogleMapMarkerOverlay(maps, map, marker, marker.placeId === selectedPlaceId, onSelectPlace));
+      nextLayers.push(createGoogleMapMarkerOverlay(maps, map, marker, markerRoles.get(marker.placeId) ?? "context", marker.placeId === selectedPlaceId, onSelectPlace));
     }
     layersRef.current = nextLayers;
 
@@ -747,7 +794,7 @@ function GoogleBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers,
       map.setZoom(fallbackViewport.zoom);
     }
     lastFitKeyRef.current = fitKey;
-  }, [fallbackLatLng, fallbackLineState, fallbackViewport.zoom, fitKey, fitLatLngs, hasFitTargets, mapReady, onSelectPlace, points, routeLatLngs, routeLines, routeRefreshBusy, selectedPlaceId]);
+  }, [fallbackLatLng, fallbackLineState, fallbackViewport.zoom, fitKey, fitLatLngs, hasFitTargets, mapReady, markerRoles, onSelectPlace, points, routeLatLngs, routeLines, routeRefreshBusy, selectedPlaceId]);
 
   return <section className="blueprint-map" aria-label="Itinerary map context">
     <div className="blueprint-map-stage blueprint-google-map" ref={hostRef} />
@@ -765,6 +812,7 @@ function LeafletBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers
   const routeLatLngs = routePlaces.filter((place) => validCoordinates(place.coordinates)).map((place) => latLngForCoordinates(place.coordinates!));
   const fitLatLngs = routeLatLngs.length ? routeLatLngs : points.map((marker) => latLngForCoordinates(marker.coordinates!));
   const fallbackLatLng = latLngForCoordinates(fallbackViewport.center);
+  const markerRoles = useMemo(() => mapMarkerRoles(routePlaces), [routePlaces]);
   const hasFitTargets = fitLatLngs.length > 0;
   const fitKey = [
     routePlaces.filter((place) => validCoordinates(place.coordinates)).map((place) => `route:${place.placeId}:${place.coordinates!.join(",")}`).join("|"),
@@ -824,7 +872,8 @@ function LeafletBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers
       L.marker(latLngForCoordinates(marker.coordinates!), {
         icon: L.divIcon({
           className: "blueprint-leaflet-icon",
-          html: mapMarkerHtml(marker, selected),
+          html: mapMarkerHtml(marker, markerRoles.get(marker.placeId) ?? "context", selected),
+          iconSize: [28, 28],
           iconAnchor: [MAP_MARKER_ANCHOR.x, MAP_MARKER_ANCHOR.y]
         }),
         title: marker.title,
@@ -846,7 +895,7 @@ function LeafletBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers
       map.setView(fallbackLatLng, fallbackViewport.zoom);
     }
     lastFitKeyRef.current = fitKey;
-  }, [fallbackLatLng, fallbackLineState, fallbackViewport.zoom, fitKey, fitLatLngs, hasFitTargets, onSelectPlace, points, routeLatLngs, routeLines, routeRefreshBusy, selectedPlaceId]);
+  }, [fallbackLatLng, fallbackLineState, fallbackViewport.zoom, fitKey, fitLatLngs, hasFitTargets, markerRoles, onSelectPlace, points, routeLatLngs, routeLines, routeRefreshBusy, selectedPlaceId]);
 
   return <section className="blueprint-map" aria-label="Itinerary map context">
     <div className="blueprint-map-stage" ref={hostRef} />
@@ -898,6 +947,11 @@ function SafeDetailImageFigure({ image }: { image: DetailImageDisplay }) {
 }
 
 function DetailPanel({ detail, hidden, onBack, onSelect, onAdd, onRemove, onUndoDraft }: { detail: DetailPlaceDisplay; hidden: boolean; onBack: () => void; onSelect: (placeId: string) => void; onAdd: (placeId: string) => void; onRemove: (placeId: string) => void; onUndoDraft: (placeId: string) => void }) {
+  const showPrimaryAction = detail.scheduled || detail.canAdd || detail.primaryActionLabel !== "Background note";
+  const showRemoveAction = detail.scheduled
+    && (detail.canRemoveFromDay || detail.removeBlockedReason)
+    && detail.removeBlockedReason !== "Background note";
+  const showActions = showPrimaryAction || showRemoveAction || Boolean(detail.draftActionLabel) || detail.links.length > 0;
   return <div className="blueprint-detail-panel blueprint-panel-view" hidden={hidden}>
     <header>
       <button type="button" className="blueprint-detail-back" aria-label="Back to explore" onClick={onBack}><span aria-hidden="true" /></button>
@@ -932,19 +986,19 @@ function DetailPanel({ detail, hidden, onBack, onSelect, onAdd, onRemove, onUndo
       {(event.dateLabel || event.locationLabel) ? <small>{[event.dateLabel, event.locationLabel].filter(Boolean).join(" · ")}</small> : null}
     </article>)}</div></section> : null}
     {detail.sources.length ? <details className="blueprint-detail-sources"><summary>{detail.sourceTitle ?? "Sources & verification"}</summary><div>{detail.sources.map((source) => source.url ? <a href={source.url} target="_blank" rel="noreferrer" key={`${source.url}-${source.summary}`}>{source.summary}</a> : <span key={source.summary}>{source.summary}</span>)}</div></details> : null}
-    <section className="blueprint-detail-actions">
-      {detail.scheduled || detail.canAdd ? <button type="button" onClick={() => detail.scheduled ? onSelect(detail.placeId) : onAdd(detail.placeId)}>{detail.primaryActionLabel}</button> : <span>{detail.primaryActionLabel}</span>}
-      {detail.scheduled && (detail.canRemoveFromDay || detail.removeBlockedReason) ? <button type="button" className="secondary" disabled={!detail.canRemoveFromDay} title={detail.removeBlockedReason} onClick={() => onRemove(detail.placeId)}>{detail.removeActionLabel ?? detail.removeBlockedReason ?? "Remove from day"}</button> : null}
+    {showActions ? <section className="blueprint-detail-actions">
+      {showPrimaryAction ? detail.scheduled || detail.canAdd ? <button type="button" onClick={() => detail.scheduled ? onSelect(detail.placeId) : onAdd(detail.placeId)}>{detail.primaryActionLabel}</button> : <span>{detail.primaryActionLabel}</span> : null}
+      {showRemoveAction ? <button type="button" className="secondary" disabled={!detail.canRemoveFromDay} title={detail.removeBlockedReason} onClick={() => onRemove(detail.placeId)}>{detail.removeActionLabel ?? detail.removeBlockedReason ?? "Remove from day"}</button> : null}
       {detail.draftActionLabel ? <button type="button" className="secondary" onClick={() => onUndoDraft(detail.placeId)}>{detail.draftActionLabel}</button> : null}
       {detail.links.map((link) => <a href={link.url} target="_blank" rel="noreferrer" key={`${link.label}-${link.url}`}>{link.label}</a>)}
-    </section>
+    </section> : null}
   </div>;
 }
 
 function PlacementPanel({ workspace, place, hidden, selectedDayId, onBack, onPreview }: { workspace: BlueprintWorkspaceDisplay; place?: BlueprintPlaceDisplay | undefined; hidden: boolean; selectedDayId?: string | undefined; onBack: () => void; onPreview: (edit: PendingItineraryEditDisplay) => void }) {
-  const [dayId, setDayId] = useState(selectedDayId ?? workspace.initialDayId);
+  const [dayId, setDayId] = useState(selectedDayId ?? workspace.placementDays[0]?.id ?? workspace.initialDayId);
   const [position, setPosition] = useState("end");
-  const availableDays = place ? workspace.days.filter((candidate) => placementDayAllowed(place, candidate.id)) : workspace.days;
+  const availableDays = place ? workspace.placementDays.filter((candidate) => placementDayAllowed(place, candidate.id)) : workspace.placementDays;
   const day = availableDays.find((candidate) => candidate.id === dayId) ?? availableDays[0];
   const itinerary = workspace.itineraries.find((candidate) => candidate.dayId === day?.id) ?? workspace.itineraries[0];
   if (!place || !day) return <div className="blueprint-placement-panel blueprint-panel-view" hidden={hidden}><p className="blueprint-empty-note">Select a guide card before choosing placement.</p></div>;
@@ -976,6 +1030,10 @@ function PlacementPanel({ workspace, place, hidden, selectedDayId, onBack, onPre
     </section> : null}
     <section className="blueprint-detail-actions"><button type="button" onClick={previewPlacement}>Add to draft</button></section>
   </div>;
+}
+
+function tabIdForActualDay(workspace: BlueprintWorkspaceDisplay, dayId: string): string {
+  return workspace.days.find((day) => day.id === dayId || day.dayIds?.includes(dayId))?.id ?? dayId;
 }
 
 function placementDayAllowed(place: BlueprintPlaceDisplay, dayId: string): boolean {
@@ -1053,14 +1111,14 @@ function clearGoogleMapLayers(layers: GoogleMapLayer[]) {
   for (const layer of layers) layer.setMap(null);
 }
 
-function createGoogleMapMarkerOverlay(maps: GoogleMapsNamespace, map: GoogleMapInstance, marker: BlueprintMapMarkerDisplay, selected: boolean, onSelectPlace: (placeId: string) => void): GoogleMapLayer {
+function createGoogleMapMarkerOverlay(maps: GoogleMapsNamespace, map: GoogleMapInstance, marker: BlueprintMapMarkerDisplay, role: BlueprintMapMarkerRole, selected: boolean, onSelectPlace: (placeId: string) => void): GoogleMapLayer {
   const coordinates = marker.coordinates!;
   const position = new maps.LatLng(coordinates[0], coordinates[1]);
   const element = document.createElement("button");
   element.type = "button";
   element.className = selected ? "blueprint-google-marker selected" : "blueprint-google-marker";
   element.title = marker.title;
-  element.innerHTML = mapMarkerHtml(marker, selected);
+  element.innerHTML = mapMarkerHtml(marker, role, selected);
   element.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -1168,31 +1226,42 @@ function recolorMapFeatureTile(context: CanvasRenderingContext2D, width: number,
 }
 
 function googleRouteLineStyle(state: MapRouteLineRenderState): Record<string, unknown> {
-  if (state === "checking") return { strokeColor: "#91d5ff", strokeOpacity: 0.78, strokeWeight: 4, zIndex: 4 };
-  if (state === "needs_refresh") return { strokeColor: "#6f97a8", strokeOpacity: 0.42, strokeWeight: 3, zIndex: 2 };
-  if (state === "reference") return { strokeColor: "#84958f", strokeOpacity: 0.34, strokeWeight: 2, zIndex: 1 };
-  return { strokeColor: "#276758", strokeOpacity: 0.72, strokeWeight: 3, zIndex: 3 };
+  const color = state === "reference" ? "#8498a8" : state === "needs_refresh" ? "#7896a8" : state === "checking" ? "#5d93bd" : "#4f7fa6";
+  const opacity = state === "reference" ? 0.3 : state === "needs_refresh" ? 0.4 : state === "checking" ? 0.56 : 0.58;
+  const zIndex = state === "reference" ? 1 : state === "needs_refresh" ? 2 : state === "checking" ? 4 : 3;
+  return {
+    strokeColor: color,
+    strokeOpacity: 0,
+    strokeWeight: 2,
+    icons: [{
+      icon: { path: "M 0,-1 0,1", strokeColor: color, strokeOpacity: opacity, strokeWeight: 2, scale: 1 },
+      offset: "0",
+      repeat: "10px"
+    }],
+    zIndex
+  };
 }
 
 function leafletRouteLineStyle(state: MapRouteLineRenderState): L.PolylineOptions {
-  if (state === "checking") return { color: "#91d5ff", opacity: 0.78, weight: 4, dashArray: "3 9" };
-  if (state === "needs_refresh") return { color: "#6f97a8", opacity: 0.42, weight: 3, dashArray: "6 8" };
-  if (state === "reference") return { color: "#84958f", opacity: 0.34, weight: 2, dashArray: "2 7" };
-  return { color: "#276758", opacity: 0.72, weight: 3 };
+  if (state === "checking") return { color: "#5d93bd", opacity: 0.56, weight: 2, dashArray: "3 7" };
+  if (state === "needs_refresh") return { color: "#7896a8", opacity: 0.4, weight: 2, dashArray: "3 7" };
+  if (state === "reference") return { color: "#8498a8", opacity: 0.3, weight: 2, dashArray: "3 7" };
+  return { color: "#4f7fa6", opacity: 0.58, weight: 2, dashArray: "3 7" };
 }
 
-function mapMarkerHtml(marker: BlueprintMapMarkerDisplay, selected: boolean): string {
+function mapMarkerRoles(routePlaces: BlueprintMapPointDisplay[]): Map<string, BlueprintMapMarkerRole> {
+  const ordered = routePlaces.filter((place) => validCoordinates(place.coordinates));
+  const roles = new Map<string, BlueprintMapMarkerRole>();
+  ordered.forEach((place, index) => {
+    const role = ordered.length === 1 || index === 0 ? "start" : index === ordered.length - 1 ? "end" : "stop";
+    roles.set(place.placeId, role);
+  });
+  return roles;
+}
+
+function mapMarkerHtml(marker: BlueprintMapMarkerDisplay, role: BlueprintMapMarkerRole, selected: boolean): string {
   const stateClass = marker.markerState === "pending" ? "pending" : marker.markerState === "on-day" ? "on-day" : "context";
-  return `<div class="blueprint-map-bubble marker-${marker.type} priority-${marker.priority} ${stateClass}${selected ? " selected" : ""}"><span class="blueprint-map-pin"><svg class="blueprint-map-pin-svg" viewBox="0 0 32 40" aria-hidden="true"><path class="blueprint-map-pin-shell" d="M16 1.8C8.9 1.8 3.2 7.5 3.2 14.6c0 9 10.5 19.8 12.1 21.5.4.4 1 .4 1.4 0 1.6-1.7 12.1-12.5 12.1-21.5C28.8 7.5 23.1 1.8 16 1.8Z"/><circle class="blueprint-map-dot" cx="16" cy="14.8" r="10.4"/><g class="blueprint-map-glyph" transform="translate(8 7) scale(.67)">${mapMarkerIcon(marker.type)}</g></svg></span><strong>${escapeHtml(marker.title)}</strong></div>`;
-}
-
-function mapMarkerIcon(type: GuideFilter): string {
-  if (type === "dining") return `<path d="M7 3v8"/><path d="M11 3v8"/><path d="M7 7h4"/><path d="M9 11v10"/><path d="M17 3v18"/><path d="M15 3c2 1.8 3 4.2 3 7"/>`;
-  if (type === "shopping") return `<path d="M6 8h12l-1 12H7L6 8Z"/><path d="M9 8a3 3 0 0 1 6 0"/>`;
-  if (type === "experience") return `<path d="M12 3l2.2 5 5.4.5-4.1 3.6 1.2 5.3L12 14.7l-4.7 2.7 1.2-5.3-4.1-3.6 5.4-.5L12 3Z"/>`;
-  if (type === "stay") return `<path d="M4 11V5"/><path d="M20 19v-7a3 3 0 0 0-3-3H9v10"/><path d="M4 19v-8h5"/><path d="M4 15h16"/>`;
-  if (type === "transport") return `<path d="M6 5h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/><path d="M4 10h16"/><path d="M8 18l-2 3"/><path d="M16 18l2 3"/><path d="M8 14h.01"/><path d="M16 14h.01"/>`;
-  return `<path d="M5 8h3l1.4-2h5.2L16 8h3v9H5V8Z"/><circle cx="12" cy="12.5" r="3"/>`;
+  return `<div class="blueprint-map-bubble role-${role} ${stateClass}${selected ? " selected" : ""}" aria-label="${escapeHtml(marker.title)}"><span class="blueprint-map-dot" aria-hidden="true"></span></div>`;
 }
 
 function escapeHtml(value: string): string {

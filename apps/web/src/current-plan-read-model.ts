@@ -9,6 +9,7 @@ export type CurrentPlanReadModel = {
   presentationSource: CurrentPlanPresentationSource;
   presentationVersion: number;
   presentationKey: string;
+  workspaceKey: string;
   mutationVersion: CurrentPlanMutationVersion;
 };
 
@@ -26,6 +27,7 @@ export function currentPlanReadModel(plan: Plan, blueprint?: TripBlueprint): Cur
       presentationSource: "blueprint",
       presentationVersion: blueprint.version,
       presentationKey: `blueprint:${blueprint.id}:${blueprint.version}`,
+      workspaceKey: `plan:${plan.id}`,
       mutationVersion: { expectedVersion: plan.version, expectedBlueprintVersion: blueprint.version }
     };
   }
@@ -36,6 +38,7 @@ export function currentPlanReadModel(plan: Plan, blueprint?: TripBlueprint): Cur
       presentationSource: "plan",
       presentationVersion: plan.version,
       presentationKey: `plan:${plan.id}:${plan.version}`,
+      workspaceKey: `plan:${plan.id}`,
       mutationVersion: { expectedVersion: plan.version }
     };
   }
@@ -44,6 +47,7 @@ export function currentPlanReadModel(plan: Plan, blueprint?: TripBlueprint): Cur
     presentationSource: "none",
     presentationVersion: plan.version,
     presentationKey: `none:${plan.id}:${plan.version}`,
+    workspaceKey: `plan:${plan.id}`,
     mutationVersion: { expectedVersion: plan.version }
   };
 }

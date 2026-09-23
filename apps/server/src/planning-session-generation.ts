@@ -3,7 +3,8 @@ import {
   chinesePartyNumber,
   firstMatch,
   missingGenerationQuestions,
-  planningStartDate
+  planningStartDate,
+  planningTravelDateRange
 } from "./planning-session-facts.js";
 import { formatBookingConstraintsForGeneration } from "./planning-session-proposal.js";
 
@@ -48,6 +49,9 @@ export function planningRequestForGenerationWithBookings(session: PlanningSessio
   const unresolved = missingGenerationQuestions(session.facts);
   if (unresolved.length) throw new Error(`Complete the generation-critical facts before Plan generation: ${unresolved.map((item) => item.key).join(", ")}.`);
   const facts = session.facts.map((fact) => `- ${fact.key}: ${fact.value}`).join("\n");
+  const travelDates = session.facts.find((fact) => fact.key === "travel_dates" && fact.confirmed)?.value;
+  const dateRange = travelDates ? planningTravelDateRange(travelDates) : undefined;
+  if (!dateRange) throw new Error("Complete the generation-critical facts before Plan generation: travel_dates.");
   const proposal = session.proposal;
   const bookingConstraints = formatBookingConstraintsForGeneration(bookings);
   return [
@@ -58,6 +62,7 @@ export function planningRequestForGenerationWithBookings(session: PlanningSessio
     `Objective: ${proposal.objective}`,
     `Theme: ${proposal.theme}`,
     `Known facts:\n${facts}`,
+    `Confirmed internal travel date range (date-only; authoritative for itinerary days): ${dateRange.startDate} to ${dateRange.endDate}`,
     `Accepted booking constraints:\n${bookingConstraints || "- None imported."}`,
     `Approved segments:\n${proposal.segments.map((item) => `- ${item}`).join("\n")}`,
     `Approved skeleton:\n${proposal.skeleton.map((item) => `- ${item}`).join("\n")}`,
@@ -70,13 +75,39 @@ export function planningResearchScopes(session: Pick<PlanningSession, "facts" | 
   const destination = session.facts.find((fact) => fact.key === "destination" && fact.confirmed)?.value.trim()
     || session.proposal?.objective.trim()
     || "Confirmed destination";
-  const qualifiedList = destination.replace(/^[^,，]+[,，]\s*(?=(?:mainly|especially|including|重点|主要|包括)\b)/iu, "");
-  const commaParts = qualifiedList.split(/\s*[,，;；]\s*/u)
-    .flatMap((value) => value.split(/\s*(?:\band\b|和)\s*/iu))
+  const qualified = /^[^,，]+[,，]\s*(?:mainly|especially|including|重点是?|主要是?|包括)\s*(.+)$/iu.exec(destination)?.[1];
+  const list = qualified ?? destination;
+  const separator = qualified ? /\s*(?:[,，;；、+\/]|→|->|\band\b|和)\s*/iu : /\s*(?:[、+\/]|→|->|\band\b|和)\s*/iu;
+  const parts = list.split(separator)
     .map((value) => value.replace(/^(?:mainly|especially|including|重点是?|主要是?|包括)\s*/iu, "").trim())
     .filter(Boolean);
-  const parts = (qualifiedList !== destination ? commaParts.length >= 2 : commaParts.length >= 3)
-    ? commaParts
-    : qualifiedList.split(/\s*(?:、|\/|→|->|\band\b|和)\s*/iu).map((value) => value.trim()).filter(Boolean);
-  return [...new Set(parts.length ? parts : [destination])];
+  const unique = parts.filter((value, index) => parts.findIndex((candidate) => normalizedDestination(candidate) === normalizedDestination(value)) === index);
+  return unique.length ? unique : [destination];
+}
+
+export function planningAccommodationDestinationConflicts(
+  session: Pick<PlanningSession, "facts" | "proposal">,
+  bookings: TravelBooking[]
+): string[] {
+  const destination = session.facts.find((fact) => fact.key === "destination" && fact.confirmed);
+  if (!destination) return [];
+  const localityTokens = planningResearchScopes(session)
+    .map((scope) => scope.split(/[,，]/u)[0]?.trim())
+    .filter((value): value is string => Boolean(value))
+    .map(normalizedLocation);
+  return bookings
+    .filter((booking) => booking.status !== "cancelled")
+    .flatMap((booking) => booking.segments)
+    .filter((segment) => segment.status !== "cancelled" && segment.segmentType === "hotel_stay")
+    .map((segment) => segment.location ?? segment.destination)
+    .filter((value): value is string => Boolean(value?.trim()))
+    .filter((location) => !localityTokens.some((token) => normalizedLocation(location).includes(token)));
+}
+
+function normalizedDestination(value: string): string {
+  return value.toLocaleLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function normalizedLocation(value: string): string {
+  return value.toLocaleLowerCase().normalize("NFKD").replace(/[\p{M}\p{P}\p{S}]+/gu, " ").replace(/\s+/g, " ").trim();
 }

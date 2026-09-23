@@ -98,6 +98,7 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
         ...(place.area ? { area: place.area } : {}),
         category: place.category,
         priority: place.priority,
+        ...(place.accommodation ? { accommodation: structuredClone(place.accommodation) } : {}),
         ...(place.display ? { display: structuredClone(place.display) } : {}),
         ...(place.guideDisplay ? { guideDisplay: structuredClone(place.guideDisplay) } : {}),
         ...(place.schedulingEligibility ? { schedulingEligibility: structuredClone(place.schedulingEligibility) } : {}),

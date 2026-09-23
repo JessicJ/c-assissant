@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { applyDirectBlueprintRevision, applyDirectBlueprintRevisionBatchWithMetadata, applyDirectBlueprintRevisionWithMetadata, DirectBlueprintReplanRequirementError, prepareDirectBlueprintAssistedReplanningHandoff } from "./blueprint-revision.js";
-import { TRIP_BLUEPRINT_SCHEMA_VERSION, type BlueprintPlace, type TripBlueprint } from "./trip-blueprint.js";
+import { MAP_COORDINATES_PENDING_SCHEDULING_REASON, TRIP_BLUEPRINT_SCHEMA_VERSION, type BlueprintPlace, type TripBlueprint } from "./trip-blueprint.js";
 
 const place = (id: string): BlueprintPlace => ({
   id,
@@ -181,6 +181,34 @@ test("Direct Blueprint Revision rejects edits that need assisted replanning", ()
     assert.match(caught.replanRequirement.explanation, /changes the shape of 2026-09-01/i);
     assert.match(caught.replanRequirement.suggestedRequest, /Replan the affected itinerary day/i);
   }
+});
+
+test("Direct Blueprint Revision accepts a map-refreshed place with stale synthetic informational eligibility", () => {
+  const value = blueprint();
+  value.places[1] = {
+    ...value.places[1]!,
+    schedulingEligibility: { decision: "informational", reason: MAP_COORDINATES_PENDING_SCHEDULING_REASON }
+  };
+  const result = applyDirectBlueprintRevision(value, {
+    kind: "move_place_within_day",
+    placeId: "b",
+    dayId: "d1",
+    position: { kind: "start" },
+    createdAt: "2026-08-27T00:00:00.000Z"
+  });
+  assert.deepEqual(result.days[0]?.stops.map((stop) => stop.placeId), ["b", "a"]);
+
+  value.places[1] = {
+    ...value.places[1]!,
+    schedulingEligibility: { decision: "informational", reason: "This is reference context, not an itinerary stop." }
+  };
+  assert.throws(() => applyDirectBlueprintRevision(value, {
+    kind: "move_place_within_day",
+    placeId: "b",
+    dayId: "d1",
+    position: { kind: "start" },
+    createdAt: "2026-08-27T00:00:00.000Z"
+  }), (error) => error instanceof DirectBlueprintReplanRequirementError && error.replanRequirement.reasonCode === "informational_place");
 });
 
 test("Direct Blueprint Revision reports fixed bookings as assisted replanning requirements", () => {
@@ -596,9 +624,9 @@ test("Direct Blueprint Revision reorders route blocks while keeping time slots i
     ...original.days[0]!,
     stops: [{ placeId: "a", order: 1, time: "09:00", role: "morning" }, { placeId: "b", order: 2, time: "10:30", role: "lunch" }],
     blocks: [
-      { id: "block-a", kind: "stop", order: 1, placeId: "a", startTime: "09:00", title: "A anchor", summary: "Use A as the morning anchor.", evidence: [] },
+      { id: "block-a", kind: "stop", order: 1, placeId: "a", startTime: "09:00", title: "A anchor", summary: "Use A as the morning anchor.", planRole: "planned", primaryExperience: true, operationalConditions: [{ kind: "recheck", note: "Recheck access." }], evidence: [] },
       { id: "block-rest", kind: "rest", order: 2, title: "Short reset", summary: "Keep a real pause between stops.", evidence: [] },
-      { id: "block-b", kind: "meal", order: 3, placeId: "b", startTime: "10:30", endTime: "11:15", title: "B meal", summary: "Use B as the food stop.", evidence: [] }
+      { id: "block-b", kind: "meal", order: 3, placeId: "b", startTime: "10:30", endTime: "11:15", title: "B meal", summary: "Use B as the food stop.", planRole: "planned", primaryExperience: true, operationalConditions: [{ kind: "weather", note: "Use the indoor route in rain." }], evidence: [] }
     ]
   };
 
@@ -618,6 +646,15 @@ test("Direct Blueprint Revision reorders route blocks while keeping time slots i
     ["block-b", "meal", "b", 1, "09:00", "", "morning", "B meal"],
     ["block-rest", "rest", "", 2, "", "", "", "Short reset"],
     ["block-a", "stop", "a", 3, "10:30", "11:15", "lunch", "A anchor"]
+  ]);
+  assert.deepEqual(revised.days[0]?.blocks?.filter((block) => block.placeId).map((block) => ({
+    placeId: block.placeId,
+    planRole: block.planRole,
+    primaryExperience: block.primaryExperience,
+    operationalConditions: block.operationalConditions
+  })), [
+    { placeId: "b", planRole: "planned", primaryExperience: true, operationalConditions: [{ kind: "weather", note: "Use the indoor route in rain." }] },
+    { placeId: "a", planRole: "planned", primaryExperience: true, operationalConditions: [{ kind: "recheck", note: "Recheck access." }] }
   ]);
 });
 

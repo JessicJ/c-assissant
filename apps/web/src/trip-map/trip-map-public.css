@@ -9,8 +9,13 @@
   --trip-accent-soft: #e5f1ee;
   --trip-warning: #a35d00;
   --trip-warning-soft: #fff4dd;
-  --trip-route: #176b61;
-  --trip-other-route: #98a2b3;
+  --trip-route: #4f7fa6;
+  --trip-sequence: #5f89ac;
+  --trip-other-route: #98a7b5;
+  --trip-marker-start: #2f80ed;
+  --trip-marker-end: #18a999;
+  --trip-marker-neutral: #f8fafc;
+  --trip-marker-neutral-border: #8fa3b6;
   --trip-shadow: 0 10px 30px rgba(32, 33, 36, 0.1);
   --day-rail-width: 78px;
   --day-list-width: 278px;
@@ -842,88 +847,76 @@ a {
 }
 
 .trip-marker {
-  --marker-color: var(--trip-accent);
+  --marker-core: var(--trip-marker-neutral);
+  --marker-ring: var(--trip-marker-neutral-border);
+  --marker-halo: transparent;
+  --marker-size: 14px;
+  --marker-dot-size: 8px;
   position: relative;
-  width: max-content;
-  max-width: 200px;
-  min-height: 38px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 10px 4px 4px;
-  border: 1px solid rgba(38, 43, 40, .14);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, .97);
-  box-shadow: 0 4px 12px rgba(32, 33, 36, .22), 0 1px 2px rgba(32, 33, 36, .12);
-  color: #202522;
-  font-size: 12px;
-  font-weight: 720;
-  white-space: nowrap;
-  transform-origin: 18px 50%;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  transform-origin: 50% 50%;
 }
 
 .marker-symbol {
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
-  display: grid;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, var(--marker-color) 55%, white);
+  position: relative;
+  width: var(--marker-size);
+  height: var(--marker-size);
   border-radius: 50%;
-  background: color-mix(in srgb, var(--marker-color) 13%, white);
-  color: var(--marker-color);
-  font-family: ui-sans-serif, system-ui, sans-serif;
-  font-size: 15px;
-  font-weight: 850;
+  background: var(--marker-core);
+  box-shadow:
+    0 0 0 1.5px var(--marker-ring),
+    0 0 0 6px var(--marker-halo);
 }
 
-.marker-status {
-  width: 20px;
-  height: 20px;
-  flex: 0 0 20px;
-  display: grid;
-  place-items: center;
-  margin-left: -8px;
-  border: 2px solid #fff;
-  border-radius: 50%;
-  background: #1683dc;
-  color: #fff;
-  font-size: 10px;
-  font-weight: 850;
+.trip-marker.role-start,
+.trip-marker.role-end {
+  --marker-ring: #fff;
+  --marker-size: 16px;
+  --marker-dot-size: 10px;
 }
 
-.marker-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.trip-marker.role-start {
+  --marker-core: var(--trip-marker-start);
+  --marker-halo: rgba(47, 128, 237, .14);
 }
 
-.trip-marker.category-hotel { --marker-color: var(--trip-category-hotel); }
-.trip-marker.category-top50 { --marker-color: var(--trip-category-top50); }
-.trip-marker.category-wine { --marker-color: var(--trip-category-wine); }
-.trip-marker.category-sweet { --marker-color: var(--trip-category-sweet); }
-.trip-marker.category-coffee { --marker-color: var(--trip-category-coffee); }
-.trip-marker.category-food { --marker-color: var(--trip-category-food); }
-.trip-marker.category-art { --marker-color: var(--trip-category-art); }
-.trip-marker.category-local-life { --marker-color: var(--trip-category-local-life); }
-.trip-marker.category-sight { --marker-color: var(--trip-category-sight); }
+.trip-marker.role-end {
+  --marker-core: var(--trip-marker-end);
+  --marker-halo: rgba(24, 169, 153, .15);
+}
+
+.trip-marker.role-context {
+  --marker-core: rgba(248, 250, 252, .92);
+  --marker-ring: rgba(143, 163, 182, .72);
+  opacity: .82;
+}
 
 .trip-marker.is-other {
-  opacity: .58;
+  opacity: .48;
 }
 
 .trip-marker.is-unassigned {
-  border-style: dashed;
+  opacity: .66;
 }
 
 .trip-marker.is-selected {
   z-index: 2;
-  box-shadow: 0 0 0 4px rgba(23, 107, 97, .2), 0 7px 18px rgba(32, 33, 36, .28);
-  transform: scale(1.04);
+  transform: scale(1.14);
 }
 
-.trip-marker.is-dirty {
-  border-color: #d7a64d;
+.trip-marker.is-selected .marker-symbol {
+  box-shadow:
+    0 0 0 2px var(--marker-ring),
+    0 0 0 8px color-mix(in srgb, var(--marker-core) 18%, transparent);
+}
+
+.trip-marker.is-dirty .marker-symbol {
+  box-shadow:
+    0 0 0 1.5px var(--marker-ring),
+    0 0 0 6px var(--marker-halo);
 }
 
 .city-summary-marker {
@@ -961,7 +954,7 @@ a {
 }
 
 .trip-sequence-guide {
-  filter: drop-shadow(0 0 2px rgba(255, 255, 255, 1));
+  filter: none;
 }
 
 .dialog-backdrop {

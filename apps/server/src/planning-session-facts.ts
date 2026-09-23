@@ -85,7 +85,8 @@ export function missingQuestions(facts: PlanningFact[]): PlanningUnknown[] {
 export function missingGenerationQuestions(facts: PlanningFact[]): PlanningUnknown[] {
   const known = new Set(facts.map((fact) => fact.key));
   const questions: PlanningUnknown[] = [];
-  if (!known.has("travel_dates")) {
+  const travelDates = facts.find((fact) => fact.key === "travel_dates" && fact.confirmed)?.value;
+  if (!travelDates || !planningTravelDateRange(travelDates)) {
     const year = valueOf(facts, "travel_year");
     questions.push({ key: "travel_dates", question: year ? `I have the year ${year}. What are the exact departure and return dates? For example, October 6–16.` : "Share the exact departure and return dates, including the year. For example, October 6–16, 2026.", impact: "high", status: "open" });
   }
@@ -159,14 +160,58 @@ export function chinesePartyNumber(value: string): number {
 }
 
 export function planningStartDate(value: string): string | undefined {
+  return planningTravelDateRange(value)?.startDate ?? planningSingleDate(value);
+}
+
+export type PlanningTravelDateRange = { startDate: string; endDate: string };
+
+export function planningTravelDateRange(value: string): PlanningTravelDateRange | undefined {
+  const normalized = value.trim();
+  const iso = /^(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\s*(?:到|至|to|-|–|—)\s*(20\d{2})[-/](\d{1,2})[-/](\d{1,2})$/iu.exec(normalized);
+  if (iso) return checkedDateRange([iso[1]!, iso[2]!, iso[3]!], [iso[4]!, iso[5]!, iso[6]!]);
+
+  const chinese = /^(20\d{2})年\s*(\d{1,2})月\s*(\d{1,2})[日号]?\s*(?:到|至|-|–|—)\s*(?:(20\d{2})年\s*)?(?:(\d{1,2})月\s*)?(\d{1,2})[日号]?$/u.exec(normalized);
+  if (chinese) return checkedDateRange(
+    [chinese[1]!, chinese[2]!, chinese[3]!],
+    [chinese[4] ?? chinese[1]!, chinese[5] ?? chinese[2]!, chinese[6]!]
+  );
+
+  const english = /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:st|nd|rd|th)?\s*(?:to|-|–|—)\s*(?:(January|February|March|April|May|June|July|August|September|October|November|December)\s+)?(\d{1,2})(?:st|nd|rd|th)?,?\s+(20\d{2})$/iu.exec(normalized);
+  if (!english) return undefined;
+  const startMonth = monthNumber(english[1]!);
+  const endMonth = monthNumber(english[3] ?? english[1]!);
+  return checkedDateRange([english[5]!, String(startMonth), english[2]!], [english[5]!, String(endMonth), english[4]!]);
+}
+
+function planningSingleDate(value: string): string | undefined {
   const iso = /\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/.exec(value);
-  if (iso) return `${iso[1]}-${iso[2]!.padStart(2, "0")}-${iso[3]!.padStart(2, "0")}`;
+  if (iso) return checkedDate(iso[1]!, iso[2]!, iso[3]!);
   const chinese = /(20\d{2})年\s*(\d{1,2})月\s*(\d{1,2})[日号]?/.exec(value);
-  if (chinese) return `${chinese[1]}-${chinese[2]!.padStart(2, "0")}-${chinese[3]!.padStart(2, "0")}`;
+  if (chinese) return checkedDate(chinese[1]!, chinese[2]!, chinese[3]!);
   const english = /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(20\d{2})\b/i.exec(value);
   if (!english) return undefined;
-  const month = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"].indexOf(english[1]!.toLowerCase()) + 1;
-  return `${english[3]}-${String(month).padStart(2, "0")}-${english[2]!.padStart(2, "0")}`;
+  return checkedDate(english[3]!, String(monthNumber(english[1]!)), english[2]!);
+}
+
+function monthNumber(value: string): number {
+  return ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"].indexOf(value.toLowerCase()) + 1;
+}
+
+function checkedDateRange(start: [string, string, string], end: [string, string, string]): PlanningTravelDateRange | undefined {
+  const startDate = checkedDate(...start);
+  const endDate = checkedDate(...end);
+  if (!startDate || !endDate || startDate > endDate) return undefined;
+  return { startDate, endDate };
+}
+
+function checkedDate(yearValue: string, monthValue: string, dayValue: string): string | undefined {
+  const year = Number(yearValue);
+  const month = Number(monthValue);
+  const day = Number(dayValue);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day) || month < 1 || month > 12 || day < 1 || day > 31) return undefined;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return undefined;
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 function extractTravelYear(message: string): string | undefined {

@@ -22,7 +22,12 @@ async function main(): Promise<void> {
     const researchRow = db.prepare("SELECT content_json FROM research_sets WHERE id = ?").get(researchSetId) as { content_json: string } | undefined;
     if (!researchRow) throw new Error(`ResearchSet not found: ${researchSetId}`);
     const research = JSON.parse(researchRow.content_json) as ResearchSet;
-    const diagnostic = structureSemanticTravelPlan(semantic, research, { importBlueprint: true, createdAt: new Date().toISOString() });
+    const destinations = (process.env.SEMANTIC_PLAN_DESTINATIONS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+    const diagnostic = structureSemanticTravelPlan(semantic, research, {
+      importBlueprint: true,
+      createdAt: new Date().toISOString(),
+      ...(destinations.length ? { destinations } : {})
+    });
     await mkdir(dirname(outputBase), { recursive: true });
     await mkdir(dirname(fidelityBase), { recursive: true });
     await mkdir(dirname(semanticContractOutput), { recursive: true });

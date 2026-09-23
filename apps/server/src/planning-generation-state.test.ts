@@ -4,6 +4,9 @@ import { RuntimeAdapterError } from "@c-assistant/agent-adapters";
 import type { BlueprintGeneration } from "@c-assistant/core";
 import {
   blueprintGenerationKey,
+  generationStrategyFromKey,
+  semanticCanaryGenerationKey,
+  selectedBlueprintGenerationKey,
   savedBlueprintGenerationKey,
   errorDiagnostic,
   generationFailurePath,
@@ -63,6 +66,21 @@ test("generation lookup preserves legacy checkpoints and prefers an existing cur
   assert.equal(saved.get(legacyKey)?.skillLineage.skillId, "interactive-trip-planner");
 });
 
+test("semantic Canary strategy is explicit and a saved checkpoint freezes selection", () => {
+  const saved = new Map<string, BlueprintGeneration>();
+  const lookup = (key: string) => saved.get(key);
+  const semanticKey = semanticCanaryGenerationKey("session-1", 3);
+  const legacyKey = blueprintGenerationKey("session-1", 3);
+  assert.equal(selectedBlueprintGenerationKey("session-1", 3, lookup, true), semanticKey);
+  assert.equal(generationStrategyFromKey(semanticKey), "semantic_canary");
+  assert.equal(generationStrategyFromKey(legacyKey), "legacy");
+  saved.set(legacyKey, generationFixture({ generationKey: legacyKey }));
+  assert.equal(selectedBlueprintGenerationKey("session-1", 3, lookup, true), legacyKey);
+  saved.clear();
+  saved.set(semanticKey, generationFixture({ generationKey: semanticKey }));
+  assert.equal(selectedBlueprintGenerationKey("session-1", 3, lookup, false), semanticKey);
+});
+
 test("updating a generation job mutates only public state fields and timestamp", () => {
   const job = jobFixture();
   const controller = job.controller;
@@ -83,6 +101,7 @@ function jobFixture(): PlanGenerationJob {
     runId: "run-1",
     sessionId: "session-1",
     generationKey: "generation-1",
+    strategy: "legacy",
     stage: "queued",
     status: "running",
     startedAt: "2026-08-27T00:00:00.000Z",

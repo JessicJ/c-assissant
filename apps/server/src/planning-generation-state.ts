@@ -16,8 +16,16 @@ export type PlanGenerationJob = {
   savedPlaceCount?: number;
   failureCode?: string;
   message?: string;
+  strategy: GenerationStrategy;
   controller: AbortController;
 };
+
+export type GenerationStrategy = "legacy" | "semantic_canary";
+
+export const SEMANTIC_DRAFT_CANARY_POLICY = {
+  policyId: "semantic-draft-canary",
+  policyVersion: "1.0.0"
+} as const;
 
 export function publicGenerationJob(job: PlanGenerationJob): Omit<PlanGenerationJob, "controller"> {
   const { controller: _controller, ...safe } = job;
@@ -29,6 +37,7 @@ export function publicPersistedGeneration(generation: BlueprintGeneration) {
     runId: generation.generationKey,
     sessionId: generation.proposalRef.sessionId,
     generationKey: generation.generationKey,
+    strategy: generationStrategyFromKey(generation.generationKey),
     stage: generation.stage,
     status: generation.status === "completed" ? "succeeded" : generation.status,
     startedAt: generation.createdAt,
@@ -45,11 +54,34 @@ export function blueprintGenerationKey(sessionId: string, proposalVersion: numbe
   return `${sessionId}:${proposalVersion}:${LANDI_BLUEPRINT_SKILL.skillId}@${LANDI_BLUEPRINT_SKILL.skillVersion}`;
 }
 
+export function semanticCanaryGenerationKey(sessionId: string, proposalVersion: number): string {
+  return `${blueprintGenerationKey(sessionId, proposalVersion)}:${SEMANTIC_DRAFT_CANARY_POLICY.policyId}@${SEMANTIC_DRAFT_CANARY_POLICY.policyVersion}`;
+}
+
+export function generationStrategyFromKey(generationKey: string): GenerationStrategy {
+  return generationKey.endsWith(`:${SEMANTIC_DRAFT_CANARY_POLICY.policyId}@${SEMANTIC_DRAFT_CANARY_POLICY.policyVersion}`)
+    ? "semantic_canary"
+    : "legacy";
+}
+
 export function savedBlueprintGenerationKey(sessionId: string, proposalVersion: number, lookup: (key: string) => BlueprintGeneration | undefined): string {
+  const semanticKey = semanticCanaryGenerationKey(sessionId, proposalVersion);
+  if (lookup(semanticKey)) return semanticKey;
   const currentKey = blueprintGenerationKey(sessionId, proposalVersion);
   if (lookup(currentKey)) return currentKey;
   const legacyKey = `${sessionId}:${proposalVersion}:${LEGACY_BLUEPRINT_SKILL.skillId}@${LEGACY_BLUEPRINT_SKILL.skillVersion}`;
   return lookup(legacyKey) ? legacyKey : currentKey;
+}
+
+export function selectedBlueprintGenerationKey(
+  sessionId: string,
+  proposalVersion: number,
+  lookup: (key: string) => BlueprintGeneration | undefined,
+  selectSemanticCanary: boolean
+): string {
+  const saved = savedBlueprintGenerationKey(sessionId, proposalVersion, lookup);
+  if (lookup(saved)) return saved;
+  return selectSemanticCanary ? semanticCanaryGenerationKey(sessionId, proposalVersion) : saved;
 }
 
 export function generationFailurePath(error: unknown, stage: BlueprintGenerationStage): string {

@@ -3,7 +3,10 @@ import test from "node:test";
 import type { TravelBooking } from "@c-assistant/core";
 import { applyAgentPlanningTurn, applyPlanningTurn, createPlanningSession, prepareConfirmedPlanningSession } from "./planning-session.js";
 import { applyExternalPlanningFacts } from "./planning-session-external-facts.js";
-import { planningArrivalLocalDateTime, planningGenerationReuse, planningPartySize, planningRequestForGeneration, planningRequestForGenerationWithBookings, planningResearchScopes, planningTransportPreference } from "./planning-session-generation.js";
+import { missingGenerationQuestions, planningTravelDateRange } from "./planning-session-facts.js";
+import { planningAccommodationDestinationConflicts, planningArrivalLocalDateTime, planningGenerationReuse, planningPartySize, planningRequestForGeneration, planningRequestForGenerationWithBookings, planningResearchScopes, planningTransportPreference } from "./planning-session-generation.js";
+
+const now = "2026-09-18T00:00:00.000Z";
 
 test("planning turns collect facts before producing a proposal", () => {
   const first = applyPlanningTurn(createPlanningSession(new Date("2026-08-17T00:00:00.000Z")), "我想去葡萄牙");
@@ -40,6 +43,40 @@ test("external booking facts can complete proposal direction and stay in generat
   assert.match(request, /Accepted booking constraints/);
   assert.match(request, /HARD flight/);
   assert.doesNotMatch(request, /ABC12345/);
+});
+
+test("inferred booking dates and destinations cannot replace user-confirmed trip scope", () => {
+  const session = {
+    ...createPlanningSession(),
+    facts: [
+      { key: "destination", value: "Porto, Portugal", source: "user" as const, confirmed: true, updatedAt: now },
+      { key: "travel_dates", value: "2026-11-10 to 2026-11-14", source: "user" as const, confirmed: true, updatedAt: now }
+    ]
+  };
+  const updated = applyExternalPlanningFacts(session, [
+    { key: "destination", value: "Praca da Batalha, Porto, Portugal", source: "inferred", confirmed: true, updatedAt: now },
+    { key: "travel_dates", value: "2026-11-11 to 2026-11-12", source: "inferred", confirmed: true, updatedAt: now },
+    { key: "accommodation_location", value: "Praca da Batalha, Porto, Portugal", source: "inferred", confirmed: true, updatedAt: now }
+  ], new Date(now));
+
+  assert.equal(updated.facts.find((fact) => fact.key === "destination")?.value, "Porto, Portugal");
+  assert.equal(updated.facts.find((fact) => fact.key === "travel_dates")?.value, "2026-11-10 to 2026-11-14");
+  assert.equal(updated.facts.find((fact) => fact.key === "accommodation_location")?.value, "Praca da Batalha, Porto, Portugal");
+});
+
+test("an imported hotel cannot manufacture a confirmed destination before the user supplies one", () => {
+  const session = applyExternalPlanningFacts(createPlanningSession(), [
+    { key: "accommodation", value: "Porto hotel at Praca da Batalha, Porto, Portugal", source: "inferred", confirmed: true, updatedAt: now },
+    { key: "accommodation_location", value: "Praca da Batalha, Porto, Portugal", source: "inferred", confirmed: true, updatedAt: now }
+  ], new Date(now));
+  assert.equal(session.facts.some((fact) => fact.key === "destination"), false);
+  assert.equal(session.unresolved.some((item) => item.key === "destination"), true);
+
+  const confirmedByUser = applyExternalPlanningFacts(session, [
+    { key: "destination", value: "Porto, Portugal", source: "user", confirmed: true, updatedAt: now }
+  ], new Date(now));
+  assert.equal(confirmedByUser.facts.find((fact) => fact.key === "destination")?.value, "Porto, Portugal");
+  assert.equal(confirmedByUser.facts.find((fact) => fact.key === "destination")?.source, "user");
 });
 
 test("accepted accommodation bookings add overnight departure continuity to generation context", () => {
@@ -158,6 +195,51 @@ test("generation-detail chat remembers a short year and asks only for the remain
   const dates = applyPlanningTurn(year.session, "10月6日至10月16日");
   assert.equal(dates.session.facts.find((item) => item.key === "travel_dates")?.value, "2026年10月6日至10月16日");
   assert.match(dates.reply, /Travel dates: 2026年10月6日至10月16日/i);
+});
+
+test("confirmed display dates resolve to one strict internal date-only range", () => {
+  assert.deepEqual(planningTravelDateRange("2026年10月6日至10月16日"), { startDate: "2026-10-06", endDate: "2026-10-16" });
+  assert.deepEqual(planningTravelDateRange("October 3–12, 2026"), { startDate: "2026-10-03", endDate: "2026-10-12" });
+  assert.deepEqual(planningTravelDateRange("2026-10-03 to 2026-10-12"), { startDate: "2026-10-03", endDate: "2026-10-12" });
+});
+
+test("ambiguous, impossible, and reversed dates remain unresolved before generation", () => {
+  const base = [
+    { key: "arrival", value: "DPS at 13:50", source: "user" as const, confirmed: true, updatedAt: now },
+    { key: "departure", value: "DPS at 14:25", source: "user" as const, confirmed: true, updatedAt: now },
+    { key: "party_size", value: "3 people", source: "user" as const, confirmed: true, updatedAt: now },
+    { key: "transport_preference", value: "Landi推荐", source: "user" as const, confirmed: true, updatedAt: now }
+  ];
+  for (const value of ["10/3 to 10/12", "2026-02-30 to 2026-03-02", "2026-10-12 to 2026-10-03"]) {
+    const unresolved = missingGenerationQuestions([...base, { key: "travel_dates", value, source: "user", confirmed: true, updatedAt: now }]);
+    assert.equal(unresolved[0]?.key, "travel_dates", value);
+  }
+});
+
+test("generation uses canonical date-only context without rewriting display dates or booking local times", () => {
+  const completed = applyAgentPlanningTurn(createPlanningSession(), "Bali dates", {
+    reply: "Dates noted.",
+    facts: [
+      { key: "destination", value: "Bali, Indonesia" },
+      { key: "purpose", value: "Vacation" },
+      { key: "travel_dates", value: "October 3–12, 2026" },
+      { key: "arrival", value: "DPS on October 5, 2026 at 13:50 local time" },
+      { key: "departure", value: "DPS on October 12, 2026 at 14:25 local time" },
+      { key: "party_size", value: "3 people" },
+      { key: "transport_preference", value: "Landi推荐" }
+    ]
+  }).session;
+  const proposal = completed.proposal!;
+  const confirmed = { ...completed, status: "proposal_confirmed" as const, confirmedProposalVersion: proposal.version };
+  const booking: TravelBooking = {
+    id: "flight-local-time", planningSessionId: confirmed.id, type: "flight", status: "confirmed", title: "Arrival flight", source: "user", sourceHash: "flight", sourceLabel: "User flight", importedAt: now, updatedAt: now, constraintStrength: "hard",
+    segments: [{ id: "arrival", segmentType: "flight_leg", title: "Arrival", status: "confirmed", startAtLocal: "2026-10-04T18:15", endAtLocal: "2026-10-05T13:50", origin: "LAX", destination: "DPS", constraintStrength: "hard", fixedCommitment: true, needsReviewReasons: [] }]
+  };
+  const request = planningRequestForGenerationWithBookings(confirmed, [booking]);
+  assert.match(request, /travel_dates: October 3–12, 2026/);
+  assert.match(request, /authoritative for itinerary days\): 2026-10-03 to 2026-10-12/);
+  assert.match(request, /start 2026-10-04T18:15; end 2026-10-05T13:50/);
+  assert.equal(confirmed.facts.find((fact) => fact.key === "travel_dates")?.value, "October 3–12, 2026");
 });
 
 test("generation-detail chat retains partial arrival facts and asks only for the airport", () => {
@@ -280,4 +362,19 @@ test("research scopes preserve city-country names while splitting explicit multi
   assert.deepEqual(planningResearchScopes({ ...base, facts: [{ key: "destination", value: "Tokyo, Japan", source: "user", confirmed: true, updatedAt: "2026-08-26T00:00:00.000Z" }] }), ["Tokyo, Japan"]);
   assert.deepEqual(planningResearchScopes({ ...base, facts: [{ key: "destination", value: "Japan, mainly Tokyo, Mount Fuji, Kyoto, Nara, and Osaka", source: "user", confirmed: true, updatedAt: "2026-08-26T00:00:00.000Z" }] }), ["Tokyo", "Mount Fuji", "Kyoto", "Nara", "Osaka"]);
   assert.deepEqual(planningResearchScopes({ ...base, facts: [{ key: "destination", value: "东京、京都和大阪", source: "user", confirmed: true, updatedAt: "2026-08-26T00:00:00.000Z" }] }), ["东京", "京都", "大阪"]);
+  assert.deepEqual(planningResearchScopes({ ...base, facts: [{ key: "destination", value: "Praca da Batalha, Porto, Portugal", source: "user", confirmed: true, updatedAt: now }] }), ["Praca da Batalha, Porto, Portugal"]);
+  assert.deepEqual(planningResearchScopes({ ...base, facts: [{ key: "destination", value: "Lisbon + Porto", source: "user", confirmed: true, updatedAt: now }] }), ["Lisbon", "Porto"]);
+});
+
+test("accommodation destination conflicts retain matching multi-base stays and flag genuine mismatches", () => {
+  const session = {
+    ...createPlanningSession(),
+    facts: [{ key: "destination", value: "Lisbon + Porto", source: "user" as const, confirmed: true, updatedAt: now }]
+  };
+  const stay = (id: string, location: string): TravelBooking => ({
+    id, type: "accommodation", status: "confirmed", title: id, source: "user", sourceHash: id, sourceLabel: "fixture", importedAt: now, updatedAt: now, constraintStrength: "hard",
+    segments: [{ id: `${id}-segment`, segmentType: "hotel_stay", title: id, status: "confirmed", location, constraintStrength: "hard", fixedCommitment: true, needsReviewReasons: [] }]
+  });
+  assert.deepEqual(planningAccommodationDestinationConflicts(session, [stay("lisbon", "Rua Example, Lisbon, Portugal"), stay("porto", "Praca Example, Porto, Portugal")]), []);
+  assert.deepEqual(planningAccommodationDestinationConflicts(session, [stay("madrid", "Calle Example, Madrid, Spain")]), ["Calle Example, Madrid, Spain"]);
 });

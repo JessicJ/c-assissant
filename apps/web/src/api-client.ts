@@ -33,6 +33,7 @@ export type PlanGenerationState = {
   runId: string;
   sessionId: string;
   generationKey?: string;
+  outputPlanId?: string;
   stage: "queued" | "research" | "itinerary" | "import" | "compile" | "ready" | "failed" | "cancelled";
   status: "running" | "succeeded" | "failed" | "cancelled";
   startedAt: string;
@@ -397,8 +398,8 @@ export async function testRuntime(kind: AgentRuntimeKind): Promise<RuntimeTestRe
   return payload;
 }
 
-export async function getPlanningGeneration(sessionId: string): Promise<{ sessionStatus: PlanningSession["status"]; generation: PlanGenerationState | null } | undefined> {
-  return await optionalJson<{ sessionStatus: PlanningSession["status"]; generation: PlanGenerationState | null }>(`/api/planning-sessions/${encodeURIComponent(sessionId)}/generation`, { cache: "no-store" });
+export async function getPlanningGeneration(sessionId: string): Promise<{ sessionStatus: PlanningSession["status"]; outputPlanId?: string; generation: PlanGenerationState | null } | undefined> {
+  return await optionalJson<{ sessionStatus: PlanningSession["status"]; outputPlanId?: string; generation: PlanGenerationState | null }>(`/api/planning-sessions/${encodeURIComponent(sessionId)}/generation`, { cache: "no-store" });
 }
 
 export function planningGenerationEventsUrl(sessionId: string): string {

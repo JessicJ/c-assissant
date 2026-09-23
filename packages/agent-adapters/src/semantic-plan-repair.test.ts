@@ -146,6 +146,7 @@ function plan(options: {
     title: "Repair fixture",
     language: "en",
     tripStrategy: "Use one compact base and preserve the surrounding itinerary unless a confirmed operational conflict requires a small coherent adjustment.",
+    fixedCommitments: [],
     targetedResearch: [],
     dailyItinerary: [
       {

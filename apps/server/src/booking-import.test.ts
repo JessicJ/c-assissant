@@ -187,6 +187,28 @@ test("planning facts from booking use active transport legs for arrival and depa
   assert.equal(facts.find((fact) => fact.key === "travel_dates")?.value, "2026-10-05 to 2026-10-12");
   assert.equal(facts.find((fact) => fact.key === "arrival")?.value, "Depart from SFO, arrive at HND, start 2026-10-05, end 2026-10-05");
   assert.equal(facts.find((fact) => fact.key === "departure")?.value, "Depart from HND, arrive at SFO, start 2026-10-12");
+  assert.equal(facts.some((fact) => fact.key === "destination"), false);
+});
+
+test("accommodation booking facts preserve the address without promoting it to trip destination", () => {
+  const facts = planningFactsFromBooking(bookingFixture({
+    title: "Porto hotel",
+    segments: [{
+      id: "stay",
+      segmentType: "hotel_stay",
+      title: "Porto stay",
+      status: "confirmed",
+      startAtLocal: "2026-11-10T15:00",
+      endAtLocal: "2026-11-12T11:00",
+      location: "Praca da Batalha, Porto, Portugal",
+      constraintStrength: "hard",
+      fixedCommitment: true,
+      needsReviewReasons: []
+    }]
+  }));
+
+  assert.equal(facts.find((fact) => fact.key === "accommodation_location")?.value, "Praca da Batalha, Porto, Portugal");
+  assert.equal(facts.some((fact) => fact.key === "destination"), false);
 });
 
 function bookingFixture(overrides: Partial<TravelBooking> = {}): TravelBooking {

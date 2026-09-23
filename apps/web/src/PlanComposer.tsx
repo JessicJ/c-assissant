@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Plan, PlanningProposal, PlanningSession, WorkspaceSnapshot } from "@c-assistant/core";
 import landiLogoUrl from "../../../assets/branding/landi-round-otter-earth-icon-final.png";
-import { confirmPlanningProposal, getPlanningGeneration, planningGenerationEventsUrl, previewPlanChangeImpact, sendAgentChat } from "./api-client.js";
+import { confirmPlanningProposal, getPlanningGeneration, getWorkspace, planningGenerationEventsUrl, previewPlanChangeImpact, sendAgentChat, type PlanGenerationState } from "./api-client.js";
 import { BookingImportPanel } from "./BookingImportPanel.js";
 import { conversationFromPlanningSession, conversationStorageKey, loadConversation, type ChatMessage } from "./conversation-state.js";
 import { refinementIntro } from "./plan-display.js";
@@ -25,32 +25,71 @@ export function PlanComposer({ mode, currentPlan, planningSession, initialMessag
   const [proposal, setProposal] = useState<PlanningProposal | undefined>(planningSession?.proposal);
   const [planningSessionId, setPlanningSessionId] = useState<string | undefined>(planningSession?.id);
   const [planningSessionStatus, setPlanningSessionStatus] = useState<PlanningSession["status"] | undefined>(planningSession?.status);
-  const [processingStatus, setProcessingStatus] = useState(mode === "new_plan" ? "Waiting for your trip details" : "Waiting for your answer about the current plan");
+  const [resultLoadingPlanId, setResultLoadingPlanId] = useState<string | null>(planningSession?.status === "draft_ready" && planningSession.outputPlanId ? planningSession.outputPlanId : null);
+  const [processingStatus, setProcessingStatus] = useState(mode === "new_plan" ? planningSession?.status === "generating" ? "Starting complete plan generation…" : "Waiting for your trip details" : "Waiting for your answer about the current plan");
   const [messages, setMessages] = useState<ChatMessage[]>(() => mode === "new_plan" ? conversationFromPlanningSession(planningSession, welcome) : loadConversation(localStorage, conversationKey, welcome));
   const autoConfirmedProposalRef = useRef<string | null>(null);
   const proposalReadyFromTurnRef = useRef<string | null>(null);
-  const planGenerationInProgress = planningSessionStatus === "generating" || (busy && planningSessionStatus === "proposal_ready");
-  const composerWorking = busy || planningSessionStatus === "generating";
-  const generationCanRetry = mode === "new_plan" && planningSessionStatus === "proposal_ready" && Boolean(proposal && planningSessionId) && !busy;
+  const openingSavedPlanRef = useRef<string | null>(null);
+  const openedSavedPlanRef = useRef<string | null>(null);
+  const planGenerationInProgress = planningSessionStatus === "generating" || Boolean(resultLoadingPlanId) || (busy && planningSessionStatus === "proposal_ready");
+  const composerWorking = busy || planningSessionStatus === "generating" || Boolean(resultLoadingPlanId);
+  const generationReadyToConfirm = planningSessionStatus === "proposal_ready" || planningSessionStatus === "proposal_confirmed";
+  const generationCanRetry = mode === "new_plan" && generationReadyToConfirm && Boolean(proposal && planningSessionId) && !busy;
+  function applyGenerationSnapshot(payload: { sessionStatus: PlanningSession["status"]; outputPlanId?: string; generation: PlanGenerationState | null }) {
+    if (payload.sessionStatus === "draft_ready" && payload.outputPlanId) {
+      setResultLoadingPlanId(payload.outputPlanId);
+      setProcessingStatus(`Plan saved. Loading draft ${payload.outputPlanId}…`);
+      return;
+    }
+    setPlanningSessionStatus(payload.sessionStatus);
+    setResultLoadingPlanId(null);
+    if (payload.generation) setProcessingStatus(generationProgressMessage(payload.generation));
+    if (payload.generation?.status === "failed") onError(payload.generation.message ?? "Plan generation did not finish. Your trip details are saved.");
+  }
+  async function openSavedPlan(sessionId: string, outputPlanId: string) {
+    const resultKey = `${sessionId}:${outputPlanId}`;
+    if (openingSavedPlanRef.current === resultKey || openedSavedPlanRef.current === resultKey) return;
+    openingSavedPlanRef.current = resultKey;
+    try {
+      const next = await getWorkspace({ cache: "no-store" });
+      if (next.planningSession?.id !== sessionId || next.planningSession.status !== "draft_ready" || next.planningSession.outputPlanId !== outputPlanId || next.activePlan.id !== outputPlanId) return;
+      openedSavedPlanRef.current = resultKey;
+      void onPlanCreated(next).catch(() => undefined);
+      onComplete();
+    } catch { /* Keep the saved result visible and retry through the existing generation poll. */ }
+    finally { openingSavedPlanRef.current = null; }
+  }
   useEffect(() => { onBusyChange?.(busy); return () => onBusyChange?.(false); }, [busy, onBusyChange]);
   useEffect(() => {
-    if (mode !== "new_plan" || !proposal || !planningSessionId || planningSessionStatus !== "proposal_ready" || busy) return;
+    if (mode !== "new_plan" || !proposal || !planningSessionId || !generationReadyToConfirm || busy) return;
     const confirmationKey = `${planningSessionId}:${proposal.version}`;
     if (proposalReadyFromTurnRef.current !== confirmationKey) return;
     if (autoConfirmedProposalRef.current === confirmationKey) return;
     proposalReadyFromTurnRef.current = null;
     autoConfirmedProposalRef.current = confirmationKey;
     void confirmProposal();
-  }, [mode, proposal, planningSessionId, planningSessionStatus, busy]);
+  }, [mode, proposal, planningSessionId, generationReadyToConfirm, busy]);
 
-  useEffect(() => { setInput(initialMessage); setActiveMode(mode); setReadyForReview(false); setProposal(mode === "new_plan" ? planningSession?.proposal : undefined); setPlanningSessionId(mode === "new_plan" ? planningSession?.id : undefined); setPlanningSessionStatus(mode === "new_plan" ? planningSession?.status : undefined); setProcessingStatus(mode === "new_plan" ? planningSession?.status === "generating" ? "Starting complete plan generation…" : "Waiting for your trip details" : initialMessage ? "Map changes are ready. Send them and Landi will replan" : "Waiting for your answer about the current plan"); setMessages(mode === "new_plan" ? conversationFromPlanningSession(planningSession, welcome) : loadConversation(localStorage, conversationKey, welcome)); }, [mode, initialMessage]);
+  useEffect(() => { setInput(initialMessage); setActiveMode(mode); setReadyForReview(false); setProposal(mode === "new_plan" ? planningSession?.proposal : undefined); setPlanningSessionId(mode === "new_plan" ? planningSession?.id : undefined); setPlanningSessionStatus(mode === "new_plan" ? planningSession?.status : undefined); setResultLoadingPlanId(mode === "new_plan" && planningSession?.status === "draft_ready" && planningSession.outputPlanId ? planningSession.outputPlanId : null); setProcessingStatus(mode === "new_plan" ? planningSession?.status === "generating" ? "Starting complete plan generation…" : planningSession?.status === "draft_ready" && planningSession.outputPlanId ? `Plan saved. Loading draft ${planningSession.outputPlanId}…` : "Waiting for your trip details" : initialMessage ? "Map changes are ready. Send them and Landi will replan" : "Waiting for your answer about the current plan"); setMessages(mode === "new_plan" ? conversationFromPlanningSession(planningSession, welcome) : loadConversation(localStorage, conversationKey, welcome)); }, [mode, initialMessage]);
   useEffect(() => {
     if (mode !== "new_plan" || !planningSession) return;
     setPlanningSessionId(planningSession.id);
     setPlanningSessionStatus(planningSession.status);
+    setResultLoadingPlanId(planningSession.status === "draft_ready" && planningSession.outputPlanId ? planningSession.outputPlanId : null);
     setProposal(planningSession.proposal);
     if (planningSession.status === "generating") setProcessingStatus("Starting complete plan generation…");
+    if (planningSession.status === "draft_ready" && planningSession.outputPlanId) setProcessingStatus(`Plan saved. Loading draft ${planningSession.outputPlanId}…`);
   }, [mode, planningSession?.id, planningSession?.status, planningSession?.proposal?.version]);
+  useEffect(() => {
+    if (mode !== "new_plan" || planningSession?.status !== "generating") return;
+    let cancelled = false;
+    void getPlanningGeneration(planningSession.id).then((payload) => {
+      if (!payload || cancelled) return;
+      applyGenerationSnapshot(payload);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [mode, planningSession?.id, planningSession?.status]);
   useEffect(() => {
     if (mode !== "new_plan" || !planningSessionId || planningSessionStatus !== "generating") return;
     let cancelled = false;
@@ -59,9 +98,8 @@ export function PlanComposer({ mode, currentPlan, planningSession, initialMessag
         const payload = await getPlanningGeneration(planningSessionId);
         if (!payload || cancelled) return;
         if (cancelled) return;
-        setPlanningSessionStatus(payload.sessionStatus);
-        if (payload.generation) setProcessingStatus(generationProgressMessage(payload.generation));
-        if (payload.generation?.status === "failed") onError(payload.generation.message ?? "Plan generation did not finish. Your trip details are saved.");
+        applyGenerationSnapshot(payload);
+        if (payload.sessionStatus === "draft_ready" && payload.outputPlanId) void openSavedPlan(planningSessionId, payload.outputPlanId);
       } catch { /* Workspace polling remains the fallback. */ }
     };
     void pollGeneration();
@@ -149,7 +187,7 @@ export function PlanComposer({ mode, currentPlan, planningSession, initialMessag
         const nextSessionId = payload.planningSession?.id ?? payload.workspace.planningSession?.id;
         const nextProposal = (payload.proposal ?? payload.planningSession?.proposal) as PlanningProposal | undefined;
         const nextStatus = payload.planningStatus ?? payload.planningSession?.status ?? payload.workspace.planningSession?.status;
-        if (nextSessionId && nextProposal && nextStatus === "proposal_ready") proposalReadyFromTurnRef.current = `${nextSessionId}:${nextProposal.version}`;
+        if (nextSessionId && nextProposal && (nextStatus === "proposal_ready" || nextStatus === "proposal_confirmed")) proposalReadyFromTurnRef.current = `${nextSessionId}:${nextProposal.version}`;
         setPlanningSessionId(nextSessionId);
         setProposal(nextProposal);
         setPlanningSessionStatus(nextStatus);

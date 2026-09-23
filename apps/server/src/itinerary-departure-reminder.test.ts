@@ -46,6 +46,28 @@ test("ordinary itinerary stops do not create notification noise", () => {
   assert.deepEqual(due, []);
 });
 
+test("narrative visit roles do not turn ordinary sightseeing into fixed-stop reminders", () => {
+  const ordinary = plan();
+  ordinary.presentation!.places.find((place) => place.id === "park")!.visitRole = "arrival-day architectural introduction";
+  ordinary.presentation!.days[1]!.accommodationDeparture = {
+    accommodationName: "Test hotel",
+    accommodationAddress: "London",
+    destinationPlaceId: "park",
+    mode: "walking",
+    durationMinutes: 20,
+    verification: "verified"
+  };
+  const due = dueItineraryDepartureReminders(ordinary, new Map([["london", "Europe/London"]]), new Date("2026-08-19T08:30:00.000Z"));
+  assert.deepEqual(due, []);
+});
+
+test("unverified route duration never becomes a precise departure reminder", () => {
+  const unverified = plan();
+  unverified.presentation!.routeSegments[0]!.verification = "needs_verification";
+  const due = dueItineraryDepartureReminders(unverified, new Map([["paris", "Europe/Paris"]]), new Date("2026-08-18T07:35:00.000Z"));
+  assert.deepEqual(due, []);
+});
+
 test("timezone lookup is restricted to itinerary cities near the current UTC date", () => {
   assert.deepEqual(itineraryReminderCandidateCities(plan(), new Date("2026-08-18T12:00:00.000Z")), ["Paris", "London"]);
 });

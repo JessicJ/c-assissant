@@ -15,7 +15,7 @@ test("SQLite records its schema baseline and creates a verified private backup",
     const store = new SqliteWorkspaceStore(databasePath);
     store.updateProfile({ displayName: "Backup owner", preferredLanguage: "English", nationality: "Canada", gender: "not_specified", immigrationStatus: "tourist_visa" });
     const maintenance = store.getDatabaseMaintenanceStatus();
-    assert.deepEqual({ schemaVersion: maintenance.schemaVersion, latest: maintenance.latestSchemaVersion, integrity: maintenance.integrity }, { schemaVersion: 19, latest: 19, integrity: "ok" });
+    assert.deepEqual({ schemaVersion: maintenance.schemaVersion, latest: maintenance.latestSchemaVersion, integrity: maintenance.integrity }, { schemaVersion: 20, latest: 20, integrity: "ok" });
     assert.equal(maintenance.migrations[0]?.name, "v1-local-workspace-baseline");
     assert.equal(maintenance.migrations[1]?.name, "country-pack-source-evidence-links");
     assert.equal(maintenance.migrations[2]?.name, "telegram-one-route-transport-override");
@@ -50,7 +50,7 @@ test("SQLite refuses to open a workspace created by a newer schema", () => {
     const future = new DatabaseSync(databasePath);
     future.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, applied_at TEXT NOT NULL); INSERT INTO schema_migrations VALUES (999, 'future', '2026-08-07T00:00:00.000Z');");
     future.close();
-    assert.throws(() => new SqliteWorkspaceStore(databasePath), /supports schema 19.*schema 999/i);
+    assert.throws(() => new SqliteWorkspaceStore(databasePath), /supports schema 20.*schema 999/i);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -391,7 +391,7 @@ test("SQLite upgrades legacy stage titles to explicit presentation kinds", () =>
 
     const upgraded = new SqliteWorkspaceStore(databasePath);
     assert.deepEqual(upgraded.getWorkspace().activePlan.stages.map((stage) => stage.presentationKind), ["overview", "itinerary", "budget"]);
-    assert.equal(upgraded.getDatabaseMaintenanceStatus().schemaVersion, 19);
+    assert.equal(upgraded.getDatabaseMaintenanceStatus().schemaVersion, 20);
     upgraded.close();
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -406,7 +406,7 @@ test("SQLite upgrades a schema-one workspace with source-evidence link tables", 
     old.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, applied_at TEXT NOT NULL); INSERT INTO schema_migrations VALUES (1, 'v1-local-workspace-baseline', '2026-08-07T00:00:00.000Z');");
     old.close();
     const store = new SqliteWorkspaceStore(databasePath);
-    assert.equal(store.getDatabaseMaintenanceStatus().schemaVersion, 19);
+    assert.equal(store.getDatabaseMaintenanceStatus().schemaVersion, 20);
     const tables = new DatabaseSync(databasePath, { readOnly: true });
     const names = tables.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%run_sources' ORDER BY name").all().map((row) => (row as { name: string }).name);
     assert.deepEqual(names, ["country_pack_skill_run_sources", "plan_compilation_run_sources"]);
@@ -518,6 +518,9 @@ test("SQLite does not discard an active Plan", () => {
 test("SQLite keeps partial Telegram Profile setup incomplete and expires pending text edits", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const initial = store.getWorkspace().profile;
+  const visaOnly = store.updateProfile({ ...initial, immigrationStatus: "student_visa" });
+  assert.equal(visaOnly.profile.status, "ready");
+  store.updateProfile({ ...visaOnly.profile, nationality: "To be confirmed", immigrationStatus: "unknown" });
   const nationalityOnly = store.updateProfile({ ...initial, nationality: "Canada" });
   assert.equal(nationalityOnly.profile.status, "incomplete");
   const ready = store.updateProfile({ ...nationalityOnly.profile, immigrationStatus: "student_visa" });
@@ -749,8 +752,8 @@ test("SQLite saves generated route facts and complete daily road geometry in one
   assert.equal(/Google Maps|route refresh|before execution/i.test(updated.activePlan.presentation?.routeSegments[0]?.detail ?? ""), false);
   assert.deepEqual(updated.activePlan.presentation?.places.map((place) => place.coordinates), [[48.86, 2.33], [48.865, 2.34]]);
   const shifted = store.saveGeneratedPlanRouteRefresh({ planId: plan.id, expectedVersion: updated.activePlan.version, provider: "google_maps", routes: [{ segmentId: "r1", observedAt: "2026-08-18T08:10:00.000Z", distanceMeters: 4_500, durationSeconds: 5_400, originCoordinates: [2.33, 48.86], destinationCoordinates: [2.34, 48.865] }] });
-  assert.deepEqual(shifted.scheduleConflictDayIds, []);
-  assert.equal(shifted.workspace.activePlan.presentation?.days[0]?.stops?.[1]?.time, "12:00");
+  assert.deepEqual(shifted.scheduleConflictDayIds, ["day-1"]);
+  assert.equal(shifted.workspace.activePlan.presentation?.days[0]?.stops?.[1]?.time, "11:00");
   store.close();
 });
 
@@ -774,6 +777,112 @@ test("SQLite preserves fixed itinerary times and exposes a provider route confli
   assert.equal(result.workspace.activePlan.presentation?.routeSegments[0]?.verification, "stale");
   assert.equal(result.workspace.activePlan.presentation?.routeSegments[0]?.durationMinutes, 30);
   assert.match(result.workspace.activePlan.presentation?.days[0]?.routeReview?.fixedConstraints?.at(-1) ?? "", /must be replanned/i);
+  store.close();
+});
+
+test("SQLite route refresh preserves Blueprint block identity when logistics blocks reference destination places", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const blueprint: TripBlueprint = {
+    schemaVersion: TRIP_BLUEPRINT_SCHEMA_VERSION,
+    id: "blueprint-bali-rendering",
+    version: 1,
+    generationKey: "generation-bali-rendering",
+    proposalRef: { sessionId: "session-bali-rendering", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+    researchSetId: "research-bali-rendering",
+    title: "Bali",
+    summary: "South Bali day",
+    language: "en",
+    destinations: ["Bali"],
+    startDate: "2026-10-10",
+    endDate: "2026-10-10",
+    places: [
+      { id: "museum", name: "Museum Pasifika", locationLabel: "Nusa Dua, Bali", city: "Bali", category: "museum", priority: "must", coordinates: [-8.8001, 115.2299], whyWorthIt: "Art context.", plan: "Visit.", evidence: [] },
+      { id: "jenggala", name: "Jenggala Jimbaran", locationLabel: "Jimbaran, Bali", city: "Bali", category: "ceramics", priority: "preferred", coordinates: [-8.7802, 115.1771], whyWorthIt: "Ceramics.", plan: "Visit.", evidence: [] }
+    ],
+    events: [],
+    sources: [],
+    days: [{
+      id: "d1",
+      date: "2026-10-10",
+      kind: "scheduled",
+      city: "Bali",
+      title: "Nusa Dua and Jimbaran",
+      summary: "Keep logistics, meal, and formal stops distinct.",
+      stops: [{ placeId: "museum", order: 1, time: "10:00" }, { placeId: "jenggala", order: 2, time: "14:15" }],
+      blocks: [
+        { id: "transfer-to-museum", kind: "transfer", order: 1, placeId: "museum", title: "Breakfast and transfer to Nusa Dua", startTime: "09:15", endTime: "10:00", durationMinutes: 45, display: { routeAnchor: false, timeLabel: "09:15–10:00" }, evidence: [] },
+        { id: "museum-stop", kind: "stop", order: 2, placeId: "museum", title: "Museum Pasifika", startTime: "10:00", evidence: [] },
+        { id: "lunch", kind: "meal", order: 3, title: "Nusa Dua lunch", startTime: "12:15", evidence: [] },
+        { id: "jenggala-stop", kind: "stop", order: 4, placeId: "jenggala", title: "Jenggala ceramics experience", startTime: "14:15", evidence: [] }
+      ],
+      candidatePlaceIds: []
+    }],
+    movements: [{ id: "movement-d1-1", dayId: "d1", originPlaceId: "museum", destinationPlaceId: "jenggala", mode: "driving", status: "recheck", evidence: [] }],
+    actionRequirements: [],
+    createdAt: "2026-08-26T00:00:00.000Z"
+  };
+  const session = store.createPlanningSession("travel", new Date("2026-08-26T00:00:00.000Z"));
+  const proposal = { version: 1, title: "Bali", objective: "Visit South Bali", theme: "Culture", segments: ["Bali"], skeleton: ["2026-10-10"], tradeoffs: [], assumptions: [], decisionPoints: [] };
+  store.savePlanningSession({ ...session, id: blueprint.proposalRef.sessionId, status: "proposal_ready", proposal, updatedAt: "2026-08-26T00:00:00.000Z" });
+  store.confirmPlanningSession(blueprint.proposalRef.sessionId, 1);
+  const research: ResearchSet = {
+    schemaVersion: TRIP_BLUEPRINT_SCHEMA_VERSION,
+    id: "research-bali-rendering",
+    generationKey: "generation-bali-rendering",
+    proposalRef: blueprint.proposalRef,
+    skillLineage: blueprint.skillLineage,
+    status: "completed",
+    batches: [{ id: "bali", scopeLabel: "Bali", status: "completed", placeIds: ["museum", "jenggala"], eventIds: [], sourceIds: [], completedAt: "2026-08-26T00:00:00.000Z" }],
+    places: blueprint.places,
+    events: [],
+    sources: [],
+    actionRequirements: [],
+    createdAt: "2026-08-26T00:00:00.000Z",
+    updatedAt: "2026-08-26T00:00:00.000Z",
+    completedAt: "2026-08-26T00:00:00.000Z"
+  };
+  store.saveBlueprintGeneration({
+    generationKey: blueprint.generationKey,
+    proposalRef: blueprint.proposalRef,
+    skillLineage: blueprint.skillLineage,
+    status: "completed",
+    stage: "ready",
+    createdAt: "2026-08-26T00:00:00.000Z",
+    updatedAt: "2026-08-26T00:00:00.000Z"
+  });
+  store.saveResearchSet(research);
+  store.saveTripBlueprint(blueprint);
+  const compiled = store.createCompiledBlueprintPlan(compileTripBlueprint(blueprint, { createdAt: "2026-08-26T00:00:01.000Z" })).activePlan;
+  const refreshed = store.saveGeneratedPlanRouteRefresh({
+    planId: compiled.id,
+    expectedVersion: compiled.version,
+    provider: "google_maps",
+    routes: [{
+      segmentId: "movement-d1-1",
+      observedAt: "2026-08-26T00:01:00.000Z",
+      distanceMeters: 4_200,
+      durationSeconds: 1_440,
+      originCoordinates: [115.2299, -8.8001],
+      destinationCoordinates: [115.1771, -8.7802],
+      geometry: [[115.2299, -8.8001], [115.1771, -8.7802]]
+    }]
+  });
+
+  assert.deepEqual(refreshed.workspace.activeBlueprint?.days[0]?.blocks?.map((block) => [block.id, block.kind, block.placeId ?? "", block.startTime ?? "", block.order]), [
+    ["transfer-to-museum", "transfer", "museum", "09:15", 1],
+    ["museum-stop", "stop", "museum", "10:00", 2],
+    ["lunch", "meal", "", "12:15", 3],
+    ["jenggala-stop", "stop", "jenggala", "14:15", 4]
+  ]);
+  assert.deepEqual(refreshed.workspace.activePlan.presentation?.days[0]?.blocks?.map((block) => [block.id, block.kind, block.placeId ?? "", block.title]), [
+    ["transfer-to-museum", "transfer", "museum", "Breakfast and transfer to Nusa Dua"],
+    ["museum-stop", "stop", "museum", "Museum Pasifika"],
+    ["lunch", "meal", "", "Nusa Dua lunch"],
+    ["jenggala-stop", "stop", "jenggala", "Jenggala ceramics experience"]
+  ]);
+  assert.equal(refreshed.workspace.activePlan.presentation?.routeSegments[0]?.verification, "verified");
+  assert.equal(refreshed.workspace.activePlan.presentation?.routeSegments[0]?.durationMinutes, 24);
   store.close();
 });
 
@@ -1126,29 +1235,91 @@ test("SQLite records high-impact revalidation scopes and preserved completion ha
 });
 
 test("SQLite persists Web preparation checklist changes only for user-owned current tasks", () => {
-  const store = new SqliteWorkspaceStore(":memory:");
-  const workspace = store.createGeneratedPlan({
-    title: "Preparation checklist",
-    location: "Shanghai, China",
-    dates: "October 2026",
-    knownInformation: ["A preparation checklist is needed."],
-    assumptions: [],
-    nextAction: "Complete preparation.",
-    stages: [{ title: "应急资料", description: "Prepare before travel.", tasks: [
-      { title: "Passport", owner: "user", dueLabel: "Before departure", preparationCategory: "documents" },
-      { title: "Open official app", owner: "external", dueLabel: "Before departure" },
-      { title: "Choose airport transport", owner: "user", dueLabel: "Before leaving the airport" }
-    ] }]
-  }, "codex");
-  const [userTask, externalTask, arrivalTask] = workspace.activePlan.stages[0]?.tasks ?? [];
+  const directory = mkdtempSync(join(tmpdir(), "c-assistant-preparation-checklist-"));
+  try {
+    const databasePath = join(directory, "workspace.sqlite");
+    const store = new SqliteWorkspaceStore(databasePath);
+    const source = store.saveSourceSnapshot({ sourceId: "official-entry", authority: "Official", titleOriginal: "Entry guidance", url: "https://example.com/entry", retrievedAt: "2026-09-01T00:00:00.000Z", contentHash: "e".repeat(64), excerpt: "Official entry guidance." }).snapshot;
+    const workspace = store.createGeneratedPlan({
+      title: "Preparation checklist",
+      location: "Shanghai, China",
+      dates: "October 2026",
+      knownInformation: ["A preparation checklist is needed."],
+      assumptions: [],
+      nextAction: "Complete preparation.",
+      stages: [{ title: "应急资料", description: "Prepare before travel.", tasks: [
+        { title: "Passport", owner: "user", dueLabel: "Before departure", preparationCategory: "documents" },
+        { title: "Open official app", owner: "external", dueLabel: "Before departure" },
+        { title: "Choose airport transport", owner: "user", dueLabel: "Before leaving the airport" }
+      ] }]
+    }, "codex");
+    const planId = workspace.activePlan.id;
+    const [userTask, externalTask, arrivalTask] = workspace.activePlan.stages[0]?.tasks ?? [];
+    const booking: TravelBooking = {
+      id: "prep-booking",
+      planId,
+      planVersionCreated: workspace.activePlan.version,
+      status: "needs_review",
+      type: "ticket",
+      title: "Museum ticket",
+      source: "imported_email",
+      sourceHash: "prep-booking-hash",
+      sourceLabel: "Booking email",
+      importedAt: "2026-09-01T00:00:00.000Z",
+      updatedAt: "2026-09-01T00:00:00.000Z",
+      constraintStrength: "soft",
+      segments: [{
+        id: "prep-ticket-segment",
+        segmentType: "event_window",
+        title: "Museum ticket",
+        status: "needs_review",
+        startAtLocal: "2026-10-01T10:00",
+        location: "Museum",
+        constraintStrength: "soft",
+        fixedCommitment: false,
+        needsReviewReasons: ["Imported for reference only."]
+      }]
+    };
+    store.saveTravelBooking(booking);
+    store.linkSourceSnapshotToPlan(planId, source.id);
+    const versionBeforeCheck = store.getWorkspace().activePlan.version;
 
-  const checked = store.setPlanTaskChecked(workspace.activePlan.id, userTask?.id ?? "", true);
-  assert.equal(checked.activePlan.stages[0]?.tasks[0]?.status, "completed");
-  const unchecked = store.setPlanTaskChecked(workspace.activePlan.id, userTask?.id ?? "", false);
-  assert.equal(unchecked.activePlan.stages[0]?.tasks[0]?.status, "waiting_user");
-  assert.throws(() => store.setPlanTaskChecked(workspace.activePlan.id, externalTask?.id ?? "", true), /packing items and pre-departure tasks/i);
-  assert.throws(() => store.setPlanTaskChecked(workspace.activePlan.id, arrivalTask?.id ?? "", true), /packing items and pre-departure tasks/i);
-  store.close();
+    const checked = store.setPlanTaskChecked(planId, userTask?.id ?? "", true);
+    assert.equal(checked.activePlan.stages[0]?.tasks[0]?.status, "completed");
+    assert.equal(checked.activePlan.status, "draft");
+    assert.equal(checked.executionPlan, undefined);
+    assert.equal(checked.activePlan.sources.length, 1);
+    assert.equal(store.listTravelBookingsForPlan(planId).length, 1);
+    assert.equal(store.getWorkspace().activePlan.stages[0]?.tasks[0]?.status, "completed");
+    const checkedAgain = store.setPlanTaskChecked(planId, userTask?.id ?? "", true);
+    assert.equal(checkedAgain.activePlan.version, checked.activePlan.version);
+
+    const unchecked = store.setPlanTaskChecked(planId, userTask?.id ?? "", false);
+    assert.equal(unchecked.activePlan.stages[0]?.tasks[0]?.status, "waiting_user");
+    const uncheckedAgain = store.setPlanTaskChecked(planId, userTask?.id ?? "", false);
+    assert.equal(uncheckedAgain.activePlan.version, unchecked.activePlan.version);
+    assert.equal(unchecked.activePlan.version, versionBeforeCheck + 2);
+    assert.throws(() => store.setPlanTaskChecked(planId, externalTask?.id ?? "", true), /packing items and pre-departure tasks/i);
+    assert.throws(() => store.setPlanTaskChecked(planId, arrivalTask?.id ?? "", true), /packing items and pre-departure tasks/i);
+    assert.equal(store.getWorkspace().activePlan.stages[0]?.tasks[0]?.status, "waiting_user");
+
+    const rechecked = store.setPlanTaskChecked(planId, userTask?.id ?? "", true);
+    assert.equal(rechecked.activePlan.stages[0]?.tasks[0]?.status, "completed");
+    assert.equal(store.listTravelBookingsForPlan(planId)[0]?.status, "needs_review");
+    store.close();
+
+    const reopened = new SqliteWorkspaceStore(databasePath);
+    const persisted = reopened.getWorkspace();
+    assert.equal(persisted.activePlan.id, planId);
+    assert.equal(persisted.activePlan.status, "draft");
+    assert.equal(persisted.executionPlan, undefined);
+    assert.equal(persisted.activePlan.stages[0]?.tasks[0]?.status, "completed");
+    assert.equal(persisted.activePlan.sources.length, 1);
+    assert.equal(reopened.listTravelBookingsForPlan(planId).length, 1);
+    reopened.close();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("SQLite carries checked completion facts into a revised Plan without another reminder", () => {
@@ -1815,6 +1986,31 @@ test("SQLite persists recoverable Blueprint checkpoints, events, lineage, and ex
   assert.equal(store.getPlanBlueprintLineage(routeRefresh.workspace.activePlan.id)?.blueprintVersion, 5);
   assert.equal(store.getPlanBlueprintLineage(routeRefresh.workspace.activePlan.id)?.planVersion, routeRefresh.workspace.activePlan.version);
 
+  const executingA = store.confirmPlan(routeRefresh.workspace.activePlan.id).activePlan;
+  const executionA = store.getExecutionPlan();
+  const executionAOrder = executionA?.presentation?.kind === "itinerary" ? executionA.presentation.days[0]?.placeIds : undefined;
+  const replacementB = store.applyDirectBlueprintRevision({
+    expectedPlanId: executingA.id,
+    expectedVersion: executingA.version,
+    expectedBlueprintVersion: 5,
+    revision: { kind: "move_place_within_day", placeId: "a", dayId: "d1", position: { kind: "start" }, createdAt: "2026-08-26T00:07:00.000Z" }
+  });
+  assert.notEqual(replacementB.activePlan.id, executingA.id);
+  assert.equal(replacementB.activePlan.status, "draft");
+  assert.equal(replacementB.activeBlueprint?.version, 6);
+  assert.deepEqual(replacementB.activeBlueprint?.days[0]?.stops.map((stop) => stop.placeId), ["a", "b", "c"]);
+  const executionWhileBIsDraft = store.getExecutionPlan();
+  assert.equal(executionWhileBIsDraft?.id, executingA.id);
+  assert.deepEqual(executionWhileBIsDraft?.presentation?.kind === "itinerary" ? executionWhileBIsDraft.presentation.days[0]?.placeIds : undefined, executionAOrder);
+  assert.equal(store.getPlanBlueprintLineage(executionWhileBIsDraft!.id)?.blueprintVersion, 5);
+
+  const executingB = store.confirmPlan(replacementB.activePlan.id).activePlan;
+  const executionB = store.getExecutionPlan();
+  assert.equal(executionB?.id, executingB.id);
+  assert.deepEqual(executionB?.presentation?.kind === "itinerary" ? executionB.presentation.days[0]?.placeIds : undefined, ["a", "b", "c"]);
+  assert.equal(store.getPlanBlueprintLineage(executingB.id)?.blueprintVersion, 6);
+  assert.equal(store.listHistoricalPlans().some((plan) => plan.id === executingA.id), true);
+
   const first = store.appendBlueprintGenerationEvent({ generationKey, stage: "research", status: "running", scopeLabel: "Tokyo", savedPlaceCount: 2, detail: "Tokyo research saved", createdAt: "2026-08-26T00:01:00.000Z" });
   const second = store.appendBlueprintGenerationEvent({ generationKey, stage: "compile", status: "running", detail: "Compiling Draft Plan", createdAt: "2026-08-26T00:02:01.000Z" });
   assert.deepEqual([first.sequence, second.sequence], [1, 2]);
@@ -1905,6 +2101,10 @@ test("SQLite hydrates Blueprint presentation over stale stored Plan presentation
     assert.equal(workspace.activePlan.presentation?.summary, "Blueprint source presentation");
     assert.deepEqual(workspace.activePlan.presentation?.days[0]?.placeIds, ["a", "b"]);
     assert.deepEqual(workspace.activePlan.presentation?.routeSegments.map((segment) => segment.id), ["movement-d1-1"]);
+    reopened.confirmPlan(planId);
+    assert.equal(reopened.getExecutionPlan()?.presentation?.summary, "Blueprint source presentation");
+    assert.deepEqual(reopened.getExecutionPlan()?.presentation?.days[0]?.placeIds, ["a", "b"]);
+    assert.deepEqual(reopened.getExecutionPlan()?.presentation?.routeSegments.map((segment) => segment.id), ["movement-d1-1"]);
     reopened.close();
   } finally {
     rmSync(directory, { recursive: true, force: true });

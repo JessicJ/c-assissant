@@ -40,6 +40,7 @@ export interface SemanticPlanDecisionDiff {
   experiencesMoved: Array<{ title: string; fromDate: string; toDate: string }>;
   planRoleChanges: Array<{ date: string; title: string; from: string; to: string }>;
   startEndContextChanges: Array<{ date: string; field: "startContext" | "endContext"; from: string; to: string }>;
+  fixedCommitmentChanges: Array<{ commitmentId: string; change: "added" | "removed" | "changed" }>;
   baseStrategyChanged: boolean;
   meaningfulTravelDecisionDrift: boolean;
 }
@@ -129,6 +130,7 @@ export function diffSemanticTravelPlans(original: SemanticTravelPlan, repaired: 
   const experiencesMoved: SemanticPlanDecisionDiff["experiencesMoved"] = [];
   const planRoleChanges: SemanticPlanDecisionDiff["planRoleChanges"] = [];
   const startEndContextChanges: SemanticPlanDecisionDiff["startEndContextChanges"] = [];
+  const fixedCommitmentChanges = fixedCommitmentDiff(original, repaired);
 
   for (const [date, day] of originalDays) {
     const repairedDay = repairedDays.get(date);
@@ -183,9 +185,23 @@ export function diffSemanticTravelPlans(original: SemanticTravelPlan, repaired: 
     experiencesMoved,
     planRoleChanges,
     startEndContextChanges,
+    fixedCommitmentChanges,
     baseStrategyChanged,
-    meaningfulTravelDecisionDrift: daysChanged.size > 0 || baseStrategyChanged
+    meaningfulTravelDecisionDrift: daysChanged.size > 0 || baseStrategyChanged || fixedCommitmentChanges.length > 0
   };
+}
+
+function fixedCommitmentDiff(original: SemanticTravelPlan, repaired: SemanticTravelPlan): SemanticPlanDecisionDiff["fixedCommitmentChanges"] {
+  const before = new Map(original.fixedCommitments.map((item) => [item.commitmentId, JSON.stringify(item)] as const));
+  const after = new Map(repaired.fixedCommitments.map((item) => [item.commitmentId, JSON.stringify(item)] as const));
+  const changes: SemanticPlanDecisionDiff["fixedCommitmentChanges"] = [];
+  for (const [commitmentId, value] of before) {
+    const repairedValue = after.get(commitmentId);
+    if (repairedValue === undefined) changes.push({ commitmentId, change: "removed" });
+    else if (repairedValue !== value) changes.push({ commitmentId, change: "changed" });
+  }
+  for (const commitmentId of after.keys()) if (!before.has(commitmentId)) changes.push({ commitmentId, change: "added" });
+  return changes;
 }
 
 function experienceDateMap(plan: SemanticTravelPlan): Map<string, string> {

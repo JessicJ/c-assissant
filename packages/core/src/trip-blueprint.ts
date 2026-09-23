@@ -2,6 +2,7 @@ export const TRIP_BLUEPRINT_SCHEMA_VERSION = 1 as const;
 
 export type BlueprintEvidenceStatus = "verified" | "recheck" | "stale";
 export type BlueprintPlacePriority = "must" | "preferred" | "nearby" | "archive" | "pending" | "recheck" | "booked";
+export type BlueprintAccommodationState = "confirmed" | "selected" | "recommended" | "pending";
 export type BlueprintPlaceDisplayType = "attraction" | "dining" | "shopping" | "experience";
 export type BlueprintMovementMode = "walking" | "transit" | "driving" | "rail" | "flight" | "unknown";
 export type BlueprintDayKind = "scheduled" | "transit" | "rest" | "free_time";
@@ -15,6 +16,19 @@ export type BlueprintPlaceRelationshipKind = "same_area" | "same_direction" | "a
 export type BlueprintTravelTipTheme = "payment" | "transport" | "etiquette" | "safety" | "weather" | "timing" | "language" | "local_norms";
 export type BlueprintPreparationGroup = "packing" | "documents" | "phone_payments" | "bookings_departure" | "other";
 export type BlueprintMovementMapLineState = "formal" | "needs_refresh" | "reference";
+
+export const MAP_COORDINATES_PENDING_SCHEDULING_REASON = "This place lacks map-ready coordinates, so it remains useful written context until its location is verified.";
+
+export function effectiveBlueprintSchedulingDecision(
+  place: Pick<BlueprintPlace, "coordinates" | "schedulingEligibility">
+): BlueprintSchedulingDecision | undefined {
+  const eligibility = place.schedulingEligibility;
+  if (eligibility?.decision === "informational"
+    && eligibility.reason === MAP_COORDINATES_PENDING_SCHEDULING_REASON
+    && place.coordinates
+    && validCoordinates(place.coordinates)) return "schedulable";
+  return eligibility?.decision;
+}
 
 export interface BlueprintLocalFood {
   id: string;
@@ -293,6 +307,14 @@ export interface BlueprintPlace {
   bookingUrl?: string;
   mapUrl?: string;
   experienceUrl?: string;
+  /** Lodging decision state. A URL or precise property identity never upgrades this state. */
+  accommodation?: {
+    state: BlueprintAccommodationState;
+    baseLabel?: string;
+    stayStartDate?: string;
+    stayEndDate?: string;
+    rationale?: string;
+  };
   evidence: BlueprintEvidenceRef[];
   fieldEvidence?: BlueprintFieldEvidence[];
   operationalFacts?: BlueprintOperationalFacts;
@@ -446,6 +468,8 @@ export interface BlueprintItineraryBlockDisplayIntent {
   timeLabel?: string;
   /** Secondary traveler-facing text for this timeline card. */
   meta?: string;
+  /** Whether the visible time is confirmed, planned advice, an estimate, unknown, or needs recheck. */
+  timingStatus?: "confirmed" | "planned" | "estimated" | "unknown" | "recheck";
   /** Whether this block participates in the formal day route and map markers. */
   routeAnchor?: boolean;
   /** Whether the Web workspace may stage same-day reorder edits for this block. */
@@ -454,7 +478,8 @@ export interface BlueprintItineraryBlockDisplayIntent {
 
 export interface BlueprintTravelContext {
   label: string;
-  status: "confirmed_property" | "planned_base_pending_property" | "unresolved_base" | "transport_node" | "in_transit";
+  status: "confirmed_property" | "selected_property" | "recommended_property" | "planned_base_pending_property" | "unresolved_base" | "transport_node" | "in_transit";
+  placeId?: string;
 }
 
 export interface BlueprintOperationalCondition {
@@ -474,6 +499,8 @@ export interface BlueprintItineraryBlock {
   kind: BlueprintItineraryBlockKind;
   order: number;
   placeId?: string;
+  /** Explicit Semantic place identity when no ResearchSet place id is available. */
+  placeName?: string;
   eventId?: string;
   startTime?: string;
   endTime?: string;
@@ -698,17 +725,18 @@ export function tripBlueprintIntegrityIssues(blueprint: TripBlueprint, options: 
       issues.push(`movement ${movement.id} references unknown day ${movement.dayId}`);
       continue;
     }
-    const originIndex = day.stops.findIndex((stop) => stop.placeId === movement.originPlaceId);
-    const destinationIndex = day.stops.findIndex((stop) => stop.placeId === movement.destinationPlaceId);
-    if (originIndex < 0 || destinationIndex !== originIndex + 1) issues.push(`movement ${movement.id} must connect adjacent stops`);
+    const anchors = physicalRouteAnchorIds(day);
+    const adjacent = anchors.some((origin, index) => origin === movement.originPlaceId && anchors[index + 1] === movement.destinationPlaceId);
+    if (!adjacent) issues.push(`movement ${movement.id} must connect adjacent committed physical occurrences`);
     if (movement.display) validateMovementDisplay(movement.display, issues, `movement ${movement.id || "<missing>"}`);
     validateEvidence(movement.evidence, sourceIds, issues, `movement ${movement.id}`);
     movementKeys.add(movementKey(day.id, movement.originPlaceId, movement.destinationPlaceId));
   }
   for (const day of blueprint.days) {
-    for (let index = 0; index < day.stops.length - 1; index += 1) {
-      const origin = day.stops[index]!.placeId;
-      const destination = day.stops[index + 1]!.placeId;
+    const anchors = physicalRouteAnchorIds(day);
+    for (let index = 0; index < anchors.length - 1; index += 1) {
+      const origin = anchors[index]!;
+      const destination = anchors[index + 1]!;
       if (!movementKeys.has(movementKey(day.id, origin, destination))) issues.push(`day ${day.id} is missing movement ${origin} -> ${destination}`);
     }
   }
@@ -735,6 +763,12 @@ function validatePlace(place: BlueprintPlace, sourceIds: Set<string>, placeIds: 
   if (!place.id.trim() || !place.name.trim() || !place.locationLabel.trim() || !place.category.trim()) issues.push(`${path} requires identity, name, location, and category`);
   if (!place.whyWorthIt.trim() || !place.plan.trim()) issues.push(`${path} requires travel rationale and plan`);
   if (place.coordinates && !validCoordinates(place.coordinates)) issues.push(`${path} has invalid coordinates`);
+  if (place.accommodation) {
+    if (!["confirmed", "selected", "recommended", "pending"].includes(place.accommodation.state)) issues.push(`${path} has invalid accommodation state`);
+    if (place.accommodation.state !== "pending" && !/\b(hotel|accommodation|lodg|villa|resort|inn|guesthouse|stay)\b/i.test(`${place.category} ${place.visitRole ?? ""}`)) issues.push(`${path} accommodation state requires a lodging place`);
+    if (place.accommodation.stayStartDate && !validDate(place.accommodation.stayStartDate)) issues.push(`${path} has invalid accommodation start date`);
+    if (place.accommodation.stayEndDate && !validDate(place.accommodation.stayEndDate)) issues.push(`${path} has invalid accommodation end date`);
+  }
   if (place.display) validatePlaceDisplay(place.display, issues, path);
   if (place.guideDisplay) validatePlaceGuideDisplay(place.guideDisplay, sourceIds, placeIds, issues, path, place.id);
   validatePlaceImages(place.images ?? [], sourceIds, issues, path);
@@ -918,19 +952,65 @@ function validateItineraryBlocks(day: BlueprintItineraryDay, placeIds: Set<strin
     if (block.placeId && !placeIds.has(block.placeId)) issues.push(`day ${day.id} block ${block.id} references unknown place ${block.placeId}`);
     if (block.eventId && !eventIds.has(block.eventId)) issues.push(`day ${day.id} block ${block.id} references unknown event ${block.eventId}`);
     if (block.durationMinutes !== undefined && (!Number.isInteger(block.durationMinutes) || block.durationMinutes < 1)) issues.push(`day ${day.id} block ${block.id} has invalid duration`);
+    validateCanonicalBlockSchedule(block, issues, `day ${day.id} block ${block.id}`);
     validateBlockSemantics(block, issues, `day ${day.id} block ${block.id}`);
     if (block.display) validateItineraryBlockDisplay(block, new Set(day.stops.map((stop) => stop.placeId)), issues, `day ${day.id} block ${block.id || "<missing>"}`);
     validateEvidence(block.evidence, sourceIds, issues, `day ${day.id} block ${block.id}`);
   }
+  validateStopScheduleProjection(day, issues);
+}
+
+function validateCanonicalBlockSchedule(block: BlueprintItineraryBlock, issues: string[], path: string): void {
+  const start = block.startTime ? clockMinutes(block.startTime) : undefined;
+  const end = block.endTime ? clockMinutes(block.endTime) : undefined;
+  if (block.startTime !== undefined && start === undefined) issues.push(`${path} has invalid startTime`);
+  if (block.endTime !== undefined && end === undefined) issues.push(`${path} has invalid endTime`);
+  if (start !== undefined && end !== undefined && block.durationMinutes !== undefined && end - start !== block.durationMinutes) {
+    issues.push(`${path} start/end/duration are inconsistent`);
+  }
+  const label = block.display?.timeLabel?.trim();
+  if (!label) return;
+  const range = /^(\d{2}:\d{2})[–-](\d{2}:\d{2})$/.exec(label);
+  const point = /^(\d{2}:\d{2})$/.exec(label);
+  if (range && (range[1] !== block.startTime || range[2] !== block.endTime)) issues.push(`${path} display.timeLabel does not match start/end`);
+  if (point && point[1] !== block.startTime) issues.push(`${path} display.timeLabel does not match startTime`);
+}
+
+function validateStopScheduleProjection(day: BlueprintItineraryDay, issues: string[]): void {
+  const candidates = (day.blocks ?? []).filter((block) => block.placeId && block.planRole !== "optional" && block.planRole !== "replacement" && (block.kind === "stop" || block.kind === "event" || block.display?.routeAnchor === true));
+  const used = new Set<string>();
+  for (const stop of day.stops) {
+    const block = candidates.find((candidate) => candidate.placeId === stop.placeId && !used.has(candidate.id));
+    if (!block) continue;
+    used.add(block.id);
+    if (block.startTime && stop.time !== block.startTime) issues.push(`day ${day.id} stop ${stop.placeId} time must equal block ${block.id} startTime`);
+    if (!block.startTime && stop.time) issues.push(`day ${day.id} stop ${stop.placeId} cannot invent time absent from block ${block.id}`);
+  }
+}
+
+function physicalRouteAnchorIds(day: BlueprintItineraryDay): string[] {
+  const fromBlocks = [...(day.blocks ?? [])]
+    .sort((left, right) => left.order - right.order)
+    .filter((block) => block.placeId && block.planRole !== "optional" && block.planRole !== "replacement" && block.kind !== "transfer" && block.kind !== "flexible")
+    .map((block) => block.placeId!);
+  const anchors = fromBlocks.length ? fromBlocks : [...day.stops].sort((left, right) => left.order - right.order).map((stop) => stop.placeId);
+  return anchors.filter((placeId, index) => index === 0 || anchors[index - 1] !== placeId);
+}
+
+function clockMinutes(value: string): number | undefined {
+  if (!validClockTime(value)) return undefined;
+  const [hour, minute] = value.split(":").map(Number);
+  return hour! * 60 + minute!;
 }
 
 function validateTravelContext(context: BlueprintItineraryDay["startContext"] | undefined, issues: string[], path: string): void {
   if (!context) return;
   if (!context.label.trim()) issues.push(`${path} requires a label`);
-  if (!["confirmed_property", "planned_base_pending_property", "unresolved_base", "transport_node", "in_transit"].includes(context.status)) issues.push(`${path} has invalid status`);
+  if (!["confirmed_property", "selected_property", "recommended_property", "planned_base_pending_property", "unresolved_base", "transport_node", "in_transit"].includes(context.status)) issues.push(`${path} has invalid status`);
 }
 
 function validateBlockSemantics(block: BlueprintItineraryBlock, issues: string[], path: string): void {
+  if (block.placeName !== undefined && !block.placeName.trim()) issues.push(`${path} has empty placeName`);
   if (block.planRole !== undefined && !["planned", "optional", "replacement"].includes(block.planRole)) issues.push(`${path} has invalid planRole`);
   if (block.replacementFor !== undefined && !block.replacementFor.trim()) issues.push(`${path} has empty replacementFor`);
   if (block.replacementForBlockId !== undefined && !block.replacementForBlockId.trim()) issues.push(`${path} has empty replacementForBlockId`);
@@ -944,6 +1024,7 @@ function validateItineraryBlockDisplay(block: BlueprintItineraryBlock, scheduled
   const display = block.display!;
   if (display.timeLabel !== undefined && !display.timeLabel.trim()) issues.push(`${path} has an empty display time label`);
   if (display.meta !== undefined && !display.meta.trim()) issues.push(`${path} has an empty display meta`);
+  if (display.timingStatus !== undefined && !["confirmed", "planned", "estimated", "unknown", "recheck"].includes(display.timingStatus)) issues.push(`${path} has invalid display timing status`);
   if (display.routeAnchor === true && !block.placeId) issues.push(`${path} display route anchor requires a place`);
   if (display.reorderable === true && (display.routeAnchor === false || !block.placeId)) issues.push(`${path} display reorderable requires a route place`);
   if (display.routeAnchor === true && block.placeId && !scheduledPlaceIds.has(block.placeId)) issues.push(`${path} display route anchor must use a scheduled stop`);

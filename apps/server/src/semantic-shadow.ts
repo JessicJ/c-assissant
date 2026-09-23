@@ -1,10 +1,12 @@
 import {
   RuntimeAdapterError,
   runSemanticPlanRepairOnce,
+  semanticFixedCommitmentsFromBookingConstraints,
   structureSemanticTravelPlan,
   validateSemanticTravelPlan,
   type CodexRuntimeAdapter,
   type SemanticPlanDecisionDiff,
+  type SemanticFixedCommitment,
   type SemanticTravelPlan,
   type ValidationFinding,
   type ValidationReport
@@ -18,11 +20,11 @@ import type {
   Plan,
   PlanningSession,
   ResearchSet,
-  SkillItineraryArtifact,
   TripBlueprint,
   WorkspaceSnapshot
 } from "@c-assistant/core";
 import type { SqliteWorkspaceStore } from "@c-assistant/storage";
+import { buildPlannedExperienceReadinessTrace } from "./semantic-readiness-trace.js";
 
 export interface SemanticShadowConfig {
   enabled: boolean;
@@ -42,6 +44,7 @@ export interface SemanticShadowSnapshot {
     immigrationStatus: WorkspaceSnapshot["profile"]["immigrationStatus"];
   };
   completedResearch: ResearchSet;
+  destinations?: string[];
   bookingConstraints: BlueprintBookingConstraint[];
   legacyPlan: Plan;
   legacyBlueprint: TripBlueprint;
@@ -107,9 +110,11 @@ export async function runSemanticShadow(snapshot: SemanticShadowSnapshot, depend
       dependencies.onDiagnostic?.({ event: "runner_started", generationKey: snapshot.generationKey });
       const plannerStartedAt = Date.now();
       dependencies.onDiagnostic?.({ event: "planner_started", generationKey: snapshot.generationKey });
+      const plannerFixedCommitments = semanticFixedCommitmentsFromBookingConstraints(snapshot.bookingConstraints);
       const semantic = await dependencies.codex.generateSemanticTravelPlan({
         request: snapshot.request,
         research: snapshot.completedResearch,
+        fixedCommitments: plannerFixedCommitments,
         profile: snapshot.profile,
         signal: controller.signal
       });
@@ -150,7 +155,12 @@ export async function runSemanticShadow(snapshot: SemanticShadowSnapshot, depend
 
       stage = "structurer";
       dependencies.onDiagnostic?.({ event: "structurer_reached", generationKey: snapshot.generationKey });
-      const structured = structureSemanticTravelPlan(finalPlan, snapshot.completedResearch, { importBlueprint: false, hardenContract: false });
+      const structured = structureSemanticTravelPlan(finalPlan, snapshot.completedResearch, {
+        importBlueprint: true,
+        hardenContract: false,
+        bookingConstraints: snapshot.bookingConstraints,
+        ...(snapshot.destinations ? { destinations: snapshot.destinations } : {})
+      });
       throwIfTimedOut(timedOut);
 
       stage = "comparison";
@@ -160,6 +170,7 @@ export async function runSemanticShadow(snapshot: SemanticShadowSnapshot, depend
         status: "completed",
         plannerRuntimeMs,
         plannerModelCallCount: 1,
+        plannerFixedCommitments,
         semanticPlan: finalPlan,
         initialReport,
         finalReport,
@@ -211,6 +222,7 @@ function buildSemanticShadowReport(input: {
   status: ShadowStatus;
   plannerRuntimeMs: number;
   plannerModelCallCount: number;
+  plannerFixedCommitments: SemanticFixedCommitment[];
   semanticPlan: SemanticTravelPlan;
   initialReport: ValidationReport;
   finalReport: ValidationReport;
@@ -229,7 +241,13 @@ function buildSemanticShadowReport(input: {
     movementCount: input.structured.artifact.movements.length,
     representationGapCount: input.structured.representationGaps.length
   };
-  const comparison = compareLegacyAndSemantic(input.snapshot, input.semanticPlan, input.structured.artifact);
+  const comparison = compareLegacyAndSemantic(input.snapshot, input.semanticPlan, input.structured);
+  const readinessTrace = buildPlannedExperienceReadinessTrace({
+    finalPlan: input.semanticPlan,
+    research: input.snapshot.completedResearch,
+    bookingConstraints: input.snapshot.bookingConstraints,
+    finalReport: input.finalReport
+  });
   return {
     type: "semantic_shadow_v1",
     identity: {
@@ -249,7 +267,10 @@ function buildSemanticShadowReport(input: {
     validator: {
       initialResult: input.initialReport.result,
       findingCountsByCategory: findingCountsByCategory(input.initialReport.findings),
-      repairRequiredFindingCount: input.initialReport.findings.filter((finding) => finding.requiresPlannerRepair).length
+      repairRequiredFindingCount: input.initialReport.findings.filter((finding) => finding.requiresPlannerRepair).length,
+      finalResult: input.finalReport.result,
+      finalFindingCountsByCategory: findingCountsByCategory(input.finalReport.findings),
+      finalRepairRequiredFindingCount: input.finalReport.findings.filter((finding) => finding.requiresPlannerRepair).length
     },
     repair: {
       attempted: input.repairAttempted,
@@ -264,7 +285,8 @@ function buildSemanticShadowReport(input: {
     semantic: semanticCounts,
     structurer: { success: true, ...structurerCounts },
     comparison,
-    commitmentPreservation: commitmentPreservationTrace(input.snapshot, input.semanticPlan, input.structured.artifact, comparison),
+    commitmentPreservation: commitmentPreservationTrace(input.snapshot, input.plannerFixedCommitments, input.semanticPlan, input.structured, comparison),
+    readinessTrace,
     watch: {
       genericConstraintExperienceCount: genericConstraintExperienceCount(input.semanticPlan),
       fillerLikeItems: fillerLikeItems(input.structured.artifact),
@@ -316,7 +338,8 @@ function semanticPlanCounts(plan: SemanticTravelPlan) {
   };
 }
 
-function compareLegacyAndSemantic(snapshot: SemanticShadowSnapshot, plan: SemanticTravelPlan, artifact: ReturnType<typeof structureSemanticTravelPlan>["artifact"]) {
+function compareLegacyAndSemantic(snapshot: SemanticShadowSnapshot, plan: SemanticTravelPlan, structured: ReturnType<typeof structureSemanticTravelPlan>) {
+  const artifact = structured.artifact;
   const legacyPresentation = snapshot.legacyPlan.presentation;
   const legacyDays = legacyPresentation?.days ?? [];
   const semanticDates = new Set(plan.dailyItinerary.map((day) => isoDate(day.date) ?? day.date));
@@ -324,7 +347,7 @@ function compareLegacyAndSemantic(snapshot: SemanticShadowSnapshot, plan: Semant
   const confirmedCommitments = snapshot.bookingConstraints
     .flatMap((constraint) => constraint.segments.map((segment) => ({ constraint, segment })))
     .filter(({ constraint, segment }) => constraint.status === "confirmed" && constraint.constraintStrength === "hard" && segment.fixedCommitment);
-  const missingConfirmedCommitments = confirmedCommitments.filter(({ constraint, segment }) => !commitmentIsStructurallyPreserved(snapshot, plan, artifact, constraint, segment));
+  const missingConfirmedCommitments = confirmedCommitments.filter(({ constraint, segment }) => !commitmentIsStructurallyPreserved(snapshot, plan, structured, constraint, segment));
   return {
     tripDayCoverage: { legacyDayCount: legacyDays.length, semanticDayCount: plan.dailyItinerary.length, matchedDateCount: legacyDays.filter((day) => semanticDates.has(day.date ?? "")).length },
     visibleItemsPerDay: artifact.days.map((day) => ({ date: day.date, semanticBlockCount: day.blocks?.length ?? 0, legacyPlaceCount: legacyDays.find((candidate) => candidate.date === day.date)?.placeIds.length ?? 0 })),
@@ -388,12 +411,13 @@ function genericConstraintExperienceCount(plan: SemanticTravelPlan): number {
 
 function fixedCommitmentChanged(diff: SemanticPlanDecisionDiff | undefined): boolean {
   if (!diff) return false;
-  return [...diff.experiencesAdded, ...diff.experiencesRemoved, ...diff.experiencesMoved, ...diff.planRoleChanges].some((item) => /flight|hotel|booking|ticket|session|commitment|event/i.test(JSON.stringify(item)));
+  return diff.fixedCommitmentChanges.length > 0
+    || [...diff.experiencesAdded, ...diff.experiencesRemoved, ...diff.experiencesMoved, ...diff.planRoleChanges].some((item) => /flight|hotel|booking|ticket|session|commitment|event/i.test(JSON.stringify(item)));
 }
 
 function suspiciousDecisionDriftCount(diff: SemanticPlanDecisionDiff | undefined): number {
   if (!diff) return 0;
-  return diff.experiencesAdded.length + diff.experiencesRemoved.length + diff.experiencesMoved.length + diff.planRoleChanges.length + diff.startEndContextChanges.length + (diff.baseStrategyChanged ? 1 : 0);
+  return diff.experiencesAdded.length + diff.experiencesRemoved.length + diff.experiencesMoved.length + diff.planRoleChanges.length + diff.startEndContextChanges.length + diff.fixedCommitmentChanges.length + (diff.baseStrategyChanged ? 1 : 0);
 }
 
 function inputDependencyCount(plan: SemanticTravelPlan): number {
@@ -401,7 +425,7 @@ function inputDependencyCount(plan: SemanticTravelPlan): number {
 }
 
 type CommitmentStageClassification = "PRESERVED" | "REPRESENTED_DIFFERENTLY" | "NOT_OBSERVED";
-type CommitmentEvidenceMatch = "research_place_id" | "exact_name" | "exact_location" | "narrative";
+type CommitmentEvidenceMatch = "stable_commitment_identity" | "research_place_id" | "exact_name" | "exact_location" | "narrative";
 interface CommitmentEvidence {
   date?: string;
   field: string;
@@ -411,8 +435,9 @@ interface CommitmentEvidence {
 
 function commitmentPreservationTrace(
   snapshot: SemanticShadowSnapshot,
+  plannerFixedCommitments: SemanticFixedCommitment[],
   plan: SemanticTravelPlan,
-  artifact: SkillItineraryArtifact,
+  structured: ReturnType<typeof structureSemanticTravelPlan>,
   comparison: ReturnType<typeof compareLegacyAndSemantic>
 ) {
   const missingIds = new Set(comparison.missingConfirmedCommitments.map((commitment) => commitment.commitmentId));
@@ -429,7 +454,7 @@ function commitmentPreservationTrace(
     };
     const researchPlace = researchPlaceForCommitment(snapshot.completedResearch, constraint, segment);
     const semantic = semanticCommitmentEvidence(plan, constraint, segment, researchPlace?.id);
-    const structurer = structurerCommitmentEvidence(artifact, constraint, segment, researchPlace?.id);
+    const structurer = structurerCommitmentEvidence(structured, constraint, segment, researchPlace?.id);
     return {
       commitmentId,
       bookingId: constraint.id,
@@ -440,7 +465,7 @@ function commitmentPreservationTrace(
         endAtLocal: segment.endAtLocal
       },
       plannerInput: {
-        directlyProvidedAsBookingConstraint: false,
+        directlyProvidedAsBookingConstraint: plannerFixedCommitments.some((commitment) => commitment.commitmentId === commitmentId && semanticFixedCommitmentMatchesSegment(commitment, constraint, segment)),
         representedInResearch: Boolean(researchPlace),
         researchPlaceId: researchPlace?.id
       },
@@ -477,6 +502,11 @@ function stageTrace(strongEvidence: CommitmentEvidence[], narrativeEvidence: Com
 function semanticCommitmentEvidence(plan: SemanticTravelPlan, constraint: BlueprintBookingConstraint, segment: BlueprintBookingSegment, researchPlaceId: string | undefined): { strongEvidence: CommitmentEvidence[]; narrativeEvidence: CommitmentEvidence[] } {
   const match = commitmentMatcher(constraint, segment);
   const strongEvidence: CommitmentEvidence[] = [];
+  for (const [index, commitment] of plan.fixedCommitments.entries()) {
+    if (semanticFixedCommitmentMatchesSegment(commitment, constraint, segment)) {
+      strongEvidence.push({ field: `fixedCommitments[${index}]`, value: commitment.commitmentId, match: "stable_commitment_identity" });
+    }
+  }
   for (const day of plan.dailyItinerary) {
     addMatchedEvidence(strongEvidence, day.startContext.label, `${isoDate(day.date) ?? day.date}.startContext`, match, { date: isoDate(day.date) ?? day.date });
     addMatchedEvidence(strongEvidence, day.endContext.label, `${isoDate(day.date) ?? day.date}.endContext`, match, { date: isoDate(day.date) ?? day.date });
@@ -496,16 +526,42 @@ function semanticCommitmentEvidence(plan: SemanticTravelPlan, constraint: Bluepr
   return { strongEvidence: dedupeEvidence(strongEvidence), narrativeEvidence: dedupeEvidence(narrativeEvidence) };
 }
 
-function commitmentIsStructurallyPreserved(snapshot: SemanticShadowSnapshot, plan: SemanticTravelPlan, artifact: SkillItineraryArtifact, constraint: BlueprintBookingConstraint, segment: BlueprintBookingSegment): boolean {
-  const researchPlace = researchPlaceForCommitment(snapshot.completedResearch, constraint, segment);
-  const semantic = semanticCommitmentEvidence(plan, constraint, segment, researchPlace?.id).strongEvidence;
-  const structurer = structurerCommitmentEvidence(artifact, constraint, segment, researchPlace?.id).strongEvidence;
-  return [...semantic, ...structurer].some((evidenceItem) => commitmentEvidenceCounts(constraint, segment, evidenceItem));
+function semanticFixedCommitmentMatchesSegment(commitment: SemanticFixedCommitment, constraint: BlueprintBookingConstraint, segment: BlueprintBookingSegment): boolean {
+  return commitment.commitmentId === commitmentIdentity(constraint, segment)
+    && commitment.bookingConstraintId === constraint.id
+    && commitment.segmentId === segment.id
+    && commitment.type === constraint.type
+    && commitment.segmentType === segment.segmentType
+    && commitment.status === "confirmed"
+    && commitment.constraintStrength === "hard"
+    && commitment.fixed === true
+    && commitment.title === constraint.title
+    && commitment.segmentTitle === segment.title
+    && commitment.startAtLocal === segment.startAtLocal
+    && commitment.startTimeZone === segment.startTimeZone
+    && commitment.endAtLocal === segment.endAtLocal
+    && commitment.endTimeZone === segment.endTimeZone
+    && commitment.origin === segment.origin
+    && commitment.destination === segment.destination
+    && commitment.location === segment.location;
 }
 
-function structurerCommitmentEvidence(artifact: SkillItineraryArtifact, constraint: BlueprintBookingConstraint, segment: BlueprintBookingSegment, researchPlaceId: string | undefined): { strongEvidence: CommitmentEvidence[] } {
+function commitmentIsStructurallyPreserved(snapshot: SemanticShadowSnapshot, plan: SemanticTravelPlan, structured: ReturnType<typeof structureSemanticTravelPlan>, constraint: BlueprintBookingConstraint, segment: BlueprintBookingSegment): boolean {
+  const researchPlace = researchPlaceForCommitment(snapshot.completedResearch, constraint, segment);
+  const semantic = semanticCommitmentEvidence(plan, constraint, segment, researchPlace?.id).strongEvidence;
+  const structurer = structurerCommitmentEvidence(structured, constraint, segment, researchPlace?.id).strongEvidence;
+  return semantic.some((evidenceItem) => commitmentEvidenceCounts(constraint, segment, evidenceItem))
+    && structurer.some((evidenceItem) => commitmentEvidenceCounts(constraint, segment, evidenceItem));
+}
+
+function structurerCommitmentEvidence(structured: ReturnType<typeof structureSemanticTravelPlan>, constraint: BlueprintBookingConstraint, segment: BlueprintBookingSegment, researchPlaceId: string | undefined): { strongEvidence: CommitmentEvidence[] } {
+  const artifact = structured.artifact;
   const match = commitmentMatcher(constraint, segment);
   const strongEvidence: CommitmentEvidence[] = [];
+  const preservedConstraint = structured.preservedBookingConstraints.find((candidate) => candidate.id === constraint.id);
+  if (preservedConstraint?.segments.some((candidate) => candidate.id === segment.id)) {
+    strongEvidence.push({ field: `bookingConstraints.${constraint.id}.${segment.id}`, value: commitmentIdentity(constraint, segment), match: "stable_commitment_identity" });
+  }
   for (const day of artifact.days) {
     addMatchedContextEvidence(strongEvidence, day.startContext, `${day.date}.startContext`, match, { date: day.date });
     addMatchedContextEvidence(strongEvidence, day.endContext, `${day.date}.endContext`, match, { date: day.date });
@@ -582,6 +638,8 @@ function commitmentIdentity(constraint: BlueprintBookingConstraint, segment: Blu
 }
 
 function representationKind(field: string): string {
+  if (field.includes("fixedCommitments")) return "semantic_fixed_commitment";
+  if (field.includes("bookingConstraints")) return "structured_booking_constraint";
   if (field.includes("startContext")) return "start_context";
   if (field.includes("endContext")) return "end_context";
   if (field.includes("tripStrategy")) return "base_strategy";
@@ -594,6 +652,7 @@ function representationKind(field: string): string {
 
 function commitmentEvidenceCounts(constraint: BlueprintBookingConstraint, segment: BlueprintBookingSegment, evidence: CommitmentEvidence): boolean {
   if (evidence.match === "narrative") return false;
+  if (evidence.match === "stable_commitment_identity") return true;
   const date = evidence.date;
   if (constraint.type === "accommodation") return accommodationEvidenceCounts(evidence.field, date, segment);
   if (constraint.type === "flight" || constraint.type === "train" || constraint.type === "rental_car") return transportEvidenceCounts(evidence.field, date, segment);
@@ -609,10 +668,10 @@ function accommodationEvidenceCounts(field: string, date: string | undefined, se
 }
 
 function transportEvidenceCounts(field: string, date: string | undefined, segment: BlueprintBookingSegment): boolean {
-  if (!date || !(field.includes("startContext") || field.includes("endContext") || field.includes("movements") || field.includes("blocks") || field.includes("experiences"))) return false;
-  const start = localDate(segment.startAtLocal);
-  const end = localDate(segment.endAtLocal);
-  return (start !== undefined && date === start) || (end !== undefined && date === end);
+  void field;
+  void date;
+  void segment;
+  return false;
 }
 
 function eventLikeEvidenceCounts(field: string, date: string | undefined, segment: BlueprintBookingSegment): boolean {
