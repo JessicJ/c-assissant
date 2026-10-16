@@ -1,0 +1,98 @@
+{
+  "attraction_closure": {
+    "file": "attraction-closure.jpg",
+    "alt": "Illustration of a traveler waiting outside a closed attraction.",
+    "sourceFile": "01_景点变化_闭馆入口前的失望旅人.png",
+    "sourceSha256": "a603a58798e0b19c4c3197d79ef305e3709c1664eb9f02f7e6b88003e035883f",
+    "sourceDimensions": [
+      1672,
+      941
+    ],
+    "dimensions": [
+      1040,
+      585
+    ],
+    "bytes": 55708,
+    "sha256": "05873e74f0af8a6fc0ecec3438c7d6ff5ca9c9e3937c620e769f1a6c7bc3031a"
+  },
+  "weather_impact": {
+    "file": "weather-impact.jpg",
+    "alt": "Illustration of a traveler sheltering from wind and rain.",
+    "sourceFile": "02_天气影响_风雨中的候车时光.png",
+    "sourceSha256": "85f27c8dc5930a277fbdef39dfe52b930ac9cd491d7be03fdec37105911b4dab",
+    "sourceDimensions": [
+      1672,
+      941
+    ],
+    "dimensions": [
+      1040,
+      585
+    ],
+    "bytes": 74755,
+    "sha256": "fc240ac91eba27f00765f77bd690828cdb2f93eeb883d2fcfb22a3e1941959bb"
+  },
+  "transport_disruption": {
+    "file": "transport-disruption.jpg",
+    "alt": "Illustration of a traveler resting at an airport.",
+    "sourceFile": "03_交通变化_机场候机小憩.png",
+    "sourceSha256": "a14e27be42ac094586cf41a71436574ca9d3c202f9d2a448d13bbcce9bec68ce",
+    "sourceDimensions": [
+      1672,
+      941
+    ],
+    "dimensions": [
+      1040,
+      585
+    ],
+    "bytes": 53679,
+    "sha256": "7732004285e88e21fa9f733b5a25118cbd6dec9eaa8472288d8c63df04f99c9d"
+  },
+  "reservation_change": {
+    "file": "reservation-change.jpg",
+    "alt": "Illustration of a traveler checking a cancelled reservation at a cafe.",
+    "sourceFile": "04_预约变化_咖啡馆取消预订的失落时刻.png",
+    "sourceSha256": "b94d71be5450dfae1533d112afc35e38614f684794c164db668d14312c7958a9",
+    "sourceDimensions": [
+      1672,
+      941
+    ],
+    "dimensions": [
+      1040,
+      585
+    ],
+    "bytes": 52740,
+    "sha256": "aef6d5000510027d746dd3e9de78e002062ce8219e77ce55bf27afd8817f9b83"
+  },
+  "arrival_conflict": {
+    "file": "arrival-conflict.jpg",
+    "alt": "Illustration of a traveler hurrying for a train.",
+    "sourceFile": "05_时间冲突_匆忙赶车的女孩.png",
+    "sourceSha256": "bf9f84b16d0119fab26f54ed057dde921e5a3cb3be19bdc95c81571a1b515e87",
+    "sourceDimensions": [
+      1672,
+      941
+    ],
+    "dimensions": [
+      1040,
+      585
+    ],
+    "bytes": 53965,
+    "sha256": "0742efaccdd55c9cb296543ab1c5efd1ceb4a66baeea67dca4017006ae983bae"
+  },
+  "opening_hours_change": {
+    "file": "opening-hours-change.jpg",
+    "alt": "Illustration of a traveler checking a clock at a ticket office.",
+    "sourceFile": "06_开放时间变化_售票处钟下的好奇旅人.png",
+    "sourceSha256": "490efef5aa9fb90139c8b876c4784c6cc88a8835edf644865e6781a410461bf5",
+    "sourceDimensions": [
+      1672,
+      941
+    ],
+    "dimensions": [
+      1040,
+      585
+    ],
+    "bytes": 51331,
+    "sha256": "af338312b04a78ac3349d1dfa277cf90f871e7eea06f05f6a179d4a24202f756"
+  }
+}
