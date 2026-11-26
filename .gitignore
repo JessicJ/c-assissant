@@ -46,3 +46,7 @@ __pycache__/
 /scripts/repair-outbound-departure.ts
 /scripts/review-current-trip.ts
 /docs/local-pilot-handover.md
+
+# Local itinerary screenshots
+/landi-editorial-daily.png
+/landi-editorial-overview.png
