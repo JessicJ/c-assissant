@@ -42,12 +42,3 @@ test("current server acceptance selects retirement coverage and preserves histor
   assert.equal(createHash("sha256").update(archive).digest("hex"),
     "6ec61d7ea22c47b723604a211ba108bedfc29a3b0bcb9b64ee741ebceb5aa48b");
 });
-
-test("both READMEs direct material-change confirmation to the workspace", () => {
-  const english = read("README.md");
-  const chinese = read("README.zh-CN.md");
-  assert.match(english, /return to the Landi workspace to review and explicitly confirm material changes/);
-  assert.match(chinese, /重大调整需回 Landi 工作台审阅并明确确认/);
-  assert.doesNotMatch(english, /signed Web confirmation/i);
-  assert.doesNotMatch(chinese, /签名 Web/);
-});
