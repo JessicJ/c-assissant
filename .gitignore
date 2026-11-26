@@ -34,3 +34,7 @@ apps/server/output/
 # Python development bytecode is local runtime output.
 __pycache__/
 *.py[cod]
+
+# Local travel exports
+/Landi-Bali-itinerary-source-2026-10-03-to-2026-10-12.json
+/Landi-Bali-left-panel-source-2026-10-03-to-2026-10-12.json
