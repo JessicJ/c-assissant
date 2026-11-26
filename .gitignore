@@ -38,3 +38,11 @@ __pycache__/
 # Local travel exports
 /Landi-Bali-itinerary-source-2026-10-03-to-2026-10-12.json
 /Landi-Bali-left-panel-source-2026-10-03-to-2026-10-12.json
+
+# Local one-off travel and pilot files
+/scripts/revise-current-new-zealand-plan.ts
+/scripts/replay-daily-accommodation-anchor-final.ts
+/scripts/add-outbound-airport-photo.ts
+/scripts/repair-outbound-departure.ts
+/scripts/review-current-trip.ts
+/docs/local-pilot-handover.md
