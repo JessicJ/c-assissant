@@ -251,3 +251,11 @@ test("route checking status feedback keeps saved plans out of the error path", (
   assert.equal(statuses.some((status) => status.tone === "error"), false);
   assert.equal(/\broute refresh\b|\bexecution\b|\breplan/i.test(statuses.map((status) => status.text).join("\n")), false);
 });
+
+
+test("保存后可撤销编辑阻止自动路线刷新，保持精确撤销版本", () => {
+  const current = workspace();
+  current.latestDirectBlueprintRevision = { id: "revision", planId: current.activePlan.id, planVersion: current.activePlan.version, blueprintId: "blueprint", blueprintVersion: 7, baseBlueprintVersion: 6, createdAt: "2026-11-05T00:00:00Z" };
+  assert.equal(automaticRouteRefreshRequestForRevision(current, revision(["move-1"])), undefined);
+  assert.equal(automaticRouteRefreshGate({ planId: "plan-1", planVersion: 4, dayId: "day-1", routeRefresh, pendingEditCount: 0, routeRefreshBusy: false, canRequest: true, savedEditUndoAvailable: true }, new Set()), undefined);
+});

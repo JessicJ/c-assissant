@@ -1,0 +1,911 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "landi.mah-business-request.v1",
+  "description": "Landi-local contract, not a supported public MAH API. Identity, digest, authoritative receipt and domain validation are mandatory in code.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "requestId",
+    "operation",
+    "scope",
+    "businessTime",
+    "input",
+    "output",
+    "execution"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "kind": {
+      "const": "landi_business_request"
+    },
+    "requestId": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+    },
+    "operation": {
+      "enum": [
+        "research_batch",
+        "itinerary_draft",
+        "itinerary_review",
+        "itinerary_repair",
+        "planned_place_image_enrichment",
+        "semantic_plan",
+        "semantic_validation",
+        "semantic_repair",
+        "planning_conversation",
+        "email_research",
+        "email_timing"
+      ]
+    },
+    "scope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "generationKey",
+            "sessionId",
+            "proposalVersion",
+            "checkpointVersion"
+          ],
+          "properties": {
+            "kind": {
+              "const": "generation"
+            },
+            "generationKey": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "proposalVersion": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "checkpointVersion": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "sessionId",
+            "requirementsVersion"
+          ],
+          "properties": {
+            "kind": {
+              "const": "conversation"
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "requirementsVersion": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "planId",
+            "planVersion",
+            "businessDate",
+            "recipientConfigRevision"
+          ],
+          "properties": {
+            "kind": {
+              "const": "email"
+            },
+            "planId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "planVersion": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "businessDate": {
+              "type": "string",
+              "format": "date"
+            },
+            "recipientConfigRevision": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      ]
+    },
+    "businessTime": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$"
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "sha256",
+        "payload"
+      ],
+      "properties": {
+        "contract": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "payload": {
+          "type": "object",
+          "minProperties": 1
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract"
+      ],
+      "properties": {
+        "contract": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "selectionOwner",
+        "preferredLanguage",
+        "capabilities",
+        "maxRuntimeSeconds",
+        "authority"
+      ],
+      "properties": {
+        "selectionOwner": {
+          "const": "mah"
+        },
+        "preferredLanguage": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "structured_output",
+              "external_current_research"
+            ]
+          },
+          "contains": {
+            "const": "structured_output"
+          }
+        },
+        "maxRuntimeSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 7200
+        },
+        "authority": {
+          "const": "artifact_only"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "research_batch"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "scope": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "generationKey",
+              "sessionId",
+              "proposalVersion",
+              "checkpointVersion"
+            ],
+            "properties": {
+              "kind": {
+                "const": "generation"
+              },
+              "generationKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "proposalVersion": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "checkpointVersion": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "input": {
+            "properties": {
+              "contract": {
+                "const": "landi.skill-research-batch-input.v1"
+              }
+            }
+          },
+          "output": {
+            "properties": {
+              "contract": {
+                "const": "landi.skill-research-batch.v1"
+              }
+            }
+          },
+          "execution": {
+            "properties": {
+              "capabilities": {
+                "contains": {
+                  "const": "external_current_research"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "itinerary_draft"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "scope": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "generationKey",
+              "sessionId",
+              "proposalVersion",
+              "checkpointVersion"
+            ],
+            "properties": {
+              "kind": {
+                "const": "generation"
+              },
+              "generationKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "proposalVersion": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "checkpointVersion": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "input": {
+            "properties": {
+              "contract": {
+                "const": "landi.skill-itinerary-input.v1"
+              }
+            }
+          },
+          "output": {
+            "properties": {
+              "contract": {
+                "const": "landi.skill-itinerary.v1"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "itinerary_review"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "scope": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "generationKey",
+              "sessionId",
+              "proposalVersion",
+              "checkpointVersion"
+            ],
+            "properties": {
+              "kind": {
+                "const": "generation"
+              },
+              "generationKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "proposalVersion": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "checkpointVersion": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "input": {
+            "properties": {
+              "contract": {
+                "const": "landi.skill-itinerary-review-input.v1"
+              }
+            }
+          },
+          "output": {
+            "properties": {
+              "contract": {
+                "const": "landi.skill-itinerary-review.v1"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "itinerary_repair"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "scope": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "generationKey",
+              "sessionId",
+              "proposalVersion",
+              "checkpointVersion"
+            ],
+            "properties": {
+              "kind": {
+                "const": "generation"
+              },
+              "generationKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "proposalVersion": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "checkpointVersion": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "input": {
+            "properties": {
+              "contract": {
+                "const": "landi.skill-itinerary-repair-input.v1"
+              }
+            }
+          },
+          "output": {
+            "properties": {
+              "contract": {
+                "const": "landi.skill-itinerary.v1"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "planned_place_image_enrichment"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "scope": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "generationKey",
+              "sessionId",
+              "proposalVersion",
+              "checkpointVersion"
+            ],
+            "properties": {
+              "kind": {
+                "const": "generation"
+              },
+              "generationKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "proposalVersion": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "checkpointVersion": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "input": {
+            "properties": {
+              "contract": {
+                "const": "landi.planned-place-image-enrichment-input.v1"
+              }
+            }
+          },
+          "output": {
+            "properties": {
+              "contract": {
+                "const": "landi.planned-place-image-enrichment.v1"
+              }
+            }
+          },
+          "execution": {
+            "properties": {
+              "capabilities": {
+                "contains": {
+                  "const": "external_current_research"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "semantic_plan"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "scope": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "generationKey",
+              "sessionId",
+              "proposalVersion",
+              "checkpointVersion"
+            ],
+            "properties": {
+              "kind": {
+                "const": "generation"
+              },
+              "generationKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "proposalVersion": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "checkpointVersion": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "input": {
+            "properties": {
+              "contract": {
+                "const": "landi.semantic-plan-input.v1"
+              }
+            }
+          },
+          "output": {
+            "properties": {
+              "contract": {
+                "const": "landi.semantic-plan.v1"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "semantic_validation"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "scope": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "generationKey",
+              "sessionId",
+              "proposalVersion",
+              "checkpointVersion"
+            ],
+            "properties": {
+              "kind": {
+                "const": "generation"
+              },
+              "generationKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "proposalVersion": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "checkpointVersion": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "input": {
+            "properties": {
+              "contract": {
+                "const": "landi.semantic-validation-input.v1"
+              }
+            }
+          },
+          "output": {
+            "properties": {
+              "contract": {
+                "const": "landi.semantic-validation.v1"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "semantic_repair"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "scope": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "generationKey",
+              "sessionId",
+              "proposalVersion",
+              "checkpointVersion"
+            ],
+            "properties": {
+              "kind": {
+                "const": "generation"
+              },
+              "generationKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "proposalVersion": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "checkpointVersion": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "input": {
+            "properties": {
+              "contract": {
+                "const": "landi.semantic-repair-input.v1"
+              }
+            }
+          },
+          "output": {
+            "properties": {
+              "contract": {
+                "const": "landi.semantic-repair.v1"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "planning_conversation"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "scope": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "sessionId",
+              "requirementsVersion"
+            ],
+            "properties": {
+              "kind": {
+                "const": "conversation"
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "requirementsVersion": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "input": {
+            "properties": {
+              "contract": {
+                "const": "landi.planning-conversation-input.v1"
+              }
+            }
+          },
+          "output": {
+            "properties": {
+              "contract": {
+                "const": "landi.planning-conversation.v1"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "email_research"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "scope": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "planId",
+              "planVersion",
+              "businessDate",
+              "recipientConfigRevision"
+            ],
+            "properties": {
+              "kind": {
+                "const": "email"
+              },
+              "planId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "planVersion": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "businessDate": {
+                "type": "string",
+                "format": "date"
+              },
+              "recipientConfigRevision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "input": {
+            "properties": {
+              "contract": {
+                "const": "landi.email-research-input.v1"
+              }
+            }
+          },
+          "output": {
+            "properties": {
+              "contract": {
+                "const": "landi.email-research.v1"
+              }
+            }
+          },
+          "execution": {
+            "properties": {
+              "capabilities": {
+                "contains": {
+                  "const": "external_current_research"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "email_timing"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "scope": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "planId",
+              "planVersion",
+              "businessDate",
+              "recipientConfigRevision"
+            ],
+            "properties": {
+              "kind": {
+                "const": "email"
+              },
+              "planId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "planVersion": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "businessDate": {
+                "type": "string",
+                "format": "date"
+              },
+              "recipientConfigRevision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "input": {
+            "properties": {
+              "contract": {
+                "const": "landi.email-timing-input.v1"
+              }
+            }
+          },
+          "output": {
+            "properties": {
+              "contract": {
+                "const": "landi.email-timing.v1"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

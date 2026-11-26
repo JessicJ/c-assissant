@@ -559,7 +559,8 @@ function structurerCommitmentEvidence(structured: ReturnType<typeof structureSem
   const match = commitmentMatcher(constraint, segment);
   const strongEvidence: CommitmentEvidence[] = [];
   const preservedConstraint = structured.preservedBookingConstraints.find((candidate) => candidate.id === constraint.id);
-  if (preservedConstraint?.segments.some((candidate) => candidate.id === segment.id)) {
+  if (preservedConstraint?.segments.some((candidate) => candidate.id === segment.id)
+    && structured.semanticPlan.fixedCommitments.some(commitment=>semanticFixedCommitmentMatchesSegment(commitment,constraint,segment))) {
     strongEvidence.push({ field: `bookingConstraints.${constraint.id}.${segment.id}`, value: commitmentIdentity(constraint, segment), match: "stable_commitment_identity" });
   }
   for (const day of artifact.days) {

@@ -22,22 +22,22 @@ export function plannedConcretePlaceIds(blueprint: TripBlueprint): string[] {
   const ids: string[] = [];
   for (const day of blueprint.days) {
     for (const block of [...(day.blocks ?? [])].sort((left, right) => left.order - right.order)) {
-      if (block.planRole !== "planned" || !block.placeId || ids.includes(block.placeId)) continue;
+      if ((block.planRole && block.planRole !== "planned") || !block.placeId || ids.includes(block.placeId)) continue;
       const place = placeById.get(block.placeId);
-      if (!place || !isConcreteTimelinePlace(block.kind, place)) continue;
+      if (!place) continue;
       ids.push(place.id);
     }
   }
   return ids;
 }
 
-export function auditPlannedPlaceImageCoverage(blueprint: TripBlueprint, research: ResearchSet): PlannedPlaceImageCoverageRow[] {
+export function auditPlannedPlaceImageCoverage(blueprint: TripBlueprint, research: ResearchSet, unconfirmedUrls?: ReadonlySet<string>): PlannedPlaceImageCoverageRow[] {
   const sourceById = new Map(research.sources.map((source) => [source.id, source] as const));
   const researchPlaceById = new Map(research.places.map((place) => [place.id, place] as const));
   const blueprintPlaceById = new Map(blueprint.places.map((place) => [place.id, place] as const));
   return plannedConcretePlaceIds(blueprint).map((placeId) => {
     const place = researchPlaceById.get(placeId) ?? blueprintPlaceById.get(placeId)!;
-    const images = usableImageCandidates(place.images ?? [], sourceById);
+    const images = usableImageCandidates(place.images ?? [], sourceById).filter(image => !unconfirmedUrls?.has(normalizeUrl(image.url)));
     return {
       placeId,
       place: place.name,
@@ -48,8 +48,8 @@ export function auditPlannedPlaceImageCoverage(blueprint: TripBlueprint, researc
   });
 }
 
-export function missingPlannedPlaceImages(blueprint: TripBlueprint, research: ResearchSet): BlueprintPlace[] {
-  const missingIds = new Set(auditPlannedPlaceImageCoverage(blueprint, research).filter((row) => row.status === "image_missing").map((row) => row.placeId));
+export function missingPlannedPlaceImages(blueprint: TripBlueprint, research: ResearchSet, unconfirmedUrls?: ReadonlySet<string>): BlueprintPlace[] {
+  const missingIds = new Set(auditPlannedPlaceImageCoverage(blueprint, research, unconfirmedUrls).filter((row) => row.status === "image_missing").map((row) => row.placeId));
   const researchPlaceById = new Map(research.places.map((place) => [place.id, place] as const));
   return plannedConcretePlaceIds(blueprint).flatMap((placeId) => {
     const place = researchPlaceById.get(placeId) ?? blueprint.places.find((candidate) => candidate.id === placeId);
@@ -57,13 +57,38 @@ export function missingPlannedPlaceImages(blueprint: TripBlueprint, research: Re
   });
 }
 
+export function removeInvalidPlannedPlaceImages(
+  research: ResearchSet,
+  blueprint: TripBlueprint,
+  invalidUrls: ReadonlySet<string>,
+  updatedAt: string
+): { research: ResearchSet; blueprint: TripBlueprint } {
+  if (!invalidUrls.size) return { research, blueprint };
+  const plannedIds = new Set(plannedConcretePlaceIds(blueprint));
+  const updatePlaces = (places: BlueprintPlace[]) => places.map((place) => {
+    if (!plannedIds.has(place.id) || !place.images?.length) return structuredClone(place);
+    const images = place.images.filter((image) => !invalidUrls.has(normalizeUrl(image.url)));
+    if (images.length === place.images.length) return structuredClone(place);
+    const next = structuredClone(place);
+    if (images.length) next.images = images;
+    else delete next.images;
+    return next;
+  });
+  const nextResearch: ResearchSet = { ...structuredClone(research), places: updatePlaces(research.places), updatedAt };
+  const nextBlueprint: TripBlueprint = { ...structuredClone(blueprint), places: updatePlaces(blueprint.places), version: blueprint.version + 1, createdAt: updatedAt };
+  assertResearchSetIntegrity(nextResearch);
+  assertTripBlueprintIntegrity(nextBlueprint, { expectedResearchPlaceIds: nextResearch.places.map((place) => place.id) });
+  return { research: nextResearch, blueprint: nextBlueprint };
+}
+
 export function mergePlannedPlaceImageEnrichment(
   research: ResearchSet,
   blueprint: TripBlueprint,
   enrichment: SkillImageEnrichmentArtifact,
-  updatedAt: string
+  updatedAt: string,
+  unconfirmedUrls?: ReadonlySet<string>
 ): { research: ResearchSet; blueprint: TripBlueprint; acceptedImageCount: number } {
-  const allowedPlaceIds = new Set(missingPlannedPlaceImages(blueprint, research).map((place) => place.id));
+  const allowedPlaceIds = new Set(missingPlannedPlaceImages(blueprint, research, unconfirmedUrls).map((place) => place.id));
   const existingSourceByUrl = new Map(research.sources.map((source) => [normalizeUrl(source.url), source] as const));
   const enrichmentSourceByUrl = new Map(enrichment.sources.map((source) => [normalizeUrl(source.url), source] as const));
   const usedSourceByUrl = new Map<string, BlueprintSource>();
@@ -96,7 +121,8 @@ export function mergePlannedPlaceImageEnrichment(
   const mergePlaces = (places: BlueprintPlace[]) => places.map((place) => {
     const incoming = imagesByPlaceId.get(place.id);
     if (!incoming?.length) return structuredClone(place);
-    const images = [...(place.images ?? []), ...incoming]
+    // New positively checked photos take priority over retained unknown candidates.
+    const images = (unconfirmedUrls?.size ? [...incoming, ...(place.images ?? [])] : [...(place.images ?? []), ...incoming])
       .filter((image, index, all) => all.findIndex((candidate) => normalizeUrl(candidate.url) === normalizeUrl(image.url)) === index)
       .slice(0, 3);
     return { ...structuredClone(place), images };
@@ -122,15 +148,6 @@ export function itinerarySemanticSnapshot(blueprint: TripBlueprint): unknown {
     bookingConstraints: blueprint.bookingConstraints,
     places: blueprint.places.map(({ images: _images, ...place }) => place)
   };
-}
-
-function isConcreteTimelinePlace(kind: string, place: BlueprintPlace): boolean {
-  if (place.accommodation) return false;
-  if (kind === "transfer" || kind === "rest" || kind === "lodging" || kind === "flexible") return false;
-  const identity = `${place.name} ${place.category} ${place.visitRole ?? ""}`.toLocaleLowerCase();
-  if (/\b(airport|terminal|station|transport|transfer|immigration|customs|check.?in|check.?out)\b/.test(identity)) return false;
-  if (kind === "meal" && !/\b(restaurant|cafe|café|warung|dining|kitchen|academy|food|bar|bakery)\b/.test(identity)) return false;
-  return true;
 }
 
 function usableImageCandidates(images: BlueprintPlaceImage[], sourceById: Map<string, BlueprintSource>): BlueprintPlaceImage[] {

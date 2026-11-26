@@ -1,7 +1,16 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import L from "leaflet";
+import { Info } from "lucide-react";
 import leafletCss from "leaflet/dist/leaflet.css?inline";
-import type { Plan, PlanPlacePriority, PlanPresentation } from "@c-assistant/core";
+import type { BlueprintEvidenceRef, DirectBlueprintReplanRequirement, Plan, PlanPlacePriority, PlanPresentation, TripBlueprint, WorkspaceSnapshot } from "@c-assistant/core";
+import { safePlanError, ApiRequestError, type DirectBlueprintRevisionInput } from "./api-client.js";
+import { bookingImpactLabel,checkedBlueprintImpact } from "./blueprint-impact-review.js";
+import { BookingRelationshipReviewPanel } from "./BookingRelationshipReviewPanel.js";
+import type { DirectBlueprintHighImpactPreview } from "@c-assistant/core";
+import type { SubmittedDraft } from "./direct-blueprint-recovery.js";
+import { BookingImportPanel } from "./BookingImportPanel.js";
+import type { AgentStatus } from "./ui-types.js";
+import { stagedItineraryMatches, staleItineraryDraftMessage, updateStagedItineraryDraft, type StagedItineraryDraft } from "./plan-mutation-recovery.js";
 import {
   buildPendingItineraryEditForWorkspace,
   buildPendingItineraryMoveForWorkspace,
@@ -16,6 +25,7 @@ import {
   itineraryCardImageForRender,
   itineraryTimelineNodesForItems,
   compactPendingItineraryEdits,
+  contextualTipsForWorkspace,
   mergePendingItineraryEdit,
   pendingItineraryDraftSummary,
   scheduledDayIdForPlace,
@@ -72,19 +82,35 @@ let googleMapsLoader: Promise<GoogleMapsNamespace> | null = null;
 const MAP_MARKER_ANCHOR = { x: 14, y: 14 } as const;
 type BlueprintMapMarkerRole = "start" | "stop" | "end" | "context";
 
-export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onApplyItineraryEdits, onRequestRouteRefresh, onUpdatePlacePriority, itineraryEditBusy = false, routeRefreshBusy = false, priorityUpdateBusyPlaceId = "" }: {
+function selectableItineraryItem(item: ItineraryCardDisplay): boolean {
+  return Boolean(item.placeId) && item.timelineRole !== "transport";
+}
+
+export function LandiBlueprintWorkspace({ rebasedDraft, reviewBlueprint, acknowledgedDraft, mutationRecoveryPending = false, savedEditUndoAvailable = false, blueprintIdentity, plan, presentation, onTaskToggle, onApplyItineraryEdits, onRequestAssistedReplanning, onRequestRouteRefresh, onReplanBookingSources,onWorkspace, onStatus, onError, itineraryEditBusy = false, routeRefreshBusy = false }: {
+  rebasedDraft?: SubmittedDraft | undefined;
+  reviewBlueprint?: TripBlueprint | undefined;
+  acknowledgedDraft?: SubmittedDraft | undefined;
+  mutationRecoveryPending?: boolean;
+  savedEditUndoAvailable?: boolean;
+  blueprintIdentity?: { id: string; version: number } | undefined;
   plan: Plan;
   presentation: PlanPresentation;
   onTaskToggle: (planId: string, taskId: string, checked: boolean) => Promise<void>;
-  onApplyItineraryEdits?: (edits: PendingItineraryEditDisplay[]) => Promise<void>;
+  onApplyItineraryEdits?: (edits: PendingItineraryEditDisplay[], extra?: DirectBlueprintRevisionInput[], highImpactConfirmation?: string, onCommitted?: () => void, draft?: SubmittedDraft) => Promise<void>;
+  onRequestAssistedReplanning?: (edits: PendingItineraryEditDisplay[], extra: DirectBlueprintRevisionInput[], requirement: DirectBlueprintReplanRequirement) => Promise<void>;
   onRequestRouteRefresh?: (refresh: ItineraryRouteRefreshDisplay) => void;
-  onUpdatePlacePriority?: (placeId: string, priority: PlanPlacePriority) => Promise<void>;
+  onReplanBookingSources?: (()=>void)|undefined;
+  onWorkspace: (workspace: WorkspaceSnapshot) => Promise<void>;
+  onStatus: (status: AgentStatus) => void;
+  onError: (message: string) => void;
   itineraryEditBusy?: boolean;
   routeRefreshBusy?: boolean;
-  priorityUpdateBusyPlaceId?: string;
 }) {
-  const workspace = useMemo(() => buildBlueprintWorkspaceDisplay(plan, presentation), [plan, presentation]);
-  const [area, setArea] = useState<BlueprintWorkspaceArea>("itinerary");
+  const workspace = useMemo(() => buildBlueprintWorkspaceDisplay(plan, presentation, reviewBlueprint && blueprintIdentity ? {blueprint:reviewBlueprint,identity:blueprintIdentity} : undefined), [plan, presentation, reviewBlueprint, blueprintIdentity?.id, blueprintIdentity?.version]);
+  const recommendedStayIds = new Set(presentation.days.flatMap((day) => (day.blocks ?? []).filter((block) => block.kind === "lodging" && block.placeId).map((block) => block.placeId!)));
+  const recommendedStays = presentation.places.filter((place) => recommendedStayIds.has(place.id) && place.accommodation?.state === "recommended");
+  const bookingActions = (presentation.actionRequirements ?? []).filter((requirement) => requirement.kind === "reservation" || requirement.kind === "transport");
+  const [area, setArea] = useState<BlueprintWorkspaceArea | "bookings">("itinerary");
   const dayStripRef = useRef<HTMLDivElement>(null);
   const dayDragRef = useRef<{ pointerId: number; startX: number; scrollLeft: number; dragged: boolean } | null>(null);
   const lastDayDragEndAtRef = useRef(0);
@@ -92,8 +118,51 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
   const [selectedPlaceId, setSelectedPlaceId] = useState(workspace.initialPlaceId);
   const [panelMode, setPanelMode] = useState<BlueprintPanelMode>("explore");
   const [guideFilter, setGuideFilter] = useState<GuideFilter>("all");
+  const [contextPlaceId, setContextPlaceId] = useState("");
+  const [contextBlockId, setContextBlockId] = useState("");
   const [placementPlaceId, setPlacementPlaceId] = useState("");
-  const [pendingEdits, setPendingEdits] = useState<PendingItineraryEditDisplay[]>([]);
+  const currentPendingStorageKey = blueprintIdentity ? `landi:pending-blueprint:blueprint:${blueprintIdentity.id}` : `landi:pending-blueprint:plan:${plan.id}`;
+  const restoredEdits = useMemo(() => readPendingWorkspaceEdits(currentPendingStorageKey), [currentPendingStorageKey]);
+  const [pendingDraft, setPendingDraft] = useState<StagedItineraryDraft | null>(restoredEdits?.draft ?? null);
+  const pendingEdits = pendingDraft?.edits ?? [];
+  const [impactReview, setImpactReview] = useState<DirectBlueprintHighImpactPreview | null>(null);
+  const [reviewingBookings, setReviewingBookings] = useState(false);
+  const [reviewingOriginalEdits, setReviewingOriginalEdits] = useState(false);
+  const [pendingExtra, setPendingExtra] = useState<{ revision: DirectBlueprintRevisionInput; label: string }[]>(restoredEdits?.extra ?? []);
+  const currentEditBinding: PendingWorkspaceEditBinding = { planId: plan.id, planVersion: plan.version, blueprintId: blueprintIdentity?.id ?? null, blueprintVersion: blueprintIdentity?.version ?? null };
+  const extraBinding = useRef<PendingWorkspaceEditBinding | null>(restoredEdits?.binding ?? (restoredEdits?.extra.length ? null : currentEditBinding));
+  const pendingStorageKey = useRef(currentPendingStorageKey);
+  const committedPendingSnapshot = useRef<{ key: string; signature: string } | null>(null);
+  const lastPersistedPendingSignature = useRef<string | null>(restoredEdits ? JSON.stringify(restoredEdits) : null);
+  const skipPreRebasePersistence = useRef(false);
+  const pendingExtraCurrent = !pendingExtra.length || samePendingWorkspaceEditBinding(extraBinding.current, currentEditBinding);
+  const exploreReturn = useRef<{ dayId: string; placeId: string; filter: GuideFilter; contextPlaceId: string; blockId: string; scroll: number } | null>(null);
+  const panelBodyRef = useRef<HTMLDivElement>(null);
+  function stageExtra(revision: DirectBlueprintRevisionInput, label: string) {
+    if (itineraryEditBusy || mutationRecoveryPending || applyingPendingEditsRef.current) return;
+    if (!pendingDraftCurrent || !pendingExtraCurrent) { onError(staleItineraryDraftMessage); return; }
+    if(revision.kind==="update_place_priority"&&(workspace.bookingAction?.(revision).knownFixed||workspace.places.find(place=>place.id===revision.placeId)?.independentFixed)){onError("Check the booking before changing a fixed commitment, or ask Landi to replan.");return;}
+    if (!pendingExtra.length) extraBinding.current = currentEditBinding;
+    const target = (value: DirectBlueprintRevisionInput) => value.kind === "update_place_priority" ? `${value.kind}:${value.placeId}` : value.kind === "set_tip_state" ? `${value.kind}:${value.tipId}:${value.pinned === undefined ? "hidden" : "pinned"}` : value.kind === "set_preparation_completed" ? `${value.kind}:${value.preparationId}` : JSON.stringify(value);
+    setPendingExtra((current) => [...current.filter((item) => target(item.revision) !== target(revision)), { revision, label }]);
+  }
+  function prepareGuide(placeId: string) {
+    const parts = placeId.split(":");
+    const kind = parts[0] === "topic" ? ({ food: "local_food", product: "local_product", experience: "experience_theme" } as const)[parts[1] as "food" | "product" | "experience"] : "place";
+    if (!kind || !blueprintIdentity) return;
+    stageExtra({ kind: "create_preparation", origin: { kind, id: parts[0] === "topic" ? parts.slice(2).join(":") : placeId, blueprintId: blueprintIdentity.id, blueprintVersion: blueprintIdentity.version } }, "Add guide to preparation");
+  }
+  function backToExplore() {
+    const saved = exploreReturn.current;
+    if (saved) { setSelectedDayId(saved.dayId); setSelectedPlaceId(saved.placeId); setGuideFilter(saved.filter); setContextPlaceId(saved.contextPlaceId); setContextBlockId(saved.blockId); requestAnimationFrame(() => { if (panelBodyRef.current) panelBodyRef.current.scrollTop = saved.scroll; }); }
+    exploreReturn.current = null; setPanelMode("explore");
+  }
+  const pendingDraftCurrent = stagedItineraryMatches(pendingDraft, plan);
+  const previewEdits = pendingDraftCurrent ? pendingEdits : [];
+  const applyingPendingEditsRef = useRef(false);
+  function setPendingEdits(update: PendingItineraryEditDisplay[] | ((current: PendingItineraryEditDisplay[]) => PendingItineraryEditDisplay[])) {
+    setPendingDraft((current) => updateStagedItineraryDraft(current, plan, update));
+  }
   const [draggedPlaceId, setDraggedPlaceId] = useState("");
   const [dragOverDropId, setDragOverDropId] = useState("");
   const [savingPreparationItemId, setSavingPreparationItemId] = useState("");
@@ -102,14 +171,51 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
   const itineraryDragRef = useRef<{ pointerId: number; placeId: string; activeDropId: string } | null>(null);
   const selectedDay = workspace.days.find((day) => day.id === selectedDayId) ?? workspace.days[0];
   const selectedActualDayId = selectedDay?.dayIds?.length ? selectedDay.defaultDayId ?? selectedDay.dayIds[selectedDay.dayIds.length - 1] : selectedDay?.id;
-  const guideCards = guideCardsForWorkspace(workspace, pendingEdits, selectedActualDayId);
-  const selectedDetail = detailDisplayForWorkspacePlace(workspace, selectedPlaceId, pendingEdits);
-  const itinerary = itineraryDisplayForWorkspace(workspace, selectedDay?.id ?? "", pendingEdits);
+  const guideCards = guideCardsForWorkspace(workspace, previewEdits, selectedActualDayId, contextPlaceId);
+  const selectedDetail = detailDisplayForWorkspacePlace(workspace, selectedPlaceId, previewEdits, workspace.bookingDayForBlock?.(selectedDay?.id??"",selectedPlaceId,contextBlockId)||selectedActualDayId);
+  const itinerary = itineraryDisplayForWorkspace(workspace, selectedDay?.id ?? "", previewEdits);
   const autoRouteRefreshAttemptedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!rebasedDraft || pendingStorageKey.current !== rebasedDraft.key || sessionStorage.getItem(rebasedDraft.key) !== rebasedDraft.signature) return;
+    try {
+      const restored = JSON.parse(rebasedDraft.signature) as PendingWorkspaceEdits;
+      setPendingDraft(restored.draft); setPendingExtra(restored.extra); extraBinding.current = restored.binding;
+      skipPreRebasePersistence.current = true;
+      lastPersistedPendingSignature.current = rebasedDraft.signature; setImpactReview(null);
+    } catch { onError("The booking review is saved and your original edits have been kept. Review the draft again."); }
+  }, [rebasedDraft]);
+  useEffect(() => {
+    if (!acknowledgedDraft) return;
+    const signature = JSON.stringify({ draft: pendingDraft, extra: pendingExtra, binding: extraBinding.current });
+    if (pendingStorageKey.current === acknowledgedDraft.key && signature === acknowledgedDraft.signature) {
+      committedPendingSnapshot.current = acknowledgedDraft;
+      setPendingDraft(null); setPendingExtra([]); setImpactReview(null);
+    }
+  }, [acknowledgedDraft]);
+  useEffect(() => {
+    try {
+      const key = pendingStorageKey.current;
+      if (!pendingDraft?.edits.length && !pendingExtra.length) {
+        if (lastPersistedPendingSignature.current && sessionStorage.getItem(key) === lastPersistedPendingSignature.current) sessionStorage.removeItem(key);
+        lastPersistedPendingSignature.current = null;
+        pendingStorageKey.current = currentPendingStorageKey;
+      }
+      else {
+        const signature = JSON.stringify({ draft: pendingDraft, extra: pendingExtra, binding: extraBinding.current });
+        if (skipPreRebasePersistence.current) { skipPreRebasePersistence.current = false; return; }
+        if (committedPendingSnapshot.current?.key === key && committedPendingSnapshot.current.signature === signature) {
+          if (sessionStorage.getItem(key) === signature) sessionStorage.removeItem(key);
+        } else {
+          sessionStorage.setItem(key, signature);
+          lastPersistedPendingSignature.current = signature;
+        }
+      }
+    } catch { onError("Unsaved changes could not be kept for reopening this page. Keep this workspace open until you save or cancel them."); }
+  }, [currentPendingStorageKey, pendingDraft, pendingExtra, rebasedDraft, onError]);
 
   useEffect(() => {
-    setPendingEdits([]);
-  }, [plan.id, plan.version]);
+    if ((!pendingDraftCurrent || !pendingExtraCurrent) && !itineraryEditBusy && !applyingPendingEditsRef.current) onError(staleItineraryDraftMessage);
+  }, [pendingDraftCurrent, pendingExtraCurrent, plan.id, plan.version, blueprintIdentity?.id, blueprintIdentity?.version, itineraryEditBusy, onError]);
 
   useEffect(() => {
     const request = automaticRouteRefreshGate({
@@ -117,19 +223,27 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
       planVersion: plan.version,
       dayId: itinerary.dayId,
       routeRefresh: itinerary.routeRefresh,
-      pendingEditCount: pendingEdits.length,
+      pendingEditCount: pendingEdits.length + pendingExtra.length + Number(mutationRecoveryPending),
+      savedEditUndoAvailable,
       routeRefreshBusy,
       canRequest: Boolean(onRequestRouteRefresh)
     }, autoRouteRefreshAttemptedRef.current);
     if (!request || !onRequestRouteRefresh) return;
     autoRouteRefreshAttemptedRef.current.add(request.key);
     onRequestRouteRefresh(request.refresh);
-  }, [itinerary.dayId, itinerary.routeRefresh, onRequestRouteRefresh, pendingEdits.length, plan.id, plan.version, routeRefreshBusy]);
+  }, [itinerary.dayId, itinerary.routeRefresh, onRequestRouteRefresh, pendingEdits.length, pendingExtra.length, mutationRecoveryPending, plan.id, plan.version, routeRefreshBusy, savedEditUndoAvailable]);
 
-  function selectPlace(placeId: string, mode: BlueprintPanelMode = "detail") {
+  function selectPlace(placeId: string, mode: BlueprintPanelMode = "detail", block?: ItineraryCardDisplay) {
+    if (block && !selectableItineraryItem(block)) return;
+    if (panelMode === "explore") exploreReturn.current = { dayId: selectedDayId, placeId, filter: guideFilter, contextPlaceId, blockId: contextBlockId, scroll: panelBodyRef.current?.scrollTop ?? 0 };
     setSelectedPlaceId(placeId);
-    const dayId = scheduledDayIdForPlace(workspace, placeId);
+    const blockDayId = block ? workspace.itineraries.flatMap((day) => day.sections ?? []).find((section) => section.items.some((item) => item.key === block.key))?.dayId ?? selectedActualDayId : undefined;
+    const dayId = block ? blockDayId : scheduledDayIdForPlace(workspace, placeId);
     if (dayId) setSelectedDayId(tabIdForActualDay(workspace, dayId));
+    const targetDay = workspace.itineraries.find((day) => day.dayId === tabIdForActualDay(workspace, dayId ?? ""));
+    const target = block ?? (targetDay?.sections?.flatMap((section) => section.items) ?? targetDay?.items)?.find((item) => selectableItineraryItem(item) && item.placeId === placeId);
+    setContextPlaceId(placeId);
+    setContextBlockId(target?.blockId ?? "");
     setPanelMode(mode);
   }
 
@@ -140,7 +254,7 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
   }
 
   function stageRemoveFromDay(placeId: string) {
-    const dayId = scheduledDayIdForPlace(workspace, placeId) ?? selectedActualDayId;
+    const dayId = (selectedDetail?.placeId===placeId?selectedDetail.scheduledDayId:undefined) ?? scheduledDayIdForPlace(workspace, placeId) ?? selectedActualDayId;
     if (!dayId) return;
     const edit = buildPendingItineraryRemoveForWorkspace(workspace, { dayId, placeId });
     if (!edit) return;
@@ -148,9 +262,13 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
   }
 
   function stagePendingEdit(edit: PendingItineraryEditDisplay) {
+    if (!pendingDraftCurrent) { onError(staleItineraryDraftMessage); return; }
+    if (itineraryEditBusy || mutationRecoveryPending || applyingPendingEditsRef.current) return;
     setPendingEdits((current) => mergePendingItineraryEdit(current, edit));
     setSelectedDayId(tabIdForActualDay(workspace, edit.dayId));
     setSelectedPlaceId(edit.placeId);
+    setContextPlaceId(edit.placeId);
+    setContextBlockId("");
     setPanelMode("explore");
   }
 
@@ -167,6 +285,7 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
   }
 
   function startItineraryCardDrag(event: PointerEvent<HTMLElement>, item: ItineraryCardDisplay) {
+    if (!pendingDraftCurrent || itineraryEditBusy || mutationRecoveryPending || applyingPendingEditsRef.current) return;
     if (!item.reorderable || !item.placeId || !selectedDay) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
     event.preventDefault();
@@ -188,6 +307,7 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
   function endItineraryCardDrag(event: PointerEvent<HTMLElement>) {
     const drag = itineraryDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
+    if (!pendingDraftCurrent) { clearItineraryCardDrag(); onError(staleItineraryDraftMessage); return; }
     event.preventDefault();
     const dropId = nearestItineraryDropId(event.clientX, event.clientY) || drag.activeDropId;
     const placeId = drag.placeId;
@@ -204,6 +324,7 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
     }
     const edit = buildPendingItineraryMoveForWorkspace(workspace, { dayId: selectedDay.id, placeId, position });
     if (edit) stagePendingEdit(edit);
+    else if(workspace.bookingAction?.({kind:"move_place_within_day",dayId:selectedDay.id,placeId,position}).knownFixed)onError("This position affects a fixed booking. Review it first or ask Landi to replan.");
   }
 
   function cancelItineraryCardDrag(event: PointerEvent<HTMLElement>) {
@@ -250,6 +371,8 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
   }
 
   function discardPendingEdits() {
+    if (itineraryEditBusy || mutationRecoveryPending || applyingPendingEditsRef.current) return;
+    setPendingExtra([]); setImpactReview(null);
     const savedItinerary = itineraryDisplayForWorkspace(workspace, selectedDay?.id ?? "", null);
     const savedPlaceIds = savedItinerary.items.flatMap((item) => item.kind === "block" && item.routeAnchor && item.placeId ? [item.placeId] : []);
     setPendingEdits([]);
@@ -260,31 +383,56 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
   }
 
   function undoPendingEdit(placeId: string) {
+    if (itineraryEditBusy || mutationRecoveryPending || applyingPendingEditsRef.current) return;
     setPendingEdits((current) => current.filter((edit) => edit.placeId !== placeId));
     setSelectedPlaceId(placeId);
+    setContextPlaceId(placeId);
+    setContextBlockId("");
   }
 
   async function togglePreparationItem(itemId: string, taskId: string | undefined, checked: boolean) {
-    if (!taskId || savingPreparationItemId) return;
+    if (savingPreparationItemId || itineraryEditBusy || mutationRecoveryPending || applyingPendingEditsRef.current) return;
+    if (!taskId) { stageExtra({ kind: "set_preparation_completed", preparationId: itemId, completed: checked }, `${checked ? "Complete" : "Reopen"} preparation item`); return; }
     setSavingPreparationItemId(itemId);
     setPreparationSaveError(null);
     try {
       await onTaskToggle(plan.id, taskId, checked);
     } catch (caught) {
-      setPreparationSaveError({ itemId, message: caught instanceof Error ? caught.message : "Checklist status could not be saved." });
+      setPreparationSaveError({ itemId, message: safePlanError(caught) });
     } finally {
       setSavingPreparationItemId("");
     }
   }
 
-  async function confirmPendingEdits() {
-    if (!pendingEdits.length || itineraryEditBusy || !onApplyItineraryEdits) return;
+  async function confirmPendingEdits(highImpactConfirmation?: string) {
+    if ((!pendingEdits.length && !pendingExtra.length) || itineraryEditBusy || mutationRecoveryPending || applyingPendingEditsRef.current || !onApplyItineraryEdits) return;
+    if (!pendingDraftCurrent || !pendingExtraCurrent) { onError(staleItineraryDraftMessage); return; }
+    const submittedDraft = pendingDraft;
+    const submittedExtra = pendingExtra;
+    const submittedStorageKey = pendingStorageKey.current;
+    const submittedSignature = JSON.stringify({ draft: submittedDraft, extra: submittedExtra, binding: extraBinding.current });
+    const onCommitted = () => {
+      const stored = sessionStorage.getItem(submittedStorageKey);
+      if (stored === submittedSignature) sessionStorage.removeItem(submittedStorageKey);
+      committedPendingSnapshot.current = { key: submittedStorageKey, signature: submittedSignature };
+      setImpactReview(null);
+      setPendingExtra((current) => current === submittedExtra ? [] : current);
+      setPendingDraft((current) => current === submittedDraft ? null : current);
+    };
+    applyingPendingEditsRef.current = true;
     try {
-      await onApplyItineraryEdits(compactPendingItineraryEdits(pendingEdits));
-      setPendingEdits([]);
+      sessionStorage.setItem(submittedStorageKey, submittedSignature);
+      if (sessionStorage.getItem(submittedStorageKey) !== submittedSignature) throw new Error("The draft recovery information could not be kept.");
+      await onApplyItineraryEdits(compactPendingItineraryEdits(pendingEdits), submittedExtra.map((item) => item.revision), highImpactConfirmation, onCommitted, { key: submittedStorageKey, signature: submittedSignature });
       setPanelMode("explore");
-    } catch {
-      // The parent surfaces the error and leaves the staged edits available.
+    } catch (caught) {
+      const payload = caught instanceof ApiRequestError && caught.code === "high_impact_confirmation_required" ? caught.payload as { impact?: typeof impactReview } : undefined;
+      const impact = checkedBlueprintImpact(payload?.impact, reviewBlueprint?.id === blueprintIdentity?.id && reviewBlueprint?.version === blueprintIdentity?.version ? reviewBlueprint : undefined,plan,[...compactPendingItineraryEdits(pendingEdits), ...submittedExtra.map((item) => item.revision)]);
+      setImpactReview(impact);
+      if (!(caught instanceof ApiRequestError)) onError(safePlanError(caught));
+      // 父组件显示安全错误，保留待确认编辑。
+    } finally {
+      applyingPendingEditsRef.current = false;
     }
   }
 
@@ -317,7 +465,8 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
 
   function selectDayTab(dayId: string) {
     setSelectedDayId(dayId);
-    const firstPlaceId = itineraryDisplayForWorkspace(workspace, dayId, pendingEdits).items[0]?.placeId;
+    setContextPlaceId(""); setContextBlockId("");
+    const firstPlaceId = itineraryDisplayForWorkspace(workspace, dayId, previewEdits).items[0]?.placeId;
     if (firstPlaceId) setSelectedPlaceId(firstPlaceId);
   }
 
@@ -331,17 +480,20 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
 
   const movableItineraryItemCount = itinerary.items.filter((item) => item.kind === "block" && item.routeAnchor && item.reorderable && item.placeId).length;
   const canReorderSelectedDay = !itinerary.sections?.length && movableItineraryItemCount > 1;
+  const visibleItineraryItems = (itinerary.sections?.length ? itinerary.sections.flatMap((section) => section.items) : itinerary.items).filter(selectableItineraryItem);
+  const currentItineraryItem = visibleItineraryItems.find((item) => Boolean(contextBlockId) && item.blockId === contextBlockId)
+    ?? visibleItineraryItems.find((item) => Boolean(item.placeId) && item.placeId === selectedPlaceId);
   function renderItineraryItems(items: ItineraryCardDisplay[]) {
     return itineraryTimelineNodesForItems(items, routeRefreshBusy).map((node) => {
       if (node.kind === "movement") return <ItineraryRouteReadout item={node.item} label={node.label} state={node.state} key={node.key} />;
       const item = node.item;
-      if (item.kind === "pending") return <PendingItineraryCard item={item} selected={selectedPlaceId === item.placeId} onSelect={() => selectPlace(item.placeId)} onUndoDraft={() => undoPendingEdit(item.placeId)} key={item.key} />;
+      if (item.kind === "pending") return <PendingItineraryCard item={item} selected={currentItineraryItem?.key === item.key} onSelect={() => selectPlace(item.placeId, "detail", item)} onUndoDraft={() => undoPendingEdit(item.placeId)} key={item.key} />;
       const displayItem = canReorderSelectedDay ? item : { ...item, reorderable: false };
       return <Fragment key={item.key}>
         {displayItem.reorderable ? <ItineraryDropZone dropId={`before-${displayItem.key}`} active={dragOverDropId === `before-${displayItem.key}`} /> : null}
         {displayItem.timelineRole === "transport"
           ? <TransportConnector item={displayItem} />
-          : <ItineraryBlockCard item={displayItem} dragging={Boolean(displayItem.placeId) && draggedPlaceId === displayItem.placeId} selected={Boolean(displayItem.placeId) && selectedPlaceId === displayItem.placeId} onSelect={() => displayItem.placeId ? selectPlace(displayItem.placeId) : undefined} onUndoDraft={() => undoPendingEdit(displayItem.placeId)} onDragStart={(event) => startItineraryCardDrag(event, displayItem)} onDragMove={moveItineraryCardDrag} onDragEnd={endItineraryCardDrag} onDragCancel={cancelItineraryCardDrag} />}
+          : <ItineraryBlockCard item={displayItem} dragging={Boolean(displayItem.placeId) && draggedPlaceId === displayItem.placeId} selected={currentItineraryItem?.key === displayItem.key} onSelect={() => { if (displayItem.placeId) { selectPlace(displayItem.placeId, "detail", displayItem); const saved = exploreReturn.current; if (panelMode === "explore" && saved) { saved.contextPlaceId = displayItem.placeId; saved.blockId = displayItem.blockId ?? ""; } } }} onUndoDraft={() => undoPendingEdit(displayItem.placeId)} onDragStart={(event) => startItineraryCardDrag(event, displayItem)} onDragMove={moveItineraryCardDrag} onDragEnd={endItineraryCardDrag} onDragCancel={cancelItineraryCardDrag} />}
       </Fragment>;
     });
   }
@@ -352,10 +504,36 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
         <h2>{workspace.title}</h2>
         <p>{workspace.dateLabel}</p>
       </div>
-      <nav aria-label="Plan workspace areas">{workspace.areas.map((item) => <button type="button" className={area === item ? "active" : ""} aria-current={area === item ? "page" : undefined} key={item} onClick={() => setArea(item)}>{areaLabel(item)}</button>)}</nav>
-      {area === "itinerary" && pendingEdits.length ? <ItineraryEditBar edits={pendingEdits} onConfirm={confirmPendingEdits} onDiscard={discardPendingEdits} canConfirm={Boolean(onApplyItineraryEdits)} busy={itineraryEditBusy} /> : null}
+      <nav aria-label="Plan workspace areas">{[...workspace.areas, "bookings" as const].map((item) => <button type="button" className={area === item ? "active" : ""} aria-current={area === item ? "page" : undefined} key={item} onClick={() => setArea(item)}>{item === "bookings" ? "Bookings" : areaLabel(item)}</button>)}</nav>
+      {pendingEdits.length || pendingExtra.length ? <ItineraryEditBar edits={pendingEdits} extraLabels={pendingExtra.map((item) => item.label)} onConfirm={() => void confirmPendingEdits()} onDiscard={discardPendingEdits} canConfirm={Boolean(onApplyItineraryEdits) && pendingDraftCurrent && pendingExtraCurrent && !mutationRecoveryPending} busy={itineraryEditBusy} /> : null}
     </header>
 
+    {(!pendingDraftCurrent || !pendingExtraCurrent) && (pendingEdits.length || pendingExtra.length) ? <section className="blueprint-impact-review" aria-label="重新审阅原修改">
+      <p>Your original edits are kept with the previous version. Review each against the current itinerary before previewing again.</p>
+      <button type="button" disabled={mutationRecoveryPending || itineraryEditBusy} onClick={() => setReviewingOriginalEdits(true)}>按当前行程重新审阅原修改</button>
+      {reviewingOriginalEdits ? <><ul>{pendingEdits.map((edit, index) => <li key={index}>Original edit: {edit.placeName} · {edit.dayLabel}; current item: {reviewBlueprint?.days.find((day) => day.id === edit.dayId)?.date ? new Date(reviewBlueprint.days.find((day) => day.id === edit.dayId)!.date + "T12:00:00").toLocaleDateString() : "Date no longer available"} · {reviewBlueprint?.places.find((place) => place.id === edit.placeId)?.name ?? "Place no longer available; select it again"}</li>)}{pendingExtra.map((item, index) => <li key={index}>{item.label}</li>)}</ul><p>Confirming creates a new pending draft. Preview and confirm it again before saving. If an original item cannot be matched exactly, discard that edit and select the item again.</p><button type="button" disabled={mutationRecoveryPending || itineraryEditBusy} onClick={() => {
+        const revisions = [...pendingEdits, ...pendingExtra.map((item) => item.revision)];
+        if (!reviewBlueprint || revisions.some((edit) => ("dayId" in edit && !reviewBlueprint.days.some((day) => day.id === edit.dayId)) || ("placeId" in edit && !reviewBlueprint.places.some((place) => place.id === edit.placeId)))) { onError("Some original items are no longer available. Select the items to change again."); return; }
+        setPendingDraft((draft) => draft ? { ...draft, planId: plan.id, version: plan.version } : null); setPendingExtra((items) => [...items]); extraBinding.current = currentEditBinding; setImpactReview(null); setReviewingOriginalEdits(false); onError("");
+      }}>我已逐项核对，重新预览原修改</button><button type="button" onClick={() => setReviewingOriginalEdits(false)}>继续保留原草稿</button></> : null}
+    </section> : null}
+    {reviewingBookings && reviewBlueprint && onApplyItineraryEdits ? <BookingRelationshipReviewPanel plan={plan} blueprint={reviewBlueprint} busy={itineraryEditBusy || mutationRecoveryPending} onError={onError} onClose={() => setReviewingBookings(false)} onSave={(revision) => onApplyItineraryEdits([], [revision])} {...(onReplanBookingSources?{onReplan:onReplanBookingSources}:{})} /> : null}
+
+    {impactReview ? <section role="dialog" aria-label="审阅本批重要修改" className="blueprint-impact-review">
+      <h3>审阅本批修改的影响</h3>
+      <p>{impactReview.dates.length ? `Affected dates: ${impactReview.dates.map((date) => new Date(`${date}T12:00:00`).toLocaleDateString()).join("，")}` : "These places are not scheduled on any day. This change affects their overall priority or archive status."}</p>
+      <h4>Places</h4><ul>{impactReview.placeIds.map((id) => <li key={id}>{presentation.places.find((place) => place.id === id)?.name ?? "Place details unavailable"}</li>)}</ul>
+      <h4>Routes</h4>{impactReview.movementIds.length ? <ul>{impactReview.movementIds.map((id) => { const route = presentation.routeSegments?.find((item) => item.id === id); const name = (placeId: string) => presentation.places.find((place) => place.id === placeId)?.name ?? "Unknown stop"; return <li key={id}>{route ? `${name(route.originPlaceId)} → ${name(route.destinationPlaceId)}` : "Route details unavailable"}</li>; })}</ul> : <p>No affected routes.</p>}
+      <h4>Reminders and preparation</h4>{impactReview.reminderRequirementIds.length ? <ul>{impactReview.reminderRequirementIds.map((id) => <li key={id}>{presentation.actionRequirements?.find((item) => item.id === id)?.title ?? "Reminder details unavailable"}</li>)}</ul> : <p>No linked reminders.</p>}
+      {([['affected', 'Known to be affected'], ['unaffected', 'Known to be unaffected'], ['unknown', 'Needs review']] as const).map(([group, title]) => <section key={group}><h4>{title}</h4>{impactReview.bookingImpact[group].length ? <ul>{impactReview.bookingImpact[group].map((item, index) => <li key={index}><strong>{bookingImpactLabel(item,presentation.bookingConstraints??[])}</strong><p>{item.rationale}</p><small>{item.evidenceRefs.map((ref) => presentation.sourceCatalog?.find((source) => source.id === ref)?.title ?? "Review information provided by the traveler").join("；")}</small></li>)}</ul> : <p>{group === 'affected' ? "No affected items are known. Check the items still awaiting review." : group === 'unknown' ? "There are no unresolved items in this review." : "No bookings have been confirmed as unaffected."}</p>}</section>)}
+      {!impactReview.bookingImpact.canConfirm ? <p>The booking links have not been fully reviewed. Your pending edits have been kept. Review the links before previewing again.</p> : null}
+      <button type="button" disabled={itineraryEditBusy || mutationRecoveryPending} onClick={() => { setReviewingBookings(true); setImpactReview(null); }}>审阅或更正预订关联</button>
+      <h4>Evidence</h4><EntrySources sources={impactReview.evidence.flatMap((ref) => { const source = presentation.sourceCatalog?.find((item) => item.id === ref.sourceId); return source ? [{ label: source.title, title: source.title, summary: ref.supports?.join("; ") ?? source.authority, url: source.url, status: ref.status, purpose: source.purpose, retrievedAt: ref.checkedAt ?? source.retrievedAt }] : []; })} />
+      <p>{pendingEdits.length ? "After saving, check the affected days’ routes and times. The approved itinerary remains in effect." : "This priority or archive change keeps the route order. The approved itinerary remains in effect."}</p>
+      {impactReview.bookingImpact.canConfirm && impactReview.nextActions.includes("confirm_removal") ? <button type="button" disabled={itineraryEditBusy || mutationRecoveryPending} onClick={() => void confirmPendingEdits(impactReview.id)}>确认并保存本批修改</button> : null}
+      {pendingEdits.some((item) => item.kind === "remove_place_from_day") ? <button type="button" disabled={!onRequestAssistedReplanning || itineraryEditBusy || mutationRecoveryPending || !pendingDraftCurrent || !pendingExtraCurrent} onClick={() => { const edit = pendingEdits.find((item) => item.kind === "remove_place_from_day"); if (!edit || !onRequestAssistedReplanning) return; void onRequestAssistedReplanning(pendingEdits, pendingExtra.map((item) => item.revision), { status: "assisted_replanning_required", editKind: edit.kind, placeId: edit.placeId, dayId: edit.dayId, reasonCode: "high_impact_place", affectedDayIds: impactReview.dayIds, affectedPlaceIds: impactReview.placeIds, explanation: "Removing this must-visit stop needs a review of the affected day.", suggestedRequest: `Please review removing ${edit.placeName} from ${edit.dayLabel} and show the resulting itinerary changes before saving.` }).catch(() => {}); }}>请 Landi 审阅本次修改</button> : null}
+      <button type="button" onClick={() => setImpactReview(null)}>Keep editing</button><button type="button" onClick={discardPendingEdits}>Cancel batch</button>
+    </section> : null}
     {area === "itinerary" ? <div className="blueprint-itinerary-grid">
       <aside className="blueprint-timeline" aria-label="Daily itinerary cards">
         <div className="blueprint-day-tabs">
@@ -365,15 +543,16 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
           </button>)}</div>
         </div>
         <div className="blueprint-timeline-list" ref={timelineListRef}>
+          {contextualTipsForWorkspace(presentation.travelTips ?? [], { dayId: selectedActualDayId, placeId: contextPlaceId, blockId: contextBlockId }).map((tip) => <button type="button" className="blueprint-context-tip" key={tip.id} onClick={() => { setArea("tips"); requestAnimationFrame(() => document.getElementById(`tip-${tip.id}`)?.scrollIntoView({ block: "center" })); }}>{tip.title} · Read full tip</button>)}
           {itinerary.sections?.length ? itinerary.sections.map((section) => <section className="blueprint-itinerary-date-section" aria-label={section.heading} key={section.key}>
             <h4>{section.heading}</h4>
-            {section.dayContext ? <DayContextNote context={section.dayContext} /> : null}
             {renderItineraryItems(section.items)}
             {!section.items.length && !section.dayContext ? <p className="blueprint-empty-note">No itinerary blocks are available for this date.</p> : null}
           </section>) : <>
-            {itinerary.dayContext ? <DayContextNote context={itinerary.dayContext} /> : null}
             {renderItineraryItems(itinerary.items)}
           </>}
+          {itinerary.routeRefresh && savedEditUndoAvailable ? <details className="blueprint-route-context"><summary>Travel times need checking</summary><p>Checking travel times creates a new saved version and ends undo for the latest edit. You can undo the edit first, or continue to check routes.</p><button type="button" disabled={routeRefreshBusy || mutationRecoveryPending || Boolean(pendingEdits.length + pendingExtra.length)} onClick={() => onRequestRouteRefresh?.(itinerary.routeRefresh!)}>Check travel times and continue</button></details> : null}
+          {itinerary.dayContext ? <details className="blueprint-route-context"><summary>Route start and end</summary><DayContextNote context={itinerary.dayContext} /></details> : null}
           {canReorderSelectedDay ? <ItineraryDropZone dropId="end" active={dragOverDropId === "end"} /> : null}
           {workspace.planAlternatives.length ? <PlanAlternatives alternatives={workspace.planAlternatives} /> : null}
           {!itinerary.items.length && !itinerary.dayContext ? <p className="blueprint-empty-note">No itinerary blocks are available for this day.</p> : null}
@@ -383,13 +562,22 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
       <BlueprintMap routePlaces={itinerary.routePlaces} routeSegments={itinerary.routeSegments} routeRefresh={itinerary.routeRefresh} markers={itinerary.markers} fallbackViewport={workspace.mapFallback} selectedPlaceId={selectedPlaceId} onSelectPlace={selectMapPlace} routeRefreshBusy={routeRefreshBusy} />
 
       <aside className="blueprint-side-panel" aria-label="Itinerary side panel">
-        <div className="blueprint-panel-body">
-          <ExplorePanel filters={workspace.guideFilters} cards={guideCards} filter={guideFilter} hidden={panelMode !== "explore"} onFilter={setGuideFilter} onSelect={selectPlace} onAdd={openPlacement} onUndoDraft={undoPendingEdit} />
-          {selectedDetail ? <DetailPanel detail={selectedDetail} hidden={panelMode !== "detail"} onBack={() => setPanelMode("explore")} onSelect={selectPlace} onAdd={openPlacement} onRemove={stageRemoveFromDay} onUndoDraft={undoPendingEdit} /> : <p className="blueprint-empty-note" hidden={panelMode !== "detail"}>Select an itinerary block or guide card to open details.</p>}
+        <div className="blueprint-panel-body" ref={panelBodyRef}>
+          <ExplorePanel selectedPlaceId={selectedPlaceId} filters={workspace.guideFilters} cards={guideCards} filter={guideFilter} hidden={panelMode !== "explore"} onFilter={setGuideFilter} onSelect={selectPlace} onAdd={openPlacement} onUndoDraft={undoPendingEdit} />
+          {selectedDetail ? <DetailPanel detail={selectedDetail} hidden={panelMode !== "detail"} onBack={backToExplore} onPriority={(priority) => stageExtra({ kind: "update_place_priority", placeId: selectedPlaceId, priority }, `${selectedDetail.title}: ${priority}`)} onPrepare={() => prepareGuide(selectedPlaceId)} onSelect={selectPlace} onAdd={openPlacement} onRemove={stageRemoveFromDay} onUndoDraft={undoPendingEdit} /> : <p className="blueprint-empty-note" hidden={panelMode !== "detail"}>Select an itinerary block or guide card to open details.</p>}
           {placementPlaceId ? <PlacementPanel key={placementPlaceId} workspace={workspace} place={workspace.places.find((place) => place.id === placementPlaceId)} hidden={panelMode !== "placement"} selectedDayId={selectedActualDayId} onBack={() => setPanelMode("explore")} onPreview={stagePendingEdit} /> : null}
         </div>
       </aside>
     </div> : null}
+
+    {area === "bookings" ? <section className="blueprint-page blueprint-bookings" aria-label="Bookings">
+      {reviewBlueprint ? <button type="button" disabled={itineraryEditBusy || mutationRecoveryPending} onClick={() => setReviewingBookings(true)}>审阅或更正预订关联</button> : null}
+      {recommendedStays.length || bookingActions.length ? <div className="blueprint-booking-todo"><h3>Still to arrange</h3><p>These are recommendations or planning tasks, not confirmed reservations.</p>
+        {recommendedStays.map((place) => <article key={place.id}><strong>Hotel · {place.name}</strong><span>Recommended stay · booking not confirmed</span></article>)}
+        {bookingActions.map((item) => <article key={item.id}><strong>{item.title}</strong><span>{item.description}</span></article>)}
+      </div> : null}
+      <fieldset disabled={mutationRecoveryPending} style={{ border: 0, margin: 0, padding: 0 }}><BookingImportPanel scope={{ type: "plan", planId: plan.id }} expectedVersion={plan.version} onWorkspace={onWorkspace} onStatus={onStatus} onError={onError} /></fieldset>
+    </section> : null}
 
     {area === "preparation" ? <section className="blueprint-page blueprint-preparation" aria-label="Preparation checklist">
       {workspace.preparationGroups.length ? workspace.preparationGroups.map((group) => <section className="blueprint-check-group" key={group.title}>
@@ -404,6 +592,8 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
           </summary>
           {item.completion ? <small>{item.completion}</small> : null}
           {item.context ? <small>{item.context}</small> : null}
+          <EntrySources sources={item.sources} />
+          {item.links?.map((link) => <a key={link.url} href={link.url} target="_blank" rel="noreferrer">{link.label} · opens only</a>)}
         </details>;
         })}</div>
       </section>) : <p className="blueprint-empty-note">No explicit travel preparation checklist is available for this plan.</p>}
@@ -412,9 +602,14 @@ export function LandiBlueprintWorkspace({ plan, presentation, onTaskToggle, onAp
     {area === "tips" ? <section className="blueprint-page blueprint-tips" aria-label="Destination tips">
       {workspace.tipGroups.length ? <div className="blueprint-tip-groups">{workspace.tipGroups.map((group) => <section className="blueprint-tip-group" key={group.theme}>
         <h4>{group.theme}</h4>
-        <div className="blueprint-tip-grid">{group.tips.map((tip) => <article key={tip.id}>
-          <p>{tip.body}</p>
+        <div className="blueprint-tip-grid">{group.tips.map((tip) => <article key={tip.id} id={`tip-${tip.id}`} className={tip.hidden ? "hidden-tip" : ""}>
+          <h5>{tip.title}{tip.pinned ? " · Pinned" : ""}{tip.hidden ? " · Hidden" : ""}</h5>
+          <p hidden={tip.hidden}>{tip.body}</p>
           <small>{tip.context}</small>
+          {!tip.hidden ? <EntrySources sources={tip.sources} /> : null}
+          <button type="button" hidden={tip.hidden} onClick={() => stageExtra({ kind: "set_tip_state", tipId: tip.id, pinned: !tip.pinned }, `${tip.title}: ${tip.pinned ? "unpin" : "pin"}`)}>{tip.pinned ? "Unpin" : "Pin"}</button>
+          <button type="button" onClick={() => stageExtra({ kind: "set_tip_state", tipId: tip.id, hidden: !tip.hidden }, `${tip.title}: ${tip.hidden ? "restore" : "hide"}`)}>{tip.hidden ? "Restore" : "Hide"}</button>
+          <button type="button" hidden={tip.hidden} onClick={() => { if (blueprintIdentity) stageExtra({ kind: "create_preparation", origin: { kind: "tip", id: tip.id, blueprintId: blueprintIdentity.id, blueprintVersion: blueprintIdentity.version } }, `Prepare: ${tip.title}`); }}>Add to preparation</button>
         </article>)}</div>
       </section>)}</div> : <p className="blueprint-empty-note">No destination-specific tips were provided in this plan.</p>}
     </section> : null}
@@ -439,19 +634,21 @@ function SourceCard({ source }: { source: BlueprintWorkspaceDisplay["sources"][n
   const supports = source.contexts?.filter((context) => /^supports\b/i.test(context)) ?? [];
   const status = sourceStatusLabel(source);
   const statusTone = sourceStatusTone(source);
-  const secondary = [publisher, source.retrievedAt ? `Retrieved ${source.retrievedAt}` : undefined, source.url].filter(Boolean);
+  const secondary = [publisher, source.retrievedAt ? `Retrieved ${localizedSourceSummary(source.retrievedAt)}` : undefined, source.url].filter(Boolean);
   const heading = source.url ? <a href={source.url} target="_blank" rel="noreferrer">{primary}</a> : <strong>{primary}</strong>;
   return <article className={`blueprint-source-card${statusTone ? ` status-${statusTone}` : ""}`}>
     <header>
       <div>{heading}{publisher ? <small>{publisher}</small> : null}</div>
       {status ? <span>{status}</span> : null}
     </header>
+    <small>{source.purpose === "inspiration" ? "Inspiration" : source.purpose === "evidence" ? "Evidence" : "Source purpose unknown"}</small>
     {supports.length ? <p>{supports.slice(0, 3).join(" · ")}</p> : null}
+    {(statusTone === "attention" || statusTone === "mixed") && source.summary ? <p>To verify: {localizedSourceSummary(source.summary)}</p> : null}
     <details>
       <summary>Details</summary>
       <div>
         {secondary.map((item) => <small key={item}>{item}</small>)}
-        <small>{source.summary}</small>
+        <small>{localizedSourceSummary(source.summary)}</small>
         {source.contexts?.filter((context) => !supports.includes(context)).map((context) => <small key={context}>{context}</small>)}
       </div>
     </details>
@@ -459,15 +656,25 @@ function SourceCard({ source }: { source: BlueprintWorkspaceDisplay["sources"][n
 }
 
 function sourceStatusLabel(source: BlueprintWorkspaceDisplay["sources"][number]): string | undefined {
+  if (source.documentStatus === "verified" && sourceHasDetailRecheck(source)) return "Source verified · Details to recheck";
+  if (source.documentStatus === "verified") return "Verified";
   if (source.status === "stale") return "Needs recheck";
   if (source.status === "recheck") return "Needs confirmation";
-  if (source.contexts?.some((context) => /needs confirmation|recheck|needs check/i.test(context))) return "Needs confirmation";
+  if (sourceHasDetailRecheck(source)) return "Needs confirmation";
   if (source.status === "verified") return "Verified";
   return undefined;
 }
 
-function sourceStatusTone(source: BlueprintWorkspaceDisplay["sources"][number]): "attention" | "verified" | undefined {
-  if (source.status === "stale" || source.status === "recheck" || source.contexts?.some((context) => /needs confirmation|recheck|needs check/i.test(context))) return "attention";
+function sourceHasDetailRecheck(source: BlueprintWorkspaceDisplay["sources"][number]): boolean {
+  return source.status === "recheck" || source.status === "stale"
+    || /needs confirmation|recheck|needs check/i.test(source.summary)
+    || Boolean(source.contexts?.some((context) => /needs confirmation|recheck|needs check/i.test(context)));
+}
+
+function sourceStatusTone(source: BlueprintWorkspaceDisplay["sources"][number]): "attention" | "mixed" | "verified" | undefined {
+  if (source.documentStatus === "verified" && sourceHasDetailRecheck(source)) return "mixed";
+  if (source.documentStatus === "verified") return "verified";
+  if (source.status === "stale" || source.status === "recheck" || sourceHasDetailRecheck(source)) return "attention";
   if (source.status === "verified") return "verified";
   return undefined;
 }
@@ -504,10 +711,10 @@ function DayContextNote({ context }: { context: DayContextDisplay }) {
   </section>;
 }
 
-function ItineraryEditBar({ edits, onConfirm, onDiscard, canConfirm, busy }: { edits: PendingItineraryEditDisplay[]; onConfirm: () => void; onDiscard: () => void; canConfirm: boolean; busy: boolean }) {
+function ItineraryEditBar({ edits, extraLabels, onConfirm, onDiscard, canConfirm, busy }: { edits: PendingItineraryEditDisplay[]; extraLabels: string[]; onConfirm: () => void; onDiscard: () => void; canConfirm: boolean; busy: boolean }) {
   const summary = pendingItineraryDraftSummary(edits);
   return <div className="blueprint-itinerary-edit-bar" role="toolbar" aria-label="Unsaved itinerary edits" aria-live="polite" aria-busy={busy || undefined}>
-    <span><strong>{summary.changeLabel}</strong><small>{summary.affectedDayLabel}</small></span>
+    <span><strong>{edits.length + extraLabels.length} unsaved changes</strong>{edits.length ? <small>{summary.affectedDayLabel}</small> : null}{extraLabels.length ? <ul>{extraLabels.map((label, index) => <li key={index}>{label}</li>)}</ul> : null}</span>
     <button type="button" onClick={onDiscard} disabled={busy}>Cancel</button>
     <button type="button" className="primary" onClick={() => void onConfirm()} disabled={!canConfirm || busy}>{busy ? "Applying..." : "Apply"}</button>
   </div>;
@@ -575,20 +782,20 @@ function ItineraryBlockCard({ item, selected, dragging, onSelect, onUndoDraft, o
     item.reorderable ? "reorderable" : "static",
     selected ? "selected" : "",
     dragging ? "dragging" : "",
-    item.editState === "moved" ? "moved" : "",
-    featurePlaceCard ? "feature-place-card" : image ? "featured" : "compact",
-    featurePlaceCard ? image ? "with-image" : "text-only" : "",
+    item.compactStep ? "compact-step" : featurePlaceCard ? "feature-place-card" : "featured",
+    image ? "with-image" : "text-only",
     item.emphasis ? `emphasis-${item.emphasis}` : "",
+    item.illustrationKind ? `illustration-${item.illustrationKind}` : "",
     `primitive-${timelineVisualPrimitiveForItem(item)}`,
     `role-${item.timelineRole}`,
     `type-${item.type}`
   ].filter(Boolean).join(" ");
   return <article className={className}>
-    {item.timeLabel ? <time className="blueprint-itinerary-time">{item.timeLabel}</time> : <span className="blueprint-itinerary-time blueprint-itinerary-time-empty" aria-hidden="true" />}
+    {item.timeLabel ? <time className={`blueprint-itinerary-time${/[A-Za-z\p{Script=Han}]/u.test(item.timeLabel) ? " descriptive-time" : ""}`}>{item.timeLabel}</time> : <span className="blueprint-itinerary-time blueprint-itinerary-time-empty" aria-hidden="true" />}
     <span className="blueprint-itinerary-rail" aria-hidden="true" />
     <span className="blueprint-itinerary-icon" aria-hidden="true">{itineraryItemIcon(item)}</span>
     {item.reorderable ? <button type="button" className="blueprint-itinerary-drag-handle" aria-label={`Move ${item.title}`} onPointerDown={onDragStart} onPointerMove={onDragMove} onPointerUp={onDragEnd} onPointerCancel={onDragCancel}>⠿</button> : null}
-    <button type="button" className="blueprint-itinerary-card-main" onClick={onSelect}>
+    <button type="button" className="blueprint-itinerary-card-main" aria-current={selected ? "true" : undefined} onClick={onSelect}>
       {featurePlaceCard ? <>
         {image ? <img className={imageClassName} src={image.url} alt={image.alt} loading="lazy" referrerPolicy="no-referrer" onLoad={() => setLoadedImageUrl(image.url)} onError={failImage} /> : null}
         <div className="blueprint-itinerary-feature-content">
@@ -600,7 +807,7 @@ function ItineraryBlockCard({ item, selected, dragging, onSelect, onUndoDraft, o
           </span>
         </div>
       </> : <>
-        {image ? <img className={imageClassName} src={image.url} alt={image.alt} loading="lazy" referrerPolicy="no-referrer" onLoad={() => setLoadedImageUrl(image.url)} onError={failImage} /> : null}
+        {!item.compactStep ? image ? <img className={imageClassName} src={image.url} alt={image.alt} loading="lazy" referrerPolicy="no-referrer" onLoad={() => setLoadedImageUrl(image.url)} onError={failImage} /> : null : null}
         <div className="blueprint-itinerary-card-heading">
           <div className="blueprint-itinerary-card-copy">
             <strong>{item.title}</strong>
@@ -624,11 +831,11 @@ function locationPinIcon() {
 function PendingItineraryCard({ item, selected, onSelect, onUndoDraft }: { item: ItineraryCardDisplay; selected: boolean; onSelect: () => void; onUndoDraft: () => void }) {
   const [failedImageUrl, setFailedImageUrl] = useState("");
   const image = itineraryCardImageForRender(item.image, failedImageUrl);
-  return <article className={`blueprint-itinerary-block blueprint-itinerary-block-pending ${image ? "featured" : "compact"} primitive-${timelineVisualPrimitiveForItem(item)} role-${item.timelineRole} type-${item.type}${selected ? " selected" : ""}`}>
+  return <article className={`blueprint-itinerary-block blueprint-itinerary-block-pending featured primitive-${timelineVisualPrimitiveForItem(item)} role-${item.timelineRole} type-${item.type}${selected ? " selected" : ""}`}>
     <time className="blueprint-itinerary-time">{item.timeLabel}</time>
     <span className="blueprint-itinerary-rail" aria-hidden="true" />
     <span className="blueprint-itinerary-icon" aria-hidden="true">{itineraryItemIcon(item)}</span>
-    <button type="button" className="blueprint-itinerary-card-main" aria-label={`Pending itinerary edit for ${item.title}`} onClick={onSelect}>
+    <button type="button" className="blueprint-itinerary-card-main" aria-current={selected ? "true" : undefined} aria-label={`Pending itinerary edit for ${item.title}`} onClick={onSelect}>
       {image ? <img className="blueprint-itinerary-thumbnail" src={image.url} alt={image.alt} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailedImageUrl(image.url)} /> : null}
       <div className="blueprint-itinerary-card-heading">
         <div className="blueprint-itinerary-card-copy">
@@ -902,13 +1109,12 @@ function LeafletBlueprintMap({ routePlaces, routeSegments, routeRefresh, markers
   </section>;
 }
 
-function ExplorePanel({ filters, cards, filter, hidden, onFilter, onSelect, onAdd, onUndoDraft }: { filters: readonly Exclude<GuideFilter, "all">[]; cards: GuideCardDisplay[]; filter: GuideFilter; hidden: boolean; onFilter: (filter: GuideFilter) => void; onSelect: (placeId: string) => void; onAdd: (placeId: string) => void; onUndoDraft: (placeId: string) => void }) {
+function ExplorePanel({ selectedPlaceId, filters, cards, filter, hidden, onFilter, onSelect, onAdd, onUndoDraft }: { selectedPlaceId: string; filters: readonly Exclude<GuideFilter, "all">[]; cards: GuideCardDisplay[]; filter: GuideFilter; hidden: boolean; onFilter: (filter: GuideFilter) => void; onSelect: (placeId: string) => void; onAdd: (placeId: string) => void; onUndoDraft: (placeId: string) => void }) {
   const visibleCards = filterGuideCards(cards, { type: filter });
   return <div className="blueprint-explore-panel blueprint-panel-view" hidden={hidden}>
-    <header><h3>Explore</h3></header>
     <div className="blueprint-guide-filters">{filters.map((item) => <button type="button" className={filter === item ? "active" : ""} aria-pressed={filter === item} onClick={() => onFilter(filter === item ? "all" : item)} key={item}>{guideFilterLabel(item)}</button>)}</div>
     <div className="blueprint-guide-list">
-      {visibleCards.map((card) => <article className="blueprint-guide-card" key={card.placeId}>
+      {visibleCards.map((card) => <article className={`blueprint-guide-card${selectedPlaceId === card.placeId ? " selected" : ""}`} key={`${card.placeId}-${card.type}`}>
         <button type="button" className="blueprint-guide-card-main" onClick={() => onSelect(card.placeId)}>
           <header><div><strong>{card.title}</strong><small>{[card.typeLabel, card.locationLabel].filter(Boolean).join(" · ")}</small></div>{card.practicalSignal ? <span className="blueprint-practical-pill">{card.practicalSignal}</span> : <span className="blueprint-priority-pill">{card.priorityLabel}</span>}</header>
           <p>{card.summary}</p>
@@ -916,9 +1122,11 @@ function ExplorePanel({ filters, cards, filter, hidden, onFilter, onSelect, onAd
             {card.planFitLabel ? <span>{card.planFitLabel}</span> : null}
             {!card.practicalSignal && card.priorityLabel ? <small>{card.priorityLabel}</small> : null}
           </div>
-          {card.image ? <SafeGuideImage image={card.image} /> : null}
+
           {card.tags.length ? <div className="blueprint-guide-tags">{card.tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
         </button>
+        {card.image ? <SafeGuideImage image={card.image} source={card.imageSource} /> : null}
+        <EntrySources sources={card.sources} />
         {(card.footerNote || card.canAdd || card.draftActionLabel || card.state === "scheduled") ? <footer>{card.footerNote ? <span>{card.footerNote}</span> : card.state === "scheduled" ? <span>Already in plan</span> : <span />}{card.canAdd && card.actionLabel ? <button type="button" onClick={() => onAdd(card.placeId)}>{card.actionLabel}</button> : null}{card.draftActionLabel ? <button type="button" className="secondary" onClick={() => onUndoDraft(card.placeId)}>{card.draftActionLabel}</button> : null}</footer> : null}
       </article>)}
       {!visibleCards.length ? <p className="blueprint-empty-note">No guide cards match these filters.</p> : null}
@@ -926,27 +1134,25 @@ function ExplorePanel({ filters, cards, filter, hidden, onFilter, onSelect, onAd
   </div>;
 }
 
-function SafeGuideImage({ image }: { image: GuideCardImageDisplay }) {
+function SafeGuideImage({ image, source }: { image: GuideCardImageDisplay; source?: BlueprintWorkspaceDisplay["sources"][number] | undefined }) {
   const [failed, setFailed] = useState(false);
   if (failed) return null;
-  return <img className="blueprint-guide-card-image" src={image.url} alt={image.alt} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />;
+  return <figure className="blueprint-guide-image"><img className="blueprint-guide-card-image" src={image.url} alt={image.alt} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />{source ? <ImageSource source={source} /> : null}</figure>;
 }
 
-function SafeDetailImageFigure({ image }: { image: DetailImageDisplay }) {
-  const [failed, setFailed] = useState(false);
-  if (failed) return null;
+function SafeDetailImageFigure({ images }: { images: DetailImageDisplay[] }) {
+  const [failedUrls, setFailedUrls] = useState<string[]>([]);
+  const image = images.find((candidate) => !failedUrls.includes(candidate.url));
+  if (!image) return null;
   return <figure className="blueprint-detail-image">
-    <img src={image.url} alt={image.alt} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
-    <figcaption>
-      {image.caption ? <span>{image.caption}</span> : null}
-      {image.source.url
-        ? <a className="blueprint-detail-image-source" href={image.source.url} target="_blank" rel="noreferrer" aria-label={`Image source: ${image.source.summary}`}><span>Source</span><small role="tooltip">{image.source.summary}</small></a>
-        : <span className="blueprint-detail-image-source" tabIndex={0} aria-label={`Image source: ${image.source.summary}`}><span>Source</span><small role="tooltip">{image.source.summary}</small></span>}
-    </figcaption>
+    <img src={image.url} alt={image.alt} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailedUrls((current) => [...current, image.url])} />
+    <figcaption><ImageSource source={image.source} /></figcaption>
   </figure>;
 }
 
-function DetailPanel({ detail, hidden, onBack, onSelect, onAdd, onRemove, onUndoDraft }: { detail: DetailPlaceDisplay; hidden: boolean; onBack: () => void; onSelect: (placeId: string) => void; onAdd: (placeId: string) => void; onRemove: (placeId: string) => void; onUndoDraft: (placeId: string) => void }) {
+const comparisonColumnLabels = ["Place", "Where", "Fit", "Timing", "Before going", "Reference"] as const;
+
+function DetailPanel({ detail, hidden, onBack, onSelect, onAdd, onRemove, onUndoDraft, onPriority, onPrepare }: { onPriority: (priority: PlanPlacePriority) => void; onPrepare: () => void; detail: DetailPlaceDisplay; hidden: boolean; onBack: () => void; onSelect: (placeId: string) => void; onAdd: (placeId: string) => void; onRemove: (placeId: string) => void; onUndoDraft: (placeId: string) => void }) {
   const showPrimaryAction = detail.scheduled || detail.canAdd || detail.primaryActionLabel !== "Background note";
   const showRemoveAction = detail.scheduled
     && (detail.canRemoveFromDay || detail.removeBlockedReason)
@@ -958,7 +1164,8 @@ function DetailPanel({ detail, hidden, onBack, onSelect, onAdd, onRemove, onUndo
       <div><h3>{detail.title}</h3>{detail.heroMeta.length ? <p>{detail.heroMeta.join(" · ")}</p> : null}</div>
     </header>
     {detail.itineraryDraftNote ? <p className="blueprint-detail-draft-note">{detail.itineraryDraftNote}</p> : null}
-    {detail.image ? <SafeDetailImageFigure image={detail.image} /> : null}
+    {detail.bookingRelationshipNote ? <p>{detail.bookingRelationshipNote}</p> : null}
+    {detail.image ? <SafeDetailImageFigure key={detail.placeId} images={detail.imageCandidates ?? [detail.image]} /> : null}
     <section><h4>{detail.leadTitle}</h4><p>{detail.leadBody}</p></section>
     {(detail.visitFacts.length || (detail.planTitle && detail.planBody)) ? <section className="blueprint-detail-visit"><h4>Your visit</h4>{detail.visitFacts.length ? <div className="blueprint-detail-facts">{detail.visitFacts.map((fact) => <span key={fact}>{fact}</span>)}</div> : null}{detail.planTitle && detail.planBody ? <p>{detail.planBody}</p> : null}</section> : null}
     {(detail.reservationNote || detail.visitNotes.length) ? <section><h4>Before you go</h4>{detail.reservationNote ? <p>{detail.reservationNote}</p> : null}{detail.visitNotes.length ? <div className="blueprint-detail-visit-notes">{detail.visitNotes.map((note) => <article key={note.id}>
@@ -968,24 +1175,34 @@ function DetailPanel({ detail, hidden, onBack, onSelect, onAdd, onRemove, onUndo
     </article>)}</div> : null}</section> : null}
     {detail.itineraryContext ? <section className="blueprint-detail-itinerary-context"><h4>{detail.itineraryContext.title}</h4>{detail.itineraryContext.body ? <p>{detail.itineraryContext.body}</p> : null}{detail.itineraryContext.items?.length ? <ul>{detail.itineraryContext.items.map((item) => <li key={item}>{item}</li>)}</ul> : null}</section> : null}
     {detail.comparisonTitle ? <section className="blueprint-comparison"><h4>Nearby & alternatives</h4><div role="table" aria-label={detail.comparisonTitle}>
-      <div role="row"><span>Place</span><span>Where</span><span>Fit</span><span>Timing</span><span>Before going</span><span>Reference</span><span /></div>
-      {detail.comparisonRows.map((row) => <div role="row" key={row.id}><strong>{row.name}</strong><span>{row.area}</span><span>{row.routeFit}</span><span>{row.timing}</span><span>{row.effort}</span><span>{row.sourceState}</span><button type="button" onClick={() => onSelect(row.id)}>Open</button></div>)}
+      <div role="row" className="blueprint-comparison-heading">{comparisonColumnLabels.map((label) => <span role="columnheader" key={label}>{label}</span>)}<span role="columnheader" aria-label="操作" /></div>
+      {detail.comparisonRows.map((row) => <div role="rowgroup" key={row.id}>
+        <div role="row"><strong role="rowheader">{row.name}</strong><span role="cell" data-label={comparisonColumnLabels[1]}>{row.area}</span><span role="cell" data-label={comparisonColumnLabels[2]}>{row.routeFit}</span><span role="cell" data-label={comparisonColumnLabels[3]}>{row.timing}</span><span role="cell" data-label={comparisonColumnLabels[4]}>{row.effort}</span><span role="cell" data-label={comparisonColumnLabels[5]}>{row.sourceState}</span><div role="cell" className="blueprint-comparison-actions">{row.relatedPlaceId ? <><button type="button" onClick={() => onSelect(row.relatedPlaceId!)}>Open</button>{row.canAdd ? <button type="button" onClick={() => onAdd(row.relatedPlaceId!)}>Add</button> : null}</> : null}</div></div>
+        <div role="row" className="blueprint-comparison-evidence"><div role="cell" aria-colspan={7} aria-label={`${row.name}：事实与来源`}>
+          {row.facts?.map((fact, index) => <div className="blueprint-comparison-fact" key={index}><strong>{fact.label}</strong> {fact.value}<EntrySources sources={fact.sources} /></div>)}
+          <EntrySources sources={row.sources} />
+        </div></div>
+      </div>)}
     </div></section> : null}
     {(detail.detailSections.length || detail.guideContext.length || detail.relatedEvents.length) ? <section className="blueprint-detail-more"><h4>More about this place</h4>
-      {detail.detailSections.map((section) => <article key={section.title}><h5>{section.title}</h5>{section.body ? <p>{section.body}</p> : null}{section.items?.length ? <ul>{section.items.map((item) => <li key={item}>{item}</li>)}</ul> : null}</article>)}
+      {detail.detailSections.map((section, index) => <article key={`${section.title}-${index}`}><h5>{section.title}</h5>{section.body ? <p>{section.body}</p> : null}{section.items?.length ? <ul>{section.items.map((item) => <li key={item}>{item}</li>)}</ul> : null}{section.sources ? <EntrySources sources={section.sources} /> : null}</article>)}
     </section> : null}
     {detail.guideContext.length ? <section className="blueprint-detail-guide-context"><h4>Worth noticing here</h4><div>{detail.guideContext.map((item) => <article key={`${item.kind}-${item.id}`}>
       <span>{item.label}</span>
       <strong>{item.title}</strong>
       {item.context ? <small>{item.context}</small> : null}
       <p>{item.description}</p>
+      <EntrySources sources={item.sources} />
     </article>)}</div></section> : null}
     {detail.relatedEvents.length ? <section className="blueprint-detail-events"><h4>Timing notes</h4><div>{detail.relatedEvents.map((event) => <article key={event.id}>
       <strong>{event.title}</strong>
       <p>{event.description}</p>
+      <EntrySources sources={event.sources} />
       {(event.dateLabel || event.locationLabel) ? <small>{[event.dateLabel, event.locationLabel].filter(Boolean).join(" · ")}</small> : null}
     </article>)}</div></section> : null}
-    {detail.sources.length ? <details className="blueprint-detail-sources"><summary>{detail.sourceTitle ?? "Sources & verification"}</summary><div>{detail.sources.map((source) => source.url ? <a href={source.url} target="_blank" rel="noreferrer" key={`${source.url}-${source.summary}`}>{source.summary}</a> : <span key={source.summary}>{source.summary}</span>)}</div></details> : null}
+    {!detail.sources.length ? <EntrySources /> : null}
+    {detail.sources.length ? <details className="blueprint-detail-sources"><summary>{detail.sourceTitle ?? "Sources & verification"}</summary><div>{detail.sources.map((source) => source.url ? <a href={source.url} target="_blank" rel="noreferrer" key={`${source.url}-${source.summary}`}>{localizedSourceSummary(source.summary)}</a> : <span key={source.summary}>{localizedSourceSummary(source.summary)}</span>)}</div></details> : null}
+    <section className="blueprint-detail-priorities">{detail.priorityActions.map((action) => <button key={action.priority} type="button" aria-pressed={action.active} disabled={action.disabled || action.active} title={action.disabledReason} onClick={() => onPriority(action.priority)}>{action.label}</button>)}<button type="button" onClick={onPrepare}>Add to preparation</button></section>
     {showActions ? <section className="blueprint-detail-actions">
       {showPrimaryAction ? detail.scheduled || detail.canAdd ? <button type="button" onClick={() => detail.scheduled ? onSelect(detail.placeId) : onAdd(detail.placeId)}>{detail.primaryActionLabel}</button> : <span>{detail.primaryActionLabel}</span> : null}
       {showRemoveAction ? <button type="button" className="secondary" disabled={!detail.canRemoveFromDay} title={detail.removeBlockedReason} onClick={() => onRemove(detail.placeId)}>{detail.removeActionLabel ?? detail.removeBlockedReason ?? "Remove from day"}</button> : null}
@@ -1004,9 +1221,10 @@ function PlacementPanel({ workspace, place, hidden, selectedDayId, onBack, onPre
   if (!place || !day) return <div className="blueprint-placement-panel blueprint-panel-view" hidden={hidden}><p className="blueprint-empty-note">Select a guide card before choosing placement.</p></div>;
   const positionOptions = itinerary?.placementOptions ?? [];
   const selectedPosition = positionOptions.find((option) => option.id === position) ?? positionOptions[positionOptions.length - 1];
-  const pendingPreview = buildPendingItineraryEditForWorkspace(workspace, place.id, { dayId: day.id, positionId: selectedPosition?.id ?? "end" });
+  const finalPlacement={kind:"add_place_to_day",placeId:place.id,dayId:day.id,position:selectedPosition?.kind==="after"&&selectedPosition.afterPlaceId?{kind:"after" as const,afterPlaceId:selectedPosition.afterPlaceId}:selectedPosition?.kind==="start"?{kind:"start" as const}:{kind:"end" as const}};
+  const pendingPreview = buildPendingItineraryEditForWorkspace(workspace, place.id, { dayId: finalPlacement.dayId, positionId: selectedPosition?.id ?? "end" });
   function previewPlacement() {
-    onPreview(pendingPreview);
+    if(pendingPreview)onPreview(pendingPreview);
   }
   return <div className="blueprint-placement-panel blueprint-panel-view" hidden={hidden}>
     <header>
@@ -1024,11 +1242,12 @@ function PlacementPanel({ workspace, place, hidden, selectedDayId, onBack, onPre
       <h4>Position</h4>
       <div className="blueprint-placement-options">{positionOptions.map((option) => <button type="button" className={option.id === selectedPosition?.id ? "active" : ""} key={option.id} onClick={() => setPosition(option.id)}>{option.label}</button>)}</div>
     </section>
-    {pendingPreview.advisories.length ? <section className="blueprint-placement-advisory-panel">
+    {workspace.bookingAction?.(finalPlacement).unknown ? <p>The booking links need review. Review them before previewing again; they will be checked again before saving.</p> : null}
+    {pendingPreview?.advisories.length ? <section className="blueprint-placement-advisory-panel">
       <h4>Before adding</h4>
       <ul className="blueprint-placement-advisories">{pendingPreview.advisories.map((advisory) => <li className={advisory.tone} key={advisory.text}>{advisory.text}</li>)}</ul>
     </section> : null}
-    <section className="blueprint-detail-actions"><button type="button" onClick={previewPlacement}>Add to draft</button></section>
+    <section className="blueprint-detail-actions">{!pendingPreview?<p>This arrangement affects a fixed booking. Review it first or ask Landi to replan.</p>:null}<button type="button" disabled={!pendingPreview} onClick={previewPlacement}>Add to draft</button></section>
   </div>;
 }
 
@@ -1272,4 +1491,37 @@ function escapeHtml(value: string): string {
     "\"": "&quot;",
     "'": "&#39;"
   })[character]!);
+}
+
+function EntrySources({ sources = [], inline = false }: { sources?: BlueprintWorkspaceDisplay["sources"] | undefined; inline?: boolean }) {
+  const Root = inline ? "span" : "div";
+  const SourceSummary = inline ? "span" : "small";
+  return <Root className="blueprint-entry-sources">{sources.length ? sources.map((source, index) => {
+    const title = source.url ? source.title ?? source.label : source.label;
+    return <span key={`${source.url}-${index}`}>{source.url && !inline ? <a href={source.url} target="_blank" rel="noreferrer">{title}</a> : title} · {source.purpose === "inspiration" ? "Inspiration" : source.purpose === "evidence" ? "Evidence" : "Source purpose unknown"} · {source.status ?? "unknown"} · {source.retrievedAt ? new Date(source.retrievedAt).toLocaleDateString() : "Freshness unknown"}<SourceSummary className="blueprint-entry-source-summary">{localizedSourceSummary(source.summary)}</SourceSummary></span>;
+  }) : <SourceSummary className="blueprint-entry-source-summary">Evidence unavailable · Freshness unknown</SourceSummary>}</Root>;
+}
+function ImageSource({ source }: { source: BlueprintWorkspaceDisplay["sources"][number] }) {
+  return <details className="blueprint-image-source"><summary aria-label="Image source"><Info size={16} /><span role="tooltip"><EntrySources sources={[source]} inline /></span></summary><EntrySources sources={[source]} /></details>;
+}
+
+function localizedSourceSummary(value: string): string {
+  return value.replace(/\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)?/g, (stamp) => {
+    const date = new Date(stamp.length === 10 ? `${stamp}T12:00:00` : stamp);
+    return Number.isNaN(date.getTime()) ? stamp : stamp.length === 10 ? date.toLocaleDateString() : date.toLocaleString();
+  });
+}
+
+type PendingWorkspaceEditBinding = { planId: string; planVersion: number; blueprintId: string | null; blueprintVersion: number | null };
+type PendingWorkspaceEdits = { draft: StagedItineraryDraft | null; extra: { revision: DirectBlueprintRevisionInput; label: string }[]; binding: PendingWorkspaceEditBinding | null };
+function samePendingWorkspaceEditBinding(left: PendingWorkspaceEditBinding | null, right: PendingWorkspaceEditBinding): boolean {
+  return Boolean(left && left.planId === right.planId && left.planVersion === right.planVersion && left.blueprintId === right.blueprintId && left.blueprintVersion === right.blueprintVersion);
+}
+function readPendingWorkspaceEdits(storageKey: string): PendingWorkspaceEdits | null {
+  try {
+    const raw = sessionStorage.getItem(storageKey);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as PendingWorkspaceEdits;
+    return Array.isArray(value.extra) && (value.draft === null || Array.isArray(value.draft?.edits)) ? value : null;
+  } catch { return null; }
 }

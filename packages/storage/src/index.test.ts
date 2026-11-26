@@ -1,12 +1,42 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { TRIP_BLUEPRINT_SCHEMA_VERSION, compilePlanProposal, compileTripBlueprint, type PlanCompilationProposal, type ResearchSet, type TravelBooking, type TripBlueprint } from "@c-assistant/core";
+import { TRIP_BLUEPRINT_SCHEMA_VERSION, compilePlanProposal, compileTripBlueprint, bookingTaskRequirementId, bookingRelationshipDigest, type PlanCompilationProposal, type ResearchSet, type TravelBooking, type TripBlueprint } from "@c-assistant/core";
 import { SqliteWorkspaceStore } from "./index.js";
+
+test("execution Blueprint repair preserves the approved Plan and rejects stale versions", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const session = store.createPlanningSession("travel");
+  const proposal = { version: 1, title: "Trip", objective: "Travel", theme: "Travel", segments: ["Los Angeles"], skeleton: ["2026-11-02"], tradeoffs: [], assumptions: [], decisionPoints: [] };
+  store.savePlanningSession({ ...session, status: "proposal_ready", proposal });
+  store.confirmPlanningSession(session.id, 1);
+  const blueprint: TripBlueprint = { schemaVersion: TRIP_BLUEPRINT_SCHEMA_VERSION, id: "b-repair", version: 1, generationKey: "g-repair", proposalRef: { sessionId: session.id, proposalVersion: 1 }, skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" }, researchSetId: "r-repair", title: "Departure", summary: "Travel", language: "en", destinations: ["Los Angeles"], startDate: "2026-11-02", endDate: "2026-11-02", places: [], events: [], sources: [], days: [{ id: "departure", date: "2026-11-02", kind: "transit", city: "Los Angeles", title: "Departure", summary: "Travel", stops: [], blocks: [{ id: "initial-prep", kind: "rest", order: 1, title: "Check departure details", evidence: [] }], candidatePlaceIds: [] }], movements: [], actionRequirements: [], createdAt: "2026-10-08T00:00:00Z" };
+  store.saveBlueprintGeneration({ generationKey: blueprint.generationKey, proposalRef: blueprint.proposalRef, skillLineage: blueprint.skillLineage, stage: "ready", status: "completed", createdAt: blueprint.createdAt, updatedAt: blueprint.createdAt });
+  const research: ResearchSet = { schemaVersion: TRIP_BLUEPRINT_SCHEMA_VERSION, id: blueprint.researchSetId, generationKey: blueprint.generationKey, proposalRef: blueprint.proposalRef, skillLineage: blueprint.skillLineage, status: "completed", batches: [], places: [], events: [], sources: [], actionRequirements: [], createdAt: blueprint.createdAt, updatedAt: blueprint.createdAt };
+  store.saveResearchSet(research);
+  store.saveTripBlueprint(blueprint);
+  const draft = store.createCompiledBlueprintPlan(compileTripBlueprint(blueprint, { createdAt: blueprint.createdAt })).activePlan;
+  store.confirmPlan(draft.id);
+  const plan = store.getExecutionPlan()!;
+  const repaired = structuredClone(blueprint);
+  repaired.version = 2;
+  repaired.days[0]!.blocks = [{ id: "prep", kind: "rest", order: 1, title: "Prepare for departure", evidence: [] }];
+  store.saveTripBlueprint(repaired);
+  const updated = store.saveExecutionBlueprintRepair({ planId: plan.id, expectedVersion: plan.version, expectedBlueprintVersion: 1, blueprint: repaired });
+  assert.equal(updated.activePlan.id, plan.id);
+  assert.equal(updated.activePlan.status, "active");
+  assert.equal(updated.activePlan.version, plan.version + 1);
+  assert.deepEqual(updated.activePlan.configuration, plan.configuration);
+  assert.equal(store.getExecutionPlan()!.presentation!.days[0]!.blocks![0]!.title, "Prepare for departure");
+  assert.equal(updated.activeBlueprint!.version, 2);
+  assert.throws(() => store.saveExecutionBlueprintRepair({ planId: plan.id, expectedVersion: plan.version, expectedBlueprintVersion: 1, blueprint: repaired }), /changed/);
+  store.close();
+});
 
 test("SQLite records its schema baseline and creates a verified private backup", () => {
   const directory = mkdtempSync(join(tmpdir(), "c-assistant-storage-"));
@@ -15,7 +45,7 @@ test("SQLite records its schema baseline and creates a verified private backup",
     const store = new SqliteWorkspaceStore(databasePath);
     store.updateProfile({ displayName: "Backup owner", preferredLanguage: "English", nationality: "Canada", gender: "not_specified", immigrationStatus: "tourist_visa" });
     const maintenance = store.getDatabaseMaintenanceStatus();
-    assert.deepEqual({ schemaVersion: maintenance.schemaVersion, latest: maintenance.latestSchemaVersion, integrity: maintenance.integrity }, { schemaVersion: 20, latest: 20, integrity: "ok" });
+    assert.deepEqual({ schemaVersion: maintenance.schemaVersion, latest: maintenance.latestSchemaVersion, integrity: maintenance.integrity }, { schemaVersion: 32, latest: 32, integrity: "ok" });
     assert.equal(maintenance.migrations[0]?.name, "v1-local-workspace-baseline");
     assert.equal(maintenance.migrations[1]?.name, "country-pack-source-evidence-links");
     assert.equal(maintenance.migrations[2]?.name, "telegram-one-route-transport-override");
@@ -50,7 +80,7 @@ test("SQLite refuses to open a workspace created by a newer schema", () => {
     const future = new DatabaseSync(databasePath);
     future.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, applied_at TEXT NOT NULL); INSERT INTO schema_migrations VALUES (999, 'future', '2026-08-07T00:00:00.000Z');");
     future.close();
-    assert.throws(() => new SqliteWorkspaceStore(databasePath), /supports schema 20.*schema 999/i);
+    assert.throws(() => new SqliteWorkspaceStore(databasePath), /supports schema 32.*schema 999/i);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -147,7 +177,7 @@ test("SQLite persists booking imports for planning sessions and Plans", () => {
     const planBooking: TravelBooking = { ...booking, id: "booking-2", planId, planVersionCreated: 1, sourceHash: "hash-2" };
     delete planBooking.planningSessionId;
     store.saveTravelBooking(planBooking);
-    assert.equal(store.listTravelBookingsForPlan(planId)[0]?.sourceHash, "hash-2");
+    assert.equal(store.listCurrentTravelBookingSourcesForPlan(planId)[0]?.sourceHash, "hash-2");
     const updated = store.applyTravelBookingToCurrentPlan({
       ...planBooking,
       type: "accommodation",
@@ -237,42 +267,6 @@ test("SQLite recovers interrupted Plan generation without losing the proposal", 
       failureCode: "service_interrupted"
     });
     assert.deepEqual(store.recoverInterruptedPlanGenerations("2026-08-17T00:13:00.000Z"), { runs: 0, sessions: 0 });
-    store.close();
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test("SQLite persists one version-bound pending Telegram Plan change proposal", () => {
-  const directory = mkdtempSync(join(tmpdir(), "c-assistant-telegram-plan-change-"));
-  try {
-    const store = new SqliteWorkspaceStore(join(directory, "workspace.sqlite"));
-    const draft = store.createGeneratedPlan({
-      title: "Paris trip",
-      location: "Paris, France",
-      dates: "October 12–18, 2026",
-      knownInformation: ["Two travellers."],
-      assumptions: [],
-      nextAction: "Review the Plan.",
-      stages: [{ title: "Daily itinerary", description: "A compact itinerary.", tasks: [{ title: "Explore Paris", owner: "assistant", dueLabel: "Day 1" }] }]
-    });
-    const active = store.confirmPlan(draft.activePlan.id).activePlan;
-    const impact = {
-      planId: active.id,
-      baseVersion: active.version,
-      impact: "low" as const,
-      summary: "A meal preference changes itinerary choices.",
-      reasons: [],
-      affectedAreas: ["itinerary" as const],
-      requiresConfirmation: false,
-      createsReplacementDraft: true
-    };
-    const first = store.createTelegramPlanChangeProposal({ planId: active.id, baseVersion: active.version, request: "I want Italian food.", impact });
-    assert.equal(store.getTelegramPlanChangeProposal(first.id)?.status, "pending");
-    const second = store.createTelegramPlanChangeProposal({ planId: active.id, baseVersion: active.version, request: "Add one Italian dinner.", impact });
-    assert.equal(store.getTelegramPlanChangeProposal(first.id)?.status, "cancelled");
-    assert.equal(store.resolveTelegramPlanChangeProposal(second.id, "applied").status, "applied");
-    assert.throws(() => store.resolveTelegramPlanChangeProposal(second.id, "applied"), /already resolved/i);
     store.close();
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -391,7 +385,7 @@ test("SQLite upgrades legacy stage titles to explicit presentation kinds", () =>
 
     const upgraded = new SqliteWorkspaceStore(databasePath);
     assert.deepEqual(upgraded.getWorkspace().activePlan.stages.map((stage) => stage.presentationKind), ["overview", "itinerary", "budget"]);
-    assert.equal(upgraded.getDatabaseMaintenanceStatus().schemaVersion, 20);
+    assert.equal(upgraded.getDatabaseMaintenanceStatus().schemaVersion, 32);
     upgraded.close();
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -406,7 +400,7 @@ test("SQLite upgrades a schema-one workspace with source-evidence link tables", 
     old.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, applied_at TEXT NOT NULL); INSERT INTO schema_migrations VALUES (1, 'v1-local-workspace-baseline', '2026-08-07T00:00:00.000Z');");
     old.close();
     const store = new SqliteWorkspaceStore(databasePath);
-    assert.equal(store.getDatabaseMaintenanceStatus().schemaVersion, 20);
+    assert.equal(store.getDatabaseMaintenanceStatus().schemaVersion, 32);
     const tables = new DatabaseSync(databasePath, { readOnly: true });
     const names = tables.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%run_sources' ORDER BY name").all().map((row) => (row as { name: string }).name);
     assert.deepEqual(names, ["country_pack_skill_run_sources", "plan_compilation_run_sources"]);
@@ -512,51 +506,6 @@ test("SQLite does not discard an active Plan", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const active = store.confirmPlan(store.createPlan({ request: "Take a new trip to Paris." }).activePlan.id).activePlan;
   assert.throws(() => store.discardCurrentDraft(active.id), /Only an unconfirmed draft Plan/);
-  store.close();
-});
-
-test("SQLite keeps partial Telegram Profile setup incomplete and expires pending text edits", () => {
-  const store = new SqliteWorkspaceStore(":memory:");
-  const initial = store.getWorkspace().profile;
-  const visaOnly = store.updateProfile({ ...initial, immigrationStatus: "student_visa" });
-  assert.equal(visaOnly.profile.status, "ready");
-  store.updateProfile({ ...visaOnly.profile, nationality: "To be confirmed", immigrationStatus: "unknown" });
-  const nationalityOnly = store.updateProfile({ ...initial, nationality: "Canada" });
-  assert.equal(nationalityOnly.profile.status, "incomplete");
-  const ready = store.updateProfile({ ...nationalityOnly.profile, immigrationStatus: "student_visa" });
-  assert.equal(ready.profile.status, "ready");
-  const noVisaYet = store.updateProfile({ ...ready.profile, immigrationStatus: "no_visa" });
-  assert.equal(noVisaYet.profile.status, "ready");
-  assert.equal(noVisaYet.profile.immigrationStatus, "no_visa");
-
-  store.startTelegramProfileTextEdit("nationality", "2026-08-07T00:00:00.000Z");
-  assert.equal(store.getTelegramProfileTextEdit("2026-08-07T00:14:59.000Z"), "nationality");
-  assert.equal(store.getTelegramProfileTextEdit("2026-08-07T00:15:01.000Z"), undefined);
-  store.close();
-});
-
-test("SQLite binds temporary Telegram location use to a Plan and expires it", () => {
-  const store = new SqliteWorkspaceStore(":memory:");
-  const planId = store.getWorkspace().activePlan.id;
-  store.startTelegramLocationIntent({ purpose: "nearby_food", planId, startedAt: "2026-08-07T00:00:00.000Z" });
-
-  assert.deepEqual(store.getTelegramLocationIntent("2026-08-07T00:14:59.000Z"), { purpose: "nearby_food", planId });
-  assert.equal(store.getTelegramLocationIntent("2026-08-07T00:15:01.000Z"), undefined);
-  store.startTelegramLocationIntent({ purpose: "uber_test", planId, startedAt: "2026-08-07T00:16:00.000Z" });
-  assert.deepEqual(store.getTelegramLocationIntent("2026-08-07T00:16:30.000Z"), { purpose: "uber_test", planId });
-  store.startTelegramLocationIntent({ purpose: "movement_go", planId, startedAt: "2026-08-07T00:17:00.000Z" });
-  assert.deepEqual(store.getTelegramLocationIntent("2026-08-07T00:17:30.000Z"), { purpose: "movement_go", planId });
-  store.close();
-});
-
-test("SQLite keeps a one-route transport override temporary and purpose-bound", () => {
-  const store = new SqliteWorkspaceStore(":memory:");
-  const planId = store.getWorkspace().activePlan.id;
-  store.startTelegramLocationIntent({ purpose: "arrival_route", planId, transportOverride: "taxi", startedAt: "2026-08-07T00:00:00.000Z" });
-
-  assert.deepEqual(store.getTelegramLocationIntent("2026-08-07T00:14:59.000Z"), { purpose: "arrival_route", planId, transportOverride: "taxi" });
-  assert.equal(store.getWorkspace().activePlan.configuration.transport.preference, "plan_recommended");
-  assert.throws(() => store.startTelegramLocationIntent({ purpose: "nearby_food", planId, transportOverride: "taxi" }), /only valid for an arrival route/i);
   store.close();
 });
 
@@ -1042,7 +991,7 @@ test("SQLite atomically persists a compiled draft with Skill provenance and audi
   assert.equal(run?.taskCount, 1);
   assert.equal(run?.reminderCount, 1);
   assert.deepEqual(run?.sourceEvidence, evidence);
-  assert.deepEqual(store.listRecentCountryPackSkillRuns()[0]?.sourceEvidence, evidence);
+  assert.deepEqual(store.listRecentPreparationEvidenceRuns()[0]?.sourceEvidence, evidence);
   assert.equal(Object.hasOwn(run ?? {}, "proposal"), false);
   assert.match(saved.inbox[0]?.body ?? "", /No Task, Reminder, or external action was activated/);
 
@@ -1289,7 +1238,7 @@ test("SQLite persists Web preparation checklist changes only for user-owned curr
     assert.equal(checked.activePlan.status, "draft");
     assert.equal(checked.executionPlan, undefined);
     assert.equal(checked.activePlan.sources.length, 1);
-    assert.equal(store.listTravelBookingsForPlan(planId).length, 1);
+    assert.equal(store.listCurrentTravelBookingSourcesForPlan(planId).length, 1);
     assert.equal(store.getWorkspace().activePlan.stages[0]?.tasks[0]?.status, "completed");
     const checkedAgain = store.setPlanTaskChecked(planId, userTask?.id ?? "", true);
     assert.equal(checkedAgain.activePlan.version, checked.activePlan.version);
@@ -1305,7 +1254,7 @@ test("SQLite persists Web preparation checklist changes only for user-owned curr
 
     const rechecked = store.setPlanTaskChecked(planId, userTask?.id ?? "", true);
     assert.equal(rechecked.activePlan.stages[0]?.tasks[0]?.status, "completed");
-    assert.equal(store.listTravelBookingsForPlan(planId)[0]?.status, "needs_review");
+    assert.equal(store.listCurrentTravelBookingSourcesForPlan(planId)[0]?.status, "needs_review");
     store.close();
 
     const reopened = new SqliteWorkspaceStore(databasePath);
@@ -1315,7 +1264,7 @@ test("SQLite persists Web preparation checklist changes only for user-owned curr
     assert.equal(persisted.executionPlan, undefined);
     assert.equal(persisted.activePlan.stages[0]?.tasks[0]?.status, "completed");
     assert.equal(persisted.activePlan.sources.length, 1);
-    assert.equal(reopened.listTravelBookingsForPlan(planId).length, 1);
+    assert.equal(reopened.listCurrentTravelBookingSourcesForPlan(planId).length, 1);
     reopened.close();
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -1453,301 +1402,6 @@ test("SQLite keeps and clears expected arrival timing inside the current Plan", 
   store.close();
 });
 
-test("SQLite stores one explicit Telegram pairing and records it in the Inbox", () => {
-  const store = new SqliteWorkspaceStore(":memory:");
-  const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
-  const pending = store.createTelegramPairingRequest({ code: "pairing_code_123", expiresAt });
-
-  assert.equal(pending.state, "waiting_for_start");
-  const paired = store.claimTelegramPairing({ code: "pairing_code_123", chatId: "1001", userId: "1001", firstName: "Avery", username: "avery" });
-  assert.equal(paired.state, "paired");
-  assert.equal(paired.binding?.chatId, "1001");
-  assert.equal(store.getWorkspace().inbox[0]?.title, "Telegram paired");
-  store.close();
-});
-
-test("SQLite disconnects only the Telegram binding and preserves the workspace", () => {
-  const store = new SqliteWorkspaceStore(":memory:");
-  const planId = store.getWorkspace().activePlan.id;
-  const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
-  store.createTelegramPairingRequest({ code: "pairing_code_456", expiresAt });
-  store.claimTelegramPairing({ code: "pairing_code_456", chatId: "1002", userId: "1002", firstName: "Avery" });
-
-  store.startTelegramProfileTextEdit("nationality");
-  store.startTelegramLocationIntent({ purpose: "nearby_food", planId });
-  const disconnected = store.unpairTelegram();
-
-  assert.equal(disconnected.state, "not_paired");
-  assert.equal(store.getWorkspace().activePlan.id, planId);
-  assert.equal(store.getTelegramProfileTextEdit(), undefined);
-  assert.equal(store.getTelegramLocationIntent(), undefined);
-  assert.equal(store.getWorkspace().inbox[0]?.title, "Telegram disconnected");
-  assert.match(store.getWorkspace().inbox[0]?.body ?? "", /were not deleted/i);
-  store.close();
-});
-
-test("SQLite keeps the Telegram update cursor across reads", () => {
-  const store = new SqliteWorkspaceStore(":memory:");
-  assert.equal(store.getTelegramUpdateOffset(), undefined);
-  store.advanceTelegramUpdateOffset(41);
-  store.advanceTelegramUpdateOffset(40);
-  assert.equal(store.getTelegramUpdateOffset(), 41);
-  store.close();
-});
-
-test("SQLite only claims one Telegram update once", () => {
-  const store = new SqliteWorkspaceStore(":memory:");
-  assert.equal(store.claimTelegramUpdate(41), true);
-  assert.equal(store.claimTelegramUpdate(41), false);
-  store.close();
-});
-
-test("SQLite only claims one signed WhatsApp message once", () => {
-  const store = new SqliteWorkspaceStore(":memory:");
-  assert.equal(store.claimWhatsAppMessage("wamid.message-41"), true);
-  assert.equal(store.claimWhatsAppMessage("wamid.message-41"), false);
-  assert.throws(() => store.claimWhatsAppMessage("invalid"));
-  store.close();
-});
-
-test("SQLite records an arrival reminder delivery attempt only once per Plan", () => {
-  const store = new SqliteWorkspaceStore(":memory:");
-  const planId = store.getWorkspace().activePlan.id;
-  const reminder = { planId, reminderKey: "arrival-check-in", dueAt: "2026-09-01T00:00:00.000Z" };
-  assert.equal(store.claimTelegramReminder(reminder), true);
-  assert.equal(store.claimTelegramReminder(reminder), false);
-  store.close();
-});
-
-test("SQLite retries itinerary reminders and rejects them after the executing Plan changes", () => {
-  const store = new SqliteWorkspaceStore(":memory:");
-  const workspace = store.createGeneratedPlan({
-    title: "Paris day", location: "Paris", dates: "August 18, 2026", knownInformation: [], assumptions: [], nextAction: "Review",
-    presentation: {
-      kind: "itinerary", summary: "One fixed visit", startDate: "2026-08-18", endDate: "2026-08-18",
-      days: [{ id: "day-1", label: "Aug 18", date: "2026-08-18", city: "Paris", title: "Museum", summary: "A timed museum visit.", placeIds: ["museum"], stops: [{ placeId: "museum", order: 1, time: "10:00", role: "fixed anchor" }] }],
-      places: [{ id: "museum", name: "Museum", locationLabel: "Paris", city: "Paris", coordinates: [48.86, 2.34], category: "museum", priority: "booked", durationMinutes: 120, whyWorthIt: "Visit", plan: "Arrive on time", detailSections: [], sourceRefs: [] }],
-      routeSegments: []
-    }, stages: []
-  });
-  const planId = workspace.activePlan.id;
-  const reminder = { planId, reminderKey: "itinerary-departure:day-1:museum:2026-08-18T08:00:00.000Z", dayId: "day-1", placeId: "museum", scheduledTime: "10:00", dueAt: "2026-08-18T07:30:00.000Z" };
-  store.confirmPlan(planId);
-
-  assert.deepEqual(store.claimTelegramItineraryReminderAttempt({ ...reminder, now: reminder.dueAt }), { claimed: true, attemptNumber: 1 });
-  assert.deepEqual(store.recordTelegramItineraryReminderFailure({ ...reminder, failureCode: "network_error", retryable: true, failedAt: "2026-08-18T07:30:01.000Z" }), { status: "retry_scheduled", nextAttemptAt: "2026-08-18T07:31:01.000Z" });
-  assert.deepEqual(store.claimTelegramItineraryReminderAttempt({ ...reminder, now: "2026-08-18T07:31:01.000Z" }), { claimed: true, attemptNumber: 2 });
-  store.recordTelegramItineraryReminderDelivered({ ...reminder, deliveredAt: "2026-08-18T07:31:02.000Z" });
-  assert.equal(store.claimTelegramItineraryReminderAttempt({ ...reminder, now: "2026-08-18T07:32:00.000Z" }).claimed, false);
-
-  const replacement = store.createPlan({ request: "Create a London Plan." });
-  store.confirmPlan(replacement.activePlan.id);
-  assert.equal(store.claimTelegramItineraryReminderAttempt({ ...reminder, reminderKey: `${reminder.reminderKey}:stale`, now: "2026-08-18T07:32:00.000Z" }).claimed, false);
-  store.close();
-});
-
-test("SQLite mirrors a delivered Task reminder into the Web Inbox", () => {
-  const store = new SqliteWorkspaceStore(":memory:");
-  const workspace = store.createGeneratedPlan({
-    title: "Prepare for departure",
-    location: "Shanghai, China",
-    dates: "September 1, 2026",
-    knownInformation: ["Departure at 07:00."],
-    assumptions: [],
-    nextAction: "Review the reminder.",
-    stages: [{ title: "Departure", description: "Prepare.", tasks: [{ title: "Check essentials", owner: "user", dueLabel: "Two hours before departure", reminder: { scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Check passport and essential items.", refreshFacts: ["weather"] } }] }]
-  });
-  const task = workspace.activePlan.stages[0]!.tasks[0]!;
-  const reminder = task.reminder!;
-  const reminderKey = `task-reminder:${task.id}:2026-08-31T21:00:00.000Z`;
-  assert.deepEqual(reminder.refreshFacts, ["weather"]);
-
-  store.confirmPlan(workspace.activePlan.id);
-  assert.deepEqual(store.claimTelegramTaskReminderAttempt({ planId: workspace.activePlan.id, reminderKey, taskId: task.id, dueAt: "2026-08-31T21:00:00.000Z", reminder, now: "2026-08-31T21:00:00.000Z" }), { claimed: true, attemptNumber: 1 });
-  store.recordTelegramTaskReminderDelivered({ planId: workspace.activePlan.id, reminderKey, taskId: task.id, taskTitle: task.title, reminder, deliveredAt: "2026-08-31T21:00:01.000Z" });
-
-  assert.equal(store.getWorkspace().inbox[0]?.title, "Reminder sent: Check essentials");
-  assert.equal(store.getWorkspace().inbox[0]?.body, "Check passport and essential items.");
-  assert.equal(store.claimTelegramTaskReminderAttempt({ planId: workspace.activePlan.id, reminderKey, taskId: task.id, dueAt: "2026-08-31T21:00:00.000Z", reminder, now: "2026-08-31T21:02:00.000Z" }).claimed, false);
-  store.close();
-});
-
-test("SQLite rejects a stale Task reminder when its dynamic fact policy changed", () => {
-  const store = new SqliteWorkspaceStore(":memory:");
-  const workspace = store.createGeneratedPlan({
-    title: "Prepare for departure",
-    location: "Shanghai, China",
-    dates: "September 1, 2026",
-    knownInformation: [],
-    assumptions: [],
-    nextAction: "Review.",
-    stages: [{ title: "Departure", description: "Prepare.", tasks: [{ title: "Pack", owner: "user", dueLabel: "Morning", reminder: { scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Pack for departure.", refreshFacts: ["weather"] } }] }]
-  });
-  const task = workspace.activePlan.stages[0]!.tasks[0]!;
-  const dueAt = "2026-08-31T21:00:00.000Z";
-  store.confirmPlan(workspace.activePlan.id);
-
-  assert.equal(store.claimTelegramTaskReminderAttempt({
-    planId: workspace.activePlan.id,
-    reminderKey: `task-reminder:${task.id}:${dueAt}`,
-    taskId: task.id,
-    dueAt,
-    reminder: { ...task.reminder!, refreshFacts: [] },
-    now: dueAt
-  }).claimed, false);
-  store.close();
-});
-
-test("SQLite cancels a Task reminder and rejects a stale in-memory delivery attempt", () => {
-  const store = new SqliteWorkspaceStore(":memory:");
-  const workspace = store.createGeneratedPlan({
-    title: "Prepare for departure",
-    location: "Shanghai, China",
-    dates: "September 1, 2026",
-    knownInformation: ["Departure at 07:00."],
-    assumptions: [],
-    nextAction: "Review the reminder.",
-    stages: [{ title: "Departure", description: "Prepare.", tasks: [{ title: "Check essentials", owner: "user", dueLabel: "Two hours before departure", reminder: { scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Check passport and essential items." } }] }]
-  });
-  const planId = workspace.activePlan.id;
-  const task = workspace.activePlan.stages[0]!.tasks[0]!;
-  const reminder = task.reminder!;
-  const version = workspace.activePlan.version;
-  const dueAt = "2026-08-31T21:00:00.000Z";
-  const reminderKey = `task-reminder:${task.id}:${dueAt}`;
-  store.confirmPlan(planId);
-
-  const cancelled = store.cancelTaskReminder(planId, task.id);
-  assert.equal(cancelled.activePlan.version, version + 1);
-  assert.equal(cancelled.activePlan.stages[0]!.tasks[0]!.reminder, undefined);
-  assert.equal(cancelled.inbox[0]?.title, "Reminder cancelled: Check essentials");
-  assert.equal(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, reminder, now: dueAt }).claimed, false);
-  store.close();
-});
-
-test("SQLite keeps the executing Plan alive while a replacement draft is reviewed, then switches atomically", () => {
-  const store = new SqliteWorkspaceStore(":memory:");
-  const oldWorkspace = store.createGeneratedPlan({
-    title: "Old Plan",
-    location: "Shanghai, China",
-    dates: "September 1, 2026",
-    knownInformation: ["Departure at 07:00."],
-    assumptions: [],
-    nextAction: "Review the reminder.",
-    stages: [{ title: "Departure", description: "Prepare.", tasks: [{ title: "Old reminder", owner: "user", dueLabel: "Before departure", reminder: { scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Check old details." } }] }]
-  });
-  const oldPlan = oldWorkspace.activePlan;
-  const oldTask = oldPlan.stages[0]!.tasks[0]!;
-  store.confirmPlan(oldPlan.id);
-  const dueAt = "2026-08-31T21:00:00.000Z";
-  const reminderKey = `task-reminder:${oldTask.id}:${dueAt}`;
-  assert.equal(store.claimTelegramTaskReminderAttempt({ planId: oldPlan.id, reminderKey, taskId: oldTask.id, dueAt, reminder: oldTask.reminder!, now: dueAt }).claimed, true);
-  const run = store.startTaskReminderRun({ planId: oldPlan.id, taskId: oldTask.id, reminderKey, dueAt, attemptNumber: 1, startedAt: dueAt });
-  const replacement = store.createPlan({ request: "Create a newer Plan for Hangzhou." });
-
-  assert.equal(replacement.activePlan.status, "draft");
-  assert.equal(replacement.executionPlan?.id, oldPlan.id);
-  assert.equal(store.getExecutionPlan()?.id, oldPlan.id);
-  assert.equal(store.listHistoricalPlans().some((plan) => plan.id === oldPlan.id), false);
-  assert.equal(store.listRecentTaskReminderRuns().find((candidate) => candidate.id === run.id)?.status, "running");
-
-  const activatedReplacement = store.confirmPlan(replacement.activePlan.id);
-  assert.equal(activatedReplacement.activePlan.status, "active");
-  assert.equal(activatedReplacement.executionPlan, undefined);
-  assert.equal(store.getExecutionPlan()?.id, replacement.activePlan.id);
-  assert.equal(store.listHistoricalPlans().some((plan) => plan.id === oldPlan.id), true);
-  assert.equal(store.listRecentTaskReminderRuns().find((candidate) => candidate.id === run.id)?.status, "cancelled");
-  assert.equal(store.claimTelegramTaskReminderAttempt({ planId: oldPlan.id, reminderKey: `${reminderKey}:after-switch`, taskId: oldTask.id, dueAt, reminder: oldTask.reminder!, now: dueAt }).claimed, false);
-  store.close();
-});
-
-test("SQLite records a Telegram success that raced with reminder cancellation", () => {
-  const store = new SqliteWorkspaceStore(":memory:");
-  const workspace = store.createGeneratedPlan({
-    title: "Prepare for departure",
-    location: "Shanghai, China",
-    dates: "September 1, 2026",
-    knownInformation: ["Departure at 07:00."],
-    assumptions: [],
-    nextAction: "Review the reminder.",
-    stages: [{ title: "Departure", description: "Prepare.", tasks: [{ title: "Check essentials", owner: "user", dueLabel: "Two hours before departure", reminder: { scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Check passport and essential items." } }] }]
-  });
-  const planId = workspace.activePlan.id;
-  const task = workspace.activePlan.stages[0]!.tasks[0]!;
-  const reminder = task.reminder!;
-  const dueAt = "2026-08-31T21:00:00.000Z";
-  const reminderKey = `task-reminder:${task.id}:${dueAt}`;
-  store.confirmPlan(planId);
-  assert.equal(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, reminder, now: dueAt }).claimed, true);
-  const run = store.startTaskReminderRun({ planId, taskId: task.id, reminderKey, dueAt, attemptNumber: 1, startedAt: dueAt });
-
-  store.cancelTaskReminder(planId, task.id);
-  store.recordTelegramTaskReminderDelivered({ planId, reminderKey, taskId: task.id, taskTitle: task.title, reminder, deliveredAt: "2026-08-31T21:00:01.000Z" });
-  store.recordTaskReminderRunDelivery({ runId: run.id, status: "succeeded", recordedAt: "2026-08-31T21:00:01.000Z" });
-
-  assert.equal(store.getWorkspace().inbox[0]?.title, "Reminder sent before Plan change took effect: Check essentials");
-  assert.match(store.getWorkspace().inbox[0]?.body ?? "", /before cancellation or Plan replacement/i);
-  assert.equal(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, reminder, now: "2026-08-31T21:02:00.000Z" }).claimed, false);
-  assert.equal(store.listRecentTaskReminderRuns()[0]?.status, "succeeded");
-  store.close();
-});
-
-test("SQLite retries a transient Task reminder failure twice before recording a terminal failure", () => {
-  const store = new SqliteWorkspaceStore(":memory:");
-  const workspace = store.createGeneratedPlan({
-    title: "Prepare for departure",
-    location: "Shanghai, China",
-    dates: "September 1, 2026",
-    knownInformation: ["Departure at 07:00."],
-    assumptions: [],
-    nextAction: "Review the reminder.",
-    stages: [{ title: "Departure", description: "Prepare.", tasks: [{ title: "Check essentials", owner: "user", dueLabel: "Two hours before departure", reminder: { scheduledAtLocal: "2026-09-01T05:00", timeZone: "Asia/Shanghai", purpose: "Check passport and essential items." } }] }]
-  });
-  const task = workspace.activePlan.stages[0]!.tasks[0]!;
-  const reminder = task.reminder!;
-  const planId = workspace.activePlan.id;
-  const dueAt = "2026-08-31T21:00:00.000Z";
-  const reminderKey = `task-reminder:${task.id}:${dueAt}`;
-  store.confirmPlan(planId);
-
-  assert.deepEqual(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, reminder, now: dueAt }), { claimed: true, attemptNumber: 1 });
-  const run = store.startTaskReminderRun({ planId, taskId: task.id, reminderKey, dueAt, attemptNumber: 1, startedAt: dueAt });
-  store.recordTaskReminderRunWeather({ runId: run.id, status: "unavailable", stage: "qweather", failureCode: "network_error", recordedAt: "2026-08-31T21:00:00.500Z" });
-  assert.deepEqual(store.recordTelegramTaskReminderFailure({ planId, reminderKey, taskId: task.id, reminder, failureCode: "network_error", retryable: true, failedAt: "2026-08-31T21:00:01.000Z" }), { status: "retry_scheduled", nextAttemptAt: "2026-08-31T21:01:01.000Z" });
-  store.recordTaskReminderRunDelivery({ runId: run.id, status: "retry_wait", failureCode: "network_error", recordedAt: "2026-08-31T21:00:01.000Z" });
-  assert.equal(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, reminder, now: "2026-08-31T21:01:00.000Z" }).claimed, false);
-  assert.deepEqual(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, reminder, now: "2026-08-31T21:01:01.000Z" }), { claimed: true, attemptNumber: 2 });
-  assert.equal(store.startTaskReminderRun({ planId, taskId: task.id, reminderKey, dueAt, attemptNumber: 2, startedAt: "2026-08-31T21:01:01.000Z" }).id, run.id);
-  store.recordTaskReminderRunWeather({ runId: run.id, status: "available", recordedAt: "2026-08-31T21:01:01.500Z" });
-  assert.deepEqual(store.recordTelegramTaskReminderFailure({ planId, reminderKey, taskId: task.id, reminder, failureCode: "telegram_500", retryable: true, failedAt: "2026-08-31T21:01:02.000Z" }), { status: "retry_scheduled", nextAttemptAt: "2026-08-31T21:06:02.000Z" });
-  store.recordTaskReminderRunDelivery({ runId: run.id, status: "retry_wait", failureCode: "telegram_500", recordedAt: "2026-08-31T21:01:02.000Z" });
-  assert.deepEqual(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, reminder, now: "2026-08-31T21:06:02.000Z" }), { claimed: true, attemptNumber: 3 });
-  store.startTaskReminderRun({ planId, taskId: task.id, reminderKey, dueAt, attemptNumber: 3, startedAt: "2026-08-31T21:06:02.000Z" });
-  store.recordTaskReminderRunWeather({ runId: run.id, status: "available", recordedAt: "2026-08-31T21:06:02.500Z" });
-  assert.deepEqual(store.recordTelegramTaskReminderFailure({ planId, reminderKey, taskId: task.id, reminder, failureCode: "timeout", retryable: true, failedAt: "2026-08-31T21:06:03.000Z" }), { status: "failed" });
-  store.recordTaskReminderRunDelivery({ runId: run.id, status: "failed", failureCode: "timeout", recordedAt: "2026-08-31T21:06:03.000Z" });
-
-  assert.equal(store.claimTelegramTaskReminderAttempt({ planId, reminderKey, taskId: task.id, dueAt, reminder, now: "2026-08-31T21:10:00.000Z" }).claimed, false);
-  assert.equal(store.getWorkspace().inbox[0]?.title, "Reminder could not be sent: Check essentials");
-  assert.match(store.getWorkspace().inbox[0]?.body ?? "", /stopped after 3 delivery attempts/i);
-  assert.deepEqual(store.listRecentTaskReminderRuns()[0], {
-    id: run.id,
-    kind: "task_reminder",
-    planId,
-    taskId: task.id,
-    reminderKey,
-    dueAt,
-    status: "failed",
-    attemptCount: 3,
-    weatherStatus: "available",
-    telegramFailureCode: "timeout",
-    startedAt: dueAt,
-    finishedAt: "2026-08-31T21:06:03.000Z",
-    updatedAt: "2026-08-31T21:06:03.000Z"
-  });
-  store.close();
-});
-
 test("SQLite advances an explicitly tagged arrival task to ready without completing it", () => {
   const store = new SqliteWorkspaceStore(":memory:");
   const planId = store.getWorkspace().activePlan.id;
@@ -1800,44 +1454,6 @@ test("SQLite completes a ready task only after an explicit user confirmation", (
   assert.equal(store.completeReadyTask(planId, ready?.id ?? ""), undefined);
   assert.equal(store.getWorkspace().activePlan.stages.flatMap((stage) => stage.tasks).find((task) => task.id === ready?.id)?.status, "completed");
   assert.match(store.getWorkspace().inbox[0]?.title ?? "", /Task completed by you/);
-  store.close();
-});
-
-test("SQLite stores arrival follow-up state without storing shared coordinates", () => {
-  const store = new SqliteWorkspaceStore(":memory:");
-  const planId = store.getWorkspace().activePlan.id;
-  store.recordTelegramArrivalCheckin({ planId, checkInSentAt: "2026-09-01T00:00:00.000Z" });
-  assert.equal(store.getTelegramArrivalCheckin(planId)?.locationRequestedAt, undefined);
-  assert.equal(store.markTelegramArrivalLocationRequested(planId, "2026-09-01T00:05:00.000Z"), true);
-  assert.equal(store.markTelegramArrivalLocationRequested(planId, "2026-09-01T00:05:01.000Z"), false);
-  store.markTelegramArrivalLocationReceived(planId, "2026-09-01T00:05:30.000Z");
-  const state = store.getTelegramArrivalCheckin(planId);
-  assert.equal(state?.locationReceivedAt, "2026-09-01T00:05:30.000Z");
-  assert.deepEqual(Object.keys(state ?? {}).sort(), ["checkInSentAt", "locationReceivedAt", "locationRequestedAt"]);
-  store.close();
-});
-
-test("SQLite records a handoff offer and re-arms guidance after an explicit delay", () => {
-  const store = new SqliteWorkspaceStore(":memory:");
-  const planId = store.getWorkspace().activePlan.id;
-  const offered = store.recordTelegramRouteHandoffOffered({
-    planId,
-    offeredAt: "2026-08-10T06:00:00.000Z",
-    routeDurationSeconds: 2_100,
-    waitBufferSeconds: 600,
-    safetyMarginSeconds: 600,
-    expectedArrivalAt: "2026-08-10T06:55:00.000Z"
-  });
-  assert.equal(offered.openedAt, undefined);
-  assert.equal(store.claimTelegramRouteArrivalGuidance(planId, "2026-08-10T06:54:59.000Z"), undefined);
-  assert.equal(store.claimTelegramRouteArrivalGuidance(planId, "2026-08-10T06:55:00.000Z")?.guidanceSentAt, "2026-08-10T06:55:00.000Z");
-  assert.equal(store.claimTelegramRouteArrivalGuidance(planId, "2026-08-10T06:55:01.000Z"), undefined);
-  const delayed = store.delayTelegramRouteArrivalGuidance(planId, "2026-08-10T06:56:00.000Z");
-  assert.equal(delayed?.expectedArrivalAt, "2026-08-10T07:11:00.000Z");
-  assert.equal(delayed?.delayCount, 1);
-  assert.equal(delayed?.guidanceSentAt, undefined);
-  assert.equal(store.delayTelegramRouteArrivalGuidance(planId, "2026-08-10T06:57:00.000Z"), undefined);
-  assert.deepEqual(Object.keys(offered).sort(), ["delayCount", "expectedArrivalAt", "offeredAt", "planId", "routeDurationSeconds", "safetyMarginSeconds", "waitBufferSeconds"].sort());
   store.close();
 });
 
@@ -1901,10 +1517,12 @@ test("SQLite persists recoverable Blueprint checkpoints, events, lineage, and ex
   };
   store.saveTripBlueprint(blueprint);
   assert.equal(store.getTripBlueprintByGenerationKey(generationKey)?.places.length, 3);
+  assert.equal(store.getBlueprintGeneration(generationKey)?.stage, "research");
 
   const compilation = compileTripBlueprint(blueprint, { createdAt: "2026-08-26T00:02:01.000Z" });
   const compiled = store.createCompiledBlueprintPlan(compilation).activePlan;
   assert.equal(compiled.id, compilation.plan.id);
+  assert.equal(store.getBlueprintGeneration(generationKey)?.stage, "ready");
   assert.equal(compiled.presentation?.kind, "itinerary");
   assert.equal(compiled.presentation?.routeSegments[0]?.mode, "unknown");
   assert.deepEqual(store.getPlanBlueprintLineage(compiled.id), compilation.lineage);
@@ -1931,11 +1549,11 @@ test("SQLite persists recoverable Blueprint checkpoints, events, lineage, and ex
     ]
   });
   const batchWorkspace = batchResult.workspace;
-  assert.equal(batchWorkspace.activeBlueprint?.version, 4);
+  assert.equal(batchWorkspace.activeBlueprint?.version, 3);
   assert.equal(batchResult.revision.revisionCount, 2);
   assert.deepEqual(batchResult.revision.affectedDayIds, ["d1"]);
   assert.deepEqual(batchWorkspace.activeBlueprint?.days[0]?.stops.map((stop) => stop.placeId), ["b", "c", "a"]);
-  assert.equal(store.getPlanBlueprintLineage(batchWorkspace.activePlan.id)?.blueprintVersion, 4);
+  assert.equal(store.getPlanBlueprintLineage(batchWorkspace.activePlan.id)?.blueprintVersion, 3);
 
   assert.throws(() => store.applyDirectBlueprintRevisionBatch({
     expectedPlanId: batchWorkspace.activePlan.id,
@@ -1946,7 +1564,7 @@ test("SQLite persists recoverable Blueprint checkpoints, events, lineage, and ex
     ]
   }), /unknown place missing-place/i);
   const afterFailedBatch = store.getWorkspace();
-  assert.equal(afterFailedBatch.activeBlueprint?.version, 4);
+  assert.equal(afterFailedBatch.activeBlueprint?.version, 3);
   assert.deepEqual(afterFailedBatch.activeBlueprint?.days[0]?.stops.map((stop) => stop.placeId), ["b", "c", "a"]);
   assert.equal(afterFailedBatch.activePlan.id, batchWorkspace.activePlan.id);
 
@@ -1968,7 +1586,8 @@ test("SQLite persists recoverable Blueprint checkpoints, events, lineage, and ex
   assert.equal(routeRefresh.workspace.activePlan.id, batchWorkspace.activePlan.id);
   assert.equal(routeRefresh.workspace.activePlan.status, batchWorkspace.activePlan.status);
   assert.equal(routeRefresh.workspace.activePlan.version, batchWorkspace.activePlan.version + 1);
-  assert.equal(routeRefresh.workspace.activeBlueprint?.version, 5);
+  assert.equal(store.getBlueprintGeneration(generationKey)?.stage, "ready");
+  assert.equal(routeRefresh.workspace.activeBlueprint?.version, 4);
   assert.deepEqual(routeRefresh.workspace.activeBlueprint?.movements.map((movement) => [movement.id, movement.status, movement.durationMinutes, movement.distanceMeters]), [["movement-d1-1", "verified", 9, 850], ["movement-d1-2", "recheck", undefined, undefined]]);
   assert.deepEqual(routeRefresh.workspace.activeBlueprint?.movements.map((movement) => [movement.id, movement.display?.mapLineState, movement.display?.refreshReason ?? ""]), [
     ["movement-d1-1", "formal", ""],
@@ -1983,7 +1602,7 @@ test("SQLite persists recoverable Blueprint checkpoints, events, lineage, and ex
   ]);
   assert.equal(routeRefresh.workspace.activePlan.presentation?.routeSegments[0]?.verification, "verified");
   assert.equal(routeRefresh.workspace.activePlan.presentation?.routeSegments[0]?.display?.mapLineState, "formal");
-  assert.equal(store.getPlanBlueprintLineage(routeRefresh.workspace.activePlan.id)?.blueprintVersion, 5);
+  assert.equal(store.getPlanBlueprintLineage(routeRefresh.workspace.activePlan.id)?.blueprintVersion, 4);
   assert.equal(store.getPlanBlueprintLineage(routeRefresh.workspace.activePlan.id)?.planVersion, routeRefresh.workspace.activePlan.version);
 
   const executingA = store.confirmPlan(routeRefresh.workspace.activePlan.id).activePlan;
@@ -1992,23 +1611,23 @@ test("SQLite persists recoverable Blueprint checkpoints, events, lineage, and ex
   const replacementB = store.applyDirectBlueprintRevision({
     expectedPlanId: executingA.id,
     expectedVersion: executingA.version,
-    expectedBlueprintVersion: 5,
+    expectedBlueprintVersion: 4,
     revision: { kind: "move_place_within_day", placeId: "a", dayId: "d1", position: { kind: "start" }, createdAt: "2026-08-26T00:07:00.000Z" }
   });
   assert.notEqual(replacementB.activePlan.id, executingA.id);
   assert.equal(replacementB.activePlan.status, "draft");
-  assert.equal(replacementB.activeBlueprint?.version, 6);
+  assert.equal(replacementB.activeBlueprint?.version, 5);
   assert.deepEqual(replacementB.activeBlueprint?.days[0]?.stops.map((stop) => stop.placeId), ["a", "b", "c"]);
   const executionWhileBIsDraft = store.getExecutionPlan();
   assert.equal(executionWhileBIsDraft?.id, executingA.id);
   assert.deepEqual(executionWhileBIsDraft?.presentation?.kind === "itinerary" ? executionWhileBIsDraft.presentation.days[0]?.placeIds : undefined, executionAOrder);
-  assert.equal(store.getPlanBlueprintLineage(executionWhileBIsDraft!.id)?.blueprintVersion, 5);
+  assert.equal(store.getPlanBlueprintLineage(executionWhileBIsDraft!.id)?.blueprintVersion, 4);
 
   const executingB = store.confirmPlan(replacementB.activePlan.id).activePlan;
   const executionB = store.getExecutionPlan();
   assert.equal(executionB?.id, executingB.id);
   assert.deepEqual(executionB?.presentation?.kind === "itinerary" ? executionB.presentation.days[0]?.placeIds : undefined, ["a", "b", "c"]);
-  assert.equal(store.getPlanBlueprintLineage(executingB.id)?.blueprintVersion, 6);
+  assert.equal(store.getPlanBlueprintLineage(executingB.id)?.blueprintVersion, 5);
   assert.equal(store.listHistoricalPlans().some((plan) => plan.id === executingA.id), true);
 
   const first = store.appendBlueprintGenerationEvent({ generationKey, stage: "research", status: "running", scopeLabel: "Tokyo", savedPlaceCount: 2, detail: "Tokyo research saved", createdAt: "2026-08-26T00:01:00.000Z" });
@@ -2311,4 +1930,431 @@ test("SQLite refreshes Blueprint routes from active Blueprint despite stale Plan
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("checking preparation on an approved itinerary preserves execution version and progress", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  const plan = store.createGeneratedPlan({ title: "Approved trip", location: "Auckland", dates: "2026-11-04", knownInformation: [], assumptions: [], nextAction: "Review", stages: [{ title: "Packing", description: "Prepare", tasks: [{ title: "Passport", owner: "user", dueLabel: "Before departure", preparationCategory: "documents" }] }] }).activePlan;
+  store.confirmPlan(plan.id);
+  const progress = { steps: { museum: { phase: "done" } }, deliveries: { reminder: { status: "sent" } }, timeZones: { auckland: "Pacific/Auckland" } };
+  assert.equal(store.saveExecutionAssistantState(plan.id, plan.version, 0, progress), true);
+  store.setPlanTaskChecked(plan.id, plan.stages[0]!.tasks[0]!.id, true);
+  assert.equal(store.getExecutionPlan()!.version, plan.version);
+  assert.deepEqual(store.getExecutionAssistantState(plan.id, plan.version)?.data, progress);
+  store.setPlanTaskChecked(plan.id, plan.stages[0]!.tasks[0]!.id, false);
+  assert.equal(store.getExecutionPlan()!.version, plan.version);
+  assert.deepEqual(store.getExecutionAssistantState(plan.id, plan.version)?.data, progress);
+  store.close();
+});
+
+function 准备直接编辑存储(store: SqliteWorkspaceStore, configure?: (blueprint:TripBlueprint)=>void, compilation?: ReturnType<typeof compileTripBlueprint>): TripBlueprint {
+  const session=store.createPlanningSession("travel");
+  store.savePlanningSession({...session,status:"proposal_ready",proposal:{version:1,title:"虚构旅行",objective:"旅行",theme:"旅行",segments:["东京"],skeleton:["2026-09-01"],tradeoffs:[],assumptions:[],decisionPoints:[]}});
+  store.confirmPlanningSession(session.id,1);
+  const blueprint:TripBlueprint={schemaVersion:1,id:"持久蓝图",version:1,generationKey:"持久生成",proposalRef:{sessionId:session.id,proposalVersion:1},skillLineage:{skillId:"landi-trip-blueprint",skillVersion:"1.0.0"},researchSetId:"持久研究",title:"虚构旅行",summary:"隔离测试",language:"zh",destinations:["东京"],startDate:"2026-09-01",endDate:"2026-09-01",places:[{id:"a",name:"虚构景点",locationLabel:"东京",category:"sight",priority:"must",coordinates:[35.68,139.76],whyWorthIt:"测试",plan:"游览",evidence:[]}],events:[],sources:[],days:[{id:"d",date:"2026-09-01",kind:"scheduled",city:"东京",title:"第一天",summary:"测试",stops:[{placeId:"a",order:1}],candidatePlaceIds:[]}],movements:[],actionRequirements:[],travelTips:[{id:"t",title:"雨具",body:"随身携带雨具",theme:"weather",context:"雨天",evidence:[]}],createdAt:"2026-08-26T00:00:00Z"};
+  configure?.(blueprint);
+  store.saveBlueprintGeneration({generationKey:blueprint.generationKey,proposalRef:blueprint.proposalRef,skillLineage:blueprint.skillLineage,stage:"ready",status:"completed",createdAt:blueprint.createdAt,updatedAt:blueprint.createdAt});
+  store.saveResearchSet({schemaVersion:1,id:blueprint.researchSetId,generationKey:blueprint.generationKey,proposalRef:blueprint.proposalRef,skillLineage:blueprint.skillLineage,status:"completed",batches:[],places:blueprint.places,events:[],sources:[],actionRequirements:[],createdAt:blueprint.createdAt,updatedAt:blueprint.createdAt});
+  store.saveTripBlueprint(blueprint);store.createCompiledBlueprintPlan(compilation ?? compileTripBlueprint(blueprint,{createdAt:blueprint.createdAt}));return blueprint;
+}
+
+test("保存后直接编辑与撤销跨重启回读并幂等保留执行指针和配置", () => {
+  const directory=mkdtempSync(join(tmpdir(),"landi-direct-"));const file=join(directory,"test.sqlite");let store=new SqliteWorkspaceStore(file);
+  try {
+    const original=准备直接编辑存储(store);store.confirmPlan(store.getWorkspace().activePlan.id);
+    const before=store.getWorkspace();const execution=store.getExecutionPlan()!;
+    const input={expectedPlanId:before.activePlan.id,expectedVersion:before.activePlan.version,expectedBlueprintVersion:1,requestId:"保存请求",revisions:[{kind:"set_tip_state" as const,tipId:"t",pinned:true,createdAt:"2026-08-27T00:00:00Z"}]};
+    const saved=store.applyDirectBlueprintRevisionBatch(input);
+    assert.equal(saved.workspace.activeBlueprint!.version,2);assert.equal(saved.workspace.activePlan.status,"draft");
+    assert.deepEqual(saved.workspace.activePlan.configuration,before.activePlan.configuration);assert.equal(store.getExecutionPlan()!.id,execution.id);
+    assert.deepEqual(store.applyDirectBlueprintRevisionBatch(input),saved);
+    assert.throws(()=>store.applyDirectBlueprintRevisionBatch({...input,revisions:[{...input.revisions[0]!,pinned:false}]}),/请求身份/);
+    assert.throws(()=>store.saveTripBlueprint({...original,title:"不允许同版本覆盖"}),/同一旅行蓝图版本/);
+    store.close();store=new SqliteWorkspaceStore(file);
+    assert.equal(store.getWorkspace().latestDirectBlueprintRevision!.id,saved.revision.id);
+    const undo={expectedPlanId:saved.workspace.activePlan.id,expectedVersion:saved.workspace.activePlan.version,expectedBlueprintVersion:2,revisionId:saved.revision.id,requestId:"撤销请求"};
+    const undone=store.undoDirectBlueprintRevision(undo);
+    assert.equal(undone.activeBlueprint!.version,3);assert.equal(undone.activeBlueprint!.travelTips![0]!.pinned,undefined);assert.equal(undone.latestDirectBlueprintRevision,undefined);
+    assert.equal(store.getExecutionPlan()!.id,execution.id);assert.deepEqual(undone.activePlan.configuration,before.activePlan.configuration);
+    store.close();store=new SqliteWorkspaceStore(file);assert.deepEqual(store.undoDirectBlueprintRevision(undo),undone);
+    assert.throws(()=>store.undoDirectBlueprintRevision({...undo,requestId:"另一撤销"}),/已变化/);
+  } finally {store.close();rmSync(directory,{recursive:true,force:true});}
+});
+
+// 比较所有业务表，覆盖当前/执行指针、生成状态、Plan 子表、lineage 与审计回执。
+function isolatedDatabaseRows(database: DatabaseSync) {
+  const tables = database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[];
+  return tables.map(({ name }) => ({ name, rows: database.prepare(`SELECT * FROM "${name.replaceAll('"', '""')}" ORDER BY rowid`).all() }));
+}
+
+const directTransactionFailures = [
+  ["Blueprint 保存", "INSERT ON trip_blueprints"],
+  ["Generation 版本关联", "UPDATE ON blueprint_generations"],
+  ["旧草稿指针", "UPDATE ON plans"],
+  ["替代草稿保存", "INSERT ON plans"],
+  ["草稿阶段保存", "INSERT ON stages"],
+  ["草稿任务保存", "INSERT ON tasks"],
+  ["Compilation lineage", "INSERT ON plan_blueprint_lineage"],
+  ["编译通知", "INSERT ON inbox_items"],
+] as const;
+
+for (const operation of ["save", "undo"] as const) {
+  const auditFailures = operation === "save"
+    ? [["修订审计", "INSERT ON direct_blueprint_edits"], ["修订结果回执", "UPDATE OF result_json ON direct_blueprint_edits"]] as const
+    : [["撤销标记", "UPDATE OF undone ON direct_blueprint_edits"], ["撤销回执", "INSERT ON direct_blueprint_undos"]] as const;
+  for (const [label, statement] of [...directTransactionFailures, ...auditFailures]) {
+    test(`直接编辑 ${operation} 在${label}失败时完整回滚并跨重启重试`, () => {
+      const directory = mkdtempSync(join(tmpdir(), "landi-atomic-step-"));
+      const file = join(directory, "test.sqlite");
+      let store = new SqliteWorkspaceStore(file);
+      const fault = new DatabaseSync(file);
+      try {
+        准备直接编辑存储(store, blueprint => {
+          blueprint.bookingConstraints = [{id:"fictional-booking",type:"ticket",title:"虚构门票",status:"needs_review",sourceLabel:"虚构测试",importedAt:"2026-08-26T00:00:00Z",constraintStrength:"soft",segments:[{id:"fictional-segment",segmentType:"event_window",title:"核对虚构门票",constraintStrength:"soft",fixedCommitment:false,needsReviewReasons:[]}]}];
+        });
+        store.confirmPlan(store.getWorkspace().activePlan.id);
+        const original = store.getWorkspace();
+        const input = { expectedPlanId: original.activePlan.id, expectedVersion: original.activePlan.version, expectedBlueprintVersion: 1, requestId: "隔离保存", revisions: [{ kind: "set_tip_state" as const, tipId: "t", hidden: true, createdAt: "2026-08-27T00:00:00Z" }] };
+        const saved = operation === "undo" ? store.applyDirectBlueprintRevisionBatch(input) : undefined;
+        const undo = saved && { expectedPlanId: saved.workspace.activePlan.id, expectedVersion: saved.workspace.activePlan.version, expectedBlueprintVersion: 2, revisionId: saved.revision.id, requestId: "隔离撤销" };
+        const before = isolatedDatabaseRows(fault);
+        fault.exec(`CREATE TRIGGER isolated_failure BEFORE ${statement} BEGIN SELECT RAISE(ABORT,'隔离事务注入失败'); END`);
+        assert.throws(() => undo ? store.undoDirectBlueprintRevision(undo) : store.applyDirectBlueprintRevisionBatch(input), /隔离事务注入失败/);
+        assert.deepEqual(isolatedDatabaseRows(fault), before);
+        store.close();
+        store = new SqliteWorkspaceStore(file);
+        assert.deepEqual(isolatedDatabaseRows(fault), before);
+        fault.exec("DROP TRIGGER isolated_failure");
+        const workspace = undo ? store.undoDirectBlueprintRevision(undo) : store.applyDirectBlueprintRevisionBatch(input).workspace;
+        assert.equal(workspace.activeBlueprint!.version, undo ? 3 : 2);
+        assert.equal(store.getExecutionPlan()!.id, original.activePlan.id);
+      } finally {
+        fault.close();
+        store.close();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
+test("独立 Schema 27 数据迁移到 28 后保留历史编译关联和执行状态并可重开", () => {
+  const directory = mkdtempSync(join(tmpdir(), "landi-schema27-"));
+  const file = join(directory, "test.sqlite");
+  let store = new SqliteWorkspaceStore(file);
+  try {
+    const historical = JSON.parse(readFileSync(new URL("../../../tests/fixtures/blueprint-compiler-v1.json", import.meta.url), "utf8")) as {blueprint:TripBlueprint;compilation:ReturnType<typeof compileTripBlueprint>};
+    assert.equal(historical.compilation.lineage.compilerVersion, "1.0.0");
+    assert.equal(historical.compilation.lineage.compilationKey, `${historical.blueprint.id}:1:1.0.0`);
+    准备直接编辑存储(store, blueprint => {
+      const proposalRef = blueprint.proposalRef;
+      Object.assign(blueprint, structuredClone(historical.blueprint), {proposalRef});
+    }, historical.compilation);
+    store.confirmPlan(store.getWorkspace().activePlan.id);
+    const execution = store.getExecutionPlan()!;
+    const progress = { steps: { fictional: { phase: "done" } }, deliveries: {}, timeZones: {} };
+    assert.equal(store.saveExecutionAssistantState(execution.id, execution.version, 0, progress), true);
+    store.close();
+    const legacy = new DatabaseSync(file);
+    let before;
+    try {
+      // 28 仅增加这两张表与版本标记；其余结构就是独立虚构的 27 数据库。
+      legacy.exec("DROP TABLE travel_adjustment_drafts; DROP TABLE travel_adjustment_handoffs; DROP TABLE travel_adjustment_receipts; DROP TABLE travel_episodes; DROP TABLE travel_observations; DROP TABLE travel_phases; DROP TABLE booking_mutation_receipts; DROP TABLE direct_blueprint_undos; DROP TABLE direct_blueprint_edits; DELETE FROM schema_migrations WHERE version>=28");
+      assert.equal((legacy.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as {version:number}).version, 27);
+      before = isolatedDatabaseRows(legacy);
+    } finally { legacy.close(); }
+    store = new SqliteWorkspaceStore(file);
+    assert.equal(store.getDatabaseMaintenanceStatus().schemaVersion, 32);
+    const migrated = new DatabaseSync(file);
+    try {
+      const existingTables = new Set(before.map(table => table.name));
+      const after = isolatedDatabaseRows(migrated).filter(table => existingTables.has(table.name)).map(table => table.name === "schema_migrations" ? {...table, rows: table.rows.filter(row => Number(row.version) < 28)} : table);
+      assert.deepEqual(after, before);
+    } finally { migrated.close(); }
+    const oldLineage = store.getPlanBlueprintLineage(execution.id)!;
+    assert.deepEqual(oldLineage, historical.compilation.lineage);
+    assert.equal(execution.id, historical.compilation.plan.id);
+    const historicalTask = execution.stages.flatMap(stage => stage.tasks).find(task => task.requirementId === "historical-preparation")!;
+    assert.equal(historicalTask.status, "completed");
+    const beforeEdit = store.getWorkspace();
+    const saved = store.applyDirectBlueprintRevisionBatch({ expectedPlanId: beforeEdit.activePlan.id, expectedVersion: beforeEdit.activePlan.version, expectedBlueprintVersion: 1, requestId: "迁移后保存", revisions: [{kind:"set_tip_state",tipId:"t",pinned:true,createdAt:"2026-08-27T00:00:00Z"}] });
+    assert.equal(saved.workspace.activePlan.stages.flatMap(stage => stage.tasks).find(task => task.requirementId === "historical-preparation")!.status, "completed");
+    assert.deepEqual(store.getPlanBlueprintLineage(execution.id), historical.compilation.lineage);
+    assert.deepEqual(store.getExecutionPlan(), execution);
+    const undone = store.undoDirectBlueprintRevision({expectedPlanId:saved.workspace.activePlan.id,expectedVersion:saved.workspace.activePlan.version,expectedBlueprintVersion:2,revisionId:saved.revision.id,requestId:"迁移后撤销"});
+    const newLineage = store.getPlanBlueprintLineage(undone.activePlan.id)!;
+    assert.equal(newLineage.blueprintVersion, 3);
+    assert.equal(newLineage.compilerVersion, "2.1.0");
+    assert.equal(newLineage.compilationKey, `${historical.blueprint.id}:3:2.1.0`);
+    assert.equal(undone.activePlan.stages.flatMap(stage => stage.tasks).find(task => task.requirementId === "historical-preparation")!.status, "completed");
+    store.close();
+    store = new SqliteWorkspaceStore(file);
+    assert.deepEqual(store.getPlanBlueprintLineage(execution.id), oldLineage);
+    assert.deepEqual(store.getPlanBlueprintLineage(undone.activePlan.id), newLineage);
+    assert.deepEqual(store.getExecutionPlan(), execution);
+    assert.equal(store.getWorkspace().activePlan.stages.flatMap(stage => stage.tasks).find(task => task.requirementId === "historical-preparation")!.status, "completed");
+    assert.deepEqual(store.getExecutionAssistantState(execution.id, execution.version)?.data, progress);
+    assert.equal(store.getWorkspace().activeBlueprint!.version, 3);
+    assert.equal(store.getDatabaseMaintenanceStatus().migrations.filter(migration => migration.version === 28).length, 1);
+  } finally { store.close(); rmSync(directory, {recursive:true,force:true}); }
+});
+
+test("必访先降级另存再删除仍需精确影响确认", async()=>{
+  const {DirectBlueprintHighImpactError}=await import("@c-assistant/core");const store=new SqliteWorkspaceStore(":memory:");
+  try {准备直接编辑存储(store);let workspace=store.getWorkspace();workspace=store.applyDirectBlueprintRevision({expectedPlanId:workspace.activePlan.id,expectedVersion:workspace.activePlan.version,revision:{kind:"update_place_priority",placeId:"a",priority:"preferred",createdAt:"2026-08-27T00:00:00Z"}});
+    const input={expectedPlanId:workspace.activePlan.id,expectedVersion:workspace.activePlan.version,expectedBlueprintVersion:2,revisions:[{kind:"remove_place_from_day" as const,placeId:"a",dayId:"d",createdAt:"2026-08-27T00:01:00Z"}]};
+    let confirmation="";assert.throws(()=>store.applyDirectBlueprintRevisionBatch(input),(error:unknown)=>{assert.ok(error instanceof DirectBlueprintHighImpactError);confirmation=error.impact.id;return true;});
+    const saved=store.applyDirectBlueprintRevisionBatch({...input,highImpactConfirmation:confirmation});assert.equal(saved.workspace.activeBlueprint!.places[0]!.priority,"preferred");assert.deepEqual(saved.workspace.activeBlueprint!.days[0]!.stops,[]);
+  } finally {store.close();}
+});
+
+test("受控打开精确支持新审计表版本并拒绝历史版本伪装",async()=>{
+  const {guardedSchemaSha256}=await import("./guarded-schema.js");const directory=mkdtempSync(join(tmpdir(),"landi-guarded-"));const file=join(directory,"test.sqlite");
+  try {const initial=new SqliteWorkspaceStore(file);准备直接编辑存储(initial);initial.close();
+    let database=new DatabaseSync(file);const digest=guardedSchemaSha256(database);database.close();
+    const guarded=new SqliteWorkspaceStore(file,{guardedSchemaSha256:digest});assert.equal(guarded.getDatabaseMaintenanceStatus().schemaVersion,32);assert.equal(guarded.getWorkspace().activeBlueprint!.version,1);guarded.close();
+    database=new DatabaseSync(file);database.exec("ALTER TABLE direct_blueprint_undos DROP COLUMN fingerprint");const incompleteDigest=guardedSchemaSha256(database);database.close();
+    assert.throws(()=>new SqliteWorkspaceStore(file,{guardedSchemaSha256:incompleteDigest}),/guarded_schema_incomplete/);
+    database=new DatabaseSync(file);database.exec("DELETE FROM schema_migrations WHERE version>=28");const oldDigest=guardedSchemaSha256(database);database.close();
+    assert.throws(()=>new SqliteWorkspaceStore(file,{guardedSchemaSha256:oldDigest}),/guarded_schema_version_unsupported/);
+  }finally{rmSync(directory,{recursive:true,force:true});}
+});
+
+test("后续编辑后的早先保存与撤销重放保留原回执且不回退当前工作区",()=>{
+  const store=new SqliteWorkspaceStore(":memory:");
+  try{准备直接编辑存储(store);const before=store.getWorkspace();
+    const firstInput={expectedPlanId:before.activePlan.id,expectedVersion:before.activePlan.version,expectedBlueprintVersion:1,requestId:"首次保存",revisions:[{kind:"set_tip_state" as const,tipId:"t",pinned:true,createdAt:"2026-08-27T00:00:00Z"}]};
+    const first=store.applyDirectBlueprintRevisionBatch(firstInput);
+    const second=store.applyDirectBlueprintRevisionBatch({expectedPlanId:first.workspace.activePlan.id,expectedVersion:first.workspace.activePlan.version,expectedBlueprintVersion:2,requestId:"第二次保存",revisions:[{kind:"set_tip_state",tipId:"t",hidden:true,createdAt:"2026-08-27T00:01:00Z"}]});
+    const replay=store.applyDirectBlueprintRevisionBatch(firstInput);assert.deepEqual(replay.revision,first.revision);assert.equal(replay.workspace.activeBlueprint!.version,3);assert.equal(replay.workspace.activePlan.id,second.workspace.activePlan.id);
+    const undo={expectedPlanId:second.workspace.activePlan.id,expectedVersion:second.workspace.activePlan.version,expectedBlueprintVersion:3,revisionId:second.revision.id,requestId:"撤销第二次"};
+    const undone=store.undoDirectBlueprintRevision(undo);const third=store.applyDirectBlueprintRevisionBatch({expectedPlanId:undone.activePlan.id,expectedVersion:undone.activePlan.version,expectedBlueprintVersion:4,requestId:"第三次保存",revisions:[{kind:"set_tip_state",tipId:"t",pinned:false,createdAt:"2026-08-27T00:02:00Z"}]});
+    assert.equal(store.undoDirectBlueprintRevision(undo).activePlan.id,third.workspace.activePlan.id);assert.equal(store.getWorkspace().activeBlueprint!.version,5);assert.equal(store.getTripBlueprint("持久蓝图",6),undefined);
+  }finally{store.close();}
+});
+
+test("未编译生成候选可修正但已编译版本保持不可覆盖",()=>{
+  const store=new SqliteWorkspaceStore(":memory:");
+  try{const published=准备直接编辑存储(store);assert.throws(()=>store.saveTripBlueprint({...published,summary:"覆盖已发布内容"}),/同一旅行蓝图版本/);
+    const candidate={...structuredClone(published),version:2,summary:"生成中的候选"};store.saveTripBlueprint(candidate);
+    const corrected={...candidate,summary:"同一未编译候选的修正"};assert.equal(store.saveTripBlueprint(corrected).summary,corrected.summary);
+    store.createCompiledBlueprintPlan(compileTripBlueprint(corrected,{createdAt:"2026-08-27T00:00:00Z"}));assert.throws(()=>store.saveTripBlueprint({...corrected,summary:"编译后覆盖"}),/同一旅行蓝图版本/);
+  }finally{store.close();}
+});
+
+test("联合检查点不能覆盖已编译或直接编辑审计引用的前后版本",()=>{
+  const directory=mkdtempSync(join(tmpdir(),"landi-protected-"));const file=join(directory,"test.sqlite");const store=new SqliteWorkspaceStore(file);const database=new DatabaseSync(file);
+  try{const original=准备直接编辑存储(store);const research=store.getResearchSet(original.researchSetId)!;
+    assert.throws(()=>store.saveResearchSetAndTripBlueprint(research,{...original,summary:"联合写入绕过"}),/同一旅行蓝图版本/);
+    const before=store.getWorkspace();store.applyDirectBlueprintRevisionBatch({expectedPlanId:before.activePlan.id,expectedVersion:before.activePlan.version,expectedBlueprintVersion:1,requestId:"审计保护",revisions:[{kind:"set_tip_state",tipId:"t",pinned:true,createdAt:"2026-08-27T00:00:00Z"}]});
+    database.prepare("DELETE FROM plan_blueprint_lineage WHERE blueprint_id=?").run(original.id);
+    assert.throws(()=>store.saveTripBlueprint({...original,summary:"改写审计前版本"}),/同一旅行蓝图版本/);
+    assert.throws(()=>store.saveResearchSetAndTripBlueprint(research,{...original,summary:"联合改写审计前版本"}),/同一旅行蓝图版本/);
+    const after=store.getTripBlueprint(original.id,2)!;assert.throws(()=>store.saveResearchSetAndTripBlueprint(research,{...after,summary:"改写审计后版本"}),/同一旅行蓝图版本/);
+  }finally{database.close();store.close();rmSync(directory,{recursive:true,force:true});}
+});
+
+test("已完成结构化预订经直接编辑撤销与重启保持完成",()=>{
+ const directory=mkdtempSync(join(tmpdir(),"landi-booking-completion-"));const file=join(directory,"test.sqlite");let store=new SqliteWorkspaceStore(file);
+ try{准备直接编辑存储(store,blueprint=>{blueprint.bookingConstraints=[{id:"booking",type:"ticket",title:"虚构门票",status:"needs_review",sourceLabel:"旅客导入",importedAt:"2026-08-26T00:00:00Z",constraintStrength:"soft",segments:[{id:"segment",segmentType:"event_window",title:"确认门票",constraintStrength:"soft",fixedCommitment:false,needsReviewReasons:[]}]}];});
+  let workspace=store.getWorkspace();const requirementId=bookingTaskRequirementId(workspace.activeBlueprint!.bookingConstraints![0]!,"segment");const task=workspace.activePlan.stages.flatMap(stage=>stage.tasks).find(task=>task.requirementId===requirementId)!;assert.equal(task.owner,"user");
+  store.setPlanTaskChecked(workspace.activePlan.id,task.id,true);workspace=store.getWorkspace();
+  const saved=store.applyDirectBlueprintRevisionBatch({expectedPlanId:workspace.activePlan.id,expectedVersion:workspace.activePlan.version,expectedBlueprintVersion:1,requestId:"保留完成预订",revisions:[{kind:"set_tip_state",tipId:"t",pinned:true,createdAt:"2026-08-27T00:00:00Z"}]});
+  const completed=(value:typeof workspace)=>value.activePlan.stages.flatMap(stage=>stage.tasks).find(task=>task.requirementId===requirementId)!;
+  assert.equal(completed(saved.workspace).status,"completed");
+  const undone=store.undoDirectBlueprintRevision({expectedPlanId:saved.workspace.activePlan.id,expectedVersion:saved.workspace.activePlan.version,expectedBlueprintVersion:2,revisionId:saved.revision.id,requestId:"撤销并保留完成预订"});assert.equal(completed(undone).status,"completed");assert.equal(completed(undone).reminder,undefined);
+  store.close();store=new SqliteWorkspaceStore(file);assert.equal(completed(store.getWorkspace()).status,"completed");
+ }finally{store.close();rmSync(directory,{recursive:true,force:true});}
+});
+
+
+test("Schema 28 迁移标记失败原子回滚新增表且保留虚构 27 数据", () => {
+  const directory = mkdtempSync(join(tmpdir(), "landi-schema28-atomic-"));
+  const file = join(directory, "test.sqlite");
+  const initial = new SqliteWorkspaceStore(file);
+  准备直接编辑存储(initial);
+  initial.close();
+  const database = new DatabaseSync(file);
+  try {
+    database.exec("DROP TABLE travel_adjustment_drafts; DROP TABLE travel_adjustment_handoffs; DROP TABLE travel_adjustment_receipts; DROP TABLE travel_episodes; DROP TABLE travel_observations; DROP TABLE travel_phases; DROP TABLE booking_mutation_receipts; DROP TABLE direct_blueprint_undos; DROP TABLE direct_blueprint_edits; DELETE FROM schema_migrations WHERE version>=28");
+    const before = isolatedDatabaseRows(database);
+    const tablesBefore = database.prepare("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+    database.exec("CREATE TRIGGER isolated_migration_failure BEFORE INSERT ON schema_migrations WHEN NEW.version=28 BEGIN SELECT RAISE(ABORT,'隔离迁移标记失败'); END");
+    assert.throws(() => new SqliteWorkspaceStore(file), /隔离迁移标记失败/);
+    assert.deepEqual(isolatedDatabaseRows(database), before);
+    assert.deepEqual(database.prepare("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all(), tablesBefore);
+    assert.equal((database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as {version:number}).version, 27);
+    database.exec("DROP TRIGGER isolated_migration_failure");
+    const recovered = new SqliteWorkspaceStore(file);
+    try {
+      assert.equal(recovered.getDatabaseMaintenanceStatus().schemaVersion, 32);
+      assert.equal(recovered.getWorkspace().activeBlueprint!.version, 1);
+      const existingTables = new Set(before.map(table => table.name));
+      const after = isolatedDatabaseRows(database).filter(table => existingTables.has(table.name)).map(table => table.name === "schema_migrations" ? {...table, rows:table.rows.filter(row => Number(row.version) < 28)} : table);
+      assert.deepEqual(after, before);
+      assert.equal((database.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name IN ('direct_blueprint_edits','direct_blueprint_undos')").get() as {count:number}).count, 2);
+    } finally { recovered.close(); }
+  } finally { database.close(); rmSync(directory, {recursive:true,force:true}); }
+});
+
+test("独立 Schema 29 升级预订回执 Schema 30 保留历史，编号失败回滚新表",()=>{
+  const directory=mkdtempSync(join(tmpdir(),"landi-booking-schema30-"));const file=join(directory,"isolated.sqlite");
+  try{
+    const initial=new SqliteWorkspaceStore(file);准备直接编辑存储(initial);const before=initial.getWorkspace();const lineage=initial.getPlanBlueprintLineage(before.activePlan.id);initial.close();
+    let database=new DatabaseSync(file);database.exec("DROP TABLE travel_adjustment_drafts; DROP TABLE travel_adjustment_handoffs; DROP TABLE travel_adjustment_receipts; DROP TABLE travel_episodes; DROP TABLE travel_observations; DROP TABLE travel_phases; DROP TABLE booking_mutation_receipts; DELETE FROM schema_migrations WHERE version>=30; CREATE TRIGGER isolated_schema30_failure BEFORE INSERT ON schema_migrations WHEN NEW.version=30 BEGIN SELECT RAISE(ABORT,'隔离预订回执迁移失败'); END");database.close();
+    assert.throws(()=>new SqliteWorkspaceStore(file),/隔离预订回执迁移失败/);
+    database=new DatabaseSync(file);assert.equal(database.prepare("SELECT MAX(version) AS value FROM schema_migrations").get()!.value,29);assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE name='booking_mutation_receipts'").get(),undefined);database.exec("DROP TRIGGER isolated_schema30_failure");database.close();
+    const upgraded=new SqliteWorkspaceStore(file);assert.equal(upgraded.getDatabaseMaintenanceStatus().schemaVersion,32);assert.deepEqual(upgraded.getWorkspace(),before);assert.deepEqual(upgraded.getPlanBlueprintLineage(before.activePlan.id),lineage);upgraded.close();
+    const reopened=new SqliteWorkspaceStore(file);assert.deepEqual(reopened.getWorkspace(),before);assert.equal(reopened.getDatabaseMaintenanceStatus().migrations.filter(item=>item.version===30).length,1);reopened.close();
+  }finally{rmSync(directory,{recursive:true,force:true});}
+});
+
+test("真实旧 2.0 产物经持久勾选、重启及普通编辑或关系审阅精确继承完成",()=>{
+  const fixture=JSON.parse(readFileSync(new URL("../test-fixtures/blueprint-compiler-v2.json",import.meta.url),"utf8")) as {provenance:{compilerVersion:string;sourceHead:string};cases:Array<{name:string;blueprint:TripBlueprint;compilation:ReturnType<typeof compileTripBlueprint>}>};
+  assert.equal(fixture.provenance.compilerVersion,"2.0.0");assert.equal(fixture.provenance.sourceHead,"7bda1fccc6c694215631c9367d5065c2014ebc77");
+  for(const item of fixture.cases) for(const mode of item.blueprint.bookingConstraints![0]!.sourceBookingId?["普通编辑","关联审阅"]:["普通编辑"]) {
+    const directory=mkdtempSync(join(tmpdir(),"landi-real-v2-"));const file=join(directory,"isolated.sqlite");let store=new SqliteWorkspaceStore(file);
+    try{
+      准备真实旧编译存储(store,item);
+      let workspace=store.getWorkspace();const originalPlanId=workspace.activePlan.id;const lineage=store.getPlanBlueprintLineage(originalPlanId)!;assert.equal(lineage.compilerVersion,"2.0.0");
+      const legacyTask=workspace.activePlan.stages.flatMap(stage=>stage.tasks).find(task=>task.requirementId==="booking:booking-旧原始预订:segment-旧分段")!;assert.ok(legacyTask);
+      store.setPlanTaskChecked(originalPlanId,legacyTask.id,true);workspace=store.getWorkspace();assert.equal(workspace.activePlan.version,2);assert.equal(store.getPlanBlueprintLineage(originalPlanId)!.planVersion,1);
+      store.close();store=new SqliteWorkspaceStore(file);workspace=store.getWorkspace();
+      let revisions:import("@c-assistant/core").DirectBlueprintRevision[];
+      if(mode==="普通编辑")revisions=[{kind:"set_tip_state",tipId:"旧提示",pinned:true,createdAt:"2026-11-02T00:00:00Z"}];
+      else {const context=store.getBookingRelationshipReviewContext(workspace.activePlan.id);revisions=[{kind:"review_booking_relationships",expectedSourceSetDigest:context.sourceSetDigest,assessment:{schemaVersion:1,blueprintId:context.blueprintId,blueprintVersion:context.blueprintVersion,universeDigest:context.universeDigest,status:"reviewed",units:context.units.map(unit=>({...unit,coverage:"complete",relations:[],rationale:"核对全量直接、间接及跨日依赖后明确无关联",evidenceRefs:["traveler-declaration"]})),decision:{source:"traveler",actorId:"local-traveler",decidedAt:"2026-11-02T00:00:00Z",rationale:"逐项审阅所有来源与目标",evidenceRefs:["traveler-declaration"],obligations:["考虑直接、间接和跨日依赖"]}},createdAt:"2026-11-02T00:00:00Z"}];}
+      const saved=store.applyDirectBlueprintRevisionBatch({expectedPlanId:workspace.activePlan.id,expectedVersion:workspace.activePlan.version,expectedBlueprintVersion:1,requestId:`旧版${item.name}${mode}`,revisions});
+      const constraint=saved.workspace.activeBlueprint!.bookingConstraints![0]!;const identity=bookingTaskRequirementId(constraint,constraint.segments[0]!.id);
+      assert.equal(saved.workspace.activePlan.stages.flatMap(stage=>stage.tasks).find(task=>task.requirementId===identity)!.status,"completed",`${item.name}/${mode}`);
+      assert.equal(store.getPlanBlueprintLineage(saved.workspace.activePlan.id)!.compilerVersion,"2.1.0");assert.deepEqual(store.getPlanBlueprintLineage(originalPlanId),lineage);
+      store.close();store=new SqliteWorkspaceStore(file);assert.equal(store.getWorkspace().activePlan.stages.flatMap(stage=>stage.tasks).find(task=>task.requirementId===identity)!.status,"completed");
+    }finally{store.close();rmSync(directory,{recursive:true,force:true});}
+  }
+});
+
+test("真实旧 2.0 完成不跨源语义变化或任务字段篡改继承",()=>{
+  const fixture=JSON.parse(readFileSync(new URL("../test-fixtures/blueprint-compiler-v2.json",import.meta.url),"utf8")) as {cases:Array<{name:string;blueprint:TripBlueprint;compilation:ReturnType<typeof compileTripBlueprint>}>};const item=fixture.cases.find(value=>value.blueprint.bookingConstraints![0]!.sourceBookingId)!;
+  for(const mode of ["源结构变化","任务字段篡改"]) {
+    const directory=mkdtempSync(join(tmpdir(),"landi-real-v2-rejection-"));const file=join(directory,"isolated.sqlite");let store=new SqliteWorkspaceStore(file);
+    try{
+      准备真实旧编译存储(store,item);let workspace=store.getWorkspace();const legacy=workspace.activePlan.stages.flatMap(stage=>stage.tasks).find(task=>task.requirementId==="booking:booking-旧原始预订:segment-旧分段")!;store.setPlanTaskChecked(workspace.activePlan.id,legacy.id,true);
+      if(mode==="任务字段篡改") {store.close();const database=new DatabaseSync(file);database.prepare("UPDATE tasks SET due_label=? WHERE id=?").run("虚构篡改完成条件",legacy.id);database.close();store=new SqliteWorkspaceStore(file);workspace=store.getWorkspace();store.applyDirectBlueprintRevisionBatch({expectedPlanId:workspace.activePlan.id,expectedVersion:workspace.activePlan.version,expectedBlueprintVersion:1,requestId:"拒绝篡改继承",revisions:[{kind:"set_tip_state",tipId:"旧提示",pinned:true,createdAt:"2026-11-02T00:00:00Z"}]});}
+      else {workspace=store.getWorkspace();const context=store.getBookingRelationshipReviewContext(workspace.activePlan.id);const source=store.listCurrentTravelBookingSourcesForPlan(workspace.activePlan.id)[0]!;store.savePlanTravelBooking({targetPlanId:workspace.activePlan.id,booking:{...source,segments:source.segments.map(segment=>({...segment,startAtLocal:"2026-12-01T12:00"})),updatedAt:"2026-11-02T00:00:00Z"},expectedVersion:workspace.activePlan.version,expectedBlueprintVersion:1,expectedSourceSetDigest:context.sourceSetDigest,expectedRecordDigest:bookingRelationshipDigest(source),requestId:"拒绝源变化继承",requestDigest:bookingRelationshipDigest({mode})});}
+      workspace=store.getWorkspace();const constraint=workspace.activeBlueprint!.bookingConstraints![0]!;const identity=bookingTaskRequirementId(constraint,constraint.segments[0]!.id);assert.equal(workspace.activePlan.stages.flatMap(stage=>stage.tasks).find(task=>task.requirementId===identity)!.status,"waiting_user",mode);
+    }finally{store.close();rmSync(directory,{recursive:true,force:true});}
+  }
+});
+
+function 准备真实旧编译存储(store:SqliteWorkspaceStore,item:{blueprint:TripBlueprint;compilation:ReturnType<typeof compileTripBlueprint>}):void {
+  准备直接编辑存储(store,blueprint=>{
+    const proposalRef=blueprint.proposalRef;Object.assign(blueprint,structuredClone(item.blueprint),{proposalRef});
+    const constraint=blueprint.bookingConstraints![0]!;
+    if(constraint.sourceBookingId)store.saveTravelBooking({id:constraint.sourceBookingId,planningSessionId:proposalRef.sessionId,type:constraint.type,status:constraint.status,title:constraint.title,source:"user",sourceHash:"虚构旧版来源摘要",sourceLabel:constraint.sourceLabel,importedAt:constraint.importedAt,updatedAt:constraint.importedAt,constraintStrength:constraint.constraintStrength,segments:constraint.segments.map(segment=>{const {sourceSegmentId,...fields}=segment;return {...fields,id:sourceSegmentId!,status:segment.status??"needs_review"};})});
+  },structuredClone(item.compilation));
+}
+
+
+test("关联准备项的直接保存拒绝且无任何持久化副作用，规范任务勾选仍成功", () => {
+  const directory = mkdtempSync(join(tmpdir(), "landi-linked-preparation-"));
+  const file = join(directory, "test.sqlite");
+  const store = new SqliteWorkspaceStore(file);
+  const database = new DatabaseSync(file);
+  try {
+    准备直接编辑存储(store, blueprint => {
+      blueprint.actionRequirements = [{id:"linked-preparation",kind:"preparation",title:"核对虚构材料",description:"隔离测试",accountableParty:"traveler",completionCondition:"旅行者确认",evidence:[]}];
+      blueprint.preparationChecklist = [{id:"linked",title:"核对虚构材料",group:"documents",completionCondition:"旅行者确认",requirementId:"linked-preparation",evidence:[]}];
+    });
+    const workspace = store.getWorkspace();
+    const input = {expectedPlanId:workspace.activePlan.id,expectedVersion:workspace.activePlan.version,expectedBlueprintVersion:1,requestId:"关联准备项拒绝",revisions:[
+      {kind:"set_tip_state" as const,tipId:"t",pinned:true,createdAt:"2026-08-27T00:00:00Z"},
+      {kind:"set_preparation_completed" as const,preparationId:"linked",completed:true,createdAt:"2026-08-27T00:00:00Z"}
+    ]};
+    const before = isolatedDatabaseRows(database);
+    assert.throws(() => store.applyDirectBlueprintRevisionBatch(input), (error:unknown) => {
+      assert.ok(error instanceof Error && "code" in error);
+      assert.equal(error.code, "invalid_edit");
+      return true;
+    });
+    assert.deepEqual(isolatedDatabaseRows(database), before);
+    const task = workspace.activePlan.stages.flatMap(stage => stage.tasks).find(task => task.requirementId === "linked-preparation")!;
+    assert.ok(task);
+    const checked = store.setPlanTaskChecked(workspace.activePlan.id, task.id, true);
+    assert.equal(checked.activePlan.stages.flatMap(stage => stage.tasks).find(candidate => candidate.id === task.id)!.status, "completed");
+    assert.equal(checked.activeBlueprint!.version, 1);
+    assert.equal(checked.activeBlueprint!.preparationChecklist![0]!.completed, undefined);
+    assert.equal((database.prepare("SELECT COUNT(*) AS count FROM direct_blueprint_edits").get() as {count:number}).count, 0);
+  } finally {database.close();store.close();rmSync(directory,{recursive:true,force:true});}
+});
+
+test("Blueprint 精确检查点仅导入被消费的 carrier，空检查点及取消不吸收其它候选", () => {
+  const directory = mkdtempSync(join(tmpdir(), "landi-parent-content-"));
+  const databasePath = join(directory, "isolated.sqlite");
+  const store = new SqliteWorkspaceStore(databasePath);
+  try {
+    const session = store.createPlanningSession("travel");
+    store.savePlanningSession({ ...session, status: "proposal_ready", proposal: { version: 1, title: "虚构行程", objective: "旅行", theme: "城市", segments: ["测试市"], skeleton: ["2026-11-20"], tradeoffs: [], assumptions: [], decisionPoints: [] } });
+    store.confirmPlanningSession(session.id, 1);
+    const identity = { generationKey: "exact-carrier-generation", proposalRef: { sessionId: session.id, proposalVersion: 1 }, skillLineage: { skillId: "fixture", skillVersion: "1" } };
+    const createdAt = "2026-11-09T00:00:00Z";
+    store.saveBlueprintGeneration({ ...identity, status: "running", stage: "itinerary", createdAt, updatedAt: createdAt });
+    const research: ResearchSet = { ...identity, id: "exact-research", schemaVersion: TRIP_BLUEPRINT_SCHEMA_VERSION, status: "completed", batches: [], places: [], events: [], sources: [], actionRequirements: [], createdAt, updatedAt: createdAt };
+    store.saveResearchSet(research);
+    const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+    const canonical = (value: unknown): string => Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : value && typeof value === "object" ? `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => `${JSON.stringify(key)}:${canonical(child)}`).join(",")}}` : JSON.stringify(value);
+    const prepare = (batchId: string) => store.generationCarriers.prepare({ ...identity, operation: "itinerary_draft", batchId, protocol: "mah_task_queue_v1", inputSha256: hash(canonical({ text: batchId })), expectedSubpath: "artifacts/landi-stage-result.json", projectRoot: "/tmp/fictional", preparedStatus: "prepared", retryableTerminalStatuses: [], serializeRequest: canonical, hashRequest: hash, createRequest: requestIdentity => ({ ...identity, ...requestIdentity, batchId, operation: "itinerary_draft", schemaVersion: 3, protocol: "mah_task_queue_v1", projectRoot: "/tmp/fictional", kind: "landi_generation_stage_request", parentCheckpoint: store.getGenerationCarrierCheckpoint(identity.generationKey), input: { businessContract: "landi.skill-itinerary-input.v1", sha256: hash(canonical({ text: batchId })), businessInput: { text: batchId } }, output: { subpath: "artifacts/landi-stage-result.json", envelopeContract: "landi.mah-generation-stage-result.v2" }, execution: { preferredLanguage: "zh-CN", webSearch: false, maxRuntimeSeconds: 60, capabilityRequirements: ["structured_output"] }, createdAt }) });
+    const used = prepare("used"), unused = prepare("unused");
+    for (const carrier of [used, unused]) store.generationCarriers.recordValidated({ carrierTaskId: carrier.carrierTaskId, resultJson: "{}", resultSha256: hash("{}"), validatedStatus: "validated", importedStatus: "imported", changedStatus: "artifact_changed", cancelledStatuses: [] });
+    const blueprint: TripBlueprint = { ...identity, schemaVersion: TRIP_BLUEPRINT_SCHEMA_VERSION, id: "exact-blueprint", version: 1, researchSetId: research.id, title: "虚构离境日", summary: "旅行", language: "zh-CN", destinations: ["测试市"], startDate: "2026-11-20", endDate: "2026-11-20", places: [], events: [], sources: [], days: [{ id: "departure", date: "2026-11-20", kind: "transit", city: "测试市", title: "离境", summary: "旅行", stops: [], blocks: [{ id: "rest", kind: "rest", order: 1, title: "准备", evidence: [] }], candidatePlaceIds: [] }], movements: [], actionRequirements: [], createdAt };
+    const event = { id: "exact-checkpoint", generationKey: identity.generationKey, stage: "itinerary" as const, status: "running" as const, detail: "保存精确候选", savedPlaceCount: 0, createdAt };
+    const peer = new DatabaseSync(databasePath);
+    try {
+      peer.prepare("UPDATE research_sets SET content_json=? WHERE id=?").run(JSON.stringify({ ...research, updatedAt: "2026-11-09T00:01:00Z" }), research.id);
+      assert.throws(() => prepare("used"), /冻结请求/);
+      assert.throws(() => store.generationCarriers.claimSubmission(used.carrierTaskId, used.requestSha256), /父检查点内容摘要/);
+      assert.throws(() => store.generationCarriers.recordValidated({ carrierTaskId: used.carrierTaskId, resultJson: "{}", resultSha256: hash("{}"), validatedStatus: "validated", importedStatus: "imported", changedStatus: "artifact_changed", cancelledStatuses: [] }), /父检查点内容摘要/);
+      assert.throws(() => store.saveTripBlueprint(blueprint, { carrierTaskIds: [used.carrierTaskId], expectedCarriers: [{ carrierTaskId: used.carrierTaskId, requestSha256: used.requestSha256, resultSha256: hash("{}") }], generationEvent: event }), /父检查点内容摘要/);
+      assert.equal(store.getTripBlueprint(blueprint.id, blueprint.version), undefined);
+      assert.equal(store.generationCarriers.getByTaskId(used.carrierTaskId)?.status, "validated");
+      peer.prepare("UPDATE research_sets SET content_json=? WHERE id=?").run(JSON.stringify(research), research.id);
+    } finally { peer.close(); }
+    store.saveTripBlueprint(blueprint, { carrierTaskIds: [used.carrierTaskId], expectedCarriers: [{ carrierTaskId: used.carrierTaskId, requestSha256: used.requestSha256, resultSha256: hash("{}") }], generationEvent: event });
+    assert.equal(store.generationCarriers.getByTaskId(used.carrierTaskId)?.status, "imported");
+    assert.equal(store.generationCarriers.getByTaskId(unused.carrierTaskId)?.status, "validated");
+    store.saveTripBlueprint(blueprint, { carrierTaskIds: [], expectedCarriers: [], generationEvent: { ...event, id: "deterministic-checkpoint" } });
+    assert.equal(store.generationCarriers.getByTaskId(unused.carrierTaskId)?.status, "validated");
+    store.requestBlueprintGenerationCancellation(identity.generationKey, "取消虚构测试");
+    assert.throws(() => store.saveTripBlueprint(blueprint, { carrierTaskIds: [], expectedCarriers: [], generationEvent: { ...event, id: "cancelled-checkpoint" } }), /取消/);
+    assert.equal(store.generationCarriers.getByTaskId(used.carrierTaskId)?.status, "imported");
+    assert.equal(store.generationCarriers.getByTaskId(unused.carrierTaskId)?.status, "cancel_requested");
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("完成后停止图片工作持久阻断后续批次，同时保留 Plan、lineage 与直接编辑", () => {
+  const directory = mkdtempSync(join(tmpdir(), "landi-completed-carrier-cancel-"));
+  const path = join(directory, "isolated.sqlite");
+  const store = new SqliteWorkspaceStore(path);
+  let peer: SqliteWorkspaceStore | undefined;
+  try {
+    const blueprint = 准备直接编辑存储(store);
+    peer = new SqliteWorkspaceStore(path);
+    const plan = structuredClone(store.getWorkspace().activePlan);
+    const lineage = store.getPlanBlueprintLineage(plan.id);
+    const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+    const canonical = (value: unknown): string => Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : value && typeof value === "object" ? `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => `${JSON.stringify(key)}:${canonical(child)}`).join(",")}}` : JSON.stringify(value);
+    const prepare = (target: SqliteWorkspaceStore, batchId: string) => target.generationCarriers.prepare({ generationKey: blueprint.generationKey, operation: "planned_place_image_enrichment", batchId, protocol: "mah_task_queue_v1", inputSha256: hash(canonical({ batchId })), expectedSubpath: "artifacts/landi-stage-result.json", projectRoot: "/tmp/fictional", preparedStatus: "prepared", retryableTerminalStatuses: [], serializeRequest: canonical, hashRequest: hash, createRequest: identity => ({ ...identity, generationKey: blueprint.generationKey, proposalRef: blueprint.proposalRef, skillLineage: blueprint.skillLineage, operation: "planned_place_image_enrichment", batchId, schemaVersion: 3, protocol: "mah_task_queue_v1", projectRoot: "/tmp/fictional", kind: "landi_generation_stage_request", parentCheckpoint: target.getGenerationCarrierCheckpoint(blueprint.generationKey), input: { businessContract: "landi.planned-place-image-enrichment-input.v1", sha256: hash(canonical({ batchId })), businessInput: { batchId } }, output: { subpath: "artifacts/landi-stage-result.json", envelopeContract: "landi.mah-generation-stage-result.v2" }, execution: { preferredLanguage: "zh-CN", webSearch: true, maxRuntimeSeconds: 60, capabilityRequirements: ["structured_output"] }, createdAt: "2026-11-09T00:00:00Z" }) });
+    const existing = prepare(peer, "before-cancel");
+    store.requestBlueprintGenerationCancellation(blueprint.generationKey, "停止后续图片工作");
+    assert.throws(() => prepare(peer!, "after-cancel"), /取消/);
+    assert.throws(() => peer!.generationCarriers.recordValidated({ carrierTaskId: existing.carrierTaskId, resultJson: "{}", resultSha256: hash("{}"), validatedStatus: "validated", importedStatus: "imported", changedStatus: "artifact_changed", cancelledStatuses: [] }), /取消/);
+    assert.equal(peer.getBlueprintGeneration(blueprint.generationKey)?.status, "completed");
+    assert.deepEqual(peer.getWorkspace().activePlan, plan);
+    assert.deepEqual(peer.getPlanBlueprintLineage(plan.id), lineage);
+    assert.equal(peer.generationCarriers.listForGeneration(blueprint.generationKey).length, 1);
+    assert.throws(() => peer!.saveResearchSetAndTripBlueprint(peer!.getResearchSet(blueprint.researchSetId)!, blueprint), /取消/);
+    const raw = new DatabaseSync(path);
+    try { raw.prepare("DELETE FROM mah_generation_carriers WHERE generation_key=?").run(blueprint.generationKey); } finally { raw.close(); }
+    assert.throws(() => peer!.saveResearchSetAndTripBlueprint(peer!.getResearchSet(blueprint.researchSetId)!, blueprint), /取消/);
+    const edited = store.applyDirectBlueprintRevisionBatch({ expectedPlanId: plan.id, expectedVersion: plan.version, expectedBlueprintVersion: 1, requestId: "stopped-image-direct-edit", revisions: [{ kind: "set_tip_state", tipId: "t", pinned: true, createdAt: "2026-11-09T00:01:00Z" }] });
+    assert.equal(edited.workspace.activeBlueprint?.version, 2);
+    assert.equal(edited.workspace.activeBlueprint?.travelTips?.[0]?.pinned, true);
+  } finally { peer?.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
 });

@@ -1,3 +1,7 @@
+import { registerMahReadinessRoute } from "./mah-readiness-route.js";
+import { buildMahReadinessReport } from "./mah-readiness-report.js";
+import { productionReadiness } from "./production-readiness.js";
+import { createEmailTransportFromEnvironment } from "./email-transport.js";
 import type { FastifyInstance } from "fastify";
 import { RuntimeAdapterError, type RuntimeCheck, type RuntimeKind } from "@c-assistant/agent-adapters";
 import type { RuntimeSelectionUpdate } from "@c-assistant/core";
@@ -11,15 +15,18 @@ type RuntimeHealthAdapter = {
 
 type LocalConfigurationSnapshot = {
   google: { configured: boolean };
-  telegram: { configured: boolean };
 };
 
 export function registerRuntimeRoutes(server: FastifyInstance, dependencies: {
   store: SqliteWorkspaceStore;
   runtimes: Record<RuntimeKind, RuntimeHealthAdapter>;
   getLocalConfiguration: () => LocalConfigurationSnapshot;
+  conversationSubmissionConfigured?: boolean;
+  getMahDiagnostics?: () => Promise<Omit<ReturnType<typeof buildMahReadinessReport>, "evidenceMode"> & { evidenceMode: string }>;
 }): void {
   const { store, runtimes, getLocalConfiguration } = dependencies;
+
+  registerMahReadinessRoute(server, dependencies.getMahDiagnostics, dependencies.conversationSubmissionConfigured === true);
 
   server.get("/api/runtimes/codex", async () => runtimes.codex.check());
   server.get("/api/runtimes/claude-code", async () => runtimes["claude-code"].check());
@@ -48,14 +55,16 @@ export function registerRuntimeRoutes(server: FastifyInstance, dependencies: {
     const workspace = store.getWorkspace();
     const configuration = getLocalConfiguration();
     const runtimeChecks = await Promise.all([runtimes.codex.check(), runtimes["claude-code"].check()]);
-    return assessSetupReadiness({
+    const diagnostic = assessSetupReadiness({
       profileStatus: workspace.profile.status,
       selectedRuntime: workspace.runtime.selectedKind,
       runtimeChecks,
       googleConfigured: configuration.google.configured,
-      telegramConfigured: configuration.telegram.configured,
-      telegramPaired: store.getTelegramPairingStatus().state === "paired"
+      emailConfigured: createEmailTransportFromEnvironment().configured(),
+      emailVerified: store.email.settings().verified
     });
+    const items = diagnostic.items.map(item => item.id === "runtime" ? { ...item, status: "needs_attention" as const, label: "MAH integration", detail: "Local Agent login does not verify MAH readiness. Plan generation and continuous operation are not ready for use." } : item);
+    return { ...diagnostic, status: "needs_attention", items, readyCount: items.filter(item => item.status === "ready").length, nextAction: items.find(item => item.status === "needs_attention")!.detail, production: productionReadiness() };
   });
 
   server.put<{ Body: RuntimeSelectionUpdate }>("/api/runtime", async (request, reply) => {

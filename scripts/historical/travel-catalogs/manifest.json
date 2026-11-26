@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Historical source and test evidence; not executable or production input. SHA-256 applies to original decompressed bytes.",
+  "files": [
+    {
+      "originalPath": "apps/server/src/china-source-preparation.ts",
+      "archivePath": "apps__server__src__china-source-preparation.ts.gz",
+      "encoding": "gzip",
+      "sha256": "85a68133f6864637dd4d8cce49f6127f6536978ba45e29400c3d441f62e292a4",
+      "bytes": 5379
+    },
+    {
+      "originalPath": "apps/server/src/japan-source-preparation.ts",
+      "archivePath": "apps__server__src__japan-source-preparation.ts.gz",
+      "encoding": "gzip",
+      "sha256": "bca4266b4fd76727792adce4a6678d986405f4fa789963460a2b715c45bec0d9",
+      "bytes": 3878
+    },
+    {
+      "originalPath": "packages/travel-support/src/china-reference-catalog.ts",
+      "archivePath": "packages__travel-support__src__china-reference-catalog.ts.gz",
+      "encoding": "gzip",
+      "sha256": "8202ad142bf2bc5612e1abd6022ef26d72a638b4dab1f49c9376476a2b8d7d24",
+      "bytes": 10070
+    },
+    {
+      "originalPath": "packages/travel-support/src/japan-reference-catalog.ts",
+      "archivePath": "packages__travel-support__src__japan-reference-catalog.ts.gz",
+      "encoding": "gzip",
+      "sha256": "d6804d81bd4cf0824c5b4e8407a10093c21c79e2502172417a2ad644d61d555f",
+      "bytes": 3565
+    },
+    {
+      "originalPath": "packages/travel-support/data/china/digital-life-catalog.json",
+      "archivePath": "packages__travel-support__data__china__digital-life-catalog.json.gz",
+      "encoding": "gzip",
+      "sha256": "3cb6781ea433c0823fab2ec53ac595b0af9119b2f2f19e0b46c0683f1e62c006",
+      "bytes": 3028
+    },
+    {
+      "originalPath": "packages/travel-support/data/china/local-food-catalog.json",
+      "archivePath": "packages__travel-support__data__china__local-food-catalog.json.gz",
+      "encoding": "gzip",
+      "sha256": "e1f10f8355d10badce70d236240b2e636f674b9c37d7bf0c7ecd173374ec0b86",
+      "bytes": 5960
+    },
+    {
+      "originalPath": "packages/travel-support/data/japan/reference-catalog.json",
+      "archivePath": "packages__travel-support__data__japan__reference-catalog.json.gz",
+      "encoding": "gzip",
+      "sha256": "8c428c44dd8036f6dd6fd9e43f68a94414f70cc1ced2db0353b63623804c4743",
+      "bytes": 2985
+    },
+    {
+      "originalPath": "apps/server/src/china-source-preparation.test.ts",
+      "archivePath": "apps__server__src__china-source-preparation.test.ts.gz",
+      "encoding": "gzip",
+      "sha256": "4eb9b6cb80871957f626e3c675dc1ac48e56c0c789073ccca8dd16db84b1dcd7",
+      "bytes": 4905
+    },
+    {
+      "originalPath": "packages/travel-support/src/china-reference-catalog.test.ts",
+      "archivePath": "packages__travel-support__src__china-reference-catalog.test.ts.gz",
+      "encoding": "gzip",
+      "sha256": "d5399c855d1e6d0868f2a6e6e43032668b530aee021276a3c89a89c7bbf95f16",
+      "bytes": 9883
+    },
+    {
+      "originalPath": "packages/travel-support/src/japan-reference-catalog.test.ts",
+      "archivePath": "packages__travel-support__src__japan-reference-catalog.test.ts.gz",
+      "encoding": "gzip",
+      "sha256": "f0ccd14ece9d024102d13753f8d460b9a318449b039301bd897bbbb9f45a7977",
+      "bytes": 1275
+    },
+    {
+      "originalPath": "scripts/release-check-policy.test.mjs",
+      "archivePath": "scripts__release-check-policy.test.mjs.gz",
+      "encoding": "gzip",
+      "sha256": "868093deedfbe271413a7ed282516c2f54296e91ca45cc91e5cb1864c89b79db",
+      "bytes": 4643
+    }
+  ]
+}

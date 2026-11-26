@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import test from "node:test";
-
-import { AmapConnector, createAmapDrivingHandoff, createAmapNavigationHandoff, createAmapPlaceHandoff, createGoogleMapsNavigationHandoff, createGoogleMapsPlaceHandoff, createUberRideHandoff, GoogleMapsConnector, GoogleWeatherConnector, OfficialSourceConnector, QWeatherConnector, TelegramConnector, WhatsAppConnector } from "./index.js";
+import { AmapConnector, createAmapDrivingHandoff, createAmapNavigationHandoff, createAmapPlaceHandoff, createGoogleMapsNavigationHandoff, createGoogleMapsPlaceHandoff, createUberRideHandoff, GoogleMapsConnector, GoogleWeatherConnector, OfficialSourceConnector, QWeatherConnector } from "./index.js";
 
 const officialSources = [{
   id: "immigration",
@@ -76,7 +75,7 @@ test("Google Maps normalizes Places and route facts without exposing its key", a
     fetcher: async (input) => {
       requested.push(String(input));
       if (String(input).includes("places.googleapis.com")) return new Response(JSON.stringify({ places: [{ id: "place-1", displayName: { text: "Example Hotel" }, formattedAddress: "1 Example Road", location: { latitude: 31.23, longitude: 121.47 }, primaryType: "lodging", addressComponents: [{ longText: "Shanghai", types: ["locality"] }, { longText: "China", types: ["country"] }], businessStatus: "CLOSED_TEMPORARILY" }] }));
-      return new Response(JSON.stringify({ routes: [{ distanceMeters: 2400, duration: "720s", polyline: { encodedPolyline: "_p~iF~ps|U_ulLnnqC_mqNvxq`@" } }] }));
+      return new Response(JSON.stringify({ routes: [{ distanceMeters: 2400, duration: "720s", staticDuration: "600s", polyline: { encodedPolyline: "_p~iF~ps|U_ulLnnqC_mqNvxq`@" } }] }));
     }
   });
   const places = await connector.searchPlaces({ query: "Example Hotel" });
@@ -88,9 +87,25 @@ test("Google Maps normalizes Places and route facts without exposing its key", a
   assert.equal(places.data?.[0]?.businessStatus, "temporarily_closed");
   assert.equal(route.data?.provider, "google_maps");
   assert.equal(route.data?.durationSeconds, 720);
+  assert.equal(route.data?.staticDurationSeconds, 600);
   assert.deepEqual(route.data?.geometry, [[-120.2, 38.5], [-120.95, 40.7], [-126.453, 43.252]]);
   assert.equal(route.data?.strategy, "google_maps_recommended");
   assert.doesNotMatch(JSON.stringify({ places, route, requested }), /google-test-key/);
+});
+
+test("restaurant searches request and preserve sourced dining introductions", async () => {
+  const masks: string[] = [];
+  const connector = new GoogleMapsConnector({ apiKey: "test", fetcher: async (_input, init) => {
+    masks.push(new Headers(init?.headers).get("X-Goog-FieldMask") ?? "");
+    return new Response(JSON.stringify({ places: [{ id: "restaurant", displayName: { text: "Example Restaurant" }, formattedAddress: "Auckland", location: { latitude: -36.844, longitude: 174.769 }, primaryType: "japanese_restaurant", primaryTypeDisplayName: { text: "Japanese restaurant" }, editorialSummary: { text: "Japanese dishes in a relaxed dining room." }, priceLevel: "PRICE_LEVEL_MODERATE", servesVegetarianFood: true, websiteUri: "https://example.com/restaurant" }] }));
+  } });
+  const result = await connector.nearbyRestaurants({ location: "174.769,-36.844" });
+  assert.match(masks[0]!, /places.editorialSummary/);
+  assert.equal(result.data?.[0]?.dining?.summary, "Japanese dishes in a relaxed dining room.");
+  assert.equal(result.data?.[0]?.dining?.priceLevel, "PRICE_LEVEL_MODERATE");
+  assert.equal(result.data?.[0]?.dining?.servesVegetarianFood, true);
+  await connector.searchPlaces({ query: "hotel" });
+  assert.doesNotMatch(masks[1]!, /editorialSummary/);
 });
 
 test("Google Weather normalizes current and three-day facts", async () => {
@@ -429,169 +444,45 @@ test("QWeather reports missing configuration without making a request", async ()
   assert.equal(requests, 0);
 });
 
-test("Telegram bot verification normalizes identity and keeps the token out of results", async () => {
-  let requestUrl = "";
-  const connector = new TelegramConnector({
-    botToken: "test-bot-token",
-    fetcher: async (input) => {
-      requestUrl = String(input);
-      return new Response(JSON.stringify({
-        ok: true,
-        result: { id: 321, first_name: "C Assistant", username: "c_assistant_bot", can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: false }
-      }));
-    }
-  });
 
-  const result = await connector.getMe();
-  assert.equal(result.status, "available");
-  assert.equal(result.data?.username, "c_assistant_bot");
-  assert.match(requestUrl, /\/getMe$/);
-  assert.doesNotMatch(JSON.stringify(result), /test-bot-token/);
+test("Google reverse geocoding resolves pickup country and city with latitude first", async () => {
+  const connector = new GoogleMapsConnector({ apiKey: "test", fetcher: async input => {
+    const url = new URL(String(input));
+    assert.equal(url.searchParams.get("latlng"), "-36.8442,174.7695");
+    return new Response(JSON.stringify({ status: "OK", results: [{ formatted_address: "29 Galway Street, Auckland, New Zealand", address_components: [
+      { long_name: "Auckland", short_name: "Auckland", types: ["locality"] },
+      { long_name: "New Zealand", short_name: "NZ", types: ["country"] }
+    ] }] }));
+  } });
+  const result = await connector.reverseGeocode({ location: "174.7695,-36.8442" });
+  assert.equal(result.data?.country, "New Zealand");
+  assert.equal(result.data?.city, "Auckland");
 });
 
-test("Telegram update polling normalizes only a usable private-chat message", async () => {
-  let requestBody = "";
-  const connector = new TelegramConnector({
-    botToken: "test-token",
-    fetcher: async (_input, init) => {
-      requestBody = String(init?.body);
-      return new Response(JSON.stringify({ ok: true, result: [
-        { update_id: 11, message: { text: "/start pair_code_123", chat: { id: 1001, type: "private" }, from: { id: 1001, first_name: "Avery", username: "avery" } } },
-        { update_id: 12, message: { chat: { id: 1002 }, from: { id: 1002 } } }
-      ] }));
-    }
-  });
-
-  const result = await connector.getUpdates({ offset: 10 });
-  assert.equal(result.status, "available");
-  assert.equal(result.data?.updates.length, 1);
-  assert.equal(result.data?.updates[0]?.kind, "message");
-  assert.equal(result.data?.updates[0]?.chatId, "1001");
-  assert.equal(result.data?.updates[0]?.chatType, "private");
-  assert.equal(result.data?.updates[0]?.text, "/start pair_code_123");
-  assert.equal(result.data?.nextOffset, 13);
-  assert.match(requestBody, /"offset":10/);
-  assert.match(requestBody, /callback_query/);
-  assert.doesNotMatch(JSON.stringify(result), /test-token/);
+test("Google reverse geocoding failure does not manufacture a pickup area", async () => {
+  for (const status of ["ZERO_RESULTS", "REQUEST_DENIED", "OVER_QUERY_LIMIT"]) {
+    const connector = new GoogleMapsConnector({ apiKey: "test", fetcher: async () => new Response(JSON.stringify({ status })) });
+    const result = await connector.reverseGeocode({ location: "174.7695,-36.8442" });
+    assert.notEqual(result.status, "available");
+    assert.equal(result.data, undefined);
+  }
 });
 
-test("Telegram supports an arrival callback and an explicit shared location without exposing the token", async () => {
-  const bodies: string[] = [];
-  const connector = new TelegramConnector({
-    botToken: "test-token",
-    fetcher: async (input, init) => {
-      bodies.push(String(init?.body));
-      const url = String(input);
-      if (url.endsWith("/getUpdates")) return new Response(JSON.stringify({ ok: true, result: [
-        { update_id: 14, callback_query: { id: "callback-1", data: "arrival_not_here", from: { id: 1001, first_name: "Avery" }, message: { chat: { id: 1001, type: "private" } } } },
-        { update_id: 15, message: { location: { latitude: 31.23, longitude: 121.47 }, chat: { id: 1001, type: "private" }, from: { id: 1001, first_name: "Avery" } } }
-      ] }));
-      if (url.endsWith("/sendMessage")) return new Response(JSON.stringify({ ok: true, result: { message_id: 3, chat: { id: 1001 } } }));
-      return new Response(JSON.stringify({ ok: true, result: true }));
-    }
-  });
 
-  const updates = await connector.getUpdates();
-  assert.equal(updates.data?.updates[0]?.kind, "callback");
-  assert.equal(updates.data?.updates[0]?.callbackData, "arrival_not_here");
-  assert.deepEqual(updates.data?.updates[1]?.location, { latitude: 31.23, longitude: 121.47 });
-  await connector.answerCallbackQuery({ callbackId: "callback-1", text: "Share location" });
-  await connector.sendMessage({ chatId: "1001", text: "Share location", replyMarkup: { keyboard: [[{ text: "Share current location", request_location: true }]], resize_keyboard: true, one_time_keyboard: true } });
-  await connector.sendMessage({ chatId: "1001", text: "Open Amap", replyMarkup: { inline_keyboard: [[{ text: "Open route in Amap", url: "https://uri.amap.com/navigation?mode=car" }]] } });
-  assert.ok(bodies.some((body) => /callback_query_id/.test(body)));
-  assert.ok(bodies.some((body) => /request_location/.test(body)));
-  assert.ok(bodies.some((body) => /uri\.amap\.com\/navigation/.test(body)));
-  assert.doesNotMatch(JSON.stringify({ bodies }), /test-token/);
+test("hourly forecasts preserve provider intervals and omit incomplete rain evidence", async () => {
+  const connector = new GoogleWeatherConnector({apiKey:"test",fetcher:async input=>{
+    const url=new URL(String(input));assert.equal(url.pathname,"/v1/forecast/hours:lookup");
+    assert.equal(url.searchParams.get("location.latitude"),"-37.872");assert.equal(url.searchParams.get("hours"),"6");
+    return new Response(JSON.stringify({forecastHours:[{interval:{startTime:"2026-11-05T12:00:00Z",endTime:"2026-11-05T13:00:00Z"},weatherCondition:{description:{text:"Cloudy"}},precipitation:{qpf:{quantity:0},probability:{percent:10}}},{interval:{startTime:"2026-11-05T13:00:00Z",endTime:"2026-11-05T14:00:00Z"},precipitation:{}}]}));
+  }});
+  const result=await connector.hourlyForecast({coordinates:"175.683,-37.872"});
+  assert.equal(result.data?.length,1);assert.equal(result.data?.[0]?.precipitationProbability,10);assert.equal(result.data?.[0]?.startAt,"2026-11-05T12:00:00Z");
 });
 
-test("Telegram does not make a request when no bot token is configured", async () => {
-  let requests = 0;
-  const connector = new TelegramConnector({
-    botToken: "",
-    fetcher: async () => {
-      requests += 1;
-      return new Response();
-    }
-  });
-
-  const result = await connector.getMe();
-  assert.equal(result.status, "not_configured");
-  assert.equal(requests, 0);
-});
-
-test("WhatsApp remains optional and reports actionable readiness states without exposing secrets", () => {
-  const absent = new WhatsAppConnector({});
-  assert.equal(absent.configurationStatus().status, "not_configured");
-
-  const outboundOnly = new WhatsAppConnector({ accessToken: "wa-access-token", phoneNumberId: "phone-1" });
-  const webhookPending = outboundOnly.configurationStatus();
-  assert.equal(webhookPending.status, "degraded");
-  assert.equal(webhookPending.data?.state, "webhook_pending");
-
-  const templatePending = new WhatsAppConnector({ accessToken: "wa-access-token", phoneNumberId: "phone-1", appSecret: "wa-app-secret", verifyToken: "wa-verify-token" }).configurationStatus();
-  assert.equal(templatePending.data?.state, "template_pending");
-
-  const ready = new WhatsAppConnector({ accessToken: "wa-access-token", phoneNumberId: "phone-1", appSecret: "wa-app-secret", verifyToken: "wa-verify-token", reminderTemplateName: "landi_reminder" }).configurationStatus();
-  assert.equal(ready.status, "available");
-  assert.equal(ready.data?.state, "available");
-  assert.doesNotMatch(JSON.stringify({ webhookPending, templatePending, ready }), /wa-access-token|wa-app-secret|wa-verify-token/);
-});
-
-test("WhatsApp verifies its phone and separates service-window text from proactive templates", async () => {
-  const requests: Array<{ url: string; body: string }> = [];
-  const connector = new WhatsAppConnector({
-    accessToken: "wa-access-token",
-    phoneNumberId: "phone-1",
-    appSecret: "wa-app-secret",
-    verifyToken: "wa-verify-token",
-    reminderTemplateName: "landi_reminder",
-    fetcher: async (input, init) => {
-      const url = String(input);
-      requests.push({ url, body: String(init?.body ?? "") });
-      if (url.includes("fields=")) return new Response(JSON.stringify({ id: "phone-1", display_phone_number: "+1 555 0100", verified_name: "Landi", quality_rating: "GREEN" }));
-      return new Response(JSON.stringify({ contacts: [{ wa_id: "15550100" }], messages: [{ id: "wamid.1" }] }));
-    }
-  });
-
-  const identity = await connector.verifyPhoneNumber();
-  assert.equal(identity.data?.verifiedName, "Landi");
-
-  const expired = await connector.sendText({ to: "+1 (555) 0100", text: "Free-form reminder", serviceWindowExpiresAt: "2020-01-01T00:00:00Z" });
-  assert.equal(expired.status, "unsupported");
-  assert.equal(expired.failure?.code, "template_required");
-
-  const text = await connector.sendText({ to: "+1 (555) 0100", text: "How can I help?", serviceWindowExpiresAt: "2099-01-01T00:00:00Z" });
-  const template = await connector.sendTemplate({ to: "15550100", templateName: "landi_reminder", languageCode: "en_US", bodyParameters: ["Bring your passport"] });
-  assert.equal(text.data?.messageId, "wamid.1");
-  assert.equal(template.data?.messageId, "wamid.1");
-  assert.ok(requests.some((request) => /"type":"text"/.test(request.body)));
-  assert.ok(requests.some((request) => /"type":"template"/.test(request.body)));
-  assert.doesNotMatch(JSON.stringify({ identity, text, template, requests }), /wa-access-token/);
-});
-
-test("WhatsApp accepts only signed webhooks and normalizes text, location, actions, and delivery state", () => {
-  const appSecret = "wa-app-secret";
-  const connector = new WhatsAppConnector({ accessToken: "wa-access-token", phoneNumberId: "phone-1", appSecret, verifyToken: "wa-verify-token", reminderTemplateName: "landi_reminder" });
-  const challenge = connector.verifyWebhookChallenge({ mode: "subscribe", verifyToken: "wa-verify-token", challenge: "challenge-123" });
-  assert.equal(challenge.data, "challenge-123");
-
-  const rawBody = JSON.stringify({ object: "whatsapp_business_account", entry: [{ changes: [{ field: "messages", value: {
-    contacts: [{ wa_id: "15550100", profile: { name: "Avery" } }],
-    messages: [
-      { id: "wamid.text", from: "15550100", timestamp: "1786665600", type: "text", text: { body: "Hello Landi" } },
-      { id: "wamid.location", from: "15550100", timestamp: "1786665601", type: "location", location: { latitude: 48.85, longitude: 2.35 } },
-      { id: "wamid.button", from: "15550100", timestamp: "1786665602", type: "interactive", interactive: { button_reply: { id: "not_arrived", title: "I haven't arrived" } } }
-    ],
-    statuses: [{ id: "wamid.outbound", recipient_id: "15550100", status: "delivered", timestamp: "1786665603" }]
-  } }] }] });
-  const signature = `sha256=${createHmac("sha256", appSecret).update(rawBody).digest("hex")}`;
-  assert.equal(connector.receiveWebhook({ rawBody, signature: "sha256=" + "0".repeat(64) }).status, "unauthorized");
-  const result = connector.receiveWebhook({ rawBody, signature });
-  assert.equal(result.status, "available");
-  assert.equal(result.data?.messages[0]?.text, "Hello Landi");
-  assert.deepEqual(result.data?.messages[1]?.location, { latitude: 48.85, longitude: 2.35 });
-  assert.equal(result.data?.messages[2]?.actionId, "not_arrived");
-  assert.equal(result.data?.deliveryStatuses[0]?.status, "delivered");
-  assert.match(result.data?.messages[0]?.serviceWindowExpiresAt ?? "", /^2026-/);
-  assert.doesNotMatch(JSON.stringify(result), /wa-app-secret|wa-access-token/);
+test("email Uber handoff delegates pickup to Uber while preserving destination and public client configuration",()=>{
+ const url=new URL(createUberRideHandoff({destination:{name:"Museum & Gallery",address:"Rotorua"},clientId:"public-test-client"}).url);
+ assert.equal(url.searchParams.get("pickup"),"my_location");
+ assert.equal(JSON.parse(url.searchParams.get("drop[0]")!).addressLine1,"Museum & Gallery");
+ assert.equal(url.searchParams.get("client_id"),"public-test-client");
+ assert.equal(url.origin,"https://m.uber.com");
 });

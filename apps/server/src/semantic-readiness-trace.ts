@@ -93,6 +93,7 @@ export interface PlannedExperienceReadinessOccurrence {
     endAtLocal?: string;
     auditLabel: "C";
   }>;
+  bookingRelationshipCheck: {status:"unknown";reason:string};
   finalFindings: Array<{ findingIndex: number; finding: ValidationFinding }>;
   auditLabels: AuditLabel[];
 }
@@ -186,6 +187,7 @@ export function buildPlannedExperienceReadinessTrace(input: {
       conditionChecks,
       operationalFactChecks,
       bookingSupport,
+      bookingRelationshipCheck: {status:"unknown" as const,reason:"语义草案尚无已审阅的精确日程出现位置映射，预订支持需在工作区核对。"},
       finalFindings,
       auditLabels
     };
@@ -347,37 +349,9 @@ function linkFindings(plannedOccurrences: OccurrenceSeed[], allOccurrences: Occu
   return { byOccurrence, unlinked, linkedCount };
 }
 
-function linkBookings(occurrences: OccurrenceSeed[], plan: SemanticTravelPlan, bookings: BlueprintBookingConstraint[]) {
-  const result = new Map<number, PlannedExperienceReadinessOccurrence["bookingSupport"]>();
-  const projectedIds = new Set(plan.fixedCommitments.map((commitment) => commitment.commitmentId));
-  for (const booking of bookings) {
-    if (booking.status !== "confirmed" || booking.constraintStrength !== "hard") continue;
-    for (const segment of booking.segments) {
-      const commitmentId = `${booking.id}:${segment.id}`;
-      if (!segment.fixedCommitment || !projectedIds.has(commitmentId)) continue;
-      const segmentDates = new Set([localDate(segment.startAtLocal), localDate(segment.endAtLocal)].filter((value): value is string => Boolean(value)));
-      const bookingNames = [booking.title, segment.title].map(normalizeName);
-      const candidates = occurrences.flatMap((occurrence, occurrenceIndex) => {
-        const occurrenceNames = [occurrence.experience.title, occurrence.experience.placeName].filter((value): value is string => Boolean(value)).map(normalizeName);
-        return segmentDates.has(occurrence.date) && occurrenceNames.some((name) => bookingNames.includes(name)) ? [occurrenceIndex] : [];
-      });
-      if (candidates.length !== 1) continue;
-      const occurrenceIndex = candidates[0]!;
-      const support = {
-        commitmentId,
-        bookingConstraintId: booking.id,
-        segmentId: segment.id,
-        type: booking.type,
-        segmentType: segment.segmentType,
-        conditionSupported: "confirmed_fixed_commitment" as const,
-        ...(segment.startAtLocal ? { startAtLocal: segment.startAtLocal } : {}),
-        ...(segment.endAtLocal ? { endAtLocal: segment.endAtLocal } : {}),
-        auditLabel: "C" as const
-      };
-      result.set(occurrenceIndex, [...(result.get(occurrenceIndex) ?? []), support]);
-    }
-  }
-  return result;
+function linkBookings(_occurrences: OccurrenceSeed[], _plan: SemanticTravelPlan, _bookings: BlueprintBookingConstraint[]) {
+  // 语义草案没有经审阅的 Blueprint 出现位置映射；名称和日期只可作候选，不能证明预订支持。
+  return new Map<number, PlannedExperienceReadinessOccurrence["bookingSupport"]>();
 }
 
 function groupPlacesByNormalizedName(places: BlueprintPlace[]): Map<string, BlueprintPlace[]> {

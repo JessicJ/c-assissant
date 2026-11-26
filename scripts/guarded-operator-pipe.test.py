@@ -1,0 +1,140 @@
+"""Anonymous pipe-only acceptance: simulated kernel replies and test-owned descriptors only.
+No application process, listener, SQLite, release build, service manager or MAH.
+"""
+from pathlib import Path
+import ast,copy,ctypes,hashlib,importlib.util,json,os,stat,subprocess,sys,tempfile
+C=Path(__file__).resolve().parents[1]
+spec=importlib.util.spec_from_file_location('pipe_control',C/'scripts/guarded-deployment-control.py')
+m=importlib.util.module_from_spec(spec);sys.modules[spec.name]=m;spec.loader.exec_module(m)
+
+OUT=Path(tempfile.mkdtemp(prefix='landi-operator-pipe-check-',dir=None)).resolve();os.chmod(OUT,0o700)
+checks=[];fds=[];pipe_reused=[];pipe_reuse_pin=None;runtime_ref=None
+def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+def pin(p):return {'path':str(p),'sha256':sha(p)}
+def read(p):return json.loads(Path(p).read_text())
+def write(name,value):
+ p=OUT/name;fd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+ with os.fdopen(fd,'w') as f:json.dump(value,f,indent=2)
+ return pin(p)
+def reject(name,fn,code=None):
+ try:fn()
+ except m.ControlError as e:
+  if code:assert code in str(e),(name,str(e))
+  checks.append(name);return
+ raise AssertionError(name+' was accepted')
+def pipe():
+ r,w=os.pipe();fds.extend([r,w]);return r,w
+
+class Kernel:
+ def __init__(self):
+  self.parent={'pid':os.getppid(),'uid':os.getuid(),'startSeconds':123,'startMicroseconds':456}
+  self.reader={'handle':101,'peer':202,'access':1};self.writer={'handle':202,'peer':101,'access':2}
+  self.fail=False;self.identity_calls=0;self.swap=False;self.anonymous=True
+ def identity(self,pid):
+  if self.fail:raise m.ControlError('kernel_evidence_denied')
+  self.identity_calls+=1
+  if self.swap and self.identity_calls>1:self.reader['handle']=303;self.writer['peer']=303
+  return {**self.parent,'realUid':self.parent['uid']}
+ def endpoint(self,pid,fd):
+  if not self.anonymous:raise m.ControlError('operator_anonymous_endpoint_unverified')
+  return dict(self.reader if pid==os.getpid() else self.writer)
+ def binding(self):return {'version':1,'kind':'inherited_anonymous_pipe','parent':dict(self.parent),'writerFd':77}
+
+try:
+ reuse=None
+ if not pipe_reused:
+  r,w=pipe();k=Kernel();b=k.binding()
+  first=m.validate_operator_pipe(r,b,inspector=k)
+  assert m.validate_operator_pipe(r,b,inspector=k,expected=first)==first
+  checks.append('reciprocal_endpoints_and_pinned_parent_accepted')
+  # Fields are logged independently; mode is not used as an ownership proof.
+  st=os.fstat(r)
+  write('anonymous-local-fstat.json',{'fixtureOnly':True,'typeFIFO':stat.S_ISFIFO(st.st_mode),'mode':oct(stat.S_IMODE(st.st_mode)),
+                                   'uidProjectionMatches':st.st_uid==os.getuid(),'fstatUsedAsOwnershipProof':False})
+  reject('missing_provenance',lambda:m.validate_operator_pipe(r,None,inspector=k),'provenance_missing')
+  reject('stdin_descriptor',lambda:m.validate_operator_pipe(0,b,inspector=k),'read_fd_invalid')
+  for field,value in [('kind','named_fifo'),('version',2),('writerFd',0),('writerFd',True)]:
+   bad=copy.deepcopy(b);bad[field]=value
+   reject('binding_'+field+'_'+str(value),lambda bad=bad:m.validate_operator_pipe(r,bad,inspector=k))
+  for field,value in [('pid',os.getppid()+10000),('uid',os.getuid()+1),('startSeconds',0),('startMicroseconds',1000000)]:
+   bad=copy.deepcopy(b);bad['parent'][field]=value
+   reject('parent_'+field+'_invalid',lambda bad=bad:m.validate_operator_pipe(r,bad,inspector=k))
+  k2=Kernel();k2.parent['startSeconds']+=1
+  reject('parent_pid_reuse_start_mismatch',lambda:m.validate_operator_pipe(r,b,inspector=k2),'identity_mismatch')
+  k2=Kernel();k2.parent['uid']+=1
+  reject('kernel_parent_uid_mismatch',lambda:m.validate_operator_pipe(r,b,inspector=k2),'identity_mismatch')
+  k2=Kernel();k2.writer['peer']=999
+  reject('unrelated_pipe_pair',lambda:m.validate_operator_pipe(r,b,inspector=k2),'pair_mismatch')
+  k2=Kernel();k2.reader['handle']=0
+  reject('missing_kernel_handle',lambda:m.validate_operator_pipe(r,b,inspector=k2),'pair_mismatch')
+  k2=Kernel();k2.writer['access']=1
+  reject('parent_writer_is_read_end',lambda:m.validate_operator_pipe(r,b,inspector=k2),'direction_mismatch')
+  k2=Kernel();k2.reader['access']=3
+  reject('kernel_reader_is_readwrite',lambda:m.validate_operator_pipe(r,b,inspector=k2),'direction_mismatch')
+  reject('local_write_end_rejected',lambda:m.validate_operator_pipe(w,b,inspector=k),'read_direction_invalid')
+  k2=Kernel();k2.fail=True
+  reject('kernel_permission_denied',lambda:m.validate_operator_pipe(r,b,inspector=k2),'kernel_evidence_denied')
+  k2=Kernel();k2.swap=True
+  reject('endpoint_changes_during_observation',lambda:m.validate_operator_pipe(r,b,inspector=k2),'changed_during_validation')
+  k2=Kernel();k2.reader['handle']=303;k2.writer['peer']=303
+  reject('descriptor_reuse_after_initial_bind',lambda:m.validate_operator_pipe(r,b,inspector=k2,expected=first),'identity_changed')
+  file=OUT/'ordinary-file';file.write_bytes(b'fixture');fd=os.open(file,os.O_RDONLY);fds.append(fd)
+  reject('ordinary_file_not_pipe',lambda:m.validate_operator_pipe(fd,b,inspector=k),'read_type_invalid')
+  fifo=OUT/'named.fifo';os.mkfifo(fifo,0o600);ff=os.open(fifo,os.O_RDONLY|os.O_NONBLOCK);fds.append(ff)
+  # Simulated endpoint rejection keeps named FIFO insufficient despite owner/mode matching.
+  named=Kernel();named.anonymous=False
+  reject('named_fifo_not_anonymous',lambda:m.validate_operator_pipe(ff,b,inspector=named),'anonymous_endpoint_unverified')
+  # Verify exact-size decoding is fail-closed using fake libproc, without compiler.
+  fake=m.DarwinPipeInspector.__new__(m.DarwinPipeInspector)
+  class Short:
+   def proc_pidfdinfo(self,*args):return ctypes.sizeof(m._PipeFDInfo)-1
+   def proc_pidinfo(self,*args):return ctypes.sizeof(m._ProcBSDInfo)-1
+  fake.lib=Short()
+  reject('short_pipe_kernel_result',lambda:fake.endpoint(os.getpid(),r),'anonymous_endpoint_unverified')
+  reject('short_parent_kernel_result',lambda:fake.identity(os.getppid()),'parent_identity_unverified')
+ else:
+  # Recreate only the fixtures needed by the remaining checks; do not replay them.
+  r,w=pipe();k=Kernel();b=k.binding();native=m.DarwinPipeInspector()
+ # Integration: provenance validated before start and again before command handling.
+ class Halt(Exception):pass
+ class Session:
+  def __init__(self,mode):
+   self.plan={'operatorPipe':b};self.state='created';self.started=0;self.commands=0;self.mode=mode
+   self.journal=m.Journal(OUT/('integration-'+mode))
+  def start(self):
+   self.started+=1;self.state='running'
+   if self.mode=='swap':kernel.reader['handle']=303;kernel.writer['peer']=303
+  def command(self,value):
+   self.commands+=1;assert value=={'op':'shutdown','deploymentId':'fixture'};self.state='closed'
+   return self.status()
+  def status(self):return {'state':self.state,'fixture':True}
+  def mark_unverified(self,error):self.state='unverified';raise Halt(str(error))
+ original=m.DarwinPipeInspector
+ for mode in ['valid','swap','eof']:
+  kernel=Kernel();m.DarwinPipeInspector=lambda:kernel;s=Session(mode);rr,ww=pipe()
+  if mode!='eof':os.write(ww,b'{"op":"shutdown","deploymentId":"fixture"}\n')
+  else:os.close(ww);fds.remove(ww)
+  try:
+   result=m.serve_control_session(s,rr)
+   assert mode=='valid' and result['state']=='closed' and s.started==1 and s.commands==1
+   checks.append('serve_revalidates_then_accepts_explicit_command')
+  except Halt as error:
+   assert mode in ['swap','eof'] and s.commands==0 and s.state=='unverified'
+   checks.append('serve_'+mode+'_stops_commands_and_retains_uncertainty')
+ m.DarwinPipeInspector=original
+ native_result=dict(status='not_run',reason='native_kernel_and_real_process_observation_forbidden_in_offline_suite')
+ write('verification.json',{'status':'passed','checks':checks,'reusedChecks':0,'reuseEvidence':reuse,'reusedPipeChecks':pipe_reused,'priorPipeFailure':pipe_reuse_pin,'runtimeVerification':runtime_ref,
+        'source':pin(C/'scripts/guarded-deployment-control.py'),'test':pin(Path(__file__)),
+        'nativePipeMetadata':native_result,'productionExecutable':False,'realServicesStarted':False,
+        'onlyChild':'none','databaseOpened':False,'compiled':False,
+        'historicalTestsRun':False,'mahCommandsRun':False,'oldArtifactsModified':False,
+        'limits':'Bound to declared direct parent endpoints; not proof of OS-wide exclusive writer possession.'})
+ print(json.dumps({'status':'passed','newChecks':len(checks),'reusedChecks':0,'evidence':str(OUT/'verification.json')}))
+except BaseException as error:
+ write('failure.json',{'status':'failed_stopped','error':repr(error),'passed':checks,'reusedPipeChecks':pipe_reused,'priorPipeFailure':pipe_reuse_pin,'runtimeVerification':runtime_ref,'automaticRetry':False,
+                       'source':pin(C/'scripts/guarded-deployment-control.py'),'realServicesStarted':False})
+ print(str(OUT/'failure.json'));raise
+finally:
+ for fd in fds:
+  try:os.close(fd)
+  except OSError:pass

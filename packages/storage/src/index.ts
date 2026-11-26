@@ -1,10 +1,36 @@
-import { chmodSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
-import { randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
+import { TravelAdjustmentPersistence, TRAVEL_ADJUSTMENT_SCHEMA_SQL, TRAVEL_ADJUSTMENT_MIGRATION_NAME } from "./travel-adjustment-store.js";
+import type { TravelAdjustmentEmailConsumption } from './travel-adjustment-store.js';
+export type { TravelAdjustmentEmailConsumption } from './travel-adjustment-store.js';
+import { applyPlanActivation, assertTravelPhase, assertTravelAdjustmentInput, travelAdjustmentEventIdentityBlocker, assertTravelAdjustmentReplacement, travelAdjustmentApplicationBlocker, type TravelAdjustmentContext, type TravelAdjustmentInput, type TravelAdjustmentReceipt, type TravelPhase } from "@c-assistant/core";
+import { WorkspaceMutationError, workspaceMutationDigestInput } from "@c-assistant/core";
+import { loadPostStopAdmission, type PostStopEvidencePin } from './post-stop-admission.js';
+export { loadPostStopAdmission, assessPostStopAdmission, type PostStopEvidencePin } from './post-stop-admission.js';
+import { assertGuardedSchema, assertPostStopHistory, BOOKING_MUTATION_RECEIPTS_SQL, BOOKING_MUTATION_RECEIPTS_MIGRATION_NAME } from "./guarded-schema.js";
+import { readPlanningReturnSnapshot } from "./readonly-planning-store.js";
+import { chmodSync, existsSync, mkdirSync, unlinkSync, statSync } from "node:fs";
+import { randomUUID, createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { dirname, join, isAbsolute } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { EMAIL_SCHEMA_SQL, EMAIL_TIMING_SCOPE_SCHEMA_SQL, EMAIL_TIMING_SCOPE_MIGRATION_NAME, EmailExecutionStorage } from "./email-store.js";
+export type { EmailSettings, EmailJob, EmailDeliveryContent, EmailReviewScope, EmailPlanConfirmation } from "./email-store.js";
+import { AGENT_WORK_SCHEMA_SQL, AgentWorkStore, AgentWorkError, workDigest } from "./agent-work-store.js";
+export * from "./agent-work-store.js";
+import { GENERATION_CARRIER_SCHEMA_SQL, GenerationCarrierStore } from "./generation-carrier-store.js";
+export { assertGenerationCarrierBusinessContext, hasConfirmedPublicImageFailure, type FailedImageRetryIntent, GenerationCarrierStorageError, GenerationCarrierStore, type GenerationCarrierMapping, type GenerationCarrierProtocol } from "./generation-carrier-store.js";
 import {
-  confirmPlan,
+  isAssistantPersonalityId,
+  type AssistantPersonalityId,
   applyDirectBlueprintRevisionBatchWithMetadata,
+  reconcileBookingRelationshipAssessment,
+  resolveBlueprintPlanCompilationIdentity,
+  blueprintBookingConstraintsFromTravelBookings,
+  bookingRelationshipReviewContext,
+  bookingRelationshipDigest,
+  bookingRelationshipSourceUnits,
+  type BookingRelationshipSourceContext,
+  type BlueprintBookingConstraint,
+  undoDirectBlueprintRevision,
   assertPlanPresentationIntegrity,
   assertResearchSetIntegrity,
   assertTripBlueprintIntegrity,
@@ -17,7 +43,7 @@ import {
   effectiveBlueprintSchedulingDecision,
   isPreDepartureChecklistTask,
   type CreatePlanInput,
-  type CountryPackSkillRun,
+  type PreparationEvidenceRun,
   type DestinationArrivalEvent,
   type DirectBlueprintRevision,
   type DirectBlueprintRevisionBatchMetadata,
@@ -71,8 +97,6 @@ import {
   type TaskReminderRun,
   type TaskReminderRunStatus,
   type TripBlueprint,
-  type TelegramBinding,
-  type TelegramPairingStatus,
   type TransportPreference,
   type WorkspaceSnapshot
 } from "@c-assistant/core";
@@ -81,6 +105,7 @@ interface ProfileRow {
   display_name: string;
   preferred_language: string;
   travel_preferences: string;
+  assistant_personality: AssistantPersonalityId;
   nationality: string;
   gender: ProfileGender;
   immigration_status: ImmigrationStatus;
@@ -190,31 +215,18 @@ interface BlueprintGenerationEventRow {
   created_at: string;
 }
 
-export interface TelegramPlanChangeProposal {
-  id: string;
+export interface BlueprintMutationBeforeIdentity {
   planId: string;
-  baseVersion: number;
-  request: string;
-  impact: PlanChangeImpactPreview;
-  status: "pending" | "applied" | "cancelled" | "stale";
-  createdAt: string;
-  resolvedAt?: string;
+  planVersion: number;
+  blueprintId: string;
+  blueprintVersion: number;
 }
-
+type DirectBlueprintUndoReceipt = WorkspaceSnapshot & { beforeIdentity?: BlueprintMutationBeforeIdentity };
 export interface DirectBlueprintRevisionSaveResult {
+  beforeIdentity?: BlueprintMutationBeforeIdentity;
   workspace: WorkspaceSnapshot;
   revision: DirectBlueprintRevisionBatchMetadata;
-}
-
-interface TelegramPlanChangeProposalRow {
-  id: string;
-  plan_id: string;
-  base_version: number;
-  request: string;
-  impact_json: string;
-  status: TelegramPlanChangeProposal["status"];
-  created_at: string;
-  resolved_at: string | null;
+  originalResult?: { planId: string; planVersion: number; blueprintId: string; blueprintVersion: number; sourceSetDigest: string; targetDigests: Record<string,string>; revisionKinds: string[]; recoveryBinding?:{schemaVersion:1;draftDigest:string;seedDigest:string} };
 }
 
 interface StageRow {
@@ -253,14 +265,14 @@ interface PlanCompilationRunRow {
   compiled_at: string;
 }
 
-interface CountryPackSkillRunRow {
+interface PreparationEvidenceRunRow {
   id: string;
   compilation_run_id: string;
   plan_id: string;
   source_plan_version: number;
   skill_id: string;
   skill_version: string;
-  status: CountryPackSkillRun["status"];
+  status: PreparationEvidenceRun["status"];
   finished_at: string;
 }
 
@@ -339,90 +351,11 @@ interface TaskReminderRunRow {
   updated_at: string;
 }
 
-interface TelegramBindingRow {
-  chat_id: string;
-  user_id: string;
-  first_name: string;
-  username: string | null;
-  paired_at: string;
-}
-
-interface TelegramPairingRequestRow {
-  code: string;
-  expires_at: string;
-}
-
-interface TelegramArrivalCheckinRow {
-  check_in_sent_at: string;
-  location_requested_at: string | null;
-  location_received_at: string | null;
-}
-
 interface PlanDestinationArrivalRow {
   city: string;
   arrived_at: string;
   confirmed: number;
 }
-
-interface TelegramRouteHandoffRow {
-  plan_id: string;
-  offered_at: string;
-  opened_at: string | null;
-  route_duration_seconds: number;
-  wait_buffer_seconds: number;
-  safety_margin_seconds: number;
-  expected_arrival_at: string;
-  guidance_sent_at: string | null;
-  delay_count: number;
-  last_delayed_at: string | null;
-}
-
-export type TelegramProfileTextField = "displayName" | "preferredLanguage" | "nationality";
-
-interface TelegramProfileEditRow {
-  field: TelegramProfileTextField;
-  started_at: string;
-}
-
-export type TelegramLocationIntentPurpose = "arrival_route" | "nearby_food" | "uber_test" | "movement_go";
-
-interface TelegramLocationIntentRow {
-  purpose: TelegramLocationIntentPurpose;
-  plan_id: string;
-  started_at: string;
-  transport_override: Exclude<TransportPreference, "plan_recommended"> | null;
-}
-
-interface TelegramTaskReminderDeliveryRow {
-  task_id: string;
-  due_at: string;
-  status: "attempting" | "retry_wait" | "delivered" | "failed";
-  attempt_count: number;
-  next_attempt_at: string | null;
-}
-
-interface TelegramItineraryReminderDeliveryRow {
-  day_id: string;
-  place_id: string;
-  scheduled_time: string;
-  due_at: string;
-  status: "attempting" | "retry_wait" | "delivered" | "failed";
-  attempt_count: number;
-  next_attempt_at: string | null;
-}
-
-export interface TelegramTaskReminderAttempt {
-  claimed: boolean;
-  attemptNumber?: number;
-}
-
-export interface TelegramTaskReminderFailureResult {
-  status: "retry_scheduled" | "failed" | "cancelled";
-  nextAttemptAt?: string;
-}
-
-export type TelegramItineraryReminderAttempt = TelegramTaskReminderAttempt;
-export type TelegramItineraryReminderFailureResult = TelegramTaskReminderFailureResult;
 
 const TASK_REMINDER_CATCH_UP_MS = 30 * 60_000;
 const TASK_REMINDER_ATTEMPT_LEASE_MS = 60_000;
@@ -430,7 +363,7 @@ const TASK_REMINDER_RETRY_DELAYS_MS = [60_000, 5 * 60_000] as const;
 const ITINERARY_REMINDER_CATCH_UP_MS = 20 * 60_000;
 const ITINERARY_REMINDER_ATTEMPT_LEASE_MS = 60_000;
 const ITINERARY_REMINDER_RETRY_DELAYS_MS = [60_000, 5 * 60_000] as const;
-const CURRENT_SCHEMA_VERSION = 20;
+const CURRENT_SCHEMA_VERSION = 32;
 
 export interface DatabaseMaintenanceStatus {
   schemaVersion: number;
@@ -447,39 +380,69 @@ export interface DatabaseBackupResult {
   integrity: "ok";
 }
 
-/** Contains delivery state only. Coordinates are never stored here. */
-export interface TelegramArrivalCheckinState {
-  checkInSentAt: string;
-  locationRequestedAt?: string;
-  locationReceivedAt?: string;
-}
+export type GenerationCarrierCheckpoint = {
+  expectedCarriers?: readonly { carrierTaskId: string; resultSha256: string; requestSha256: string }[] | undefined;
+  carrierTaskIds: readonly string[];
+  generationEvent: Omit<BlueprintGenerationEvent, "sequence">;
+};
 
-/** Confirmed handoff delivery facts and timing inputs only; journey state is derived elsewhere. */
-export interface TelegramRouteHandoffState {
-  planId: string;
-  offeredAt: string;
-  openedAt?: string;
-  routeDurationSeconds: number;
-  waitBufferSeconds: number;
-  safetyMarginSeconds: number;
-  expectedArrivalAt: string;
-  guidanceSentAt?: string;
-  delayCount: number;
-  lastDelayedAt?: string;
+/** 仅经可信公开执行验证的候选可在原创建事务中取得事件关联；不登记已有草稿。 */
+export interface TravelAdjustmentDraftOrigin {
+  input: Omit<TravelAdjustmentInput,'requestId'|'replacement'>;
+  verifyExecution: (decision:NonNullable<TravelAdjustmentInput['decision']>,input:TravelAdjustmentInput)=>boolean;
 }
 
 export class SqliteWorkspaceStore {
+  readonly email: EmailExecutionStorage;
+  readonly generationCarriers: GenerationCarrierStore;
+  readonly agentWork: AgentWorkStore;
   private readonly database: DatabaseSync;
   private readonly databasePath: string;
+  private readonly historicalPostStop: boolean;
+  private bookingWriteDepth = 0;
+  private directTransactionDepth = 0;
 
-  constructor(databasePath: string) {
-    if (databasePath !== ":memory:") mkdirSync(dirname(databasePath), { recursive: true });
+  constructor(databasePath: string, options?: { guardedSchemaSha256: string; postStopAdmission?: PostStopEvidencePin }) {
+    if (!options && databasePath !== ":memory:") mkdirSync(dirname(databasePath), { recursive: true });
+    if (options && (!isAbsolute(databasePath) || !existsSync(databasePath) || !statSync(databasePath).isFile() || ["-wal", "-shm", "-journal"].some(suffix => existsSync(databasePath + suffix)))) throw new Error("guarded_existing_database_required");
+    const postStop = options?.postStopAdmission ? loadPostStopAdmission(databasePath, options.postStopAdmission) : undefined;
+    if (postStop && options?.guardedSchemaSha256 !== postStop.audit.facts.schemaSha256) throw new Error("post_stop_schema_binding_mismatch");
+    this.historicalPostStop = Boolean(postStop);
     this.databasePath = databasePath;
     this.database = new DatabaseSync(databasePath);
     try {
       this.database.exec("PRAGMA foreign_keys = ON;");
-      this.migrate();
-      this.seedIfEmpty();
+      if (options) assertGuardedSchema(this.database, options.guardedSchemaSha256, postStop ? {historicalPostStop: true} : undefined);
+      else this.migrate();
+      if (postStop) assertPostStopHistory(this.database, postStop.audit.factsSha256);
+      if (!options) this.database.exec("BEGIN IMMEDIATE");
+      this.generationCarriers = new GenerationCarrierStore(this.database, databasePath, options ? { initialize: false } : undefined);
+      if (!options) {
+        try {
+          this.database.exec(AGENT_WORK_SCHEMA_SQL);
+          for (const row of this.database.prepare("SELECT id,messages_json FROM planning_sessions WHERE id NOT IN (SELECT session_id FROM planning_session_revisions)").all()) {
+            this.database.prepare("INSERT OR IGNORE INTO planning_session_revisions VALUES (?,?)").run(String(row.id), JSON.parse(String(row.messages_json)).length);
+          }
+          this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version,name,applied_at) VALUES (27,'agent-work-and-planning-revisions',?)").run(new Date().toISOString());
+          this.database.exec(`CREATE TABLE IF NOT EXISTS direct_blueprint_edits (
+            id TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL,
+            plan_id TEXT NOT NULL, plan_version INTEGER NOT NULL, blueprint_id TEXT NOT NULL, blueprint_version INTEGER NOT NULL, base_blueprint_version INTEGER NOT NULL,
+            before_json TEXT NOT NULL, after_json TEXT NOT NULL, metadata_json TEXT NOT NULL, result_json TEXT NOT NULL, created_at TEXT NOT NULL, undone INTEGER NOT NULL DEFAULT 0
+          ); CREATE TABLE IF NOT EXISTS direct_blueprint_undos(request_id TEXT PRIMARY KEY, revision_id TEXT NOT NULL REFERENCES direct_blueprint_edits(id), fingerprint TEXT NOT NULL, result_json TEXT NOT NULL, created_at TEXT NOT NULL);`);
+          this.database.prepare("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES(28,'持久直接蓝图编辑与撤销',?)").run(new Date().toISOString());
+          this.database.exec(BOOKING_MUTATION_RECEIPTS_SQL);
+          this.database.prepare("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES(30,?,?)").run(BOOKING_MUTATION_RECEIPTS_MIGRATION_NAME, new Date().toISOString());
+          this.database.exec(TRAVEL_ADJUSTMENT_SCHEMA_SQL);
+          this.database.prepare("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES(31,?,?)").run(TRAVEL_ADJUSTMENT_MIGRATION_NAME,new Date().toISOString());
+          this.database.exec(EMAIL_TIMING_SCOPE_SCHEMA_SQL);
+          this.database.prepare("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES(32,?,?)").run(EMAIL_TIMING_SCOPE_MIGRATION_NAME,new Date().toISOString());
+          this.database.exec("COMMIT");
+          this.generationCarriers.cleanupLegacySidecar(databasePath);
+        } catch (error) { this.database.exec("ROLLBACK"); throw error; }
+      }
+      this.agentWork = new AgentWorkStore(this.database);
+      if (!options) this.seedIfEmpty();
+      this.email = new EmailExecutionStorage(this.database);
     } catch (error) {
       this.database.close();
       throw error;
@@ -532,7 +495,7 @@ export class SqliteWorkspaceStore {
   }
 
   getWorkspace(): WorkspaceSnapshot {
-    const profile = this.database.prepare("SELECT display_name, preferred_language, travel_preferences, nationality, gender, immigration_status, status FROM profiles WHERE id = 1").get() as ProfileRow | undefined;
+    const profile = this.database.prepare("SELECT display_name, preferred_language, travel_preferences, assistant_personality, nationality, gender, immigration_status, status FROM profiles WHERE id = 1").get() as ProfileRow | undefined;
     const runtime = this.database.prepare("SELECT selected_runtime FROM runtime_settings WHERE id = 1").get() as RuntimeSettingsRow | undefined;
     const activePlan = this.getCurrentPlan();
     if (!profile || !runtime || !activePlan) throw new Error("The local workspace is not initialized.");
@@ -549,6 +512,7 @@ export class SqliteWorkspaceStore {
         displayName: profile.display_name,
         preferredLanguage: profile.preferred_language,
         travelPreferences: profile.travel_preferences,
+        assistantPersonality: profile.assistant_personality,
         nationality: profile.nationality,
         gender: profile.gender,
         immigrationStatus: profile.immigration_status,
@@ -557,6 +521,7 @@ export class SqliteWorkspaceStore {
       runtime: { selectedKind: runtime.selected_runtime },
       activePlan: presentedActivePlan,
       ...(activeBlueprint ? { activeBlueprint } : {}),
+      ...(() => { if(this.historicalPostStop) return {}; const row = this.database.prepare("SELECT id,plan_id,plan_version,blueprint_id,blueprint_version,base_blueprint_version,created_at FROM direct_blueprint_edits WHERE plan_id=? AND plan_version=? AND undone=0 ORDER BY rowid DESC LIMIT 1").get(activePlan.id,activePlan.version) as {id:string;plan_id:string;plan_version:number;blueprint_id:string;blueprint_version:number;base_blueprint_version:number;created_at:string} | undefined; return row ? {latestDirectBlueprintRevision:{id:row.id,planId:row.plan_id,planVersion:row.plan_version,blueprintId:row.blueprint_id,blueprintVersion:row.blueprint_version,baseBlueprintVersion:row.base_blueprint_version,createdAt:row.created_at}} : {}; })(),
       ...(planningSession ? { planningSession } : {}),
       ...(latestPlanChange ? { latestPlanChange } : {}),
       ...(latestPlanReplacement ? { latestPlanReplacement } : {}),
@@ -565,8 +530,8 @@ export class SqliteWorkspaceStore {
       inbox: (this.database.prepare("SELECT id, tone, title, body, timestamp FROM inbox_items ORDER BY created_at DESC, rowid DESC").all() as unknown as InboxRow[]).map((row) => ({
         id: row.id,
         tone: row.tone,
-        title: row.title,
-        body: row.body,
+        title: row.title === "行程已调整" ? "Itinerary updated" : row.title,
+        body: row.body === "已根据可靠客观变化应用新版安排。" ? "The updated itinerary was applied based on verified objective changes." : row.body,
         timestamp: row.timestamp
       })),
       sourceSnapshots: this.listSourceSnapshots(),
@@ -574,7 +539,6 @@ export class SqliteWorkspaceStore {
         core: "ready",
         storage: "local",
         runtime: "configured",
-        telegram: "not_configured",
         amap: "not_configured"
       }
     };
@@ -642,6 +606,9 @@ export class SqliteWorkspaceStore {
   }
 
   savePlanningSession(session: PlanningSession): PlanningSession {
+    this.database.exec("SAVEPOINT save_planning_session");
+    try {
+    const previous = this.getPlanningSessionById(session.id);
     this.database.prepare(`INSERT INTO planning_sessions (id, status, objective_type, messages_json, facts_json, unresolved_json, deferred_json, proposal_json, confirmed_proposal_version, output_plan_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET status = excluded.status, objective_type = excluded.objective_type, messages_json = excluded.messages_json, facts_json = excluded.facts_json, unresolved_json = excluded.unresolved_json, deferred_json = excluded.deferred_json, proposal_json = excluded.proposal_json, confirmed_proposal_version = excluded.confirmed_proposal_version, output_plan_id = excluded.output_plan_id, updated_at = excluded.updated_at`).run(
@@ -658,7 +625,77 @@ export class SqliteWorkspaceStore {
       session.createdAt,
       session.updatedAt
     );
+    if (previous && JSON.stringify([previous.messages, previous.facts, previous.proposal, previous.unresolved, previous.deferred]) !== JSON.stringify([session.messages, session.facts, session.proposal, session.unresolved, session.deferred])) {
+      this.database.prepare("INSERT INTO planning_session_revisions VALUES (?,?) ON CONFLICT(session_id) DO UPDATE SET revision=revision+1").run(session.id, previous.messages.length + 1);
+    }
+    this.database.exec("RELEASE save_planning_session");
     return session;
+    } catch (error) { this.database.exec("ROLLBACK TO save_planning_session; RELEASE save_planning_session"); throw error; }
+  }
+
+  /** Readback only; initialization remains the responsibility of the normal constructor. */
+  readPlanningReturnSnapshot(sessionId: string) {
+    return readPlanningReturnSnapshot(this.database, sessionId);
+  }
+
+  getPlanningRevision(sessionId: string): number {
+    const row = this.database.prepare("SELECT revision FROM planning_session_revisions WHERE session_id=?").get(sessionId);
+    if (row) return Number(row.revision);
+    const session = this.getPlanningSessionById(sessionId);
+    if (!session) throw new AgentWorkError("planning_session_missing");
+    return session.messages.length;
+  }
+
+  /** Read the original save receipt, never infer it from the current revision. */
+  readPlanningMessageReceipt(sessionId: string, messageId: string) {
+    const row = this.database.prepare("SELECT * FROM planning_message_receipts WHERE session_id=? AND message_id=?").get(sessionId, messageId);
+    if (!row) return null;
+    const message = this.getPlanningSessionById(sessionId)?.messages.find(item => item.id === messageId && item.role === "user");
+    const expectedRevision = Number(row.expected_revision), savedRevision = Number(row.saved_revision);
+    if (!message || row.input_sha256 !== workDigest({ text: message.text.trim() }) || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0
+      || !Number.isSafeInteger(savedRevision) || savedRevision !== expectedRevision + 1) throw new AgentWorkError("planning_save_receipt_invalid");
+    return { sessionId, messageId, expectedRevision, savedRevision };
+  }
+
+  /** 仅按原消息身份读回，不扫描或创建当前会话。 */
+  readPlanningMessageSaveStatus(identity: { messageId: string; expectedRevision: number; inputSha256: string; sessionId?: string }) {
+    const row = this.database.prepare("SELECT session_id,input_sha256,expected_revision FROM planning_message_receipts WHERE message_id=?").get(identity.messageId);
+    if (!row) return null;
+    if (row.input_sha256 !== identity.inputSha256 || Number(row.expected_revision) !== identity.expectedRevision
+      || (identity.sessionId !== undefined && row.session_id !== identity.sessionId)) throw new AgentWorkError("planning_message_conflict");
+    const receipt = this.readPlanningMessageReceipt(String(row.session_id), identity.messageId);
+    if (!receipt) throw new AgentWorkError("planning_save_receipt_invalid");
+    const revision = this.database.prepare("SELECT revision FROM planning_session_revisions WHERE session_id=?").get(receipt.sessionId);
+    if (!revision || !Number.isSafeInteger(Number(revision.revision)) || Number(revision.revision) < receipt.savedRevision) throw new AgentWorkError("planning_save_receipt_invalid");
+    return { saveReceipt: receipt, inputSha256: identity.inputSha256, planningRevision: Number(revision.revision) };
+  }
+
+  savePlanningMessage(input: { sessionId?: string; messageId: string; expectedRevision: number; text: string }) {
+    if ((input.sessionId !== undefined && (typeof input.sessionId !== "string" || !input.sessionId.trim() || input.sessionId.length > 128)) || typeof input.messageId !== "string" || !input.messageId.trim() || input.messageId.length > 128 || typeof input.text !== "string" || !input.text.trim() || input.text.trim().length > 1500 || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) throw new AgentWorkError("planning_message_invalid");
+    const text = input.text.trim();
+    const digest = workDigest({ text });
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const old = this.database.prepare("SELECT * FROM planning_message_receipts WHERE message_id=?").get(input.messageId);
+      if (old) {
+        if ((input.sessionId && input.sessionId !== old.session_id) || old.input_sha256 !== digest || input.expectedRevision !== old.expected_revision) throw new AgentWorkError("planning_message_conflict");
+        const session = this.getPlanningSessionById(String(old.session_id))!;
+        this.database.exec("COMMIT");
+        return { session, revision: this.getPlanningRevision(session.id), savedRevision: Number(old.saved_revision), reused: true };
+      }
+      const session = input.sessionId ? this.getPlanningSessionById(input.sessionId) : this.getPlanningSession() ?? this.createPlanningSession("travel");
+      if (!session) throw new AgentWorkError("planning_session_missing");
+      if (["generating", "draft_ready", "abandoned"].includes(session.status)) throw new AgentWorkError("planning_session_not_editable");
+      const revision = this.getPlanningRevision(session.id);
+      if (revision !== input.expectedRevision) throw new AgentWorkError("planning_revision_conflict");
+      const { confirmedProposalVersion: _approval, ...unconfirmed } = session;
+      const next: PlanningSession = { ...unconfirmed, status: "collecting", updatedAt: new Date().toISOString(), messages: [...session.messages, { id: input.messageId, role: "user", text, createdAt: new Date().toISOString() }] };
+      this.savePlanningSession(next);
+      this.database.prepare("INSERT INTO planning_session_revisions VALUES (?,?) ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision").run(session.id, revision + 1);
+      this.database.prepare("INSERT INTO planning_message_receipts VALUES (?,?,?,?,?)").run(input.messageId, session.id, digest, revision, revision + 1);
+      this.database.exec("COMMIT");
+      return { session: next, revision: revision + 1, savedRevision: revision + 1, reused: false };
+    } catch (error) { this.database.exec("ROLLBACK"); throw error; }
   }
 
   confirmPlanningSession(sessionId: string, proposalVersion: number): PlanningSession {
@@ -695,9 +732,154 @@ export class SqliteWorkspaceStore {
       FROM travel_bookings WHERE planning_session_id = ? ORDER BY created_at DESC, rowid DESC`).all(sessionId) as unknown as TravelBookingRow[]).map(travelBookingFromRow);
   }
 
-  listTravelBookingsForPlan(planId: string): TravelBooking[] {
-    return (this.database.prepare(`SELECT id, planning_session_id, plan_id, source_hash, status, type, content_json, created_at, updated_at
-      FROM travel_bookings WHERE plan_id = ? ORDER BY created_at DESC, rowid DESC`).all(planId) as unknown as TravelBookingRow[]).map(travelBookingFromRow);
+  /** 精确版本的结构快照；调用者不能把它当作真实源或当前供应商事实。 */
+  listApprovedBookingConstraintsForPlan(planId: string): BlueprintBookingConstraint[] {
+    const lineage = this.getPlanBlueprintLineage(planId);
+    return structuredClone(lineage ? this.getTripBlueprint(lineage.blueprintId, lineage.blueprintVersion)?.bookingConstraints ?? [] : []);
+  }
+
+  /** 当前资料集合仅由请求 Plan 的精确 Blueprint 来源白名单决定。 */
+  listCurrentTravelBookingSourcesForPlan(planId: string,options:{includePending?:boolean}={}): TravelBooking[] {
+    const state=this.bookingSourceState(planId);
+    return options.includePending?[...state.bookings,...state.pendingBookings]:state.bookings;
+  }
+  getCurrentTravelBookingSourceSetDigest(planId:string):string {return this.bookingSourceState(planId).sourceSetDigest;}
+
+  getBookingRelationshipReviewContext(planId: string) {
+    const workspace = this.getWorkspace();
+    if (workspace.activePlan.id !== planId || !workspace.activeBlueprint) throw new WorkspaceMutationError("请返回当前草稿审阅预订关联。", "version_conflict");
+    const state = this.bookingSourceState(planId);
+    const safeSource = (booking: TravelBooking) => { const constraint = blueprintBookingConstraintsFromTravelBookings([booking])[0]!; return { bookingId: booking.id, title: constraint.title, type: constraint.type, status: constraint.status, constraintStrength:constraint.constraintStrength,sourceLabel: constraint.sourceLabel, segments: constraint.segments, ownership: booking.planningSessionId ? "planning_session" as const : "plan" as const, recordDigest: this.bookingRecordDigest(booking), sourceDigest: this.bookingSourceDigest(booking) }; };
+    return { expectedPlanId: planId, expectedVersion: workspace.activePlan.version, ...bookingRelationshipReviewContext(workspace.activeBlueprint), sourceSetDigest: state.sourceSetDigest,pendingSourceBookingIds:state.pendingBookings.map(booking=>booking.id), sourceIssues: state.issues, sourceRecords: state.bookings.map(safeSource), sourceCandidates: this.bookingSourceCandidates(planId).map(safeSource), sourceConstraints: blueprintBookingConstraintsFromTravelBookings(state.bookings), constraints: structuredClone(workspace.activeBlueprint.bookingConstraints ?? []), assessment: workspace.activeBlueprint.bookingRelationshipAssessment };
+  }
+
+  private bookingRecordDigest(booking: TravelBooking): string { return bookingRelationshipDigest(booking); }
+  private bookingSourceDigest(booking: TravelBooking): string {
+    return bookingRelationshipDigest(bookingRelationshipSourceUnits(blueprintBookingConstraintsFromTravelBookings([booking])));
+  }
+  private directOwnedBookings(planId: string): TravelBooking[] {
+    return (this.database.prepare("SELECT * FROM travel_bookings WHERE plan_id=? ORDER BY created_at,rowid").all(planId) as unknown as TravelBookingRow[]).map(travelBookingFromRow);
+  }
+  private bookingSourceCandidates(planId: string): TravelBooking[] {
+    const lineage = this.getPlanBlueprintLineage(planId);
+    if (!lineage) return this.directOwnedBookings(planId);
+    const blueprint = this.getTripBlueprint(lineage.blueprintId, lineage.blueprintVersion);
+    if (!blueprint) return [];
+    const plans = this.database.prepare("SELECT DISTINCT plan_id FROM plan_blueprint_lineage WHERE blueprint_id=?").all(blueprint.id) as {plan_id:string}[];
+    const scopedPlans=plans.filter(plan=>{const owner=this.getPlanBlueprintLineage(plan.plan_id);const snapshot=owner?this.getTripBlueprint(owner.blueprintId,owner.blueprintVersion):undefined;return snapshot?.proposalRef.sessionId===blueprint.proposalRef.sessionId&&snapshot.proposalRef.proposalVersion===blueprint.proposalRef.proposalVersion;});
+    const values = [...this.listTravelBookingsForPlanningSession(blueprint.proposalRef.sessionId), ...scopedPlans.flatMap(plan => this.directOwnedBookings(plan.plan_id))];
+    return [...new Map(values.map(booking => [booking.id, booking])).values()];
+  }
+  /** 仅沿正规提交的精确结果身份回溯，不把兄弟候选当作来源义务。 */
+  private bookingSourceObligations(planId:string,blueprint:TripBlueprint) {
+    const bookings=new Map<string,TravelBooking>(),mappedIds=new Set<string>(),issues:string[]=[],visited=new Set<string>(),resolutionIssues:BookingRelationshipSourceContext["resolutionIssues"]=[];
+    const candidates=new Map(this.bookingSourceCandidates(planId).map(booking=>[booking.id,booking]));
+    const inScope=(value:TripBlueprint)=>value.id===blueprint.id&&value.proposalRef.sessionId===blueprint.proposalRef.sessionId&&value.proposalRef.proposalVersion===blueprint.proposalRef.proposalVersion;
+    const validNumber=(value:unknown):value is number=>typeof value==="number"&&Number.isSafeInteger(value)&&value>0;
+    const readNode=(id:string)=>{
+      const plan=this.database.prepare("SELECT id,version FROM plans WHERE id=?").get(id) as {id:string;version:number}|undefined;
+      const lineage=this.getPlanBlueprintLineage(id),snapshot=lineage?this.getTripBlueprint(lineage.blueprintId,lineage.blueprintVersion):undefined;
+      if(!plan||!lineage||!snapshot||!validNumber(plan.version)||!validNumber(lineage.planVersion)||!validNumber(snapshot.version)||plan.version<lineage.planVersion||!inScope(snapshot))throw new Error("来源节点当前范围无法核对");
+      return {plan,lineage,snapshot};
+    };
+    const verifyParent=(parentId:string,expectedVersion:number,before:TripBlueprint,receipt:object,currentId:string)=>{
+      if(parentId===currentId||!validNumber(expectedVersion)||!inScope(before))throw new Error("来源父身份无效");
+      const parent=readNode(parentId);
+      if(expectedVersion>parent.plan.version||before.version>parent.snapshot.version||(parent.snapshot.version===before.version&&expectedVersion<parent.lineage.planVersion))throw new Error("来源父版本超出已存边界");
+      if(Object.hasOwn(receipt,"beforeIdentity")) {
+        const identity=(receipt as {beforeIdentity?:BlueprintMutationBeforeIdentity}).beforeIdentity;
+        if(!identity||identity.planId!==parentId||identity.planVersion!==expectedVersion||identity.blueprintId!==before.id||identity.blueprintVersion!==before.version)throw new Error("来源回执基准身份不一致");
+      }
+      return parent;
+    };
+    const verifyOrigin=(current:ReturnType<typeof readNode>,identity:{planId:string;planVersion:number;blueprintId:string;blueprintVersion:number},after:TripBlueprint)=>{
+      if(identity.planId!==current.plan.id||identity.planVersion!==1||identity.planVersion>current.plan.version||identity.blueprintId!==after.id||identity.blueprintVersion!==after.version||after.version>current.snapshot.version||!inScope(after)||!resolveBlueprintPlanCompilationIdentity(after.id,after.version,identity.planId))throw new Error("来源创建结果身份无效");
+    };
+    const corrupt=()=>{issues.push("来源继承记录无法完整核对，请保留当前草稿并重新核对来源。");resolutionIssues.push({code:"unverified_ancestor"});};
+    let node:string|undefined=planId;
+    while(node) {
+      if(visited.has(node)){corrupt();break;}visited.add(node);
+      let current:ReturnType<typeof readNode>;
+      try{current=readNode(node);}catch{corrupt();break;}
+      const {snapshot}=current;
+      for(const booking of this.directOwnedBookings(node))bookings.set(booking.id,booking);
+      for(const constraint of snapshot.bookingConstraints??[])if(constraint.sourceBookingId)mappedIds.add(constraint.sourceBookingId);
+      const parents=new Set<string>();
+      let originProofs=0;
+      const edits=this.database.prepare("SELECT plan_id,plan_version,blueprint_id,blueprint_version,base_blueprint_version,before_json,after_json,fingerprint,result_json FROM direct_blueprint_edits WHERE plan_id=?").all(node) as Array<{plan_id:string;plan_version:number;blueprint_id:string;blueprint_version:number;base_blueprint_version:number;before_json:string;after_json:string;fingerprint:string;result_json:string}>;
+      for(const edit of edits)try{
+        const before=JSON.parse(edit.before_json) as TripBlueprint,after=JSON.parse(edit.after_json) as TripBlueprint,request=JSON.parse(edit.fingerprint) as Record<string,unknown>,result=JSON.parse(edit.result_json) as DirectBlueprintRevisionSaveResult;
+        const identity=result.originalResult??{planId:result.workspace?.activePlan.id,planVersion:result.workspace?.activePlan.version,blueprintId:result.workspace?.activeBlueprint?.id,blueprintVersion:result.workspace?.activeBlueprint?.version};
+        if(identity.planId!==node||identity.planVersion!==edit.plan_version||identity.blueprintId!==edit.blueprint_id||identity.blueprintVersion!==edit.blueprint_version||!inScope(before)||!inScope(after)||before.version!==edit.base_blueprint_version||after.version!==edit.blueprint_version||after.version!==before.version+1||typeof request.expectedPlanId!=="string"||!validNumber(request.expectedVersion)||(request.expectedBlueprintVersion!==undefined&&request.expectedBlueprintVersion!==before.version)||!isDeepStrictEqual(this.getTripBlueprint(before.id,before.version),before)||!isDeepStrictEqual(this.getTripBlueprint(after.id,after.version),after))throw new Error("来源继承身份不一致");
+        verifyOrigin(current,{planId:identity.planId,planVersion:identity.planVersion,blueprintId:edit.blueprint_id,blueprintVersion:edit.blueprint_version},after);
+        if(result.workspace?.activePlan.id!==identity.planId||result.workspace.activePlan.version!==identity.planVersion||result.workspace.activeBlueprint?.id!==identity.blueprintId||result.workspace.activeBlueprint.version!==identity.blueprintVersion||!isDeepStrictEqual(result.workspace.activeBlueprint,after))throw new Error("来源原工作区与创建结果不一致");
+        verifyParent(request.expectedPlanId,request.expectedVersion,before,result,node);
+        for(const constraint of before.bookingConstraints??[])if(constraint.sourceBookingId)mappedIds.add(constraint.sourceBookingId);
+        originProofs++;parents.add(request.expectedPlanId);
+      }catch{corrupt();}
+      const receipts=this.database.prepare("SELECT result_json FROM booking_mutation_receipts WHERE CASE WHEN json_valid(result_json) THEN json_extract(result_json,'$.planId') END=?").all(node) as {result_json:string}[];
+      for(const receipt of receipts)try{
+        const result=JSON.parse(receipt.result_json) as Record<string,unknown>,request=result.originalRequest as Record<string,unknown>|undefined;
+        if(!request||request.operation!=="import_booking"||request.targetKind!=="plan"||typeof request.targetId!=="string"||!validNumber(request.expectedVersion)||!validNumber(result.planVersion))throw new Error("预订原请求身份缺失");
+        if(request.targetId===node){
+          if(result.planVersion>current.plan.version||request.expectedVersion>current.plan.version||result.blueprintId!==undefined&&(result.blueprintId!==blueprint.id||result.blueprintVersion!==request.expectedBlueprintVersion||!validNumber(result.blueprintVersion)||result.blueprintVersion>current.snapshot.version))throw new Error("预订原结果身份不一致");
+          if(Object.hasOwn(result,"beforeIdentity")){const identity=result.beforeIdentity as BlueprintMutationBeforeIdentity|undefined;if(!identity||identity.planId!==node||identity.planVersion!==request.expectedVersion||identity.blueprintId!==blueprint.id||identity.blueprintVersion!==request.expectedBlueprintVersion)throw new Error("预订资料回执基准身份不一致");}
+          continue;
+        }
+        if(result.blueprintId!==blueprint.id||!validNumber(result.blueprintVersion)||!validNumber(request.expectedBlueprintVersion)||result.blueprintVersion!==request.expectedBlueprintVersion+1)throw new Error("预订来源结果不属于本次旅行");
+        const before=this.getTripBlueprint(blueprint.id,request.expectedBlueprintVersion),after=this.getTripBlueprint(blueprint.id,result.blueprintVersion);
+        if(!before||!after||!inScope(before)||!inScope(after))throw new Error("预订来源基准缺失");
+        verifyOrigin(current,{planId:String(result.planId),planVersion:result.planVersion,blueprintId:String(result.blueprintId),blueprintVersion:result.blueprintVersion},after);
+        verifyParent(request.targetId,request.expectedVersion,before,result,node);
+        for(const constraint of before.bookingConstraints??[])if(constraint.sourceBookingId)mappedIds.add(constraint.sourceBookingId);
+        originProofs++;parents.add(request.targetId);
+      }catch{corrupt();}
+      const undos=this.database.prepare("SELECT revision_id,fingerprint,result_json FROM direct_blueprint_undos WHERE CASE WHEN json_valid(result_json) THEN json_extract(result_json,'$.activePlan.id') END=?").all(node) as Array<{revision_id:string;fingerprint:string;result_json:string}>;
+      for(const undo of undos)try{
+        const request=JSON.parse(undo.fingerprint) as Record<string,unknown>,result=JSON.parse(undo.result_json) as DirectBlueprintUndoReceipt;
+        if(result.activePlan.id!==node||!validNumber(result.activePlan.version)||!result.activeBlueprint||!inScope(result.activeBlueprint)||typeof request.expectedPlanId!=="string"||!validNumber(request.expectedVersion)||!validNumber(request.expectedBlueprintVersion)||result.activeBlueprint.version!==request.expectedBlueprintVersion+1||!isDeepStrictEqual(this.getTripBlueprint(blueprint.id,result.activeBlueprint.version),result.activeBlueprint))throw new Error("撤销来源结果身份不一致");
+        const before=this.getTripBlueprint(blueprint.id,request.expectedBlueprintVersion);
+        const original=this.database.prepare("SELECT plan_id,blueprint_id,blueprint_version,after_json FROM direct_blueprint_edits WHERE id=?").get(undo.revision_id) as {plan_id:string;blueprint_id:string;blueprint_version:number;after_json:string}|undefined;
+        if(!before||!inScope(before)||request.revisionId!==undo.revision_id||!original||original.plan_id!==request.expectedPlanId||original.blueprint_id!==before.id||original.blueprint_version!==before.version||!isDeepStrictEqual(JSON.parse(original.after_json),before))throw new Error("撤销来源基准无法核对");
+        verifyOrigin(current,{planId:result.activePlan.id,planVersion:result.activePlan.version,blueprintId:result.activeBlueprint.id,blueprintVersion:result.activeBlueprint.version},result.activeBlueprint);
+        verifyParent(request.expectedPlanId,request.expectedVersion,before,result,node);
+        for(const constraint of before.bookingConstraints??[])if(constraint.sourceBookingId)mappedIds.add(constraint.sourceBookingId);
+        originProofs++;parents.add(request.expectedPlanId);
+      }catch{corrupt();}
+      if(parents.size>1||originProofs>1){corrupt();break;}
+      node=parents.values().next().value;
+    }
+    for(const id of mappedIds){const booking=candidates.get(id);if(booking)bookings.set(id,booking);else {issues.push("既有预订来源无法读取，请重新核对原资料。");resolutionIssues.push({code:"missing_source",sourceBookingId:id});}}
+    return {bookings:[...bookings.values()],issues,resolutionIssues};
+  }
+  private bookingSourceState(planId: string) {
+    const lineage = this.getPlanBlueprintLineage(planId);
+    if (!lineage) {
+      const bookings = this.directOwnedBookings(planId);
+      return { bookings,pendingBookings:[] as TravelBooking[], issues: [] as string[],resolutionIssues:[] as BookingRelationshipSourceContext["resolutionIssues"], sourceSetDigest: bookingRelationshipDigest(bookings.map(booking => ({ id: booking.id, digest: this.bookingSourceDigest(booking) })).sort((a,b)=>a.id.localeCompare(b.id))) };
+    }
+    const blueprint = this.getTripBlueprint(lineage.blueprintId, lineage.blueprintVersion);
+    if (!blueprint) throw new WorkspaceMutationError("当前蓝图来源无法读取。", "blueprint_required");
+    const candidates = new Map(this.bookingSourceCandidates(planId).map(booking => [booking.id, booking]));
+    const bookings: TravelBooking[] = [], issues: string[] = [], seen = new Set<string>(),resolutionIssues:BookingRelationshipSourceContext["resolutionIssues"]=[];
+    for (const constraint of blueprint.bookingConstraints ?? []) {
+      const id = constraint.sourceBookingId;
+      if (!id || seen.has(id)) { issues.push("预订来源尚未确定或重复，请明确选择保存资料。");resolutionIssues.push({code:"invalid_mapping",bookingConstraintId:constraint.id,...(id?{sourceBookingId:id}:{})}); continue; }
+      seen.add(id);
+      const booking = candidates.get(id);
+      if (!booking) { issues.push("预订来源已变化，请重新核对。");resolutionIssues.push({code:this.database.prepare("SELECT 1 FROM travel_bookings WHERE id=?").get(id)?"source_scope_unresolved":"missing_source",sourceBookingId:id,bookingConstraintId:constraint.id}); continue; }
+      bookings.push(booking);
+      const mappedSegments=constraint.segments.map(segment=>segment.sourceSegmentId);
+      if (constraint.segments.some(segment => !segment.sourceSegmentId || !booking.segments.some(source => source.id === segment.sourceSegmentId))||mappedSegments.length!==booking.segments.length||new Set(mappedSegments).size!==mappedSegments.length) {issues.push("预订分段已变化，请重新核对。");resolutionIssues.push({code:"invalid_mapping",sourceBookingId:id,bookingConstraintId:constraint.id});}
+    }
+    if (bookingRelationshipDigest(bookingRelationshipReviewContext(blueprint).units) !== bookingRelationshipDigest(bookingRelationshipReviewContext({...blueprint,bookingConstraints:blueprintBookingConstraintsFromTravelBookings(bookings)}).units)) issues.push("当前保存资料与此版本采用的预订不同，请先选择来源并保存更正。");
+    const obligation=this.bookingSourceObligations(planId,blueprint),pendingBookings=obligation.bookings.filter(booking=>!seen.has(booking.id));issues.push(...obligation.issues);resolutionIssues.push(...obligation.resolutionIssues);
+    if(pendingBookings.length)issues.push("尚有已保存的预订资料未纳入本版本，请先选择来源并核对。");
+    const sourceSetDigest = bookingRelationshipDigest({ sources: bookings.map(booking => ({ id: booking.id, digest: this.bookingSourceDigest(booking) })).sort((a,b)=>a.id.localeCompare(b.id)),pending:pendingBookings.map(booking=>({id:booking.id,digest:this.bookingSourceDigest(booking)})).sort((a,b)=>a.id.localeCompare(b.id)),candidates: [...candidates.values()].map(booking=>({id:booking.id,digest:this.bookingSourceDigest(booking)})).sort((a,b)=>a.id.localeCompare(b.id)), unresolved: issues, bindings: (blueprint.bookingConstraints ?? []).map(value => ({ id: value.id, sourceBookingId: value.sourceBookingId })) });
+    return { bookings,pendingBookings, issues,resolutionIssues, sourceSetDigest };
+  }
+  private bookingRuntimeSourceContext(plan:Plan,blueprint:TripBlueprint,state=this.bookingSourceState(plan.id)):BookingRelationshipSourceContext {
+    return {planId:plan.id,planVersion:plan.version,blueprintId:blueprint.id,blueprintVersion:blueprint.version,sourceSetDigest:state.sourceSetDigest,adoptedUnits:bookingRelationshipSourceUnits(blueprintBookingConstraintsFromTravelBookings(state.bookings)),pendingSources:state.pendingBookings.map(booking=>({sourceBookingId:booking.id,sourceDigest:this.bookingSourceDigest(booking)})),resolutionIssues:state.resolutionIssues};
   }
 
   hasTravelBookingSourceHash(scope: { planningSessionId?: string; planId?: string }, sourceHash: string): boolean {
@@ -708,8 +890,7 @@ export class SqliteWorkspaceStore {
       if (row) return true;
     }
     if (scope.planId) {
-      const row = this.database.prepare("SELECT id FROM travel_bookings WHERE plan_id = ? AND source_hash = ? LIMIT 1").get(scope.planId, hash);
-      if (row) return true;
+      if (this.listCurrentTravelBookingSourcesForPlan(scope.planId,{includePending:true}).some(booking => booking.sourceHash === hash)) return true;
     }
     return false;
   }
@@ -718,6 +899,11 @@ export class SqliteWorkspaceStore {
     if (!booking.planningSessionId && !booking.planId) throw new Error("A booking must belong to a Planning Session or Plan.");
     if (booking.planningSessionId && !this.getPlanningSessionById(booking.planningSessionId)) throw new Error("The planning session was not found.");
     if (booking.planId && !this.database.prepare("SELECT id FROM plans WHERE id = ?").get(booking.planId)) throw new Error("The Plan was not found.");
+    if (!this.bookingWriteDepth && ((booking.planId && this.getPlanBlueprintLineage(booking.planId)) || (booking.planningSessionId && this.database.prepare("SELECT 1 FROM trip_blueprints WHERE json_extract(content_json,'$.proposalRef.sessionId')=? LIMIT 1").get(booking.planningSessionId)))) throw new WorkspaceMutationError("已发布旅行的预订须通过精确版本更正保存。", "version_conflict");
+    if(!this.bookingWriteDepth&&booking.planId&&this.getExecutionPlan()?.id===booking.planId)throw new WorkspaceMutationError("旧版执行行程须先重新规划取得可审阅蓝图。","blueprint_required");
+    if (new Set(booking.segments.map(segment => segment.id)).size !== booking.segments.length || booking.segments.some(segment => !segment.id.trim())) throw new WorkspaceMutationError("预订分段身份无效。", "invalid_edit");
+    const existing = this.database.prepare("SELECT planning_session_id,plan_id FROM travel_bookings WHERE id=?").get(booking.id) as {planning_session_id:string|null;plan_id:string|null}|undefined;
+    if (existing && ((existing.planning_session_id ?? undefined) !== booking.planningSessionId || (existing.plan_id ?? undefined) !== booking.planId)) throw new WorkspaceMutationError("预订所属计划或规划会话不能改变。", "invalid_edit");
     this.database.prepare(`INSERT INTO travel_bookings (id, planning_session_id, plan_id, source_hash, status, type, content_json, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET planning_session_id = excluded.planning_session_id, plan_id = excluded.plan_id, source_hash = excluded.source_hash,
@@ -734,6 +920,91 @@ export class SqliteWorkspaceStore {
     );
     return booking;
   }
+
+  /** 补充导入、保护附件和新草稿共享一个事务，失败不留下部分预订。 */
+  savePlanTravelBooking(input: { targetPlanId?: string; booking: TravelBooking; expectedVersion: number; expectedBlueprintVersion?: number; expectedSourceSetDigest?: string; expectedRecordDigest?: string; requestId?: string; requestDigest?: string; requestIdentity?: Record<string,unknown>; sourceContent?: string }): WorkspaceSnapshot {
+    return this.directBlueprintTransaction(() => {
+      if (input.requestId && input.requestDigest) {
+        const receipt = this.database.prepare("SELECT request_digest FROM booking_mutation_receipts WHERE request_id=?").get(input.requestId) as {request_digest:string}|undefined;
+        if (receipt) { if (receipt.request_digest !== input.requestDigest) throw new WorkspaceMutationError("预订请求身份不能用于不同载荷。", "request_identity_conflict"); return this.getWorkspace(); }
+      }
+      const current = this.getWorkspace();
+      const targetPlanId = input.targetPlanId ?? input.booking.planId;
+      const plan = current.activePlan.id === targetPlanId ? current.activePlan : current.executionPlan?.id === targetPlanId ? current.executionPlan : undefined;
+      if (!plan || plan.version !== input.expectedVersion) throw new WorkspaceMutationError("预订审阅期间计划已变化。", "version_conflict");
+      if (current.activePlan.id !== plan.id) throw new WorkspaceMutationError("请在当前替换草稿处理预订更正。", "version_conflict");
+      const state = this.bookingSourceState(plan.id);
+      const lineage = this.getPlanBlueprintLineage(plan.id);
+      const blueprint = lineage ? this.getTripBlueprint(lineage.blueprintId,lineage.blueprintVersion) : undefined;
+      if(input.expectedSourceSetDigest!==state.sourceSetDigest||(!blueprint&&input.expectedBlueprintVersion!==undefined))throw new WorkspaceMutationError("预订源集合已变化，请重新打开预览。","version_conflict");
+      if (blueprint && (input.expectedBlueprintVersion !== blueprint.version || input.expectedSourceSetDigest !== state.sourceSetDigest)) throw new WorkspaceMutationError("预订或蓝图已变化，请重新审阅。", "version_conflict");
+      const existingRow = this.database.prepare("SELECT * FROM travel_bookings WHERE id=?").get(input.booking.id) as TravelBookingRow|undefined;
+      const existing = existingRow ? travelBookingFromRow(existingRow) : undefined;
+      if (existing && (!state.bookings.some(booking=>booking.id===existing.id) || input.expectedRecordDigest !== this.bookingRecordDigest(existing))) throw new WorkspaceMutationError("预订资料已变化或不属于当前旅行。", "version_conflict");
+      if (!existing && (input.booking.planId !== plan.id || input.booking.planningSessionId)) throw new WorkspaceMutationError("新预订须属于当前目标计划。", "invalid_edit");
+      if(!blueprint&&plan.status==="active"&&(!existing||this.bookingSourceDigest(existing)!==this.bookingSourceDigest(input.booking)))throw new WorkspaceMutationError("旧版执行行程须先重新规划取得可审阅蓝图。","blueprint_required");
+      const booking = existing ? { ...input.booking, ...(existing.planId ? {planId:existing.planId} : {}), ...(existing.planningSessionId ? {planningSessionId:existing.planningSessionId} : {}) } : input.booking;
+      if (existing?.planId === undefined) delete booking.planId;
+      if (existing?.planningSessionId === undefined) delete booking.planningSessionId;
+      if (!existing) booking.planId = plan.id;
+      this.bookingWriteDepth++;
+      try { this.saveTravelBooking(booking); } finally { this.bookingWriteDepth--; }
+      if (input.sourceContent?.trim()) {
+        if (input.sourceContent.length > 80_000) throw new WorkspaceMutationError("预订附件过长。", "invalid_edit");
+        this.saveProtectedBookingAttachment({ bookingId: input.booking.id, sourceHash: input.booking.sourceHash, sourceLabel: input.booking.sourceLabel, contentText: input.sourceContent, createdAt: input.booking.importedAt });
+      }
+      let result: WorkspaceSnapshot;
+      if (blueprint) {
+        if (current.activeBlueprint?.id !== blueprint.id) throw new WorkspaceMutationError("请先返回当前旅行处理预订更正。", "version_conflict");
+        const sources = [...state.bookings.filter(value=>value.id!==booking.id),booking];
+        const constraints = blueprintBookingConstraintsFromTravelBookings(sources);
+        const beforeDigest = bookingRelationshipReviewContext(blueprint).units;
+        const afterDigest = bookingRelationshipReviewContext({...blueprint,bookingConstraints:constraints}).units;
+        if (bookingRelationshipDigest(beforeDigest) !== bookingRelationshipDigest(afterDigest)) {
+          const next = reconcileBookingRelationshipAssessment({ ...structuredClone(current.activeBlueprint), version: current.activeBlueprint.version + 1, createdAt: booking.updatedAt }, constraints);
+          this.saveTripBlueprint(next);
+          const previousLineage=this.getPlanBlueprintLineage(current.activePlan.id);
+          const compilation = compileTripBlueprint(next, {createdAt:next.createdAt,completedRequirementIds:completedRequirementIdsForWorkspace(current),...(previousLineage&&current.activeBlueprint?{previousCompilation:{blueprint:current.activeBlueprint,plan:current.activePlan,lineage:previousLineage}}:{})});
+          compilation.plan.configuration = mergeUserPlanConfiguration(compilation.plan.configuration,current.activePlan.configuration,current.activeBlueprint);
+          this.createCompiledBlueprintPlan(compilation);
+        }
+        result = this.getWorkspace();
+      } else result = plan.status==="active"?this.getWorkspace():this.applyTravelBookingToCurrentPlan(booking,input.expectedVersion);
+      if (input.requestId && input.requestDigest) this.database.prepare("INSERT INTO booking_mutation_receipts VALUES(?,?,?,?)").run(input.requestId,input.requestDigest,JSON.stringify({...(blueprint?{beforeIdentity:{planId:plan.id,planVersion:plan.version,blueprintId:blueprint.id,blueprintVersion:blueprint.version}}:{}),originalRequest:input.requestIdentity,bookingId:booking.id,planId:result.activePlan.id,planVersion:result.activePlan.version,blueprintId:result.activeBlueprint?.id,blueprintVersion:result.activeBlueprint?.version}),booking.updatedAt);
+      return result;
+    });
+  }
+
+  savePlanningTravelBooking(input: { booking: TravelBooking; expectedRevision: number; expectedRecordDigest?: string; requestId: string; requestDigest: string; requestIdentity?:Record<string,unknown>; sourceContent?: string }, applyFacts: () => void): TravelBooking {
+    return this.directBlueprintTransaction(() => {
+      const receipt = this.database.prepare("SELECT request_digest,result_json FROM booking_mutation_receipts WHERE request_id=?").get(input.requestId) as {request_digest:string;result_json:string}|undefined;
+      if (receipt) { if (receipt.request_digest !== input.requestDigest) throw new WorkspaceMutationError("预订请求身份不能用于不同载荷。", "request_identity_conflict");const saved=JSON.parse(receipt.result_json) as {bookingId:string}; const row=this.database.prepare("SELECT * FROM travel_bookings WHERE id=?").get(saved.bookingId) as TravelBookingRow|undefined; if (!row) throw new WorkspaceMutationError("预订回执无法核对。", "version_conflict"); return travelBookingFromRow(row); }
+      const sessionId = input.booking.planningSessionId;
+      const session = sessionId ? this.getPlanningSessionById(sessionId) : undefined;
+      if (!session || ["generating","draft_ready","abandoned"].includes(session.status) || this.database.prepare("SELECT 1 FROM trip_blueprints WHERE json_extract(content_json,'$.proposalRef.sessionId')=? LIMIT 1").get(session.id)) throw new WorkspaceMutationError("已发布旅行的预订请在当前行程中更正。", "version_conflict");
+      if (this.getPlanningRevision(session.id) !== input.expectedRevision) throw new WorkspaceMutationError("规划会话已变化，请重新审阅预订。", "version_conflict");
+      const existingRow = this.database.prepare("SELECT * FROM travel_bookings WHERE id=?").get(input.booking.id) as TravelBookingRow|undefined;
+      if (existingRow && this.bookingRecordDigest(travelBookingFromRow(existingRow)) !== input.expectedRecordDigest) throw new WorkspaceMutationError("预订资料已变化，请重新审阅。", "version_conflict");
+      this.saveTravelBooking(input.booking);
+      if (input.sourceContent?.trim()) { if(input.sourceContent.length>80_000) throw new WorkspaceMutationError("预订附件过长。","invalid_edit"); this.saveProtectedBookingAttachment({bookingId:input.booking.id,sourceHash:input.booking.sourceHash,sourceLabel:input.booking.sourceLabel,contentText:input.sourceContent,createdAt:input.booking.importedAt}); }
+      applyFacts();
+      this.database.prepare("INSERT INTO planning_session_revisions VALUES (?,?) ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision").run(session.id,input.expectedRevision+1);
+      this.database.prepare("INSERT INTO booking_mutation_receipts VALUES(?,?,?,?)").run(input.requestId,input.requestDigest,JSON.stringify({originalRequest:input.requestIdentity,sessionId:session.id,bookingId:input.booking.id,revision:input.expectedRevision+1}),input.booking.updatedAt);
+      return input.booking;
+    });
+  }
+
+  getBookingMutationReceipt(requestId: string, requestDigest: string, expectedIdentity:Record<string,unknown>) {
+    const row=this.database.prepare("SELECT request_digest,result_json FROM booking_mutation_receipts WHERE request_id=?").get(requestId) as {request_digest:string;result_json:string}|undefined;
+    if(!row) return {requestId,requestDigest,status:"not_found" as const};
+    if(row.request_digest!==requestDigest) throw new WorkspaceMutationError("预订回执载荷不匹配。","request_identity_conflict");
+    const originalResult=JSON.parse(row.result_json) as Record<string,unknown>;
+    if(bookingRelationshipDigest(originalResult.originalRequest)!==bookingRelationshipDigest(expectedIdentity))throw new WorkspaceMutationError("预订回执目标或原版本不匹配。","request_identity_conflict");
+    const bookingRow=typeof originalResult.bookingId==="string"?this.database.prepare("SELECT * FROM travel_bookings WHERE id=?").get(originalResult.bookingId) as TravelBookingRow|undefined:undefined;
+    return {requestId,requestDigest,status:"committed" as const,originalRequest:originalResult.originalRequest,originalResult,workspace:this.getWorkspace(),...(bookingRow?{booking:travelBookingFromRow(bookingRow)}:{}),...(typeof originalResult.sessionId==="string"?{planningSession:this.getPlanningSessionById(originalResult.sessionId)}:{})};
+  }
+
+  atomicBookingImport<T>(operation:()=>T):T { return this.directBlueprintTransaction(operation); }
 
   saveProtectedBookingAttachment(input: { bookingId: string; sourceHash: string; sourceLabel: string; contentText: string; createdAt?: string }): void {
     const contentText = input.contentText.trim();
@@ -762,6 +1033,8 @@ export class SqliteWorkspaceStore {
     const workspace = this.getWorkspace();
     const plan = workspace.activePlan.id === booking.planId ? workspace.activePlan : workspace.executionPlan?.id === booking.planId ? workspace.executionPlan : undefined;
     if (!plan) throw new Error("The Plan was not found.");
+    if(plan.status==="active")throw new WorkspaceMutationError("执行行程预订须先审阅替换草稿。","draft_required");
+    if (this.getPlanBlueprintLineage(plan.id)) throw new WorkspaceMutationError("蓝图预订须通过完整版本化保存命令。", "version_conflict");
     if (expectedVersion !== undefined && plan.version !== expectedVersion) throw new Error("The Plan changed while the booking was being reviewed.");
     const knownInformation = uniqueStrings([...plan.knownInformation, ...travelBookingKnownInformation(booking)]);
     const assumptions = uniqueStrings([...plan.assumptions, ...travelBookingAssumptions(booking)]);
@@ -796,13 +1069,17 @@ export class SqliteWorkspaceStore {
     return row ? blueprintGenerationFromRow(row) : undefined;
   }
 
+  getGenerationCarrierCheckpoint(generationKey: string): ReturnType<GenerationCarrierStore["getGenerationCarrierCheckpoint"]> {
+    return this.generationCarriers.getGenerationCarrierCheckpoint(generationKey);
+  }
+
   saveBlueprintGeneration(generation: BlueprintGeneration): BlueprintGeneration {
     if (!generation.generationKey.trim() || !generation.proposalRef.sessionId.trim() || !Number.isInteger(generation.proposalRef.proposalVersion) || generation.proposalRef.proposalVersion < 1) throw new Error("Blueprint Generation needs a valid key and Proposal reference.");
     if (!generation.skillLineage.skillId.trim() || !generation.skillLineage.skillVersion.trim()) throw new Error("Blueprint Generation needs Skill lineage.");
     this.database.prepare(`INSERT INTO blueprint_generations (generation_key, session_id, proposal_version, skill_id, skill_version, status, stage,
       research_set_id, blueprint_id, blueprint_version, failure_json, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(generation_key) DO UPDATE SET status = excluded.status, stage = excluded.stage,
+      ON CONFLICT(generation_key) DO UPDATE SET status = CASE WHEN blueprint_generations.status = 'cancelled' THEN blueprint_generations.status ELSE excluded.status END, stage = excluded.stage,
         research_set_id = COALESCE(excluded.research_set_id, blueprint_generations.research_set_id),
         blueprint_id = COALESCE(excluded.blueprint_id, blueprint_generations.blueprint_id),
         blueprint_version = COALESCE(excluded.blueprint_version, blueprint_generations.blueprint_version),
@@ -824,20 +1101,33 @@ export class SqliteWorkspaceStore {
     return this.getBlueprintGeneration(generation.generationKey)!;
   }
 
-  saveResearchSet(research: ResearchSet): ResearchSet {
+  saveResearchSet(research: ResearchSet, carrierCheckpoint?: GenerationCarrierCheckpoint): ResearchSet {
     assertResearchSetIntegrity(research);
     const generation = this.getBlueprintGeneration(research.generationKey);
     if (!generation) throw new Error("Save Blueprint Generation before its Research Set.");
     if (generation.proposalRef.sessionId !== research.proposalRef.sessionId || generation.proposalRef.proposalVersion !== research.proposalRef.proposalVersion) throw new Error("Research Set does not match its confirmed Proposal.");
     if (generation.skillLineage.skillId !== research.skillLineage.skillId || generation.skillLineage.skillVersion !== research.skillLineage.skillVersion) throw new Error("Research Set does not match its Skill lineage.");
-    this.database.exec("BEGIN");
+    if (carrierCheckpoint && carrierCheckpoint.generationEvent.generationKey !== research.generationKey) throw new Error("Research carrier 检查点属于另一个 Generation。");
+    this.database.exec("BEGIN IMMEDIATE");
     try {
+      this.assertGenerationWrite(research.generationKey, carrierCheckpoint);
       this.database.prepare(`INSERT INTO research_sets (id, generation_key, schema_version, status, content_json, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET status = excluded.status, content_json = excluded.content_json, updated_at = excluded.updated_at`).run(
         research.id, research.generationKey, research.schemaVersion, research.status, JSON.stringify(research), research.createdAt, research.updatedAt
       );
       this.database.prepare("UPDATE blueprint_generations SET research_set_id = ?, updated_at = ? WHERE generation_key = ?").run(research.id, research.updatedAt, research.generationKey);
+      if (carrierCheckpoint) {
+        this.generationCarriers.markCarriersImported({
+          generationKey: research.generationKey,
+          carrierTaskIds: carrierCheckpoint.carrierTaskIds,
+          expectedCarriers: carrierCheckpoint.expectedCarriers,
+          validatedStatus: "validated",
+          importedStatus: "imported",
+          updatedAt: carrierCheckpoint.generationEvent.createdAt
+        });
+        this.insertBlueprintGenerationEvent(carrierCheckpoint.generationEvent);
+      }
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -846,7 +1136,12 @@ export class SqliteWorkspaceStore {
     return this.getResearchSet(research.id)!;
   }
 
-  saveResearchSetAndTripBlueprint(research: ResearchSet, blueprint: TripBlueprint): { research: ResearchSet; blueprint: TripBlueprint } {
+  saveResearchSetAndTripBlueprint(
+    research: ResearchSet,
+    blueprint: TripBlueprint,
+    imageContinuation?: { planId: string; expectedBlueprint: TripBlueprint; expectedResearch: ResearchSet },
+    carrierCheckpoint?: GenerationCarrierCheckpoint
+  ): { research: ResearchSet; blueprint: TripBlueprint } {
     assertResearchSetIntegrity(research);
     const generation = this.getBlueprintGeneration(research.generationKey);
     if (!generation) throw new Error("Save Blueprint Generation before its Research Set.");
@@ -854,8 +1149,41 @@ export class SqliteWorkspaceStore {
     if (generation.skillLineage.skillId !== research.skillLineage.skillId || generation.skillLineage.skillVersion !== research.skillLineage.skillVersion) throw new Error("Research Set does not match its Skill lineage.");
     if (blueprint.researchSetId !== research.id || blueprint.generationKey !== research.generationKey) throw new Error("Trip Blueprint does not belong to the supplied Research Set.");
     assertTripBlueprintIntegrity(blueprint, { expectedResearchPlaceIds: research.places.map((place) => place.id) });
-    this.database.exec("BEGIN");
+    if (carrierCheckpoint && carrierCheckpoint.generationEvent.generationKey !== research.generationKey) throw new Error("Blueprint carrier 检查点属于另一个 Generation。");
+    this.database.exec("BEGIN IMMEDIATE");
     try {
+      this.assertGenerationWrite(research.generationKey, carrierCheckpoint);
+      let imagePlan: Plan | undefined;
+      if (imageContinuation) {
+        const workspace = this.getWorkspace();
+        const saved = workspace.activeBlueprint;
+        const latest = this.getTripBlueprintByGenerationKey(blueprint.generationKey);
+        if (!latest || !isDeepStrictEqual(latest, imageContinuation.expectedBlueprint)) throw new Error("The blueprint changed before image continuation completed.");
+        const savedResearch = this.getResearchSet(research.id);
+        if (!savedResearch || !isDeepStrictEqual(savedResearch, imageContinuation.expectedResearch)) throw new Error("Research changed before image continuation completed.");
+        if (workspace.activePlan.id !== imageContinuation.planId || !saved || !isDeepStrictEqual(saved, imageContinuation.expectedBlueprint)) throw new Error("The plan changed before image continuation completed.");
+        // Photos keep the published lineage and execution version stable.
+        blueprint = { ...blueprint, version: saved.version, createdAt: saved.createdAt };
+        const withoutImages = (value: TripBlueprint) => {
+          const copy = structuredClone(value);
+          copy.sources = [];
+          for (const place of copy.places) delete place.images;
+          return copy;
+        };
+        if (!isDeepStrictEqual(withoutImages(saved), withoutImages(blueprint))) throw new Error("Image continuation cannot change itinerary content.");
+        for (const source of saved.sources) if (!blueprint.sources.some(candidate => isDeepStrictEqual(candidate, source))) throw new Error("Image continuation cannot replace saved evidence.");
+        const withoutResearchImages = (value: ResearchSet) => {
+          const copy = structuredClone(value);
+          copy.sources = [];
+          copy.updatedAt = "";
+          for (const place of copy.places) delete place.images;
+          return copy;
+        };
+        if (!isDeepStrictEqual(withoutResearchImages(savedResearch), withoutResearchImages(research))) throw new Error("Image continuation cannot change researched facts.");
+        for (const source of savedResearch.sources) if (!research.sources.some(candidate => isDeepStrictEqual(candidate, source))) throw new Error("Image continuation cannot replace research evidence.");
+        imagePlan = workspace.activePlan;
+      }
+      if (!imageContinuation) this.assertBlueprintCandidateWrite(blueprint);
       this.database.prepare(`INSERT INTO research_sets (id, generation_key, schema_version, status, content_json, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET status = excluded.status, content_json = excluded.content_json, updated_at = excluded.updated_at`).run(
@@ -866,8 +1194,30 @@ export class SqliteWorkspaceStore {
         ON CONFLICT(id, version) DO UPDATE SET content_json = excluded.content_json`).run(
         blueprint.id, blueprint.version, blueprint.generationKey, blueprint.researchSetId, blueprint.schemaVersion, JSON.stringify(blueprint), blueprint.createdAt
       );
-      this.database.prepare("UPDATE blueprint_generations SET research_set_id = ?, blueprint_id = ?, blueprint_version = ?, stage = 'compile', updated_at = ? WHERE generation_key = ?")
-        .run(research.id, blueprint.id, blueprint.version, blueprint.createdAt, blueprint.generationKey);
+      this.database.prepare("UPDATE blueprint_generations SET research_set_id = ?, blueprint_id = ?, blueprint_version = ?, updated_at = ? WHERE generation_key = ?")
+        .run(research.id, blueprint.id, blueprint.version, new Date().toISOString(), blueprint.generationKey);
+      if (carrierCheckpoint) {
+        this.generationCarriers.markCarriersImported({
+          generationKey: research.generationKey,
+          carrierTaskIds: carrierCheckpoint.carrierTaskIds,
+          expectedCarriers: carrierCheckpoint.expectedCarriers,
+          validatedStatus: "validated",
+          importedStatus: "imported",
+          updatedAt: carrierCheckpoint.generationEvent.createdAt
+        });
+        this.insertBlueprintGenerationEvent(carrierCheckpoint.generationEvent);
+      }
+      if (imagePlan?.presentation) {
+        const images = new Map(blueprintPresentation(blueprint).places.map(place => [place.id, place.images]));
+        const presentation = structuredClone(imagePlan.presentation);
+        for (const place of presentation.places) {
+          const candidates = images.get(place.id);
+          if (candidates) place.images = structuredClone(candidates);
+          else delete place.images;
+        }
+        this.database.prepare("UPDATE plans SET presentation_json = ? WHERE id = ? AND version = ?")
+          .run(JSON.stringify(presentation), imagePlan.id, imagePlan.version);
+      }
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -886,25 +1236,56 @@ export class SqliteWorkspaceStore {
     return row ? JSON.parse(row.content_json) as ResearchSet : undefined;
   }
 
-  saveTripBlueprint(blueprint: TripBlueprint): TripBlueprint {
-    const research = this.getResearchSet(blueprint.researchSetId);
-    if (!research) throw new Error("Publish a Trip Blueprint only after its Research Set is saved.");
-    if (research.generationKey !== blueprint.generationKey) throw new Error("Trip Blueprint does not belong to its Research Set Generation.");
-    assertTripBlueprintIntegrity(blueprint, { expectedResearchPlaceIds: research.places.map((place) => place.id) });
-    this.database.exec("BEGIN");
+  saveTripBlueprint(blueprint: TripBlueprint, carrierCheckpoint?: GenerationCarrierCheckpoint): TripBlueprint {
+    this.database.exec("SAVEPOINT publish_blueprint");
     try {
+      this.assertGenerationWrite(blueprint.generationKey, carrierCheckpoint, true);
+      const existing = this.getTripBlueprint(blueprint.id, blueprint.version);
+      if (existing && isDeepStrictEqual(existing, blueprint)) { this.importGenerationCheckpoint(blueprint.generationKey, carrierCheckpoint); this.database.exec("RELEASE publish_blueprint"); return existing; }
+      this.assertBlueprintCandidateWrite(blueprint);
+      const research = this.getResearchSet(blueprint.researchSetId);
+      if (!research) throw new Error("Publish a Trip Blueprint only after its Research Set is saved.");
+      if (research.generationKey !== blueprint.generationKey) throw new Error("Trip Blueprint does not belong to its Research Set Generation.");
+      assertTripBlueprintIntegrity(blueprint, { expectedResearchPlaceIds: research.places.map((place) => place.id) });
       this.database.prepare(`INSERT INTO trip_blueprints (id, version, generation_key, research_set_id, schema_version, content_json, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id, version) DO UPDATE SET content_json = excluded.content_json`).run(
+        ON CONFLICT(id, version) DO UPDATE SET content_json = excluded.content_json, created_at = excluded.created_at`).run(
         blueprint.id, blueprint.version, blueprint.generationKey, blueprint.researchSetId, blueprint.schemaVersion, JSON.stringify(blueprint), blueprint.createdAt
       );
-      this.database.prepare("UPDATE blueprint_generations SET blueprint_id = ?, blueprint_version = ?, stage = 'compile', updated_at = ? WHERE generation_key = ?").run(blueprint.id, blueprint.version, blueprint.createdAt, blueprint.generationKey);
-      this.database.exec("COMMIT");
+      this.database.prepare("UPDATE blueprint_generations SET blueprint_id = ?, blueprint_version = ?, updated_at = ? WHERE generation_key = ?").run(blueprint.id, blueprint.version, new Date().toISOString(), blueprint.generationKey);
+      this.importGenerationCheckpoint(blueprint.generationKey, carrierCheckpoint);
+      this.database.exec("RELEASE publish_blueprint");
     } catch (error) {
-      this.database.exec("ROLLBACK");
+      this.database.exec("ROLLBACK TO publish_blueprint"); this.database.exec("RELEASE publish_blueprint");
       throw error;
     }
     return this.getTripBlueprint(blueprint.id, blueprint.version)!;
+  }
+
+  private assertGenerationWrite(generationKey: string, checkpoint?: GenerationCarrierCheckpoint, allowCompletedCarrierCancellation = false): void {
+    // 包括 SAVEPOINT 调用者在内，先获取写锁再读取身份。
+    this.database.prepare("UPDATE blueprint_generations SET updated_at=updated_at WHERE generation_key=?").run(generationKey);
+    if (checkpoint && checkpoint.generationEvent.generationKey !== generationKey) throw new Error("Carrier 检查点属于另一个 Generation。");
+    const carriers = this.generationCarriers.listForGeneration(generationKey);
+    const generation = this.getBlueprintGeneration(generationKey);
+    if (generation?.status === "cancelled") throw new Error("取消后的 Generation 不能保存结果。");
+    const cancellation = this.database.prepare("SELECT carrier_cancel_requested_at FROM blueprint_generations WHERE generation_key=?").get(generationKey);
+    // 停止可选 carrier 工作后，已完成的旅行内容仍可直接编辑。
+    if (checkpoint || carriers.length || cancellation?.carrier_cancel_requested_at != null) this.generationCarriers.assertGenerationCurrent(generationKey, undefined, false, allowCompletedCarrierCancellation && !checkpoint && generation?.status === "completed");
+    for (const carrier of carriers) if (checkpoint?.carrierTaskIds.includes(carrier.carrierTaskId) && carrier.status === "validated") this.generationCarriers.assertGenerationCurrent(generationKey, carrier.request, true);
+  }
+
+  private importGenerationCheckpoint(generationKey: string, checkpoint?: GenerationCarrierCheckpoint): void {
+    if (!checkpoint) return;
+    this.generationCarriers.markCarriersImported({ generationKey, carrierTaskIds: checkpoint.carrierTaskIds, expectedCarriers: checkpoint.expectedCarriers, validatedStatus: "validated", importedStatus: "imported", updatedAt: checkpoint.generationEvent.createdAt });
+    this.insertBlueprintGenerationEvent(checkpoint.generationEvent);
+  }
+
+  private assertBlueprintCandidateWrite(blueprint: TripBlueprint): void {
+    const existing = this.getTripBlueprint(blueprint.id,blueprint.version);
+    if (!existing || isDeepStrictEqual(existing,blueprint)) return;
+    const published = this.database.prepare("SELECT 1 FROM plan_blueprint_lineage WHERE blueprint_id=? AND blueprint_version=? UNION ALL SELECT 1 FROM direct_blueprint_edits WHERE blueprint_id=? AND (blueprint_version=? OR base_blueprint_version=?) LIMIT 1").get(blueprint.id,blueprint.version,blueprint.id,blueprint.version,blueprint.version);
+    if (published) throw new Error("同一旅行蓝图版本不能保存不同内容。");
   }
 
   getTripBlueprint(id: string, version: number): TripBlueprint | undefined {
@@ -948,16 +1329,60 @@ export class SqliteWorkspaceStore {
     if (!this.getBlueprintGeneration(input.generationKey)) throw new Error("Generation Event references a missing Blueprint Generation.");
     this.database.exec("BEGIN IMMEDIATE");
     try {
-      const sequence = ((this.database.prepare("SELECT MAX(sequence) AS sequence FROM blueprint_generation_events WHERE generation_key = ?").get(input.generationKey) as { sequence: number | null } | undefined)?.sequence ?? 0) + 1;
-      const event: BlueprintGenerationEvent = { ...input, id: input.id ?? randomUUID(), sequence };
-      this.database.prepare(`INSERT INTO blueprint_generation_events (id, generation_key, sequence, stage, status, scope_label, saved_place_count, detail, next_action, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(event.id, event.generationKey, event.sequence, event.stage, event.status, event.scopeLabel ?? null, event.savedPlaceCount ?? null, event.detail, event.nextAction ?? null, event.createdAt);
+      const event = this.insertBlueprintGenerationEvent(input);
       this.database.exec("COMMIT");
       return event;
     } catch (error) {
       this.database.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  requestBlueprintGenerationCancellation(generationKey: string, message: string, cancelledAt = new Date().toISOString()): void {
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.getBlueprintGeneration(generationKey);
+      const cancellation = this.database.prepare("SELECT carrier_cancel_requested_at FROM blueprint_generations WHERE generation_key=?").get(generationKey);
+      if (!current || cancellation?.carrier_cancel_requested_at != null) { this.database.exec("COMMIT"); return; }
+      this.database.prepare("UPDATE blueprint_generations SET carrier_cancel_requested_at=? WHERE generation_key=?").run(cancelledAt,generationKey);
+      if (current.status !== "completed") this.database.prepare(`UPDATE blueprint_generations SET status = 'cancelled', failure_json = ?, updated_at = ? WHERE generation_key = ?`)
+        .run(JSON.stringify({ code: "cancelled", stage: current.stage, issues: [{ path: current.stage, code: "cancelled", message }], resumable: true }), cancelledAt, generationKey);
+      this.generationCarriers.markGenerationCancelRequested(generationKey, "cancel_requested", cancelledAt);
+      this.insertBlueprintGenerationEvent({
+        id: `mah-cancel-requested-${generationKey}`,
+        generationKey,
+        stage: current.stage,
+        status: current.status === "completed" ? "completed" : "cancelled",
+        detail: message,
+        savedPlaceCount: this.getResearchSetByGenerationKey(generationKey)?.places.length ?? 0,
+        nextAction: "Continue with this confirmed proposal when you are ready.",
+        createdAt: cancelledAt
+      });
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  private insertBlueprintGenerationEvent(input: Omit<BlueprintGenerationEvent, "id" | "sequence"> & { id?: string }): BlueprintGenerationEvent {
+    if (input.id) {
+      const existing = this.database.prepare(`SELECT id, generation_key, sequence, stage, status, scope_label, saved_place_count, detail, next_action, created_at
+        FROM blueprint_generation_events WHERE id = ?`).get(input.id) as BlueprintGenerationEventRow | undefined;
+      if (existing) {
+        const event = blueprintGenerationEventFromRow(existing);
+        const expected = { ...input, id: input.id };
+        const actual = { ...event } as Partial<BlueprintGenerationEvent>;
+        delete actual.sequence;
+        if (!isDeepStrictEqual(actual, expected)) throw new Error("Generation Event ID 已绑定到不同内容。");
+        return event;
+      }
+    }
+    const sequence = ((this.database.prepare("SELECT MAX(sequence) AS sequence FROM blueprint_generation_events WHERE generation_key = ?").get(input.generationKey) as { sequence: number | null } | undefined)?.sequence ?? 0) + 1;
+    const event: BlueprintGenerationEvent = { ...input, id: input.id ?? randomUUID(), sequence };
+    this.database.prepare(`INSERT INTO blueprint_generation_events (id, generation_key, sequence, stage, status, scope_label, saved_place_count, detail, next_action, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(event.id, event.generationKey, event.sequence, event.stage, event.status, event.scopeLabel ?? null, event.savedPlaceCount ?? null, event.detail, event.nextAction ?? null, event.createdAt);
+    return event;
   }
 
   getBlueprintGenerationEvents(generationKey: string, afterSequence = 0): BlueprintGenerationEvent[] {
@@ -1000,16 +1425,16 @@ export class SqliteWorkspaceStore {
 
   reorderPlanTask(input: { planId: string; taskId: string; direction: "up" | "down"; expectedVersion: number }): { workspace: WorkspaceSnapshot; change: PlanChangeSet } {
     const plan = this.getCurrentPlan();
-    if (!plan || plan.id !== input.planId) throw new Error("The current Plan was not found.");
-    if (plan.status !== "draft") throw new Error("Reorder a draft Plan before confirming it for execution.");
-    if (plan.version !== input.expectedVersion) throw new Error("The Plan changed before this reorder was applied.");
+    if (!plan || plan.id !== input.planId) throw new WorkspaceMutationError("The current Plan was not found.", "operation_not_found");
+    if (plan.status !== "draft") throw new WorkspaceMutationError("Reorder a draft Plan before confirming it for execution.", "draft_required");
+    if (plan.version !== input.expectedVersion) throw new WorkspaceMutationError("The Plan changed before this reorder was applied.", "version_conflict");
     const selected = this.database.prepare(`SELECT tasks.stage_id, tasks.sort_order FROM tasks JOIN stages ON stages.id = tasks.stage_id
       WHERE tasks.id = ? AND stages.plan_id = ?`).get(input.taskId, input.planId) as { stage_id: string; sort_order: number } | undefined;
-    if (!selected) throw new Error("The Plan task was not found.");
+    if (!selected) throw new WorkspaceMutationError("The Plan task was not found.", "operation_not_found");
     const comparison = input.direction === "up" ? "<" : ">";
     const ordering = input.direction === "up" ? "DESC" : "ASC";
     const adjacent = this.database.prepare(`SELECT id, sort_order FROM tasks WHERE stage_id = ? AND sort_order ${comparison} ? ORDER BY sort_order ${ordering} LIMIT 1`).get(selected.stage_id, selected.sort_order) as { id: string; sort_order: number } | undefined;
-    if (!adjacent) throw new Error(`The task is already at the ${input.direction === "up" ? "start" : "end"} of this section.`);
+    if (!adjacent) throw new WorkspaceMutationError(`The task is already at the ${input.direction === "up" ? "start" : "end"} of this section.`, "task_at_boundary");
     const createdAt = new Date().toISOString();
     const change: PlanChangeSet = {
       id: randomUUID(),
@@ -1043,13 +1468,13 @@ export class SqliteWorkspaceStore {
 
   undoPlanChange(input: { planId: string; changeId: string; expectedVersion: number }): WorkspaceSnapshot {
     const plan = this.getCurrentPlan();
-    if (!plan || plan.id !== input.planId) throw new Error("The current Plan was not found.");
-    if (plan.status !== "draft") throw new Error("Only draft Plan changes can be undone here.");
-    if (plan.version !== input.expectedVersion) throw new Error("The Plan changed before this undo was applied.");
+    if (!plan || plan.id !== input.planId) throw new WorkspaceMutationError("The current Plan was not found.", "operation_not_found");
+    if (plan.status !== "draft") throw new WorkspaceMutationError("Only draft Plan changes can be undone here.", "draft_required");
+    if (plan.version !== input.expectedVersion) throw new WorkspaceMutationError("The Plan changed before this undo was applied.", "version_conflict");
     const latest = this.getLatestAppliedPlanChange(input.planId);
-    if (!latest || latest.id !== input.changeId) throw new Error("Only the latest Plan change can be undone.");
+    if (!latest || latest.id !== input.changeId) throw new WorkspaceMutationError("Only the latest Plan change can be undone.", "edit_unavailable");
     const adjacentTaskId = latest.affectedTaskIds.find((taskId) => taskId !== latest.taskId);
-    if (!adjacentTaskId) throw new Error("The Plan change cannot be reversed safely.");
+    if (!adjacentTaskId) throw new WorkspaceMutationError("The Plan change cannot be reversed safely.", "edit_unavailable");
     const undoneAt = new Date().toISOString();
     this.database.exec("BEGIN");
     try {
@@ -1069,17 +1494,17 @@ export class SqliteWorkspaceStore {
   savePlanRouteRefresh(input: { planId: string; segmentId: string; expectedVersion: number; expectedBlueprintVersion?: number; observedAt: string; distanceMeters: number; durationSeconds?: number; originCoordinates: [number, number]; destinationCoordinates: [number, number]; provider: "google_maps" }): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
     const plan = workspace.activePlan;
-    if (plan.id !== input.planId || plan.version !== input.expectedVersion) throw new Error("The Plan changed before this route refresh was saved.");
-    if (workspace.activeBlueprint && input.expectedBlueprintVersion !== undefined && workspace.activeBlueprint.version !== input.expectedBlueprintVersion) throw new Error("The Trip Blueprint changed before this route refresh was saved.");
+    if (plan.id !== input.planId || plan.version !== input.expectedVersion) throw new WorkspaceMutationError("The Plan changed before this route refresh was saved.", "version_conflict");
+    if (workspace.activeBlueprint && input.expectedBlueprintVersion !== undefined && workspace.activeBlueprint.version !== input.expectedBlueprintVersion) throw new WorkspaceMutationError("The Trip Blueprint changed before this route refresh was saved.", "version_conflict");
     const sourcePresentation = routeRefreshPresentationForWorkspace(workspace);
-    if (!Number.isFinite(Date.parse(input.observedAt)) || !Number.isInteger(input.distanceMeters) || input.distanceMeters <= 0 || (input.durationSeconds !== undefined && (!Number.isInteger(input.durationSeconds) || input.durationSeconds <= 0))) throw new Error("A refreshed route needs valid observed distance and duration facts.");
-    if (![input.originCoordinates, input.destinationCoordinates].every(([longitude, latitude]) => Number.isFinite(longitude) && longitude >= -180 && longitude <= 180 && Number.isFinite(latitude) && latitude >= -90 && latitude <= 90)) throw new Error("A refreshed route needs valid place coordinates.");
+    if (!Number.isFinite(Date.parse(input.observedAt)) || !Number.isInteger(input.distanceMeters) || input.distanceMeters <= 0 || (input.durationSeconds !== undefined && (!Number.isInteger(input.durationSeconds) || input.durationSeconds <= 0))) throw new WorkspaceMutationError("A refreshed route needs valid observed distance and duration facts.");
+    if (![input.originCoordinates, input.destinationCoordinates].every(([longitude, latitude]) => Number.isFinite(longitude) && longitude >= -180 && longitude <= 180 && Number.isFinite(latitude) && latitude >= -90 && latitude <= 90)) throw new WorkspaceMutationError("A refreshed route needs valid place coordinates.");
     const presentation = structuredClone(sourcePresentation);
     const segment = presentation.routeSegments.find((candidate) => candidate.id === input.segmentId);
-    if (!segment) throw new Error("The Plan route segment was not found.");
+    if (!segment) throw new WorkspaceMutationError("The Plan route segment was not found.", "operation_not_found");
     const origin = presentation.places.find((place) => place.id === segment.originPlaceId);
     const destination = presentation.places.find((place) => place.id === segment.destinationPlaceId);
-    if (!origin || !destination) throw new Error("The Plan route segment references a missing place.");
+    if (!origin || !destination) throw new WorkspaceMutationError("The Plan route segment references a missing place.");
     origin.coordinates = providerCoordinatesToPlanCoordinates(input.originCoordinates);
     destination.coordinates = providerCoordinatesToPlanCoordinates(input.destinationCoordinates);
     const { distanceMeters: _oldDistance, checkedAt: _oldCheckedAt, sourceRefs: _oldSourceRefs, display: _oldDisplay, ...stableSegment } = segment;
@@ -1126,7 +1551,7 @@ export class SqliteWorkspaceStore {
       });
     }
     const updated = this.database.prepare("UPDATE plans SET presentation_json = ?, version = version + 1 WHERE id = ? AND version = ? AND is_current = 1").run(JSON.stringify(presentation), input.planId, input.expectedVersion);
-    if (updated.changes !== 1) throw new Error("The Plan changed before this route refresh was saved.");
+    if (updated.changes !== 1) throw new WorkspaceMutationError("The Plan changed before this route refresh was saved.", "version_conflict");
     this.addInbox({ id: `route-refreshed-${input.planId}-${input.segmentId}-${Date.now()}`, tone: "notice", title: "Route facts refreshed", body: "One Plan route segment was refreshed from Google Maps facts. No navigation, booking, or transport action was started.", timestamp: "Just now" });
     return this.getWorkspace();
   }
@@ -1136,21 +1561,21 @@ export class SqliteWorkspaceStore {
     if (!input.routes.length) return { workspace: this.getWorkspace(), scheduleConflictDayIds: [] };
     const workspace = this.getWorkspace();
     const plan = workspace.activePlan;
-    if (plan.id !== input.planId || plan.version !== input.expectedVersion) throw new Error("The Plan changed before generated routes were saved.");
-    if (workspace.activeBlueprint && input.expectedBlueprintVersion !== undefined && workspace.activeBlueprint.version !== input.expectedBlueprintVersion) throw new Error("The Trip Blueprint changed before generated routes were saved.");
+    if (plan.id !== input.planId || plan.version !== input.expectedVersion) throw new WorkspaceMutationError("The Plan changed before generated routes were saved.", "version_conflict");
+    if (workspace.activeBlueprint && input.expectedBlueprintVersion !== undefined && workspace.activeBlueprint.version !== input.expectedBlueprintVersion) throw new WorkspaceMutationError("The Trip Blueprint changed before generated routes were saved.", "version_conflict");
     const presentation = structuredClone(routeRefreshPresentationForWorkspace(workspace));
     const routeById = new Map(input.routes.map((route) => [route.segmentId, route]));
     const validCoordinate = ([longitude, latitude]: [number, number]) => Number.isFinite(longitude) && longitude >= -180 && longitude <= 180 && Number.isFinite(latitude) && latitude >= -90 && latitude <= 90;
     for (const route of input.routes) {
-      if (!Number.isFinite(Date.parse(route.observedAt)) || !Number.isInteger(route.distanceMeters) || route.distanceMeters <= 0 || (route.durationSeconds !== undefined && (!Number.isInteger(route.durationSeconds) || route.durationSeconds <= 0))) throw new Error("Generated routes need valid observed distance and duration facts.");
-      if (!validCoordinate(route.originCoordinates) || !validCoordinate(route.destinationCoordinates) || route.geometry?.some((point) => !validCoordinate(point))) throw new Error("Generated routes need valid map coordinates.");
+      if (!Number.isFinite(Date.parse(route.observedAt)) || !Number.isInteger(route.distanceMeters) || route.distanceMeters <= 0 || (route.durationSeconds !== undefined && (!Number.isInteger(route.durationSeconds) || route.durationSeconds <= 0))) throw new WorkspaceMutationError("Generated routes need valid observed distance and duration facts.");
+      if (!validCoordinate(route.originCoordinates) || !validCoordinate(route.destinationCoordinates) || route.geometry?.some((point) => !validCoordinate(point))) throw new WorkspaceMutationError("Generated routes need valid map coordinates.");
     }
     const refreshedSegments = new Map(presentation.routeSegments.map((segment) => {
       const route = routeById.get(segment.id);
       if (!route) return [segment.id, segment] as const;
       const origin = presentation.places.find((place) => place.id === segment.originPlaceId);
       const destination = presentation.places.find((place) => place.id === segment.destinationPlaceId);
-      if (!origin || !destination) throw new Error("A generated route references a missing place.");
+      if (!origin || !destination) throw new WorkspaceMutationError("A generated route references a missing place.");
       origin.coordinates = providerCoordinatesToPlanCoordinates(route.originCoordinates);
       destination.coordinates = providerCoordinatesToPlanCoordinates(route.destinationCoordinates);
       const durationMinutes = route.durationSeconds !== undefined ? Math.max(1, Math.round(route.durationSeconds / 60)) : segment.durationMinutes;
@@ -1246,7 +1671,7 @@ export class SqliteWorkspaceStore {
       };
     }
     const updated = this.database.prepare("UPDATE plans SET presentation_json = ?, version = version + 1 WHERE id = ? AND version = ? AND is_current = 1").run(JSON.stringify(presentation), input.planId, input.expectedVersion);
-    if (updated.changes !== 1) throw new Error("The Plan changed before generated routes were saved.");
+    if (updated.changes !== 1) throw new WorkspaceMutationError("The Plan changed before generated routes were saved.", "version_conflict");
     return { workspace: this.getWorkspace(), scheduleConflictDayIds: [...scheduleConflictDayIds] };
   }
 
@@ -1255,7 +1680,7 @@ export class SqliteWorkspaceStore {
     const plan = workspace.activePlan;
     const blueprint = workspace.activeBlueprint;
     const lineage = this.getPlanBlueprintLineage(plan.id);
-    if (!blueprint || !lineage) throw new Error("Route refresh needs the current Trip Blueprint lineage.");
+    if (!blueprint || !lineage) throw new WorkspaceMutationError("Route refresh needs the current Trip Blueprint lineage.");
     const routeById = new Map(input.routes.map((route) => [route.segmentId, route]));
     const segmentById = new Map(presentation.routeSegments.map((segment) => [segment.id, segment]));
     const providerSource = routeRefreshProviderSource(input.provider, input.observedAt);
@@ -1310,11 +1735,12 @@ export class SqliteWorkspaceStore {
       // occurrences or rewrite stop/block projections.
       days: structuredClone(blueprint.days)
     };
-    const saved = this.saveTripBlueprint(nextBlueprint);
-    const nextPresentation = blueprintPresentation(saved);
+    reconcileBookingRelationshipAssessment(nextBlueprint);
     const nextPlanVersion = plan.version + 1;
-    this.database.exec("BEGIN");
+    this.database.exec("BEGIN IMMEDIATE");
     try {
+      const saved = this.saveTripBlueprint(nextBlueprint);
+      const nextPresentation = blueprintPresentation(saved);
       const updated = this.database.prepare("UPDATE plans SET version = ?, known_information_json = ?, assumptions_json = ?, sources_json = ?, presentation_json = ? WHERE id = ? AND version = ? AND is_current = 1").run(
         nextPlanVersion,
         JSON.stringify(routeRefreshKnownInformation(plan.knownInformation, saved)),
@@ -1324,10 +1750,10 @@ export class SqliteWorkspaceStore {
         plan.id,
         plan.version
       );
-      if (updated.changes !== 1) throw new Error("The Plan changed before generated routes were saved.");
+      if (updated.changes !== 1) throw new WorkspaceMutationError("The Plan changed before generated routes were saved.", "version_conflict");
       const nextCompilationKey = `route-refresh:${lineage.compilerVersion.replaceAll(".", "-")}:${plan.id}:plan-v${nextPlanVersion}:blueprint-${saved.id}-v${saved.version}`;
       const lineageUpdated = this.database.prepare("UPDATE plan_blueprint_lineage SET plan_version = ?, blueprint_version = ?, compilation_key = ?, created_at = ? WHERE plan_id = ?").run(nextPlanVersion, saved.version, nextCompilationKey, input.observedAt, plan.id);
-      if (lineageUpdated.changes !== 1) throw new Error("The Plan Blueprint lineage changed before generated routes were saved.");
+      if (lineageUpdated.changes !== 1) throw new WorkspaceMutationError("The Plan Blueprint lineage changed before generated routes were saved.", "version_conflict");
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -1340,15 +1766,15 @@ export class SqliteWorkspaceStore {
   savePlanPresentationEdits(input: { planId: string; expectedVersion: number; assignments: Record<string, string>; priorities: Record<string, string>; orders: Record<string, string[]> }): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
     const plan = workspace.activePlan;
-    if (plan.id !== input.planId || plan.version !== input.expectedVersion) throw new Error("The Plan changed before these itinerary edits were saved.");
-    if (plan.status !== "draft" && plan.status !== "active") throw new Error("Only the current draft or active Plan can receive itinerary map edits.");
-    if (!plan.presentation || plan.presentation.kind !== "itinerary") throw new Error("This Plan does not contain a structured itinerary presentation.");
+    if (plan.id !== input.planId || plan.version !== input.expectedVersion) throw new WorkspaceMutationError("The Plan changed before these itinerary edits were saved.", "version_conflict");
+    if (plan.status !== "draft" && plan.status !== "active") throw new WorkspaceMutationError("Only the current draft or active Plan can receive itinerary map edits.");
+    if (!plan.presentation || plan.presentation.kind !== "itinerary") throw new WorkspaceMutationError("This Plan does not contain a structured itinerary presentation.");
     const presentation = structuredClone(plan.presentation);
     const placeIds = new Set(presentation.places.map((place) => place.id));
     const dayIds = new Set(presentation.days.map((day) => day.id));
-    if (Object.keys(input.assignments).some((placeId) => !placeIds.has(placeId) || (input.assignments[placeId] && !dayIds.has(input.assignments[placeId]!)))) throw new Error("The itinerary assignment contains an unknown place or day.");
-    if (Object.keys(input.priorities).some((placeId) => !placeIds.has(placeId) || !["must", "preferred", "nearby", "archive", "pending", "recheck", "booked"].includes(input.priorities[placeId]!))) throw new Error("The itinerary priority contains an unsupported value.");
-    if (Object.entries(input.orders).some(([dayId, ids]) => !dayIds.has(dayId) || !Array.isArray(ids) || ids.some((placeId, index) => !placeIds.has(placeId) || ids.indexOf(placeId) !== index))) throw new Error("The itinerary order contains an unknown or duplicate place.");
+    if (Object.keys(input.assignments).some((placeId) => !placeIds.has(placeId) || (input.assignments[placeId] && !dayIds.has(input.assignments[placeId]!)))) throw new WorkspaceMutationError("The itinerary assignment contains an unknown place or day.");
+    if (Object.keys(input.priorities).some((placeId) => !placeIds.has(placeId) || !["must", "preferred", "nearby", "archive", "pending", "recheck", "booked"].includes(input.priorities[placeId]!))) throw new WorkspaceMutationError("The itinerary priority contains an unsupported value.");
+    if (Object.entries(input.orders).some(([dayId, ids]) => !dayIds.has(dayId) || !Array.isArray(ids) || ids.some((placeId, index) => !placeIds.has(placeId) || ids.indexOf(placeId) !== index))) throw new WorkspaceMutationError("The itinerary order contains an unknown or duplicate place.");
 
     const originalDayByPlace = new Map(presentation.days.flatMap((day) => day.placeIds.map((placeId) => [placeId, day.id] as const)));
     const originalStopByPlace = new Map(presentation.days.flatMap((day) => (day.stops ?? []).map((stop) => [stop.placeId, stop] as const)));
@@ -1366,9 +1792,9 @@ export class SqliteWorkspaceStore {
         return previous?.time && place && fixedItineraryStop(previous.role, place.priority) ? [previous.time] : [];
       }));
       const changed = nextPlaceIds.join("\0") !== day.placeIds.join("\0");
-      if (day.capacity !== undefined && nextPlaceIds.length > day.capacity) throw new Error(`The itinerary edit exceeds the capacity of ${day.label}.`);
+      if (day.capacity !== undefined && nextPlaceIds.length > day.capacity) throw new WorkspaceMutationError(`The itinerary edit exceeds the capacity of ${day.label}.`);
       const wrongCity = nextPlaceIds.map((placeId) => presentation.places.find((place) => place.id === placeId)).find((place) => place?.city && day.city && !day.city.trim().toLocaleLowerCase().includes(place.city.trim().toLocaleLowerCase()));
-      if (wrongCity) throw new Error(`The itinerary edit would move ${wrongCity.name} into a day for a different city.`);
+      if (wrongCity) throw new WorkspaceMutationError(`The itinerary edit would move ${wrongCity.name} into a day for a different city.`);
       if (changed) changedDayIds.add(day.id);
       const { routeGeometry: _routeGeometry, routeGeometryMode: _routeGeometryMode, routeGeometryReviewedAt: _routeGeometryReviewedAt, routeReview: _routeReview, ...stableDay } = day;
       return {
@@ -1430,15 +1856,15 @@ export class SqliteWorkspaceStore {
         const earliest = currentStart + (origin?.durationMinutes ?? 0) + (route?.durationMinutes ?? 30);
         const nextStart = itineraryMinute(next.time);
         if (nextStart !== undefined && nextStart >= earliest) continue;
-        if (destination && fixedItineraryStop(next.role, destination.priority)) throw new Error(`The itinerary order conflicts with the fixed time for ${destination.name}. Revise the time before moving this stop.`);
-        if (earliest >= 24 * 60) throw new Error(`The itinerary edit would push ${destination?.name ?? next.placeId} beyond the end of the day.`);
+        if (destination && fixedItineraryStop(next.role, destination.priority)) throw new WorkspaceMutationError(`The itinerary order conflicts with the fixed time for ${destination.name}. Revise the time before moving this stop.`);
+        if (earliest >= 24 * 60) throw new WorkspaceMutationError(`The itinerary edit would push ${destination?.name ?? next.placeId} beyond the end of the day.`);
         next.time = itineraryTime(earliest);
       }
       return { ...day, stops };
     });
     assertPlanPresentationIntegrity(presentation, { executionReady: false });
     const updated = this.database.prepare("UPDATE plans SET presentation_json = ?, version = version + 1 WHERE id = ? AND version = ? AND is_current = 1 AND status IN ('draft', 'active')").run(JSON.stringify(presentation), input.planId, input.expectedVersion);
-    if (updated.changes !== 1) throw new Error("The Plan changed before these itinerary edits were saved.");
+    if (updated.changes !== 1) throw new WorkspaceMutationError("The Plan changed before these itinerary edits were saved.", "version_conflict");
     this.addInbox({ id: `itinerary-edited-${input.planId}-${Date.now()}`, tone: "notice", title: "Travel Plan updated", body: "The map change was saved directly to the current Plan. Only affected itinerary days and routes were marked for refresh.", timestamp: "Just now" });
     return this.getWorkspace();
   }
@@ -1455,7 +1881,7 @@ export class SqliteWorkspaceStore {
   deleteHistoricalPlan(planId: string): boolean {
     const row = this.database.prepare("SELECT is_current, is_execution FROM plans WHERE id = ?").get(planId) as { is_current: number; is_execution: number } | undefined;
     if (!row) return false;
-    if (row.is_current || row.is_execution) throw new Error("The current or executing Plan cannot be deleted from history.");
+    if (row.is_current || row.is_execution) throw new WorkspaceMutationError("The current or executing Plan cannot be deleted from history.", "history_plan_protected");
     return this.database.prepare("DELETE FROM plans WHERE id = ?").run(planId).changes > 0;
   }
 
@@ -1488,8 +1914,8 @@ export class SqliteWorkspaceStore {
   /** Discards the current unconfirmed draft, preserving an executing Plan or returning to an empty workspace. */
   discardCurrentDraft(planId: string): WorkspaceSnapshot {
     const current = this.database.prepare("SELECT id, status, is_current, is_execution FROM plans WHERE id = ?").get(planId) as { id: string; status: Plan["status"]; is_current: number; is_execution: number } | undefined;
-    if (!current || !current.is_current) throw new Error("The current draft Plan was not found.");
-    if (current.status !== "draft" || current.is_execution) throw new Error("Only an unconfirmed draft Plan can be discarded.");
+    if (!current || !current.is_current) throw new WorkspaceMutationError("The current draft Plan was not found.", "operation_not_found");
+    if (current.status !== "draft" || current.is_execution) throw new WorkspaceMutationError("Only an unconfirmed draft Plan can be discarded.", "unconfirmed_draft_required");
     const fallback = this.database.prepare(`SELECT id FROM plans
       WHERE id <> ? AND is_execution = 1
       ORDER BY rowid DESC LIMIT 1`).get(planId) as { id: string } | undefined;
@@ -1512,8 +1938,8 @@ export class SqliteWorkspaceStore {
   /** Abandons the current active Plan and returns to an empty workspace while preserving historical Plans. */
   abandonActivePlan(planId: string): WorkspaceSnapshot {
     const current = this.database.prepare("SELECT id, status, is_current, is_execution FROM plans WHERE id = ?").get(planId) as { id: string; status: Plan["status"]; is_current: number; is_execution: number } | undefined;
-    if (!current || !current.is_current || !current.is_execution) throw new Error("The active Plan was not found.");
-    if (current.status !== "active") throw new Error("Only the active Plan can be abandoned.");
+    if (!current || !current.is_current) throw new WorkspaceMutationError("The active Plan was not found.", "operation_not_found");
+    if (!current.is_execution || current.status !== "active") throw new WorkspaceMutationError("Only the active Plan can be abandoned.", "active_plan_required");
     const abandonedAt = new Date().toISOString();
     this.database.exec("BEGIN IMMEDIATE");
     try {
@@ -1544,14 +1970,16 @@ export class SqliteWorkspaceStore {
     const task = this.database.prepare(`SELECT tasks.owner, tasks.status, tasks.title, tasks.description, tasks.due_label, tasks.preparation_category, stages.title AS stage_title
       FROM tasks JOIN stages ON stages.id = tasks.stage_id JOIN plans ON plans.id = stages.plan_id
       WHERE tasks.id = ? AND plans.id = ? AND plans.is_current = 1`).get(taskId, planId) as { owner: Task["owner"]; status: Task["status"]; title: string; description: string | null; due_label: string; preparation_category: Task["preparationCategory"] | null; stage_title: string } | undefined;
-    if (!task) throw new Error("The current Plan task was not found.");
+    if (!task) throw new WorkspaceMutationError("The current Plan task was not found.", "operation_not_found");
     if (!isPreDepartureChecklistTask({ owner: task.owner, title: task.title, ...(task.description ? { description: task.description } : {}), dueLabel: task.due_label, ...(task.preparation_category ? { preparationCategory: task.preparation_category } : {}) }, task.stage_title)) {
-      throw new Error("Only packing items and pre-departure tasks can be checked here.");
+      throw new WorkspaceMutationError("Only packing items and pre-departure tasks can be checked here.");
     }
     const nextStatus: Task["status"] = checked ? "completed" : "waiting_user";
     if (task.status !== nextStatus) {
       this.database.prepare("UPDATE tasks SET status = ? WHERE id = ?").run(nextStatus, taskId);
-      this.database.prepare("UPDATE plans SET version = version + 1 WHERE id = ?").run(planId);
+      // Preparation progress does not revise an approved itinerary. Keeping its
+      // version preserves execution progress, reminder receipts and live buttons.
+      this.database.prepare("UPDATE plans SET version = version + 1 WHERE id = ? AND status <> 'active'").run(planId);
     }
     return this.getWorkspace();
   }
@@ -1567,175 +1995,28 @@ export class SqliteWorkspaceStore {
     return blueprint ? { ...restored, presentation: blueprintPresentation(blueprint) } : restored;
   }
 
-  getTelegramPairingStatus(): TelegramPairingStatus {
-    const binding = this.database.prepare("SELECT chat_id, user_id, first_name, username, paired_at FROM telegram_binding WHERE id = 1").get() as TelegramBindingRow | undefined;
-    if (binding) return {
-      state: "paired",
-      binding: {
-        chatId: binding.chat_id,
-        userId: binding.user_id,
-        firstName: binding.first_name,
-        ...(binding.username ? { username: binding.username } : {}),
-        pairedAt: binding.paired_at
-      }
-    };
-    const request = this.database.prepare("SELECT code, expires_at FROM telegram_pairing_requests WHERE consumed_at IS NULL ORDER BY created_at DESC LIMIT 1").get() as TelegramPairingRequestRow | undefined;
-    if (request && Date.parse(request.expires_at) > Date.now()) return { state: "waiting_for_start", expiresAt: request.expires_at };
-    return { state: "not_paired" };
+  /** Reads one exact persisted Plan version, including its canonical Blueprint projection. */
+  getPlanVersion(planId:string,version:number): Plan | undefined {
+    const row=this.database.prepare("SELECT id,version,title,location,dates,status,known_information_json,assumptions_json,next_action,configuration_json,sources_json,presentation_json,created_at FROM plans WHERE id=? AND version=?").get(planId,version) as PlanRow|undefined;
+    if(!row)return;
+    const plan=this.planFromRow(row);const lineage=this.getPlanBlueprintLineage(planId);
+    const blueprint=lineage ? this.getTripBlueprint(lineage.blueprintId,lineage.blueprintVersion) : undefined;
+    return blueprint?{...plan,presentation:blueprintPresentation(blueprint)}:plan;
   }
 
-  createTelegramPairingRequest(input: { code: string; expiresAt: string }): TelegramPairingStatus {
-    const code = input.code.trim();
-    if (!/^[A-Za-z0-9_-]{12,96}$/.test(code)) throw new Error("The Telegram pairing code is invalid.");
-    if (!Number.isFinite(Date.parse(input.expiresAt)) || Date.parse(input.expiresAt) <= Date.now()) throw new Error("The Telegram pairing code must expire in the future.");
-    if (this.getTelegramPairingStatus().state === "paired") return this.getTelegramPairingStatus();
-    const now = new Date().toISOString();
-    this.database.prepare("UPDATE telegram_pairing_requests SET consumed_at = ? WHERE consumed_at IS NULL").run(now);
-    this.database.prepare("INSERT INTO telegram_pairing_requests (code, expires_at, created_at, consumed_at) VALUES (?, ?, ?, NULL)").run(code, input.expiresAt, now);
-    return { state: "waiting_for_start", expiresAt: input.expiresAt };
+  getExecutionAssistantState(planId: string, version: number): { revision: number; data: unknown } | undefined {
+    const row = this.database.prepare("SELECT revision, state_json FROM execution_assistant_states WHERE plan_id = ? AND plan_version = ?").get(planId, version) as { revision: number; state_json: string } | undefined;
+    return row ? { revision: row.revision, data: JSON.parse(row.state_json) } : undefined;
   }
 
-  claimTelegramPairing(input: { code: string; chatId: string; userId: string; firstName: string; username?: string }): TelegramPairingStatus {
-    const code = input.code.trim();
-    const chatId = input.chatId.trim();
-    const userId = input.userId.trim();
-    const firstName = input.firstName.trim();
-    if (!code || !chatId || !userId || !firstName) throw new Error("Telegram pairing needs a valid private-chat identity.");
-    const existing = this.getTelegramPairingStatus();
-    if (existing.state === "paired") {
-      if (existing.binding?.chatId !== chatId) throw new Error("This instance is already paired to a different Telegram account.");
-      return existing;
+  saveExecutionAssistantState(planId: string, version: number, expectedRevision: number, data: unknown): boolean {
+    const active = this.database.prepare("SELECT id FROM plans WHERE id = ? AND version = ? AND status = 'active' AND is_execution = 1").get(planId, version);
+    if (!active) return false;
+    const json = JSON.stringify(data);
+    if (expectedRevision === 0) {
+      return this.database.prepare("INSERT OR IGNORE INTO execution_assistant_states (plan_id, plan_version, revision, state_json) VALUES (?, ?, 1, ?)").run(planId, version, json).changes === 1;
     }
-    const request = this.database.prepare("SELECT code, expires_at FROM telegram_pairing_requests WHERE code = ? AND consumed_at IS NULL").get(code) as TelegramPairingRequestRow | undefined;
-    if (!request || Date.parse(request.expires_at) <= Date.now()) throw new Error("This Telegram pairing instruction has expired. Start a new pairing from the Web workspace.");
-    const pairedAt = new Date().toISOString();
-    this.database.prepare("INSERT INTO telegram_binding (id, chat_id, user_id, first_name, username, paired_at) VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET chat_id = excluded.chat_id, user_id = excluded.user_id, first_name = excluded.first_name, username = excluded.username, paired_at = excluded.paired_at").run(chatId, userId, firstName, input.username?.trim() || null, pairedAt);
-    this.database.prepare("UPDATE telegram_pairing_requests SET consumed_at = ? WHERE code = ?").run(pairedAt, code);
-    this.addInbox({
-      id: `telegram-paired-${pairedAt}`,
-      tone: "ready",
-      title: "Telegram paired",
-      body: `Telegram is paired with ${input.username?.trim() ? `@${input.username.trim()}` : input.firstName}. Future Telegram actions still require their own explicit implementation and confirmation.`,
-      timestamp: "Just now"
-    });
-    return this.getTelegramPairingStatus();
-  }
-
-  /** Removes only the bound chat identity; Plans, Profile, update cursor, and local Bot token stay untouched. */
-  unpairTelegram(): TelegramPairingStatus {
-    const existing = this.getTelegramPairingStatus();
-    if (existing.state !== "paired") return existing;
-    const unpairedAt = new Date().toISOString();
-    this.database.exec("BEGIN");
-    try {
-      this.database.prepare("DELETE FROM telegram_binding WHERE id = 1").run();
-      this.database.prepare("DELETE FROM telegram_profile_edit_state WHERE id = 1").run();
-      this.database.prepare("DELETE FROM telegram_location_intent WHERE id = 1").run();
-      this.database.prepare("UPDATE telegram_pairing_requests SET consumed_at = ? WHERE consumed_at IS NULL").run(unpairedAt);
-      this.addInbox({
-        id: `telegram-unpaired-${unpairedAt}`,
-        tone: "notice",
-        title: "Telegram disconnected",
-        body: "This Telegram chat is no longer bound to this instance. Your Plans, Profile, local Bot token, and existing records were not deleted.",
-        timestamp: "Just now"
-      });
-      this.database.exec("COMMIT");
-    } catch (error) {
-      this.database.exec("ROLLBACK");
-      throw error;
-    }
-    return this.getTelegramPairingStatus();
-  }
-
-  getTelegramUpdateOffset(): number | undefined {
-    const row = this.database.prepare("SELECT next_update_id FROM telegram_update_cursor WHERE id = 1").get() as { next_update_id: number } | undefined;
-    return row?.next_update_id;
-  }
-
-  advanceTelegramUpdateOffset(nextUpdateId: number): void {
-    if (!Number.isInteger(nextUpdateId) || nextUpdateId < 1) throw new Error("Telegram update offset must be a positive whole number.");
-    this.database.prepare("INSERT INTO telegram_update_cursor (id, next_update_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET next_update_id = MAX(telegram_update_cursor.next_update_id, excluded.next_update_id)").run(nextUpdateId);
-  }
-
-  claimTelegramUpdate(updateId: number): boolean {
-    if (!Number.isInteger(updateId) || updateId < 1) throw new Error("Telegram update id must be a positive whole number.");
-    const existing = this.database.prepare("SELECT update_id FROM telegram_processed_updates WHERE update_id = ?").get(updateId);
-    if (existing) return false;
-    this.database.prepare("INSERT INTO telegram_processed_updates (update_id, processed_at) VALUES (?, ?)").run(updateId, new Date().toISOString());
-    return true;
-  }
-
-  claimWhatsAppMessage(messageId: string): boolean {
-    const normalized = messageId.trim();
-    if (!/^wamid\.[A-Za-z0-9._~:-]{1,240}$/.test(normalized)) throw new Error("WhatsApp message id is invalid.");
-    const existing = this.database.prepare("SELECT message_id FROM whatsapp_processed_messages WHERE message_id = ?").get(normalized);
-    if (existing) return false;
-    this.database.prepare("INSERT INTO whatsapp_processed_messages (message_id, processed_at) VALUES (?, ?)").run(normalized, new Date().toISOString());
-    return true;
-  }
-
-  claimTelegramReminder(input: { planId: string; reminderKey: string; dueAt: string }): boolean {
-    const planId = input.planId.trim();
-    const reminderKey = input.reminderKey.trim();
-    if (!planId || !reminderKey || !Number.isFinite(Date.parse(input.dueAt))) throw new Error("Telegram reminder needs a Plan, key, and due time.");
-    const existing = this.database.prepare("SELECT plan_id FROM telegram_reminder_deliveries WHERE plan_id = ? AND reminder_key = ?").get(planId, reminderKey);
-    if (existing) return false;
-    this.database.prepare("INSERT INTO telegram_reminder_deliveries (plan_id, reminder_key, due_at, claimed_at) VALUES (?, ?, ?, ?)").run(planId, reminderKey, input.dueAt, new Date().toISOString());
-    return true;
-  }
-
-  claimTelegramItineraryReminderAttempt(input: { planId: string; reminderKey: string; dayId: string; placeId: string; scheduledTime: string; dueAt: string; now?: string }): TelegramItineraryReminderAttempt {
-    const now = input.now ?? new Date().toISOString();
-    const nowMs = Date.parse(now);
-    const dueAtMs = Date.parse(input.dueAt);
-    if (![input.planId, input.reminderKey, input.dayId, input.placeId].every((value) => value.trim()) || !/^\d{2}:\d{2}$/.test(input.scheduledTime) || !Number.isFinite(nowMs) || !Number.isFinite(dueAtMs)) throw new Error("An itinerary reminder attempt needs a Plan, stop, local time, and due time.");
-    if (nowMs < dueAtMs || nowMs > dueAtMs + ITINERARY_REMINDER_CATCH_UP_MS) return { claimed: false };
-    if (!this.itineraryReminderStillCurrent(input)) return { claimed: false };
-    const existing = this.database.prepare(`SELECT day_id, place_id, scheduled_time, due_at, status, attempt_count, next_attempt_at
-      FROM telegram_itinerary_reminder_deliveries WHERE plan_id = ? AND reminder_key = ?`).get(input.planId, input.reminderKey) as TelegramItineraryReminderDeliveryRow | undefined;
-    const leaseUntil = new Date(nowMs + ITINERARY_REMINDER_ATTEMPT_LEASE_MS).toISOString();
-    if (!existing) {
-      this.database.prepare(`INSERT INTO telegram_itinerary_reminder_deliveries
-        (plan_id, reminder_key, day_id, place_id, scheduled_time, due_at, status, attempt_count, next_attempt_at, last_failure_code, delivered_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'attempting', 1, ?, NULL, NULL, ?)`).run(input.planId, input.reminderKey, input.dayId, input.placeId, input.scheduledTime, input.dueAt, leaseUntil, now);
-      return { claimed: true, attemptNumber: 1 };
-    }
-    if (existing.day_id !== input.dayId || existing.place_id !== input.placeId || existing.scheduled_time !== input.scheduledTime || existing.due_at !== input.dueAt || existing.status === "delivered" || existing.status === "failed" || existing.attempt_count >= 3) return { claimed: false };
-    if (existing.next_attempt_at && Date.parse(existing.next_attempt_at) > nowMs) return { claimed: false };
-    const attemptNumber = existing.attempt_count + 1;
-    const updated = this.database.prepare(`UPDATE telegram_itinerary_reminder_deliveries SET status = 'attempting', attempt_count = ?, next_attempt_at = ?, updated_at = ?
-      WHERE plan_id = ? AND reminder_key = ? AND status IN ('attempting', 'retry_wait') AND attempt_count = ?`).run(attemptNumber, leaseUntil, now, input.planId, input.reminderKey, existing.attempt_count);
-    return updated.changes === 1 ? { claimed: true, attemptNumber } : { claimed: false };
-  }
-
-  recordTelegramItineraryReminderDelivered(input: { planId: string; reminderKey: string; dayId: string; placeId: string; scheduledTime: string; deliveredAt?: string }): void {
-    const deliveredAt = input.deliveredAt ?? new Date().toISOString();
-    if (!Number.isFinite(Date.parse(deliveredAt))) throw new Error("A delivered itinerary reminder needs a valid delivery time.");
-    const updated = this.database.prepare(`UPDATE telegram_itinerary_reminder_deliveries SET status = 'delivered', next_attempt_at = NULL, delivered_at = ?, updated_at = ?
-      WHERE plan_id = ? AND reminder_key = ? AND day_id = ? AND place_id = ? AND scheduled_time = ? AND status = 'attempting'`).run(deliveredAt, deliveredAt, input.planId, input.reminderKey, input.dayId, input.placeId, input.scheduledTime);
-    if (updated.changes !== 1) throw new Error("The itinerary reminder delivery attempt is not active.");
-  }
-
-  recordTelegramItineraryReminderFailure(input: { planId: string; reminderKey: string; dayId: string; placeId: string; scheduledTime: string; failureCode: string; retryable: boolean; failedAt?: string }): TelegramItineraryReminderFailureResult {
-    const failedAt = input.failedAt ?? new Date().toISOString();
-    const failedAtMs = Date.parse(failedAt);
-    if (!Number.isFinite(failedAtMs)) throw new Error("A failed itinerary reminder needs a valid failure time.");
-    const row = this.database.prepare(`SELECT day_id, place_id, scheduled_time, due_at, status, attempt_count, next_attempt_at
-      FROM telegram_itinerary_reminder_deliveries WHERE plan_id = ? AND reminder_key = ?`).get(input.planId, input.reminderKey) as TelegramItineraryReminderDeliveryRow | undefined;
-    if (!row || row.day_id !== input.dayId || row.place_id !== input.placeId || row.scheduled_time !== input.scheduledTime || row.status !== "attempting") throw new Error("The itinerary reminder delivery attempt is not active.");
-    const current = this.itineraryReminderStillCurrent(input);
-    const failureCode = input.failureCode.trim().slice(0, 80) || "unknown_failure";
-    const retryDelay = ITINERARY_REMINDER_RETRY_DELAYS_MS[row.attempt_count - 1];
-    const nextAttemptAt = retryDelay === undefined ? undefined : new Date(failedAtMs + retryDelay).toISOString();
-    const retryWithinWindow = nextAttemptAt !== undefined && Date.parse(nextAttemptAt) <= Date.parse(row.due_at) + ITINERARY_REMINDER_CATCH_UP_MS;
-    if (current && input.retryable && row.attempt_count < 3 && retryWithinWindow) {
-      this.database.prepare(`UPDATE telegram_itinerary_reminder_deliveries SET status = 'retry_wait', next_attempt_at = ?, last_failure_code = ?, updated_at = ?
-        WHERE plan_id = ? AND reminder_key = ? AND status = 'attempting'`).run(nextAttemptAt, failureCode, failedAt, input.planId, input.reminderKey);
-      return { status: "retry_scheduled", nextAttemptAt };
-    }
-    this.database.prepare(`UPDATE telegram_itinerary_reminder_deliveries SET status = 'failed', next_attempt_at = NULL, last_failure_code = ?, updated_at = ?
-      WHERE plan_id = ? AND reminder_key = ? AND status = 'attempting'`).run(current ? failureCode : "reminder_cancelled", failedAt, input.planId, input.reminderKey);
-    return { status: current ? "failed" : "cancelled" };
+    return this.database.prepare("UPDATE execution_assistant_states SET revision = revision + 1, state_json = ? WHERE plan_id = ? AND plan_version = ? AND revision = ?").run(json, planId, version, expectedRevision).changes === 1;
   }
 
   private itineraryReminderStillCurrent(input: { planId: string; dayId: string; placeId: string; scheduledTime: string }): boolean {
@@ -1745,118 +2026,11 @@ export class SqliteWorkspaceStore {
     return Boolean(day?.stops?.some((stop) => stop.placeId === input.placeId && stop.time === input.scheduledTime));
   }
 
-  claimTelegramTaskReminderAttempt(input: { planId: string; reminderKey: string; taskId: string; dueAt: string; reminder: TaskReminder; now?: string }): TelegramTaskReminderAttempt {
-    const planId = input.planId.trim();
-    const reminderKey = input.reminderKey.trim();
-    const taskId = input.taskId.trim();
-    const now = input.now ?? new Date().toISOString();
-    const dueAtMs = Date.parse(input.dueAt);
-    const nowMs = Date.parse(now);
-    if (!planId || !reminderKey || !taskId || !Number.isFinite(dueAtMs) || !Number.isFinite(nowMs)) throw new Error("A Task reminder attempt needs a Plan, key, Task, due time, and current time.");
-    if (nowMs < dueAtMs || nowMs > dueAtMs + TASK_REMINDER_CATCH_UP_MS) return { claimed: false };
-    const executionPlan = this.getExecutionPlan();
-    if (executionPlan?.id !== planId || executionPlan.status !== "active") return { claimed: false };
-    const currentReminder = executionPlan.stages.flatMap((stage) => stage.tasks).find((task) => task.id === taskId)?.reminder;
-    if (!currentReminder || !taskRemindersEqual(currentReminder, input.reminder)) return { claimed: false };
-    const existing = this.database.prepare(`SELECT task_id, due_at, status, attempt_count, next_attempt_at
-      FROM telegram_task_reminder_deliveries WHERE plan_id = ? AND reminder_key = ?`).get(planId, reminderKey) as TelegramTaskReminderDeliveryRow | undefined;
-    const leaseUntil = new Date(nowMs + TASK_REMINDER_ATTEMPT_LEASE_MS).toISOString();
-    if (!existing) {
-      this.database.prepare(`INSERT INTO telegram_task_reminder_deliveries
-        (plan_id, reminder_key, task_id, due_at, status, attempt_count, next_attempt_at, last_failure_code, delivered_at, updated_at)
-        VALUES (?, ?, ?, ?, 'attempting', 1, ?, NULL, NULL, ?)`).run(planId, reminderKey, taskId, input.dueAt, leaseUntil, now);
-      return { claimed: true, attemptNumber: 1 };
-    }
-    if (existing.task_id !== taskId || existing.due_at !== input.dueAt || existing.status === "delivered" || existing.status === "failed" || existing.attempt_count >= 3) return { claimed: false };
-    if (existing.next_attempt_at && Date.parse(existing.next_attempt_at) > nowMs) return { claimed: false };
-    const nextAttemptNumber = existing.attempt_count + 1;
-    const updated = this.database.prepare(`UPDATE telegram_task_reminder_deliveries
-      SET status = 'attempting', attempt_count = ?, next_attempt_at = ?, updated_at = ?
-      WHERE plan_id = ? AND reminder_key = ? AND status IN ('attempting', 'retry_wait') AND attempt_count = ?`).run(nextAttemptNumber, leaseUntil, now, planId, reminderKey, existing.attempt_count);
-    return updated.changes === 1 ? { claimed: true, attemptNumber: nextAttemptNumber } : { claimed: false };
-  }
-
-  recordTelegramTaskReminderDelivered(input: { planId: string; reminderKey: string; taskId: string; taskTitle: string; reminder: TaskReminder; deliveredAt?: string }): void {
-    const executionPlan = this.getExecutionPlan();
-    const taskTitle = input.taskTitle.trim();
-    if (!taskTitle || !input.reminder.purpose.trim()) throw new Error("A delivered Task reminder needs its delivery-time Task context.");
-    const currentTask = executionPlan?.stages.flatMap((stage) => stage.tasks).find((candidate) => candidate.id === input.taskId);
-    const currentReminder = currentTask?.reminder;
-    const currentMatch = executionPlan?.id === input.planId && executionPlan.status === "active" && Boolean(currentReminder && taskRemindersEqual(currentReminder, input.reminder));
-    const deliveredAt = input.deliveredAt ?? new Date().toISOString();
-    if (!Number.isFinite(Date.parse(deliveredAt))) throw new Error("A delivered Task reminder needs a valid delivery time.");
-    this.database.exec("BEGIN");
-    try {
-      const updated = this.database.prepare(`UPDATE telegram_task_reminder_deliveries
-        SET status = 'delivered', next_attempt_at = NULL, delivered_at = ?, updated_at = ?
-        WHERE plan_id = ? AND reminder_key = ? AND task_id = ? AND status = 'attempting'`).run(deliveredAt, deliveredAt, input.planId, input.reminderKey, input.taskId);
-      if (updated.changes !== 1) throw new Error("The Task reminder delivery attempt is not active.");
-      this.addInbox({
-        id: `task-reminder-delivered-${input.planId}-${input.taskId}-${input.reminder.scheduledAtLocal}`,
-        tone: currentMatch ? "ready" : "attention",
-        title: currentMatch ? `Reminder sent: ${taskTitle}` : `Reminder sent before Plan change took effect: ${taskTitle}`,
-        body: currentMatch ? input.reminder.purpose : `${input.reminder.purpose} Telegram accepted this message before cancellation or Plan replacement could stop the in-flight request.`,
-        timestamp: "Just now"
-      });
-      this.database.exec("COMMIT");
-    } catch (error) {
-      this.database.exec("ROLLBACK");
-      throw error;
-    }
-  }
-
-  recordTelegramTaskReminderFailure(input: { planId: string; reminderKey: string; taskId: string; reminder: TaskReminder; failureCode: string; retryable: boolean; failedAt?: string }): TelegramTaskReminderFailureResult {
-    const failedAt = input.failedAt ?? new Date().toISOString();
-    const failedAtMs = Date.parse(failedAt);
-    const failureCode = input.failureCode.trim().slice(0, 80) || "unknown_failure";
-    if (!Number.isFinite(failedAtMs)) throw new Error("A failed Task reminder needs a valid failure time.");
-    const row = this.database.prepare(`SELECT task_id, due_at, status, attempt_count, next_attempt_at
-      FROM telegram_task_reminder_deliveries WHERE plan_id = ? AND reminder_key = ?`).get(input.planId, input.reminderKey) as TelegramTaskReminderDeliveryRow | undefined;
-    if (!row || row.task_id !== input.taskId || row.status !== "attempting") throw new Error("The Task reminder delivery attempt is not active.");
-    const executionPlan = this.getExecutionPlan();
-    const currentReminder = executionPlan?.id === input.planId ? executionPlan.stages.flatMap((stage) => stage.tasks).find((task) => task.id === input.taskId)?.reminder : undefined;
-    const currentMatch = executionPlan?.status === "active" && Boolean(currentReminder && taskRemindersEqual(currentReminder, input.reminder));
-    if (!currentMatch) {
-      this.database.prepare(`UPDATE telegram_task_reminder_deliveries
-        SET status = 'failed', next_attempt_at = NULL, last_failure_code = 'reminder_cancelled', updated_at = ?
-        WHERE plan_id = ? AND reminder_key = ? AND status = 'attempting'`).run(failedAt, input.planId, input.reminderKey);
-      return { status: "cancelled" };
-    }
-    const retryDelay = TASK_REMINDER_RETRY_DELAYS_MS[row.attempt_count - 1];
-    const nextAttemptAt = retryDelay === undefined ? undefined : new Date(failedAtMs + retryDelay).toISOString();
-    const retryWithinWindow = nextAttemptAt !== undefined && Date.parse(nextAttemptAt) <= Date.parse(row.due_at) + TASK_REMINDER_CATCH_UP_MS;
-    if (input.retryable && row.attempt_count < 3 && retryWithinWindow) {
-      this.database.prepare(`UPDATE telegram_task_reminder_deliveries
-        SET status = 'retry_wait', next_attempt_at = ?, last_failure_code = ?, updated_at = ?
-        WHERE plan_id = ? AND reminder_key = ? AND status = 'attempting'`).run(nextAttemptAt, failureCode, failedAt, input.planId, input.reminderKey);
-      return { status: "retry_scheduled", nextAttemptAt };
-    }
-    this.database.exec("BEGIN");
-    try {
-      this.database.prepare(`UPDATE telegram_task_reminder_deliveries
-        SET status = 'failed', next_attempt_at = NULL, last_failure_code = ?, updated_at = ?
-        WHERE plan_id = ? AND reminder_key = ? AND status = 'attempting'`).run(failureCode, failedAt, input.planId, input.reminderKey);
-      const task = this.getExecutionPlan()?.stages.flatMap((stage) => stage.tasks).find((candidate) => candidate.id === input.taskId);
-      this.addInbox({
-        id: `task-reminder-failed-${input.planId}-${input.reminderKey}`,
-        tone: "attention",
-        title: `Reminder could not be sent${task ? `: ${task.title}` : ""}`,
-        body: `Landi stopped after ${row.attempt_count} delivery attempt${row.attempt_count === 1 ? "" : "s"}. Review the current Plan; no external action was performed.`,
-        timestamp: "Just now"
-      });
-      this.database.exec("COMMIT");
-    } catch (error) {
-      this.database.exec("ROLLBACK");
-      throw error;
-    }
-    return { status: "failed" };
-  }
-
   cancelTaskReminder(planId: string, taskId: string): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
-    if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
+    if (workspace.activePlan.id !== planId) throw new WorkspaceMutationError(`Plan ${planId} was not found.`);
     const task = workspace.activePlan.stages.flatMap((stage) => stage.tasks).find((candidate) => candidate.id === taskId);
-    if (!task) throw new Error("The Task was not found in the current Plan.");
+    if (!task) throw new WorkspaceMutationError("The Task was not found in the current Plan.");
     if (!task.reminder) return workspace;
     this.database.exec("BEGIN");
     try {
@@ -1878,22 +2052,6 @@ export class SqliteWorkspaceStore {
       throw error;
     }
     return this.getWorkspace();
-  }
-
-  recordTelegramArrivalCheckin(input: { planId: string; checkInSentAt: string }): void {
-    const planId = input.planId.trim();
-    if (!planId || !Number.isFinite(Date.parse(input.checkInSentAt))) throw new Error("Telegram arrival check-in needs a Plan and valid delivery time.");
-    this.database.prepare("INSERT INTO telegram_arrival_checkins (plan_id, check_in_sent_at, location_requested_at, location_received_at) VALUES (?, ?, NULL, NULL) ON CONFLICT(plan_id) DO NOTHING").run(planId, input.checkInSentAt);
-  }
-
-  getTelegramArrivalCheckin(planId: string): TelegramArrivalCheckinState | undefined {
-    const row = this.database.prepare("SELECT check_in_sent_at, location_requested_at, location_received_at FROM telegram_arrival_checkins WHERE plan_id = ?").get(planId.trim()) as TelegramArrivalCheckinRow | undefined;
-    if (!row) return undefined;
-    return {
-      checkInSentAt: row.check_in_sent_at,
-      ...(row.location_requested_at ? { locationRequestedAt: row.location_requested_at } : {}),
-      ...(row.location_received_at ? { locationReceivedAt: row.location_received_at } : {})
-    };
   }
 
   recordPlanDestinationArrival(input: { planId: string; city: string; arrivedAt?: string }): DestinationArrivalEvent {
@@ -1920,60 +2078,6 @@ export class SqliteWorkspaceStore {
   listPlanDestinationArrivals(planId: string): DestinationArrivalEvent[] {
     return (this.database.prepare(`SELECT city, arrived_at, confirmed FROM plan_destination_arrivals
       WHERE plan_id = ? ORDER BY arrived_at ASC`).all(planId.trim()) as unknown as PlanDestinationArrivalRow[]).map((row) => ({ city: row.city, arrivedAt: row.arrived_at, confirmed: row.confirmed === 1 }));
-  }
-
-  markTelegramArrivalLocationRequested(planId: string, requestedAt: string): boolean {
-    if (!planId.trim() || !Number.isFinite(Date.parse(requestedAt))) throw new Error("Telegram arrival location request needs a Plan and valid time.");
-    const result = this.database.prepare("UPDATE telegram_arrival_checkins SET location_requested_at = ? WHERE plan_id = ? AND location_requested_at IS NULL AND location_received_at IS NULL").run(requestedAt, planId.trim());
-    return result.changes === 1;
-  }
-
-  markTelegramArrivalLocationReceived(planId: string, receivedAt: string): void {
-    if (!planId.trim() || !Number.isFinite(Date.parse(receivedAt))) throw new Error("Telegram arrival location receipt needs a Plan and valid time.");
-    this.database.prepare("UPDATE telegram_arrival_checkins SET location_received_at = ? WHERE plan_id = ?").run(receivedAt, planId.trim());
-  }
-
-  recordTelegramRouteHandoffOffered(input: { planId: string; offeredAt: string; routeDurationSeconds: number; waitBufferSeconds: number; safetyMarginSeconds: number; expectedArrivalAt: string }): TelegramRouteHandoffState {
-    const values = [input.routeDurationSeconds, input.waitBufferSeconds, input.safetyMarginSeconds];
-    if (!input.planId.trim() || !Number.isFinite(Date.parse(input.offeredAt)) || !Number.isFinite(Date.parse(input.expectedArrivalAt)) || !values.every((value) => Number.isInteger(value) && value >= 0)) {
-      throw new Error("A Telegram route handoff needs valid Plan and timing facts.");
-    }
-    this.database.prepare(`INSERT INTO telegram_route_handoffs
-      (plan_id, offered_at, opened_at, route_duration_seconds, wait_buffer_seconds, safety_margin_seconds, expected_arrival_at, guidance_sent_at, delay_count, last_delayed_at)
-      VALUES (?, ?, NULL, ?, ?, ?, ?, NULL, 0, NULL)
-      ON CONFLICT(plan_id) DO UPDATE SET offered_at = excluded.offered_at, opened_at = NULL, route_duration_seconds = excluded.route_duration_seconds,
-        wait_buffer_seconds = excluded.wait_buffer_seconds, safety_margin_seconds = excluded.safety_margin_seconds,
-        expected_arrival_at = excluded.expected_arrival_at, guidance_sent_at = NULL, delay_count = 0, last_delayed_at = NULL`).run(
-      input.planId.trim(), input.offeredAt, input.routeDurationSeconds, input.waitBufferSeconds, input.safetyMarginSeconds, input.expectedArrivalAt
-    );
-    return this.getTelegramRouteHandoff(input.planId)!;
-  }
-
-  getTelegramRouteHandoff(planId: string): TelegramRouteHandoffState | undefined {
-    const row = this.database.prepare(`SELECT plan_id, offered_at, opened_at, route_duration_seconds, wait_buffer_seconds, safety_margin_seconds,
-      expected_arrival_at, guidance_sent_at, delay_count, last_delayed_at FROM telegram_route_handoffs WHERE plan_id = ?`).get(planId.trim()) as TelegramRouteHandoffRow | undefined;
-    return row ? telegramRouteHandoffFromRow(row) : undefined;
-  }
-
-  claimTelegramRouteArrivalGuidance(planId: string, now = new Date().toISOString()): TelegramRouteHandoffState | undefined {
-    if (!planId.trim() || !Number.isFinite(Date.parse(now))) throw new Error("Route arrival guidance needs a Plan and valid time.");
-    const result = this.database.prepare(`UPDATE telegram_route_handoffs SET guidance_sent_at = ?
-      WHERE plan_id = ? AND guidance_sent_at IS NULL AND expected_arrival_at <= ?`).run(now, planId.trim(), now);
-    return result.changes === 1 ? this.getTelegramRouteHandoff(planId) : undefined;
-  }
-
-  releaseTelegramRouteArrivalGuidance(planId: string, guidanceSentAt: string): boolean {
-    if (!planId.trim() || !Number.isFinite(Date.parse(guidanceSentAt))) throw new Error("Route arrival guidance release needs a Plan and valid claim time.");
-    const result = this.database.prepare("UPDATE telegram_route_handoffs SET guidance_sent_at = NULL WHERE plan_id = ? AND guidance_sent_at = ?").run(planId.trim(), guidanceSentAt);
-    return result.changes === 1;
-  }
-
-  delayTelegramRouteArrivalGuidance(planId: string, delayedAt = new Date().toISOString(), delaySeconds = 15 * 60): TelegramRouteHandoffState | undefined {
-    if (!planId.trim() || !Number.isFinite(Date.parse(delayedAt)) || !Number.isInteger(delaySeconds) || delaySeconds <= 0) throw new Error("A route delay needs valid Plan and timing values.");
-    const expectedArrivalAt = new Date(Date.parse(delayedAt) + delaySeconds * 1_000).toISOString();
-    const result = this.database.prepare(`UPDATE telegram_route_handoffs SET expected_arrival_at = ?, guidance_sent_at = NULL,
-      delay_count = delay_count + 1, last_delayed_at = ? WHERE plan_id = ? AND guidance_sent_at IS NOT NULL`).run(expectedArrivalAt, delayedAt, planId.trim());
-    return result.changes === 1 ? this.getTelegramRouteHandoff(planId) : undefined;
   }
 
   /** Marks only an explicitly arrival-triggered task as ready; completion stays user-owned. */
@@ -2053,7 +2157,7 @@ export class SqliteWorkspaceStore {
       plan.configuration.travelContext.partySize = context.partySize;
     }
     if (context?.transportPreference !== undefined) {
-      if (!["plan_recommended", "taxi", "public_transit", "walking"].includes(context.transportPreference)) throw new Error("Choose a supported transport preference.");
+      if (!["plan_recommended", "taxi", "public_transit", "walking", "driving"].includes(context.transportPreference)) throw new Error("Choose a supported transport preference.");
       plan.configuration.transport.preference = context.transportPreference;
     }
     if (context?.expectedArrivalAtLocal !== undefined) {
@@ -2071,27 +2175,77 @@ export class SqliteWorkspaceStore {
     return this.getWorkspace();
   }
 
-  createCompiledBlueprintPlan(compilation: BlueprintPlanCompilation, runtime: AgentRuntimeKind = "codex"): WorkspaceSnapshot {
+  createCompiledBlueprintPlan(compilation: BlueprintPlanCompilation, runtime: AgentRuntimeKind = "codex", carrierCompletion?: {
+    generationKey: string;
+    carrierTaskIds: readonly string[];
+    expectedCarriers?: GenerationCarrierCheckpoint["expectedCarriers"];
+    generationEvent: Omit<BlueprintGenerationEvent, "sequence">;
+  }, adjustmentOrigin?: TravelAdjustmentDraftOrigin): WorkspaceSnapshot {
     const { plan, lineage } = compilation;
     if (lineage.planId !== plan.id || lineage.planVersion !== plan.version) throw new Error("Compilation Lineage does not match its Draft Plan.");
-    const existing = this.getPlanBlueprintLineageByCompilationKey(lineage.compilationKey);
-    if (existing) {
-      if (existing.planId !== plan.id || existing.blueprintId !== lineage.blueprintId || existing.blueprintVersion !== lineage.blueprintVersion || existing.compilerVersion !== lineage.compilerVersion) throw new Error("Compilation Key already belongs to a different Draft Plan.");
-      return this.getWorkspace();
-    }
     const blueprint = this.getTripBlueprint(lineage.blueprintId, lineage.blueprintVersion);
     if (!blueprint) throw new Error("Compile a Draft Plan only from a published Trip Blueprint.");
+    if (carrierCompletion && (blueprint.generationKey !== carrierCompletion.generationKey || carrierCompletion.generationEvent.generationKey !== carrierCompletion.generationKey)) {
+      throw new Error("Carrier 完成状态不属于本次已编译 Trip Blueprint 的 Generation。");
+    }
+    const existing = this.getPlanBlueprintLineageByCompilationKey(lineage.compilationKey);
+    if (existing) {
+      if(adjustmentOrigin)throw new WorkspaceMutationError('已有草稿不能事后登记为旅行事件候选。','version_conflict');
+      if (existing.planId !== plan.id || existing.blueprintId !== lineage.blueprintId || existing.blueprintVersion !== lineage.blueprintVersion || existing.compilerVersion !== lineage.compilerVersion) throw new Error("Compilation Key already belongs to a different Draft Plan.");
+      if (carrierCompletion) {
+        this.database.exec("SAVEPOINT compile_blueprint");
+        try {
+          this.assertGenerationWrite(blueprint.generationKey, carrierCompletion);
+          this.generationCarriers.markCarriersImported({
+            generationKey: carrierCompletion.generationKey,
+            carrierTaskIds: carrierCompletion.carrierTaskIds,
+            expectedCarriers: carrierCompletion.expectedCarriers,
+            validatedStatus: "validated",
+            importedStatus: "imported",
+            updatedAt: carrierCompletion.generationEvent.createdAt,
+            requireAllValidated: true
+          });
+          this.insertBlueprintGenerationEvent(carrierCompletion.generationEvent);
+          this.database.exec("RELEASE compile_blueprint");
+        } catch (error) {
+          this.database.exec("ROLLBACK TO compile_blueprint"); this.database.exec("RELEASE compile_blueprint");
+          throw error;
+        }
+      }
+      return this.getWorkspace();
+    }
     const presentablePlan = { ...plan, presentation: blueprintPresentation(blueprint) };
-    this.database.exec("BEGIN");
+    this.database.exec("SAVEPOINT compile_blueprint");
     try {
+      this.assertGenerationWrite(blueprint.generationKey, carrierCompletion, true);
+      if(adjustmentOrigin){
+        const origin:TravelAdjustmentInput={...adjustmentOrigin.input,requestId:'draft-origin:'+plan.id};
+        assertTravelAdjustmentInput(origin);this.assertAdjustmentContext(origin.context);
+        const identityBlocker=travelAdjustmentEventIdentityBlocker(origin.observations);
+        if(identityBlocker)throw new WorkspaceMutationError(identityBlocker,'version_conflict');
+        if(origin.context.draft||!origin.context.execution||!origin.context.blueprint||origin.context.blueprint.id!==blueprint.id||origin.context.phase.value!=='on_trip'||origin.decision?.verdict!=='eligible'||origin.decision.changeKind!=='objective_disruption'||origin.observations.some(o=>!['changed','unchanged'].includes(o.status))||!origin.observations.some(o=>o.status==='changed')||adjustmentOrigin.verifyExecution(origin.decision,origin)!==true)throw new WorkspaceMutationError('旅行变化候选缺少原执行版本与负责公开判断。','version_conflict');
+      }
       this.insertCurrentPlan(presentablePlan);
       this.database.prepare(`INSERT INTO plan_blueprint_lineage (plan_id, plan_version, blueprint_id, blueprint_version, compiler_version, compilation_key, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)`).run(lineage.planId, lineage.planVersion, lineage.blueprintId, lineage.blueprintVersion, lineage.compilerVersion, lineage.compilationKey, lineage.createdAt);
       this.database.prepare("UPDATE blueprint_generations SET status = 'completed', stage = 'ready', updated_at = ? WHERE blueprint_id = ? AND blueprint_version = ?").run(lineage.createdAt, lineage.blueprintId, lineage.blueprintVersion);
+      if (carrierCompletion) {
+        this.generationCarriers.markCarriersImported({
+          generationKey: carrierCompletion.generationKey,
+          carrierTaskIds: carrierCompletion.carrierTaskIds,
+            expectedCarriers: carrierCompletion.expectedCarriers,
+          validatedStatus: "validated",
+          importedStatus: "imported",
+          updatedAt: carrierCompletion.generationEvent.createdAt,
+          requireAllValidated: true
+        });
+        this.insertBlueprintGenerationEvent(carrierCompletion.generationEvent);
+      }
       this.addInbox({ id: `blueprint-plan-compiled-${plan.id}`, tone: "notice", title: `${runtimeDisplayName(runtime)} trip draft ready for review`, body: "The complete Trip Blueprint and its execution work are saved locally. Nothing will run before you confirm the Draft Plan.", timestamp: "Just now" });
-      this.database.exec("COMMIT");
+      if(adjustmentOrigin)this.travelAdjustments.bindDraft(plan.id,plan.version,adjustmentOrigin.input.context,adjustmentOrigin.input.observations,this.travelAdjustmentProposalDigest());
+      this.database.exec("RELEASE compile_blueprint");
     } catch (error) {
-      this.database.exec("ROLLBACK");
+      this.database.exec("ROLLBACK TO compile_blueprint"); this.database.exec("RELEASE compile_blueprint");
       throw error;
     }
     return this.getWorkspace();
@@ -2108,18 +2262,110 @@ export class SqliteWorkspaceStore {
     return this.applyDirectBlueprintRevisionBatch(batchInput).workspace;
   }
 
-  applyDirectBlueprintRevisionBatch(input: { expectedPlanId: string; expectedVersion: number; expectedBlueprintVersion?: number; revisions: DirectBlueprintRevision[]; runtime?: AgentRuntimeKind }): DirectBlueprintRevisionSaveResult {
+  applyDirectBlueprintRevisionBatch(input: Parameters<SqliteWorkspaceStore["applyDirectBlueprintRevisionBatchInTransaction"]>[0]): DirectBlueprintRevisionSaveResult {
+    return this.directBlueprintTransaction(() => this.applyDirectBlueprintRevisionBatchInTransaction(input));
+  }
+  undoDirectBlueprintRevision(input: Parameters<SqliteWorkspaceStore["undoDirectBlueprintRevisionInTransaction"]>[0]): WorkspaceSnapshot {
+    return this.directBlueprintTransaction(() => this.undoDirectBlueprintRevisionInTransaction(input));
+  }
+  /** 回执只读：原请求身份与事务审计核对，不把历史快照当作当前状态。 */
+  getDirectBlueprintMutationReceipt(input: { operation: "save" | "undo"; requestId: string; requestDigest: string; expectedPlanId: string; expectedVersion: number; expectedBlueprintVersion: number; revisionId?: string }) {
+    const table = input.operation === "save" ? "direct_blueprint_edits" : "direct_blueprint_undos";
+    const row = this.database.prepare("SELECT fingerprint,result_json FROM " + table + " WHERE request_id=?").get(input.requestId) as { fingerprint: string; result_json: string } | undefined;
+    const identity = { operation: input.operation, requestId: input.requestId, requestDigest: input.requestDigest, expectedPlanId: input.expectedPlanId, expectedVersion: input.expectedVersion, expectedBlueprintVersion: input.expectedBlueprintVersion, ...(input.revisionId ? { revisionId: input.revisionId } : {}) };
+    if (!row) return { ...identity, status: "not_found" as const };
+    const original = JSON.parse(row.fingerprint) as Record<string, unknown>;
+    const digest = createHash("sha256").update(workspaceMutationDigestInput(input.operation, String(original.expectedPlanId), original)).digest("hex");
+    if (digest !== input.requestDigest) throw new WorkspaceMutationError("回执载荷与原请求不一致。", "request_identity_conflict");
+    if (original.expectedPlanId !== input.expectedPlanId || original.expectedVersion !== input.expectedVersion || original.expectedBlueprintVersion !== input.expectedBlueprintVersion || (input.operation === "undo" && original.revisionId !== input.revisionId)) throw new WorkspaceMutationError("回执身份与原请求不一致。", "request_identity_conflict");
+    const saved = input.operation === "save" ? JSON.parse(row.result_json) as DirectBlueprintRevisionSaveResult : undefined;
+    return { ...identity, status: "committed" as const, workspace: this.getWorkspace(), ...(saved ? { revision: saved.revision, originalResult: saved.originalResult } : {}) };
+  }
+  private directBlueprintTransaction<T>(operation: () => T): T {
+    const nested=this.directTransactionDepth>0;
+    const savepoint=`direct_mutation_${this.directTransactionDepth}`;
+    this.database.exec(nested?`SAVEPOINT ${savepoint}`:"BEGIN IMMEDIATE");
+    this.directTransactionDepth++;
+    try { const result=operation();this.database.exec(nested?`RELEASE ${savepoint}`:"COMMIT");return result; }
+    catch(error) { this.database.exec(nested?`ROLLBACK TO ${savepoint}`:"ROLLBACK");if(nested)this.database.exec(`RELEASE ${savepoint}`);throw error; }
+    finally {this.directTransactionDepth--;}
+  }
+  private applyDirectBlueprintRevisionBatchInTransaction(input: { expectedPlanId: string; expectedVersion: number; expectedBlueprintVersion?: number; revisions: DirectBlueprintRevision[]; requestId?: string; highImpactConfirmation?: string; runtime?: AgentRuntimeKind; recoveryBinding?:{schemaVersion:1;draftDigest:string;seedDigest:string} }): DirectBlueprintRevisionSaveResult {
+    const requestId = input.requestId ?? randomUUID();
+    if(input.recoveryBinding&&(input.revisions.length!==1||input.revisions[0]!.kind!=="review_booking_relationships"||input.recoveryBinding.schemaVersion!==1||!/^[a-f0-9]{64}$/.test(input.recoveryBinding.draftDigest)||!/^[a-f0-9]{64}$/.test(input.recoveryBinding.seedDigest))) throw new WorkspaceMutationError("关联审阅恢复身份无效。","invalid_edit");
+    const fingerprint = JSON.stringify({ ...input, requestId: undefined, runtime: undefined, revisions: input.revisions.map(({createdAt, ...revision}) => revision) });
+    const replay = this.database.prepare("SELECT * FROM direct_blueprint_edits WHERE request_id = ?").get(requestId) as { fingerprint: string; result_json: string } | undefined;
+    if (replay) { if (replay.fingerprint !== fingerprint) throw new WorkspaceMutationError("请求身份不能用于不同的蓝图编辑。", "request_identity_conflict"); const receipt = JSON.parse(replay.result_json) as DirectBlueprintRevisionSaveResult; return {...receipt,workspace: this.getWorkspace()}; }
     const workspace = this.getWorkspace();
-    if (workspace.activePlan.id !== input.expectedPlanId || workspace.activePlan.version !== input.expectedVersion) throw new Error("The Plan changed before this Blueprint Revision was applied.");
-    if (!workspace.activeBlueprint) throw new Error("Direct Blueprint Revision requires a current Trip Blueprint.");
-    if (input.expectedBlueprintVersion !== undefined && workspace.activeBlueprint.version !== input.expectedBlueprintVersion) throw new Error("The Trip Blueprint changed before this Blueprint Revision was applied.");
-    const result = applyDirectBlueprintRevisionBatchWithMetadata(workspace.activeBlueprint, input.revisions);
-    const saved = this.saveTripBlueprint(result.blueprint);
-    const compilation = compileTripBlueprint(saved, { createdAt: result.metadata.createdAt, completedRequirementIds: completedRequirementIdsForWorkspace(workspace) });
-    return {
-      workspace: this.createCompiledBlueprintPlan(compilation, input.runtime),
-      revision: result.metadata
-    };
+    if (workspace.activePlan.id !== input.expectedPlanId || workspace.activePlan.version !== input.expectedVersion) throw new WorkspaceMutationError("The Plan changed before this Blueprint Revision was applied.", "version_conflict");
+    if (!workspace.activeBlueprint) throw new WorkspaceMutationError("Direct Blueprint Revision requires a current Trip Blueprint.", "blueprint_required");
+    if (input.expectedBlueprintVersion !== undefined && workspace.activeBlueprint.version !== input.expectedBlueprintVersion) throw new WorkspaceMutationError("The Trip Blueprint changed before this Blueprint Revision was applied.", "version_conflict");
+    const sourceState = this.bookingSourceState(input.expectedPlanId);
+    const sourceContext=this.bookingRuntimeSourceContext(workspace.activePlan,workspace.activeBlueprint,sourceState);
+    if(sourceContext.planId!==input.expectedPlanId||sourceContext.planVersion!==input.expectedVersion)throw new WorkspaceMutationError("预订来源基准已变化。","version_conflict");
+    const sourceRevision = input.revisions.find(revision=>revision.kind === "review_booking_relationships" || revision.kind === "select_booking_sources");
+    if (sourceRevision && sourceRevision.expectedSourceSetDigest !== sourceState.sourceSetDigest) throw new WorkspaceMutationError("预订资料已变化，请重新审阅。", "version_conflict");
+    let resolvedBookingConstraints: BlueprintBookingConstraint[]|undefined;
+    if (sourceRevision?.kind === "select_booking_sources") {
+      const candidates = new Map(this.bookingSourceCandidates(input.expectedPlanId).map(booking=>[booking.id,booking]));
+      const selected = sourceRevision.sourceBookingIds.map(id=>candidates.get(id));
+      if (selected.some(booking=>!booking)) throw new WorkspaceMutationError("请选择当前旅行的合法预订来源。", "invalid_edit");
+      resolvedBookingConstraints = blueprintBookingConstraintsFromTravelBookings(selected as TravelBooking[]);
+    }
+    // 先降级另存的必访地点仍需删除影响确认。
+    const protectedBlueprint = structuredClone(workspace.activeBlueprint);
+    const prior = this.database.prepare("SELECT before_json FROM direct_blueprint_edits WHERE blueprint_id = ? AND undone = 0").all(protectedBlueprint.id) as {before_json: string}[];
+    for (const row of prior) {
+      const before = JSON.parse(row.before_json) as TripBlueprint;
+      for (const revision of input.revisions) if (revision.kind === "remove_place_from_day" && before.places.some((place) => place.id === revision.placeId && place.priority === "must")) {
+        const place = protectedBlueprint.places.find((place) => place.id === revision.placeId); if (place && place.priority !== "booked") place.priority = "must";
+      }
+    }
+    const result = applyDirectBlueprintRevisionBatchWithMetadata(protectedBlueprint, input.revisions, {sourceContext, ...(input.highImpactConfirmation ? { highImpactConfirmation: input.highImpactConfirmation } : {}), ...(resolvedBookingConstraints ? {resolvedBookingConstraints} : {}),...(sourceRevision?.kind==="select_booking_sources"?{sourceSelectionDecision:{source:"traveler",actorId:"local-traveler",decidedAt:sourceRevision.createdAt}}:{}) });
+    // 影响确认完成后保留不属于本批次的优先级编辑。
+    for (const place of result.blueprint.places) if (!input.revisions.some((revision) => revision.kind === "update_place_priority" && revision.placeId === place.id)) place.priority = workspace.activeBlueprint.places.find((candidate) => candidate.id === place.id)!.priority;
+    {
+      const saved = this.saveTripBlueprint(result.blueprint);
+      const previousLineage=this.getPlanBlueprintLineage(workspace.activePlan.id);
+      const compilation = compileTripBlueprint(saved, { createdAt: result.metadata.createdAt, completedRequirementIds: completedRequirementIdsForWorkspace(workspace),...(previousLineage?{previousCompilation:{blueprint:workspace.activeBlueprint,plan:workspace.activePlan,lineage:previousLineage}}:{}) });
+      compilation.plan.configuration = mergeUserPlanConfiguration(compilation.plan.configuration,workspace.activePlan.configuration,workspace.activeBlueprint);
+      this.createCompiledBlueprintPlan(compilation, input.runtime);
+      this.database.prepare("INSERT INTO direct_blueprint_edits(id,request_id,fingerprint,plan_id,plan_version,blueprint_id,blueprint_version,base_blueprint_version,before_json,after_json,metadata_json,result_json,created_at,undone) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0)").run(result.metadata.id,requestId,fingerprint,compilation.plan.id,compilation.plan.version,saved.id,saved.version,workspace.activeBlueprint.version,JSON.stringify(workspace.activeBlueprint),JSON.stringify(saved),JSON.stringify(result.metadata),"{}",result.metadata.createdAt);
+      const currentWorkspace = this.getWorkspace();
+      const response: DirectBlueprintRevisionSaveResult = { workspace: currentWorkspace, revision: result.metadata, originalResult: { planId:currentWorkspace.activePlan.id,planVersion:currentWorkspace.activePlan.version,blueprintId:saved.id,blueprintVersion:saved.version,sourceSetDigest:"",targetDigests:bookingRelationshipReviewContext(saved).targetDigests,revisionKinds:input.revisions.map(revision=>revision.kind),...(input.recoveryBinding?{recoveryBinding:structuredClone(input.recoveryBinding)}:{}) } };
+      response.beforeIdentity = { planId: workspace.activePlan.id, planVersion: workspace.activePlan.version, blueprintId: workspace.activeBlueprint.id, blueprintVersion: workspace.activeBlueprint.version };
+      // 原结果身份先在同一未提交事务内齐备，供规范祖先解析器验证；外部只会读到最终提交结果。
+      this.database.prepare("UPDATE direct_blueprint_edits SET result_json=? WHERE id=?").run(JSON.stringify(response),result.metadata.id);
+      response.originalResult!.sourceSetDigest=this.bookingSourceState(currentWorkspace.activePlan.id).sourceSetDigest;
+      this.database.prepare("UPDATE direct_blueprint_edits SET result_json=? WHERE id=?").run(JSON.stringify(response),result.metadata.id);
+      return response;
+    }
+  }
+
+  private undoDirectBlueprintRevisionInTransaction(input: { expectedPlanId: string; expectedVersion: number; expectedBlueprintVersion: number; revisionId: string; requestId: string }): WorkspaceSnapshot {
+    const fingerprint = JSON.stringify(input);
+    const replay = this.database.prepare("SELECT fingerprint,result_json FROM direct_blueprint_undos WHERE request_id=?").get(input.requestId) as {fingerprint: string; result_json: string} | undefined;
+    if (replay) { if (replay.fingerprint !== fingerprint) throw new WorkspaceMutationError("撤销请求身份不能复用于不同编辑。", "request_identity_conflict"); return this.getWorkspace(); }
+    const workspace = this.getWorkspace();
+    const edit = this.database.prepare("SELECT * FROM direct_blueprint_edits WHERE id=? AND undone=0").get(input.revisionId) as {plan_id:string;plan_version:number;blueprint_id:string;blueprint_version:number;before_json:string;after_json:string} | undefined;
+    if (!edit || workspace.activePlan.id !== input.expectedPlanId || workspace.activePlan.version !== input.expectedVersion || edit.plan_id !== input.expectedPlanId || edit.plan_version !== input.expectedVersion || !workspace.activeBlueprint || workspace.activeBlueprint.id !== edit.blueprint_id || workspace.activeBlueprint.version !== input.expectedBlueprintVersion || edit.blueprint_version !== input.expectedBlueprintVersion) throw new WorkspaceMutationError("当前计划或旅行蓝图已变化，无法撤销该编辑。", "edit_unavailable");
+    const createdAt = new Date().toISOString();
+    const sourceState = this.bookingSourceState(workspace.activePlan.id);
+    const sourceContext=this.bookingRuntimeSourceContext(workspace.activePlan,workspace.activeBlueprint,sourceState);
+    if(sourceContext.planId!==input.expectedPlanId||sourceContext.planVersion!==input.expectedVersion)throw new WorkspaceMutationError("撤销来源基准已变化。","version_conflict");
+    const blueprint = undoDirectBlueprintRevision(workspace.activeBlueprint, JSON.parse(edit.before_json) as TripBlueprint, JSON.parse(edit.after_json) as TripBlueprint, createdAt,sourceContext);
+    {
+      this.saveTripBlueprint(blueprint);
+      const previousLineage=this.getPlanBlueprintLineage(workspace.activePlan.id);
+      const compilation = compileTripBlueprint(blueprint, {createdAt,completedRequirementIds:completedRequirementIdsForWorkspace(workspace),...(previousLineage?{previousCompilation:{blueprint:workspace.activeBlueprint,plan:workspace.activePlan,lineage:previousLineage}}:{})});
+      compilation.plan.configuration = mergeUserPlanConfiguration(compilation.plan.configuration,workspace.activePlan.configuration,workspace.activeBlueprint);
+      this.createCompiledBlueprintPlan(compilation);
+      this.database.prepare("UPDATE direct_blueprint_edits SET undone=1 WHERE id=?").run(input.revisionId);
+      const result = this.getWorkspace();
+      const receipt: DirectBlueprintUndoReceipt = { ...result, beforeIdentity: {planId: workspace.activePlan.id,planVersion: workspace.activePlan.version,blueprintId: workspace.activeBlueprint.id,blueprintVersion: workspace.activeBlueprint.version} };
+      this.database.prepare("INSERT INTO direct_blueprint_undos(request_id,revision_id,fingerprint,result_json,created_at) VALUES(?,?,?,?,?)").run(input.requestId,input.revisionId,fingerprint,JSON.stringify(receipt),createdAt);
+      return result;
+    }
   }
 
   saveGeneratedPlanArrivalTimeZone(input: { planId: string; expectedVersion: number; timeZone: string }): WorkspaceSnapshot {
@@ -2131,6 +2377,24 @@ export class SqliteWorkspaceStore {
     configuration.arrival.timeZone = input.timeZone;
     const updated = this.database.prepare("UPDATE plans SET configuration_json = ?, version = version + 1 WHERE id = ? AND version = ? AND is_current = 1").run(JSON.stringify(configuration), input.planId, input.expectedVersion);
     if (updated.changes !== 1) throw new Error("The Plan changed before its arrival timezone was saved.");
+    return this.getWorkspace();
+  }
+
+  /** Attach a saved, source-grounded execution repair without replacing the approved Plan. */
+  saveExecutionBlueprintRepair(input: { planId: string; expectedVersion: number; expectedBlueprintVersion: number; blueprint: TripBlueprint }): WorkspaceSnapshot {
+    const workspace = this.getWorkspace();
+    const lineage = this.getPlanBlueprintLineage(input.planId);
+    if (workspace.activePlan.id !== input.planId || workspace.activePlan.version !== input.expectedVersion || workspace.activePlan.status !== "active" || !workspace.activeBlueprint || workspace.activeBlueprint.version !== input.expectedBlueprintVersion || !lineage) throw new Error("The approved Plan changed before execution repair.");
+    if (input.blueprint.id !== workspace.activeBlueprint.id || input.blueprint.version !== input.expectedBlueprintVersion + 1 || !this.getTripBlueprint(input.blueprint.id, input.blueprint.version)) throw new Error("Execution repair requires the saved next Blueprint version.");
+    const nextVersion = input.expectedVersion + 1;
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const updated = this.database.prepare("UPDATE plans SET version = ?, presentation_json = ?, known_information_json = ?, sources_json = ? WHERE id = ? AND version = ? AND is_current = 1 AND is_execution = 1 AND status = 'active'").run(nextVersion, JSON.stringify(blueprintPresentation(input.blueprint)), JSON.stringify(routeRefreshKnownInformation(workspace.activePlan.knownInformation, input.blueprint)), JSON.stringify(input.blueprint.sources.map(source => ({ title: source.title, authority: source.authority, url: source.url, retrievedAt: source.retrievedAt }))), input.planId, input.expectedVersion);
+      if (updated.changes !== 1) throw new Error("The approved Plan changed during execution repair.");
+      const linked = this.database.prepare("UPDATE plan_blueprint_lineage SET plan_version = ?, blueprint_version = ?, compilation_key = ?, created_at = ? WHERE plan_id = ? AND blueprint_version = ?").run(nextVersion, input.blueprint.version, `execution-repair:${input.planId}:v${nextVersion}:blueprint-v${input.blueprint.version}`, new Date().toISOString(), input.planId, input.expectedBlueprintVersion);
+      if (linked.changes !== 1) throw new Error("Blueprint lineage changed during execution repair.");
+      this.database.exec("COMMIT");
+    } catch (error) { this.database.exec("ROLLBACK"); throw error; }
     return this.getWorkspace();
   }
 
@@ -2190,7 +2454,7 @@ export class SqliteWorkspaceStore {
   }
 
   /** Atomically applies an already authorized Core compilation to the exact current draft version. */
-  saveCompiledPlan(input: { plan: Plan; expectedPlanId: string; expectedVersion: number; audit: PlanCompilationAudit; skillRuns?: Array<Pick<CountryPackSkillRun, "skillId" | "skillVersion" | "status"> & { sourceEvidence?: SourceEvidenceRef[] }>; compiledAt?: string }): WorkspaceSnapshot {
+  saveCompiledPlan(input: { plan: Plan; expectedPlanId: string; expectedVersion: number; audit: PlanCompilationAudit; skillRuns?: Array<Pick<PreparationEvidenceRun, "skillId" | "skillVersion" | "status"> & { sourceEvidence?: SourceEvidenceRef[] }>; compiledAt?: string }): WorkspaceSnapshot {
     const compiledAt = input.compiledAt ?? new Date().toISOString();
     validateCompiledPlanWrite(input, compiledAt);
     const run: PlanCompilationRun = {
@@ -2274,10 +2538,10 @@ export class SqliteWorkspaceStore {
       FROM plan_compilation_runs ORDER BY compiled_at DESC, rowid DESC LIMIT ?`).all(safeLimit) as unknown as PlanCompilationRunRow[]).map((row) => ({ ...planCompilationRunFromRow(row), sourceEvidence: this.listCompilationRunEvidence(row.id) }));
   }
 
-  listRecentCountryPackSkillRuns(limit = 100): CountryPackSkillRun[] {
+  listRecentPreparationEvidenceRuns(limit = 100): PreparationEvidenceRun[] {
     const safeLimit = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), 500) : 100;
     return (this.database.prepare(`SELECT id, compilation_run_id, plan_id, source_plan_version, skill_id, skill_version, status, finished_at
-      FROM country_pack_skill_runs ORDER BY finished_at DESC, rowid DESC LIMIT ?`).all(safeLimit) as unknown as CountryPackSkillRunRow[]).map((row) => ({
+      FROM country_pack_skill_runs ORDER BY finished_at DESC, rowid DESC LIMIT ?`).all(safeLimit) as unknown as PreparationEvidenceRunRow[]).map((row) => ({
       id: row.id,
       kind: "country_pack_skill",
       compilationRunId: row.compilation_run_id,
@@ -2320,41 +2584,197 @@ export class SqliteWorkspaceStore {
     return this.database.prepare(`SELECT source_snapshot_id, content_hash FROM country_pack_skill_run_sources WHERE skill_run_id = ? ORDER BY rowid`).all(runId).map(evidenceFromRow);
   }
 
-  confirmPlan(planId: string): WorkspaceSnapshot {
-    const workspace = this.getWorkspace();
-    const confirmed = confirmPlan(workspace, planId);
-    const previousExecution = this.getExecutionPlan();
-    this.database.exec("BEGIN");
+  private get travelAdjustments(): TravelAdjustmentPersistence { return new TravelAdjustmentPersistence(this.database); }
+
+  captureAdjustmentContext(): TravelAdjustmentContext {
+    const workspace=this.getWorkspace(), execution=this.getExecutionPlan();
+    const lineage=execution?this.getPlanBlueprintLineage(execution.id):undefined;
+    const draft=execution && (workspace.activePlan.id!==execution.id || workspace.activePlan.version!==execution.version)?workspace.activePlan:undefined;
+    const settings=this.email.settings();
+    const savedPhase=this.travelAdjustments.phase(lineage?.blueprintId??execution?.id??'unbound');
+    const phase:TravelPhase=savedPhase.execution?.id===execution?.id&&savedPhase.execution?.version===execution?.version?savedPhase:{value:'unknown',revision:savedPhase.revision,basis:'unresolved',recordedAt:savedPhase.recordedAt,evidenceRefs:[]};
+    return {execution:execution?{id:execution.id,version:execution.version}:null,blueprint:lineage?{id:lineage.blueprintId,version:lineage.blueprintVersion}:null,
+      draft:draft?{id:draft.id,version:draft.version}:null,draftBlueprint:draft&&workspace.activeBlueprint?{id:workspace.activeBlueprint.id,version:workspace.activeBlueprint.version}:null,
+      phase,
+      sourceSetDigest:execution?bookingRelationshipDigest(this.listCurrentTravelBookingSourcesForPlan(execution.id).map(b=>({id:b.id,digest:this.bookingSourceDigest(b)})).sort((a,b)=>a.id.localeCompare(b.id))):bookingRelationshipDigest([]),
+      observationSetDigest:execution?this.travelAdjustments.observationDigest(execution.id,execution.version):bookingRelationshipDigest([]),
+      authorizationDigest:bookingRelationshipDigest(settings),recipientRevision:settings.revision};
+  }
+  private assertAdjustmentContext(context: TravelAdjustmentContext): void {
+    if(!isDeepStrictEqual(this.captureAdjustmentContext(),context)) throw new WorkspaceMutationError('旅行版本、来源、阶段或授权已变化，请重新审阅。','version_conflict');
+  }
+  recordTravelPhase(input: {context:TravelAdjustmentContext;value:TravelPhase['value'];basis:TravelPhase['basis'];recordedAt:string;evidenceRefs:string[];agent?:TravelPhase['agent']},authority:{verifyExecution?:(agent:NonNullable<TravelPhase['agent']>)=>boolean}={}):TravelPhase {
+    const phase:TravelPhase={value:input.value,basis:input.basis,recordedAt:input.recordedAt,evidenceRefs:input.evidenceRefs,revision:input.context.phase.revision+1,...(input.context.execution?{execution:input.context.execution}:{}),...(input.agent?{agent:input.agent}:{})};
+    assertTravelPhase(phase);
+    if(phase.basis==='verified_actual_fact'&&(!phase.agent||authority.verifyExecution?.(phase.agent)!==true))throw new Error('实际旅行事实缺少经验证的负责执行合同。');
+    this.database.exec('BEGIN IMMEDIATE');
+    try { this.assertAdjustmentContext(input.context);if(!input.context.execution)throw new Error('尚无执行旅行。');this.travelAdjustments.savePhase(input.context.blueprint?.id??input.context.execution.id,phase);this.database.exec('COMMIT');return phase; }
+    catch(error){this.database.exec('ROLLBACK');throw error;}
+  }
+  getTravelAdjustmentReceiptForPlan(planId:string,version:number){return this.travelAdjustments.receiptForPlan(planId,version);}
+  getTravelAdjustmentReceipt(requestId:string){return this.travelAdjustments.receipt(requestId);}
+  /** 以原逻辑身份识别旧版待发应用通知，不依赖后来增加的正文元数据。 */
+  travelAdjustmentEmailAuthorization(job:{id:string;planId:string;planVersion:number;recipientRevision:number},now:string):'not_adjustment'|'authorized'|'rejected' {
+    const requests=this.travelAdjustments.emailJobRequests(job.planId,job.planVersion,job.id,job.recipientRevision);
+    if(!requests.length)return 'not_adjustment';
+    return requests.length===1&&this.getTravelAdjustmentEmailConsumption(requests[0]!,now)?'authorized':'rejected';
+  }
+  /** 从同一请求持久事实生成可信消费投影；不改变已生效事实。 */
+  getTravelAdjustmentEmailConsumption(requestId:string,now:string):TravelAdjustmentEmailConsumption|undefined {
+    let opened=false;
     try {
-      if (previousExecution && previousExecution.id !== planId) {
-        const switchedAt = new Date().toISOString();
-        this.database.prepare(`UPDATE task_reminder_runs SET status = 'cancelled', finished_at = ?, updated_at = ?
-          WHERE plan_id = ? AND status IN ('running', 'retry_wait')`).run(switchedAt, switchedAt, previousExecution.id);
-      }
-      this.database.prepare("UPDATE plans SET is_execution = 0 WHERE is_execution = 1").run();
-      this.database.prepare("UPDATE plans SET status = ?, next_action = ?, is_execution = 1 WHERE id = ? AND is_current = 1").run(
-        confirmed.activePlan.status,
-        confirmed.activePlan.nextAction,
-        planId
-      );
-      this.addInbox(confirmed.inbox[0]!);
-      this.database.exec("COMMIT");
-    } catch (error) {
-      this.database.exec("ROLLBACK");
-      throw error;
+      this.database.exec('SAVEPOINT travel_email_consumption');opened=true;
+      const result=this.readTravelAdjustmentEmailConsumption(requestId,now);
+      this.database.exec('RELEASE travel_email_consumption');opened=false;
+      return result;
+    }catch{
+      if(opened){this.database.exec('ROLLBACK TO travel_email_consumption');this.database.exec('RELEASE travel_email_consumption');}
+      return undefined;
     }
+  }
+  private readTravelAdjustmentEmailConsumption(requestId:string,now:string):TravelAdjustmentEmailConsumption|undefined {
+    try {
+      const at=Date.parse(now);if(!Number.isFinite(at))return undefined;
+      const saved=this.travelAdjustments.storedRequest(requestId);if(!saved)return undefined;
+      const {receipt,context,observations,decision,handoff}=saved;
+      if(saved.requestId!==requestId||saved.handoffRequestId!==requestId||receipt.requestId!==requestId||handoff.requestId!==requestId||saved.intentId!==handoff.intentId||receipt.status!=='applied'||!receipt.handoff)return undefined;
+      if(!this.travelAdjustments.hasUniqueAppliedHandoff(requestId,handoff.replacement.plan.id,handoff.replacement.plan.version))return undefined;
+      // ACK 仅修改交接表的消费状态；应用时保存的其余快照必须逐字段一致。
+      const initial={...handoff,status:receipt.handoff.status,readbackRef:receipt.handoff.readbackRef};
+      if(!isDeepStrictEqual(initial,receipt.handoff)||!['pending','acknowledged'].includes(handoff.status)||handoff.basis!==receipt.basis||handoff.reason!==receipt.reason||!receipt.reason.trim()||handoff.arrangementRef!==receipt.receiptRef||handoff.invalidateOldPending!==true||handoff.updateFutureWork!==true)return undefined;
+      if(!receipt.appliedAt||!Number.isFinite(Date.parse(receipt.appliedAt))||Date.parse(receipt.appliedAt)>at||!receipt.proposalDigest||!/^[a-f0-9]{64}$/.test(receipt.proposalDigest))return undefined;
+      assertTravelPhase(context.phase);
+      const same=(left:unknown,right:unknown)=>isDeepStrictEqual(left,right);
+      if(!same(context.execution,handoff.base.plan)||!same(context.blueprint,handoff.base.blueprint)||!same(context.draft,handoff.replacement.plan)||!same(context.draftBlueprint,handoff.replacement.blueprint)||!same(context.phase.execution,context.execution))return undefined;
+      const settings=this.email.settings();
+      if(!settings.enabled||!settings.verified||settings.revision!==context.recipientRevision||bookingRelationshipDigest(settings)!==context.authorizationDigest)return undefined;
+      const execution=this.getExecutionPlan(),arrangement=handoff.arrangement;
+      if(!execution||execution.status!=='active'||!same({id:execution.id,version:execution.version},handoff.replacement.plan)||!same(execution,arrangement.plan))return undefined;
+      for(const side of [handoff.base,handoff.replacement]){
+        const plan=this.getPlanVersion(side.plan.id,side.plan.version),blueprint=this.getTripBlueprint(side.blueprint.id,side.blueprint.version),lineage=this.getPlanBlueprintLineage(side.plan.id);
+        if(!plan||!blueprint||!lineage||lineage.planVersion>side.plan.version||lineage.blueprintId!==side.blueprint.id||lineage.blueprintVersion!==side.blueprint.version)return undefined;
+        if(side===handoff.replacement&&(!same(plan,arrangement.plan)||!same(blueprint,arrangement.blueprint)))return undefined;
+      }
+      const base=this.getTripBlueprint(handoff.base.blueprint.id,handoff.base.blueprint.version)!;
+      assertTravelAdjustmentReplacement(base,arrangement.blueprint,settings.cityTimeZones,{requireCompleteTiming:false});
+      // 旧客观应用只持久化 verifyExecution 的布尔结果，无法证明公开执行核验。
+      // 在规范 producer 提供可读回核验依据前，不从自报 executionRef 推造证明。
+      if(receipt.basis!=='user_confirmation')return undefined;
+      if(context.phase.value!=='pre_departure'||decision!==null||observations.length!==0||receipt.events.length!==0||receipt.applicationKey!==undefined||receipt.validationRef!==undefined||requestId!=='manual:'+receipt.proposalDigest||saved.digest!==receipt.proposalDigest||receipt.receiptRef!==requestId||handoff.intentId!==requestId)return undefined;
+      const confirmation=this.email.planConfirmation(handoff.replacement.plan.id,handoff.replacement.plan.version);
+      if(!confirmation||confirmation.basePlanId!==handoff.base.plan.id||confirmation.baseVersion!==handoff.base.plan.version||confirmation.confirmedAt!==receipt.appliedAt)return undefined;
+      return {receipt:{...receipt,handoff},context,observations,decision,arrangement,confirmation};
+    }catch{return undefined;}
+  }
+  listTravelAdjustmentObservations(planId:string,version:number){return this.travelAdjustments.observations(planId,version);}
+  listPendingTravelAdjustmentHandoffs(){return this.travelAdjustments.pending();}
+  acknowledgeTravelAdjustmentHandoff(intentId:string,readbackRef:string){return this.travelAdjustments.acknowledge(intentId,readbackRef);}
+  travelAdjustmentProposalDigest():string {const w=this.getWorkspace();return bookingRelationshipDigest({plan:w.activePlan,blueprint:w.activeBlueprint??null});}
+  readTravelAdjustmentArrangement(requestId:string){
+    const result=this.travelAdjustments.receipt(requestId);if(!result?.handoff)return undefined;
+    return structuredClone(result.handoff.arrangement);
+  }
+  commitTravelAdjustment(input:TravelAdjustmentInput,authority:{verifyExecution?:(decision:NonNullable<TravelAdjustmentInput['decision']>,input:TravelAdjustmentInput)=>boolean}={}):TravelAdjustmentReceipt {
+    assertTravelAdjustmentInput(input);const digest=bookingRelationshipDigest(input);
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const old=this.travelAdjustments.receipt(input.requestId);
+      if(old){if(this.travelAdjustments.requestDigest(input.requestId)!==digest)throw new WorkspaceMutationError('旅行请求身份已用于其他内容。','version_conflict');this.database.exec('COMMIT');return old;}
+      try {this.assertAdjustmentContext(input.context);}catch {
+        const applied=this.travelAdjustments.appliedInput(input);if(applied){this.database.exec('COMMIT');return applied;}
+        const rejected:TravelAdjustmentReceipt={requestId:input.requestId,status:'rejected',reason:'旅行版本、来源、阶段或授权已经变化。',events:[]};
+        this.travelAdjustments.save(input.requestId,digest,input.context,input.observations,input.decision,rejected);this.database.exec('COMMIT');return rejected;
+      }
+      if(!input.context.execution)throw new WorkspaceMutationError('当前没有执行旅行。','version_conflict');
+      const verified=Boolean(input.decision && authority.verifyExecution?.(input.decision,input)===true);
+      const fresh=verified&&input.observations.every(o=>o.validUntil&&Date.parse(o.validUntil)>Date.parse(input.now));
+      const events=this.travelAdjustments.observe(input.context,input.observations,fresh&&input.decision?.verdict==='eligible',fresh&&input.decision?.changeKind==='none'&&input.decision.verdict==='eligible');
+      const changedKeys=new Set(input.observations.filter(observation=>observation.status==='changed').map(observation=>observation.key));
+      const applicationEvents=events.filter(event=>event.status==='open'&&changedKeys.has(event.key));
+      const applicationKey=bookingRelationshipDigest({base:input.context.execution,events:applicationEvents.map(event=>({eventId:event.eventId,episode:event.episode})).sort((a,b)=>a.eventId.localeCompare(b.eventId))});
+      const observed=this.travelAdjustments.observations(input.context.execution.id,input.context.execution.version).map(row=>row.observation);
+      let blocker=travelAdjustmentApplicationBlocker({...input,observations:observed},verified);
+      if(!blocker && observed.some(o=>!o.validUntil||Date.parse(o.validUntil)<=Date.parse(input.now)))blocker='旅行来源有效窗口已经结束。';
+      if(!blocker&&!this.travelAdjustments.coversChanges(input.observations,applicationEvents))blocker='旅行变化缺少完整持久事件，请保留现行安排并重新核实。';
+      if(!blocker&&this.travelAdjustments.consumed(applicationEvents))blocker='同一旅行事件已经应用，请等待可靠恢复后重新判断。';
+      const receipt:TravelAdjustmentReceipt={requestId:input.requestId,status:'unresolved',reason:blocker??'',events};
+      if(!blocker){
+        const w=this.getWorkspace(),replacement=input.replacement!,base=input.context.blueprint;
+        if(!base||!input.context.draft||w.activePlan.id!==replacement.planId||w.activePlan.version!==replacement.version||w.activeBlueprint?.version!==replacement.blueprintVersion||w.activeBlueprint.id!==base.id||this.travelAdjustmentProposalDigest()!==replacement.proposalDigest)blocker='完整替代草稿与审阅基准不一致。';
+        else if(!this.travelAdjustments.matchesDraft(w.activePlan.id,w.activePlan.version,input.context,input.observations,replacement.proposalDigest))blocker='当前草稿不属于本次可靠旅行事件，请保留原草稿并重新规划。';
+        else {
+          this.database.exec('SAVEPOINT travel_application');
+          try {
+            const before=this.getTripBlueprint(base.id,base.version);if(!before)throw new Error('原旅行蓝图无法读取。');
+            const lineage=this.getPlanBlueprintLineage(w.activePlan.id);if(!lineage||lineage.blueprintId!==w.activeBlueprint.id||lineage.blueprintVersion!==w.activeBlueprint.version||lineage.planVersion>w.activePlan.version)throw new Error('替代安排缺少精确编译来源。');
+            const state=this.bookingSourceState(w.activePlan.id);if(state.issues.length||state.pendingBookings.length)throw new Error('替代安排的预订来源尚未解决。');
+            assertTravelAdjustmentReplacement(before,w.activeBlueprint,this.email.settings().cityTimeZones);
+            if(!this.email.settings().enabled||!this.email.settings().verified)throw new Error('旅行授权尚未有效。');
+            this.applyPlanInTransaction(w.activePlan.id,w.activePlan.version,{expectedBase:input.context.execution,expectedBlueprintVersion:replacement.blueprintVersion},'objective_change',input.now);
+            receipt.applicationKey=applicationKey;receipt.status='applied';receipt.reason=input.decision!.rationale;receipt.basis='objective_change';receipt.appliedAt=input.now;receipt.proposalDigest=replacement.proposalDigest;receipt.receiptRef='travel-adjustment:'+input.requestId;receipt.validationRef='blueprint-validation:'+replacement.proposalDigest;
+            receipt.handoff={basis:'objective_change',arrangement:{plan:structuredClone(this.getWorkspace().activePlan),blueprint:structuredClone(w.activeBlueprint)},intentId:bookingRelationshipDigest({base:input.context.execution,events}),requestId:input.requestId,status:'pending',reason:receipt.reason,arrangementRef:receipt.receiptRef,base:{plan:input.context.execution,blueprint:base},replacement:{plan:{id:w.activePlan.id,version:w.activePlan.version},blueprint:{id:w.activeBlueprint.id,version:w.activeBlueprint.version}},invalidateOldPending:true,updateFutureWork:true,readbackRef:null};
+            this.travelAdjustments.consume(applicationEvents,input.requestId);
+            this.database.exec('RELEASE travel_application');
+          } catch(error) { this.database.exec('ROLLBACK TO travel_application');this.database.exec('RELEASE travel_application');if(receipt.status==='applied')throw error;blocker='完整替代安排未通过版本、预订、交通或授权校验。'; }
+        }
+      }
+      if(blocker)receipt.reason=blocker;
+      if(fresh&&input.decision?.verdict==='eligible'&&input.decision.changeKind==='none'&&input.observations.every(o=>o.status==='unchanged')){receipt.status='observed';receipt.reason=input.decision.rationale;}
+      this.travelAdjustments.save(input.requestId,digest,input.context,input.observations,input.decision,receipt);
+      this.database.exec('COMMIT');return receipt;
+    }catch(error){this.database.exec('ROLLBACK');throw error;}
+  }
+
+  confirmPlan(planId: string, expectedVersion?: number, options: {expectedBase?:{id:string;version:number};expectedBlueprintVersion?:number;expectedRecipientRevision?:number;confirmedAt?:string;adjustmentContext?:TravelAdjustmentContext;proposalDigest?:string} = {}): WorkspaceSnapshot {
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      if(options.adjustmentContext){this.assertAdjustmentContext(options.adjustmentContext);if(options.adjustmentContext.phase.value!=='pre_departure')throw new WorkspaceMutationError('请先核实出发前旅行阶段再明确确认。','version_conflict');}
+      if(options.proposalDigest && options.proposalDigest!==this.travelAdjustmentProposalDigest())throw new WorkspaceMutationError('替代安排内容已变化。','version_conflict');
+      if(options.adjustmentContext?.blueprint){
+        const w=this.getWorkspace(),base=this.getTripBlueprint(options.adjustmentContext.blueprint.id,options.adjustmentContext.blueprint.version);
+        if(!base||!w.activeBlueprint)throw new WorkspaceMutationError('明确确认缺少完整旅行蓝图。','activation_review_required');
+        const state=this.bookingSourceState(w.activePlan.id);if(state.issues.length||state.pendingBookings.length)throw new WorkspaceMutationError('旅行预订来源仍需审阅。','booking_source_review_required');
+        assertTravelAdjustmentReplacement(base,w.activeBlueprint,this.email.settings().cityTimeZones,{requireCompleteTiming:false});
+      }
+      const switchedAt=options.confirmedAt??new Date().toISOString();
+      this.applyPlanInTransaction(planId,expectedVersion,options,'manual_confirmation',switchedAt);
+      if(options.adjustmentContext?.execution && options.adjustmentContext.blueprint && options.proposalDigest){
+        const w=this.getWorkspace(),c=options.adjustmentContext;
+        if(!w.activeBlueprint)throw new Error('明确确认缺少旅行蓝图。');
+        const requestId='manual:'+options.proposalDigest;
+        const receipt:TravelAdjustmentReceipt={requestId,status:'applied',basis:'user_confirmation',reason:'旅行者已明确确认精确替代安排。',events:[],appliedAt:switchedAt,proposalDigest:options.proposalDigest,receiptRef:requestId};
+        receipt.handoff={basis:'user_confirmation',arrangement:{plan:w.activePlan,blueprint:w.activeBlueprint},intentId:requestId,requestId,status:'pending',reason:receipt.reason,arrangementRef:requestId,base:{plan:c.execution!,blueprint:c.blueprint!},replacement:{plan:{id:w.activePlan.id,version:w.activePlan.version},blueprint:{id:w.activeBlueprint.id,version:w.activeBlueprint.version}},invalidateOldPending:true,updateFutureWork:true,readbackRef:null};
+        this.travelAdjustments.save(requestId,options.proposalDigest,c,[],null,receipt);
+      }
+      this.database.exec('COMMIT');
+    }catch(error){this.database.exec('ROLLBACK');throw error;}
     return this.getWorkspace();
+  }
+  private applyPlanInTransaction(planId:string,expectedVersion:number|undefined,options:{expectedBase?:{id:string;version:number};expectedBlueprintVersion?:number;expectedRecipientRevision?:number},basis:'manual_confirmation'|'objective_change',switchedAt:string):void {
+    const workspace=this.getWorkspace(),previousExecution=this.getExecutionPlan();
+    if(options.expectedRecipientRevision!==undefined){const recipient=this.email.settings();if(!recipient.enabled||!recipient.verified||recipient.revision!==options.expectedRecipientRevision)throw new WorkspaceMutationError('旅行收件授权已变化。','version_conflict');}
+    if(expectedVersion!==undefined&&(workspace.activePlan.id!==planId||workspace.activePlan.version!==expectedVersion))throw new WorkspaceMutationError('旅行草稿已变化。','version_conflict');
+    if(options.expectedBase&&(previousExecution?.id!==options.expectedBase.id||previousExecution.version!==options.expectedBase.version||previousExecution.status!=='active'))throw new WorkspaceMutationError('执行旅行已变化。','version_conflict');
+    if(options.expectedBlueprintVersion!==undefined&&workspace.activeBlueprint?.version!==options.expectedBlueprintVersion)throw new WorkspaceMutationError('旅行蓝图已变化。','version_conflict');
+    const confirmed=applyPlanActivation(workspace,planId,basis);
+    if(previousExecution&&previousExecution.id!==planId){
+      this.database.prepare("UPDATE task_reminder_runs SET status='cancelled',finished_at=?,updated_at=? WHERE plan_id=? AND status IN ('running','retry_wait')").run(switchedAt,switchedAt,previousExecution.id);
+      if(basis==='manual_confirmation')this.email.recordPlanConfirmation({planId,version:confirmed.activePlan.version,basePlanId:previousExecution.id,baseVersion:previousExecution.version,confirmedAt:switchedAt});
+    }
+    this.database.prepare('UPDATE plans SET is_execution=0 WHERE is_execution=1').run();
+    this.database.prepare('UPDATE plans SET status=?,next_action=?,is_execution=1 WHERE id=? AND is_current=1').run(confirmed.activePlan.status,confirmed.activePlan.nextAction,planId);
+    this.email.cancelObsolete(planId,confirmed.activePlan.version,switchedAt);this.addInbox(confirmed.inbox[0]!);
   }
 
   undoLatestPlanReplacement(input: { expectedPlanId: string; expectedVersion: number }): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
     if (workspace.activePlan.id !== input.expectedPlanId || workspace.activePlan.version !== input.expectedVersion || workspace.activePlan.status !== "active") {
-      throw new Error("The active Plan changed before this replacement could be undone.");
+      throw new WorkspaceMutationError("The active Plan changed before this replacement could be undone.", "version_conflict");
     }
     const audit = this.getLatestPlanReplacementAudit(workspace.activePlan.id);
-    if (!audit || audit.replacementPlanVersion !== workspace.activePlan.version) throw new Error("There is no latest replacement activation to undo.");
+    if (!audit || audit.replacementPlanVersion !== workspace.activePlan.version) throw new WorkspaceMutationError("There is no latest replacement activation to undo.", "edit_unavailable");
     const source = this.database.prepare("SELECT id, status FROM plans WHERE id = ? AND is_current = 0 AND is_execution = 0").get(audit.sourcePlanId) as { id: string; status: Plan["status"] } | undefined;
-    if (!source) throw new Error("The previous Plan is no longer available to restore.");
+    if (!source) throw new WorkspaceMutationError("The previous Plan is no longer available to restore.", "edit_unavailable");
     const restoredAt = new Date().toISOString();
     this.database.exec("BEGIN IMMEDIATE");
     try {
@@ -2363,7 +2783,7 @@ export class SqliteWorkspaceStore {
       this.database.prepare("UPDATE telegram_plan_change_proposals SET status = 'cancelled', resolved_at = ? WHERE plan_id = ? AND status = 'pending'").run(restoredAt, workspace.activePlan.id);
       this.database.prepare("UPDATE plans SET is_current = 0, is_execution = 0 WHERE id = ? AND is_current = 1 AND is_execution = 1").run(workspace.activePlan.id);
       const restored = this.database.prepare("UPDATE plans SET is_current = 1, is_execution = 1, status = 'active' WHERE id = ? AND is_current = 0 AND is_execution = 0").run(source.id);
-      if (restored.changes !== 1) throw new Error("The previous Plan could not be restored atomically.");
+      if (restored.changes !== 1) throw new WorkspaceMutationError("The previous Plan could not be restored atomically.");
       this.addInbox({
         id: `plan-replacement-undone-${audit.id}`,
         tone: "ready",
@@ -2381,7 +2801,9 @@ export class SqliteWorkspaceStore {
 
   updateProfile(input: ProfileUpdate): WorkspaceSnapshot {
     const displayName = input.displayName.trim();
-    const preferredLanguage = input.preferredLanguage.trim();
+    const preferredLanguage = "English";
+    if (input.assistantPersonality !== undefined && !isAssistantPersonalityId(input.assistantPersonality)) throw new Error("Choose a supported assistant personality.");
+    const assistantPersonality = input.assistantPersonality ?? this.getWorkspace().profile.assistantPersonality ?? "local_insider";
     const travelPreferences = input.travelPreferences?.trim() ?? "";
     const nationality = input.nationality.trim();
     if (!displayName || !preferredLanguage || !nationality) throw new Error("Name, preferred language, and nationality are required.");
@@ -2389,17 +2811,21 @@ export class SqliteWorkspaceStore {
     if (!["not_specified", "woman", "man", "nonbinary", "prefer_not_to_say"].includes(input.gender)) throw new Error("Choose a supported gender setting.");
     if (!["unknown", "no_visa", "short_term_visitor", "tourist_visa", "student_visa", "work_visa", "residence_permit", "other"].includes(input.immigrationStatus)) throw new Error("Choose a supported immigration status setting.");
 
-    const status = input.immigrationStatus !== "unknown" ? "ready" : "incomplete";
-    this.database.prepare("UPDATE profiles SET display_name = ?, preferred_language = ?, travel_preferences = ?, nationality = ?, gender = ?, immigration_status = ?, status = ?, updated_at = ? WHERE id = 1").run(
+    // Entry permission is destination-specific. An unknown visa status must stay
+    // unknown for policy checks, but it does not prevent domestic trip planning.
+    const status = "ready";
+    this.database.prepare("UPDATE profiles SET display_name = ?, preferred_language = ?, travel_preferences = ?, assistant_personality = ?, nationality = ?, gender = ?, immigration_status = ?, status = ?, updated_at = ? WHERE id = 1").run(
       displayName,
       preferredLanguage,
       travelPreferences,
+      assistantPersonality,
       nationality,
       input.gender,
       input.immigrationStatus,
       status,
       new Date().toISOString()
     );
+    if (status === "ready") this.database.prepare("DELETE FROM inbox_items WHERE id = 'setup'").run();
     this.addInbox({
       id: `profile-updated-${Date.now()}`,
       tone: status === "ready" ? "ready" : "notice",
@@ -2408,98 +2834,6 @@ export class SqliteWorkspaceStore {
       timestamp: "Just now"
     });
     return this.getWorkspace();
-  }
-
-  startTelegramProfileTextEdit(field: TelegramProfileTextField, startedAt = new Date().toISOString()): void {
-    if (!["displayName", "preferredLanguage", "nationality"].includes(field)) throw new Error("Choose a supported Telegram Profile field.");
-    if (!Number.isFinite(Date.parse(startedAt))) throw new Error("Telegram Profile editing needs a valid start time.");
-    this.database.prepare("INSERT INTO telegram_profile_edit_state (id, field, started_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET field = excluded.field, started_at = excluded.started_at").run(field, startedAt);
-  }
-
-  getTelegramProfileTextEdit(now = new Date().toISOString()): TelegramProfileTextField | undefined {
-    const nowMs = Date.parse(now);
-    if (!Number.isFinite(nowMs)) throw new Error("Telegram Profile editing needs a valid current time.");
-    const row = this.database.prepare("SELECT field, started_at FROM telegram_profile_edit_state WHERE id = 1").get() as TelegramProfileEditRow | undefined;
-    if (!row) return undefined;
-    if (nowMs - Date.parse(row.started_at) <= 15 * 60_000) return row.field;
-    this.clearTelegramProfileTextEdit();
-    return undefined;
-  }
-
-  clearTelegramProfileTextEdit(): void {
-    this.database.prepare("DELETE FROM telegram_profile_edit_state WHERE id = 1").run();
-  }
-
-  startTelegramLocationIntent(input: { purpose: TelegramLocationIntentPurpose; planId: string; transportOverride?: Exclude<TransportPreference, "plan_recommended">; startedAt?: string }): void {
-    if (!["arrival_route", "nearby_food", "uber_test", "movement_go"].includes(input.purpose)) throw new Error("Choose a supported Telegram location purpose.");
-    const startedAt = input.startedAt ?? new Date().toISOString();
-    if (!Number.isFinite(Date.parse(startedAt))) throw new Error("Telegram location use needs a valid start time.");
-    const workspace = this.getWorkspace();
-    if (workspace.activePlan.id !== input.planId && workspace.executionPlan?.id !== input.planId) throw new Error(`Plan ${input.planId} was not found.`);
-    if (input.transportOverride && !["taxi", "public_transit", "walking"].includes(input.transportOverride)) throw new Error("Choose a supported temporary transport override.");
-    if (input.transportOverride && input.purpose !== "arrival_route") throw new Error("A temporary transport override is only valid for an arrival route.");
-    this.database.prepare("INSERT INTO telegram_location_intent (id, purpose, plan_id, started_at, transport_override) VALUES (1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET purpose = excluded.purpose, plan_id = excluded.plan_id, started_at = excluded.started_at, transport_override = excluded.transport_override").run(input.purpose, input.planId, startedAt, input.transportOverride ?? null);
-  }
-
-  getTelegramLocationIntent(now = new Date().toISOString()): { purpose: TelegramLocationIntentPurpose; planId: string; transportOverride?: Exclude<TransportPreference, "plan_recommended"> } | undefined {
-    const nowMs = Date.parse(now);
-    if (!Number.isFinite(nowMs)) throw new Error("Telegram location use needs a valid current time.");
-    const row = this.database.prepare("SELECT purpose, plan_id, started_at, transport_override FROM telegram_location_intent WHERE id = 1").get() as TelegramLocationIntentRow | undefined;
-    if (!row) return undefined;
-    if (nowMs - Date.parse(row.started_at) <= 15 * 60_000) return { purpose: row.purpose, planId: row.plan_id, ...(row.transport_override ? { transportOverride: row.transport_override } : {}) };
-    this.clearTelegramLocationIntent();
-    return undefined;
-  }
-
-  clearTelegramLocationIntent(): void {
-    this.database.prepare("DELETE FROM telegram_location_intent WHERE id = 1").run();
-  }
-
-  createTelegramPlanChangeProposal(input: { planId: string; baseVersion: number; request: string; impact: PlanChangeImpactPreview; createdAt?: string }): TelegramPlanChangeProposal {
-    const workspace = this.getWorkspace();
-    if (workspace.activePlan.id !== input.planId || workspace.activePlan.version !== input.baseVersion || workspace.activePlan.status !== "active") {
-      throw new Error("The active Plan changed before this Telegram proposal could be saved.");
-    }
-    const request = input.request.trim();
-    if (!request || request.length > 1_500) throw new Error("A Telegram Plan change needs a request between 1 and 1500 characters.");
-    if (input.impact.planId !== input.planId || input.impact.baseVersion !== input.baseVersion) throw new Error("The Telegram proposal impact does not match the active Plan version.");
-    const createdAt = input.createdAt ?? new Date().toISOString();
-    if (!Number.isFinite(Date.parse(createdAt))) throw new Error("A Telegram Plan change proposal needs a valid creation time.");
-    const proposal: TelegramPlanChangeProposal = {
-      id: `tg-change-${randomUUID()}`,
-      planId: input.planId,
-      baseVersion: input.baseVersion,
-      request,
-      impact: structuredClone(input.impact),
-      status: "pending",
-      createdAt
-    };
-    this.database.exec("BEGIN");
-    try {
-      this.database.prepare("UPDATE telegram_plan_change_proposals SET status = 'cancelled', resolved_at = ? WHERE status = 'pending'").run(createdAt);
-      this.database.prepare(`INSERT INTO telegram_plan_change_proposals
-        (id, plan_id, base_version, request, impact_json, status, created_at, resolved_at)
-        VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL)`).run(proposal.id, proposal.planId, proposal.baseVersion, proposal.request, JSON.stringify(proposal.impact), proposal.createdAt);
-      this.database.exec("COMMIT");
-    } catch (error) {
-      this.database.exec("ROLLBACK");
-      throw error;
-    }
-    return proposal;
-  }
-
-  getTelegramPlanChangeProposal(id: string): TelegramPlanChangeProposal | undefined {
-    const row = this.database.prepare(`SELECT id, plan_id, base_version, request, impact_json, status, created_at, resolved_at
-      FROM telegram_plan_change_proposals WHERE id = ?`).get(id.trim()) as TelegramPlanChangeProposalRow | undefined;
-    return row ? telegramPlanChangeProposalFromRow(row) : undefined;
-  }
-
-  resolveTelegramPlanChangeProposal(id: string, status: Exclude<TelegramPlanChangeProposal["status"], "pending">, resolvedAt = new Date().toISOString()): TelegramPlanChangeProposal {
-    if (!Number.isFinite(Date.parse(resolvedAt))) throw new Error("A Telegram Plan change resolution needs a valid time.");
-    const result = this.database.prepare(`UPDATE telegram_plan_change_proposals SET status = ?, resolved_at = ?
-      WHERE id = ? AND status = 'pending'`).run(status, resolvedAt, id.trim());
-    if (result.changes !== 1) throw new Error("The Telegram Plan change proposal is missing or already resolved.");
-    return this.getTelegramPlanChangeProposal(id)!;
   }
 
   updateRuntimeSelection(input: RuntimeSelectionUpdate): WorkspaceSnapshot {
@@ -2665,11 +2999,11 @@ export class SqliteWorkspaceStore {
   /** Adds a saved immutable official snapshot to the exact current draft version. */
   linkSourceSnapshotToPlan(planId: string, sourceSnapshotId: string): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
-    if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
-    if (workspace.activePlan.status !== "draft") throw new Error("Official evidence can be linked only while the current Plan is a draft.");
+    if (workspace.activePlan.id !== planId) throw new WorkspaceMutationError(`Plan ${planId} was not found.`);
+    if (workspace.activePlan.status !== "draft") throw new WorkspaceMutationError("Official evidence can be linked only while the current Plan is a draft.");
     const snapshot = this.database.prepare(`SELECT id, source_id, authority, title_original, url, retrieved_at, content_hash, excerpt
       FROM source_snapshots WHERE id = ?`).get(sourceSnapshotId.trim()) as SourceSnapshotRow | undefined;
-    if (!snapshot) throw new Error("The saved official evidence was not found.");
+    if (!snapshot) throw new WorkspaceMutationError("The saved official evidence was not found.", "operation_not_found");
 
     const source = sourceSnapshotFromRow(snapshot);
     const alreadyLinked = workspace.activePlan.sources.some((candidate) => candidate.url === source.url && candidate.authority === source.authority && candidate.retrievedAt === source.retrievedAt);
@@ -2684,7 +3018,7 @@ export class SqliteWorkspaceStore {
       contentHash: source.contentHash
     }];
     const updated = this.database.prepare("UPDATE plans SET sources_json = ?, version = version + 1 WHERE id = ? AND version = ? AND status = 'draft' AND is_current = 1").run(JSON.stringify(sources), planId, workspace.activePlan.version) as { changes: number | bigint };
-    if (Number(updated.changes) !== 1) throw new Error("The Plan changed before official evidence could be linked.");
+    if (Number(updated.changes) !== 1) throw new WorkspaceMutationError("The Plan changed before official evidence could be linked.", "version_conflict");
     this.addInbox({
       id: `source-linked-${planId}-${source.id}`,
       tone: "notice",
@@ -2697,11 +3031,11 @@ export class SqliteWorkspaceStore {
 
   updatePlanAccommodation(planId: string, input: PlanAccommodationInput): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
-    if (workspace.activePlan.id !== planId) throw new Error(`Plan ${planId} was not found.`);
+    if (workspace.activePlan.id !== planId) throw new WorkspaceMutationError(`Plan ${planId} was not found.`);
     const name = input.name.trim();
     const address = input.address.trim();
     const location = input.location.trim();
-    if (!name || !address || !location) throw new Error("A saved accommodation candidate needs a name, address, and location.");
+    if (!name || !address || !location) throw new WorkspaceMutationError("A saved accommodation candidate needs a name, address, and location.");
 
     const configuration: PlanConfiguration = {
       ...workspace.activePlan.configuration,
@@ -2730,16 +3064,16 @@ export class SqliteWorkspaceStore {
   saveDraftAccommodationLinkage(input: { planId: string; expectedVersion: number; accommodation: PlanAccommodationInput; departures: Array<{ dayId: string; departure: NonNullable<import("@c-assistant/core").ItineraryDay["accommodationDeparture"]> }> }): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
     const plan = workspace.activePlan;
-    if (plan.id !== input.planId || plan.version !== input.expectedVersion) throw new Error("The Plan changed before this accommodation update was saved.");
-    if (plan.status !== "draft") throw new Error("An active Plan must use a replacement draft before changing accommodation.");
-    if (!plan.presentation || plan.presentation.kind !== "itinerary") throw new Error("This Plan does not contain a structured itinerary presentation.");
+    if (plan.id !== input.planId || plan.version !== input.expectedVersion) throw new WorkspaceMutationError("The Plan changed before this accommodation update was saved.", "version_conflict");
+    if (plan.status !== "draft") throw new WorkspaceMutationError("An active Plan must use a replacement draft before changing accommodation.", "draft_required");
+    if (!plan.presentation || plan.presentation.kind !== "itinerary") throw new WorkspaceMutationError("This Plan does not contain a structured itinerary presentation.");
     const name = input.accommodation.name.trim();
     const address = input.accommodation.address.trim();
     const location = input.accommodation.location.trim();
-    if (!name || !address || !location) throw new Error("Accommodation linkage needs a resolved name, address, and location.");
+    if (!name || !address || !location) throw new WorkspaceMutationError("Accommodation linkage needs a resolved name, address, and location.");
     const dayById = new Map(plan.presentation.days.map((day) => [day.id, day]));
     const placeIds = new Set(plan.presentation.places.map((place) => place.id));
-    if (input.departures.some(({ dayId, departure }) => !dayById.has(dayId) || !placeIds.has(departure.destinationPlaceId) || departure.accommodationName !== name || departure.accommodationAddress !== address)) throw new Error("Accommodation departure facts do not match this Plan.");
+    if (input.departures.some(({ dayId, departure }) => !dayById.has(dayId) || !placeIds.has(departure.destinationPlaceId) || departure.accommodationName !== name || departure.accommodationAddress !== address)) throw new WorkspaceMutationError("Accommodation departure facts do not match this Plan.");
     const departureByDay = new Map(input.departures.map((item) => [item.dayId, item.departure]));
     const presentation: PlanPresentation = {
       ...structuredClone(plan.presentation),
@@ -2762,7 +3096,7 @@ export class SqliteWorkspaceStore {
       }
     };
     const updated = this.database.prepare("UPDATE plans SET configuration_json = ?, presentation_json = ?, version = version + 1 WHERE id = ? AND version = ? AND is_current = 1 AND status = 'draft'").run(JSON.stringify(configuration), JSON.stringify(presentation), input.planId, input.expectedVersion);
-    if (updated.changes !== 1) throw new Error("The Plan changed before this accommodation update was saved.");
+    if (updated.changes !== 1) throw new WorkspaceMutationError("The Plan changed before this accommodation update was saved.", "version_conflict");
     const verified = input.departures.filter((item) => item.departure.verification === "verified").length;
     this.addInbox({ id: `accommodation-linked-${input.planId}-${Date.now()}`, tone: verified === input.departures.length ? "ready" : "attention", title: "Accommodation linked to the Travel Plan", body: `${name} was saved. Departure routes were updated for ${verified} travel days, while ${input.departures.length - verified} still need verification.`, timestamp: "Just now" });
     return this.getWorkspace();
@@ -2771,8 +3105,8 @@ export class SqliteWorkspaceStore {
   updatePlanTransportPreference(planId: string, input: PlanTransportPreferenceInput): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
     const plan = workspace.activePlan.id === planId ? workspace.activePlan : workspace.executionPlan?.id === planId ? workspace.executionPlan : undefined;
-    if (!plan) throw new Error(`Plan ${planId} was not found.`);
-    if (!["plan_recommended", "taxi", "public_transit", "walking"].includes(input.preference)) throw new Error("Choose a supported transport preference.");
+    if (!plan) throw new WorkspaceMutationError(`Plan ${planId} was not found.`);
+    if (!["plan_recommended", "taxi", "public_transit", "walking", "driving"].includes(input.preference)) throw new WorkspaceMutationError("Choose a supported transport preference.");
     const configuration: PlanConfiguration = {
       ...plan.configuration,
       transport: { preference: input.preference }
@@ -2791,10 +3125,10 @@ export class SqliteWorkspaceStore {
   updatePlanTravelContext(planId: string, input: PlanTravelContextInput): WorkspaceSnapshot {
     const workspace = this.getWorkspace();
     const plan = workspace.activePlan.id === planId ? workspace.activePlan : workspace.executionPlan?.id === planId ? workspace.executionPlan : undefined;
-    if (!plan) throw new Error(`Plan ${planId} was not found.`);
+    if (!plan) throw new WorkspaceMutationError(`Plan ${planId} was not found.`);
     const partySize = input.partySize;
-    if (partySize !== undefined && (!Number.isInteger(partySize) || partySize < 1 || partySize > 20)) throw new Error("Party size must be a whole number from 1 to 20.");
-    if (!["unknown", "light", "standard", "heavy"].includes(input.luggage)) throw new Error("Choose a supported luggage level.");
+    if (partySize !== undefined && (!Number.isInteger(partySize) || partySize < 1 || partySize > 20)) throw new WorkspaceMutationError("Party size must be a whole number from 1 to 20.");
+    if (!["unknown", "light", "standard", "heavy"].includes(input.luggage)) throw new WorkspaceMutationError("Choose a supported luggage level.");
     const configuration: PlanConfiguration = {
       ...plan.configuration,
       travelContext: {
@@ -2982,10 +3316,12 @@ export class SqliteWorkspaceStore {
         research_set_id TEXT,
         blueprint_id TEXT,
         blueprint_version INTEGER,
+        carrier_cancel_requested_at TEXT,
         failure_json TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      ${GENERATION_CARRIER_SCHEMA_SQL}
       CREATE TABLE IF NOT EXISTS research_sets (
         id TEXT PRIMARY KEY,
         generation_key TEXT NOT NULL UNIQUE REFERENCES blueprint_generations(generation_key) ON DELETE CASCADE,
@@ -3145,7 +3481,7 @@ export class SqliteWorkspaceStore {
         purpose TEXT NOT NULL CHECK (purpose IN ('arrival_route', 'nearby_food', 'uber_test', 'movement_go')),
         plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
         started_at TEXT NOT NULL,
-        transport_override TEXT CHECK (transport_override IN ('taxi', 'public_transit', 'walking'))
+        transport_override TEXT CHECK (transport_override IN ('taxi', 'public_transit', 'walking', 'driving'))
       );
       CREATE TABLE IF NOT EXISTS telegram_processed_updates (
         update_id INTEGER PRIMARY KEY,
@@ -3288,17 +3624,19 @@ export class SqliteWorkspaceStore {
     if (!profileColumns.some((column) => column.name === "gender")) this.database.exec("ALTER TABLE profiles ADD COLUMN gender TEXT NOT NULL DEFAULT 'not_specified'");
     if (!profileColumns.some((column) => column.name === "immigration_status")) this.database.exec("ALTER TABLE profiles ADD COLUMN immigration_status TEXT NOT NULL DEFAULT 'unknown'");
     if (!profileColumns.some((column) => column.name === "travel_preferences")) this.database.exec("ALTER TABLE profiles ADD COLUMN travel_preferences TEXT NOT NULL DEFAULT ''");
+    if (!profileColumns.some((column) => column.name === "assistant_personality")) this.database.exec("ALTER TABLE profiles ADD COLUMN assistant_personality TEXT NOT NULL DEFAULT 'local_insider' CHECK (assistant_personality IN ('local_insider', 'travel_buddy', 'miles'))");
+    this.database.exec("UPDATE profiles SET preferred_language = 'English' WHERE preferred_language <> 'English'");
     const locationIntentColumns = this.database.prepare("PRAGMA table_info(telegram_location_intent)").all() as unknown as Array<{ name: string }>;
-    if (!locationIntentColumns.some((column) => column.name === "transport_override")) this.database.exec("ALTER TABLE telegram_location_intent ADD COLUMN transport_override TEXT CHECK (transport_override IN ('taxi', 'public_transit', 'walking'))");
+    if (!locationIntentColumns.some((column) => column.name === "transport_override")) this.database.exec("ALTER TABLE telegram_location_intent ADD COLUMN transport_override TEXT CHECK (transport_override IN ('taxi', 'public_transit', 'walking', 'driving'))");
     const locationIntentSchema = this.database.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'telegram_location_intent'").get() as { sql: string } | undefined;
-    if (locationIntentSchema?.sql && !locationIntentSchema.sql.includes("'movement_go'")) {
+    if (locationIntentSchema?.sql && (!locationIntentSchema.sql.includes("'movement_go'") || !locationIntentSchema.sql.includes("'driving'"))) {
       this.database.exec(`BEGIN;
         CREATE TABLE telegram_location_intent_next (
           id INTEGER PRIMARY KEY CHECK (id = 1),
           purpose TEXT NOT NULL CHECK (purpose IN ('arrival_route', 'nearby_food', 'uber_test', 'movement_go')),
           plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
           started_at TEXT NOT NULL,
-          transport_override TEXT CHECK (transport_override IN ('taxi', 'public_transit', 'walking'))
+          transport_override TEXT CHECK (transport_override IN ('taxi', 'public_transit', 'walking', 'driving'))
         );
         INSERT INTO telegram_location_intent_next (id, purpose, plan_id, started_at, transport_override)
           SELECT id, purpose, plan_id, started_at, transport_override FROM telegram_location_intent;
@@ -3327,7 +3665,38 @@ export class SqliteWorkspaceStore {
     }
     this.migrateTripBlueprintGenerationKeyUniqueness();
     this.database.prepare("INSERT OR IGNORE INTO runtime_settings (id, selected_runtime, updated_at) VALUES (1, 'codex', ?)").run(new Date().toISOString());
+    this.database.exec(`CREATE TABLE IF NOT EXISTS execution_assistant_states (
+      plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+      plan_version INTEGER NOT NULL,
+      revision INTEGER NOT NULL,
+      state_json TEXT NOT NULL,
+      PRIMARY KEY (plan_id, plan_version)
+    );`);
     const migrationTime = new Date().toISOString();
+    this.database.exec(EMAIL_SCHEMA_SQL);
+    if(existingVersion<24){
+      this.database.prepare("UPDATE email_outbox SET status='cancelled',failure_code='timing_replaced' WHERE kind IN ('morning','transfer','dining') AND status IN ('pending','retry')").run();
+      const columns=this.database.prepare("PRAGMA table_info(email_settings)").all() as {name:string}[];
+      for(const name of ["morning_time","transfer_lead","dining_lead"]){
+        if(columns.some(column=>column.name===name))this.database.exec(`ALTER TABLE email_settings DROP COLUMN ${name}`);
+      }
+      this.database.prepare("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES(24,'agent-email-timing',?)").run(new Date().toISOString());
+    }
+    const emailColumns = this.database.prepare("PRAGMA table_info(email_settings)").all() as unknown as Array<{name:string}>;
+    if (!emailColumns.some(column => column.name === "city_time_zones_json")) this.database.exec("ALTER TABLE email_settings ADD COLUMN city_time_zones_json TEXT NOT NULL DEFAULT '{}'");
+    if (existingVersion > 0 && existingVersion < 23) {
+      const legacy = this.database.prepare("SELECT id,version,presentation_json FROM plans WHERE is_execution=1 AND status='active'").get() as { id: string; version: number; presentation_json: string | null } | undefined;
+      if (legacy?.presentation_json) {
+        const presentation = JSON.parse(legacy.presentation_json) as { endDate?: string };
+        if (presentation.endDate && /^\d{4}-\d{2}-\d{2}$/.test(presentation.endDate) && Number.isFinite(Date.parse(presentation.endDate))) {
+          const until = new Date(Date.parse(`${presentation.endDate}T23:59:59Z`) + 12 * 3_600_000).toISOString();
+          this.database.prepare("UPDATE email_settings SET legacy_plan_id=?,legacy_plan_version=?,legacy_until=? WHERE id=1").run(legacy.id,legacy.version,until);
+        }
+      }
+    }
+
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (23, 'email-settings-and-outbox', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (22, 'assistant-personality', ?)").run(migrationTime);
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (1, 'v1-local-workspace-baseline', ?)").run(migrationTime);
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (2, 'country-pack-source-evidence-links', ?)").run(migrationTime);
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (3, 'telegram-one-route-transport-override', ?)").run(migrationTime);
@@ -3348,6 +3717,7 @@ export class SqliteWorkspaceStore {
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (18, 'telegram-movement-go-location-intent', ?)").run(migrationTime);
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (19, 'trip-blueprint-direct-revision-versions', ?)").run(migrationTime);
     this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (20, 'profile-travel-preferences', ?)").run(migrationTime);
+    this.database.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (21, 'execution-assistant-progress', ?)").run(migrationTime);
   }
 
   private migrateTripBlueprintGenerationKeyUniqueness(): void {
@@ -3539,7 +3909,7 @@ function parsePlanConfiguration(value: string): PlanConfiguration {
   try {
     const parsed = JSON.parse(value) as Partial<PlanConfiguration>;
     const accommodation = parsed.accommodation && ["not_set", "candidate", "confirmed"].includes(parsed.accommodation.status) ? parsed.accommodation : defaults.accommodation;
-    const preference = parsed.transport && ["plan_recommended", "taxi", "public_transit", "walking"].includes(parsed.transport.preference) ? parsed.transport.preference : defaults.transport.preference;
+    const preference = parsed.transport && ["plan_recommended", "taxi", "public_transit", "walking", "driving"].includes(parsed.transport.preference) ? parsed.transport.preference : defaults.transport.preference;
     const travelContext = parsed.travelContext && ["unknown", "light", "standard", "heavy"].includes(parsed.travelContext.luggage) ? { ...(Number.isInteger(parsed.travelContext.partySize) && parsed.travelContext.partySize! >= 1 && parsed.travelContext.partySize! <= 20 ? { partySize: parsed.travelContext.partySize } : {}), luggage: parsed.travelContext.luggage } : defaults.travelContext;
     const arrival = parsed.arrival && typeof parsed.arrival === "object" ? { ...(typeof parsed.arrival.expectedAtLocal === "string" && isLocalDateTime(parsed.arrival.expectedAtLocal) ? { expectedAtLocal: parsed.arrival.expectedAtLocal } : {}), ...(typeof parsed.arrival.timeZone === "string" && isTimeZoneName(parsed.arrival.timeZone) ? { timeZone: parsed.arrival.timeZone } : {}) } : defaults.arrival;
     return { accommodation, arrival, transport: { preference }, travelContext };
@@ -3547,6 +3917,13 @@ function parsePlanConfiguration(value: string): PlanConfiguration {
     // Old local data can safely fall back to an empty Plan configuration.
   }
   return defaults;
+}
+
+function mergeUserPlanConfiguration(compiled: PlanConfiguration, previous: PlanConfiguration, beforeBlueprint?: TripBlueprint): PlanConfiguration {
+  const baseline = beforeBlueprint ? compileTripBlueprint(beforeBlueprint,{createdAt:beforeBlueprint.createdAt}).plan.configuration : undefined;
+  const accommodation = compiled.accommodation.status !== "not_set" || (baseline && isDeepStrictEqual(previous.accommodation,baseline.accommodation)) ? compiled.accommodation : previous.accommodation;
+  const arrival=compiled.arrival.expectedAtLocal || (baseline&&isDeepStrictEqual(previous.arrival,baseline.arrival))?compiled.arrival:previous.arrival;
+  return { ...structuredClone(compiled), accommodation: structuredClone(accommodation), arrival: structuredClone(arrival), transport: structuredClone(previous.transport), travelContext: structuredClone(previous.travelContext) };
 }
 
 function travelBookingKnownInformation(booking: TravelBooking): string[] {
@@ -3617,7 +3994,7 @@ function parseTaskReminder(value: string | null): TaskReminder | undefined {
   }
 }
 
-function validateCompiledPlanWrite(input: { plan: Plan; expectedPlanId: string; expectedVersion: number; audit: PlanCompilationAudit; skillRuns?: Array<Pick<CountryPackSkillRun, "skillId" | "skillVersion" | "status"> & { sourceEvidence?: SourceEvidenceRef[] }> }, compiledAt: string): void {
+function validateCompiledPlanWrite(input: { plan: Plan; expectedPlanId: string; expectedVersion: number; audit: PlanCompilationAudit; skillRuns?: Array<Pick<PreparationEvidenceRun, "skillId" | "skillVersion" | "status"> & { sourceEvidence?: SourceEvidenceRef[] }> }, compiledAt: string): void {
   if (!input.expectedPlanId.trim() || !Number.isInteger(input.expectedVersion) || input.expectedVersion < 1) throw new Error("A compiled Plan write needs an exact expected Plan version.");
   if (input.plan.id !== input.expectedPlanId || input.plan.version !== input.expectedVersion + 1 || input.plan.status !== "draft") throw new Error("The compiled Plan must be the next draft version of the expected Plan.");
   if (!Number.isFinite(Date.parse(compiledAt))) throw new Error("A compiled Plan write needs a valid audit time.");
@@ -3843,18 +4220,14 @@ function refreshedBlueprintMovementDisplay(movement: BlueprintMovement, segment:
 }
 
 function routeRefreshKnownInformation(knownInformation: string[], blueprint: TripBlueprint): string[] {
-  const blueprintLine = `Trip Blueprint: ${blueprint.id} v${blueprint.version}`;
-  const replaced = knownInformation.map((item) => item.startsWith("Trip Blueprint: ") ? blueprintLine : item);
-  return replaced.includes(blueprintLine) ? replaced : [blueprintLine, ...knownInformation];
+  return knownInformation.filter(item => !item.startsWith("Trip Blueprint: "));
 }
 
 function routeRefreshAssumptions(assumptions: string[], blueprint: TripBlueprint): string[] {
-  const retained = assumptions.filter((item) => !/travel facts? or map details? remain marked for recheck/i.test(item));
+  const retained = assumptions.filter((item) => !/travel facts? or map details? remain marked for recheck/i.test(item) && item !== "Some opening hours and travel details need checking closer to your trip.");
   const recheckCount = blueprint.movements.filter((movement) => movement.status !== "verified").length;
   if (!recheckCount) return retained;
-  const factLabel = recheckCount === 1 ? "fact" : "facts";
-  const detailLabel = recheckCount === 1 ? "detail" : "details";
-  return [`${recheckCount} travel ${factLabel} or map ${detailLabel} remain marked for recheck.`, ...retained];
+  return ["Some opening hours and travel details need checking closer to your trip.", ...retained];
 }
 
 function taskRemindersEqual(left: TaskReminder, right: TaskReminder): boolean {
@@ -3873,8 +4246,9 @@ function carryForwardCompletedTasks(previousPlan: Plan, replacementPlan: Plan): 
   const preserved: PlanReplacementAudit["preservedCompletedTasks"] = [];
   for (const item of completed) {
     const sameStage = replacementPlan.stages.find((stage) => normalizedPlanLabel(stage.title) === normalizedPlanLabel(item.stageTitle));
-    const matchingTask = sameStage?.tasks.find((task) => normalizedPlanLabel(task.title) === normalizedPlanLabel(item.task.title))
-      ?? replacementPlan.stages.flatMap((stage) => stage.tasks).find((task) => normalizedPlanLabel(task.title) === normalizedPlanLabel(item.task.title));
+    const bookingTask = item.task.requirementId?.startsWith("booking:");
+    const matches = (task:Task) => bookingTask ? task.requirementId === item.task.requirementId : !task.requirementId?.startsWith("booking:") && normalizedPlanLabel(task.title) === normalizedPlanLabel(item.task.title);
+    const matchingTask = sameStage?.tasks.find(matches) ?? replacementPlan.stages.flatMap((stage) => stage.tasks).find(matches);
 
     if (matchingTask) {
       matchingTask.status = "completed";
@@ -3885,6 +4259,7 @@ function carryForwardCompletedTasks(previousPlan: Plan, replacementPlan: Plan): 
       continue;
     }
 
+    if (bookingTask) continue;
     const targetStage = sameStage ?? replacementPlan.stages.at(-1);
     if (!targetStage) continue;
     const { id: _id, reminder: _reminder, activationTrigger: _activationTrigger, ...taskWithoutExecution } = structuredClone(item.task);
@@ -4076,19 +4451,6 @@ function planReplacementAuditFromRow(row: PlanReplacementAuditRow): PlanReplacem
   };
 }
 
-function telegramPlanChangeProposalFromRow(row: TelegramPlanChangeProposalRow): TelegramPlanChangeProposal {
-  return {
-    id: row.id,
-    planId: row.plan_id,
-    baseVersion: row.base_version,
-    request: row.request,
-    impact: JSON.parse(row.impact_json) as PlanChangeImpactPreview,
-    status: row.status,
-    createdAt: row.created_at,
-    ...(row.resolved_at ? { resolvedAt: row.resolved_at } : {})
-  };
-}
-
 function agentRunFromRow(row: AgentRunRow): AgentRun {
   return {
     id: row.id,
@@ -4120,21 +4482,6 @@ function taskReminderRunFromRow(row: TaskReminderRunRow): TaskReminderRun {
     startedAt: row.started_at,
     ...(row.finished_at ? { finishedAt: row.finished_at } : {}),
     updatedAt: row.updated_at
-  };
-}
-
-function telegramRouteHandoffFromRow(row: TelegramRouteHandoffRow): TelegramRouteHandoffState {
-  return {
-    planId: row.plan_id,
-    offeredAt: row.offered_at,
-    ...(row.opened_at ? { openedAt: row.opened_at } : {}),
-    routeDurationSeconds: row.route_duration_seconds,
-    waitBufferSeconds: row.wait_buffer_seconds,
-    safetyMarginSeconds: row.safety_margin_seconds,
-    expectedArrivalAt: row.expected_arrival_at,
-    ...(row.guidance_sent_at ? { guidanceSentAt: row.guidance_sent_at } : {}),
-    delayCount: row.delay_count,
-    ...(row.last_delayed_at ? { lastDelayedAt: row.last_delayed_at } : {})
   };
 }
 

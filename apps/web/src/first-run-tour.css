@@ -13,8 +13,8 @@
 }
 
 .first-run-tour {
-  width: 680px;
-  height: 600px;
+  width: min(680px, calc(100vw - 32px));
+  height: min(600px, calc(100dvh - 32px));
   display: grid;
   grid-template-rows: minmax(0,1fr) 116px;
   overflow: hidden;
@@ -40,8 +40,8 @@
 }
 
 .first-run-brand img { width: 30px; height: 30px; object-fit: contain; }
-.first-run-stage { min-height: 0; }
-.first-run-page { height: 100%; padding: 36px 28px 0; }
+.first-run-stage { min-height: 0; overflow: hidden; }
+.first-run-page { height: 100%; padding: 36px 28px 16px; display: grid; grid-template-rows: auto minmax(0,1fr); row-gap: 18px; overflow-y: auto; }
 .first-run-page h1 { margin: 0; color: #0c1424; font-family: inherit; font-size: 29px; font-weight: 700; line-height: 1.16; letter-spacing: 0; text-align: center; }
 
 .first-run-controls { box-sizing: border-box; display: grid; justify-items: center; align-content: start; gap: 8px; padding: 0 0 16px; }
@@ -59,12 +59,12 @@
 .first-run-next:disabled { cursor: not-allowed; opacity: .45; }
 .first-run-next:focus-visible { outline: 3px solid rgba(20,123,255,.24); outline-offset: 3px; }
 
-.intro-layout { height: 430px; display: grid; grid-template-columns: 1fr 38px 1.06fr; justify-content: center; align-items: center; gap: 10px; padding: 0 9px 8px; }
+.intro-layout { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(0,1fr) 30px minmax(0,1.06fr); justify-content: center; align-items: center; gap: 10px; padding: 0 9px 8px; }
 .intro-chat { position: relative; height: 248px; }
 .intro-chat > img { position: absolute; top: 30px; left: 0; width: 36px; height: 36px; border-radius: 50%; box-shadow: 0 5px 13px rgba(16,49,78,.16); }
-.intro-chat p { position: absolute; left: 48px; width: 204px; margin: 0; padding: 13px 15px; border-radius: 13px; color: #3d4654; background: #f2f3f5; font-size: 12px; line-height: 1.45; }
+.intro-chat p { position: absolute; left: 48px; width: calc(100% - 48px); margin: 0; padding: 13px 15px; border-radius: 13px; color: #3d4654; background: #f2f3f5; font-size: 12px; line-height: 1.45; }
 .intro-chat p:nth-of-type(1) { top: 29px; }
-.intro-chat p:nth-of-type(2) { top: 128px; left: 34px; background: #147bff; color: #fff; box-shadow: 0 8px 18px rgba(20,123,255,.16); }
+.intro-chat p:nth-of-type(2) { top: 128px; left: 34px; width: calc(100% - 34px); background: #147bff; color: #fff; box-shadow: 0 8px 18px rgba(20,123,255,.16); }
 .tour-arrow { color: #8f98a5; font-size: 26px; }
 .tour-trip-card { overflow: hidden; border: 1px solid #e2ded6; border-radius: 14px; background: #fff; box-shadow: 0 10px 28px rgba(47,57,51,.08); }
 .tour-trip-card > img { width: calc(100% - 24px); height: 158px; display: block; margin: 12px 12px 0; border-radius: 11px; object-fit: cover; }
@@ -73,7 +73,7 @@
 .tour-trip-card h2 { font-family: inherit; font-size: 18px; }
 .tour-trip-card p { color: #6c746f; font-size: 12px; }
 
-.plan-page-layout { height: 430px; display: grid; grid-template-columns: 1.08fr .92fr; justify-content: center; align-items: center; gap: 18px; padding-bottom: 4px; }
+.plan-page-layout { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(0,1.08fr) minmax(0,.92fr); justify-content: center; align-items: center; gap: 18px; padding-bottom: 4px; }
 .tour-itinerary { overflow: hidden; border: 1px solid #e1ddd5; border-radius: 14px; background: #fff; box-shadow: 0 10px 28px rgba(47,57,51,.06); }
 .tour-itinerary > header { display: grid; gap: 3px; padding: 17px 21px 10px; }
 .tour-itinerary > header strong { font-family: inherit; font-size: 17px; }
@@ -85,11 +85,11 @@
 .tour-itinerary p strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .tour-itinerary p small { color: #818984; font-size: 10px; }
 .tour-grip { color: #a5ada8; font-size: 18px; }
-.tour-map { height: 363px; overflow: hidden; border-radius: 14px; box-shadow: 0 10px 28px rgba(47,57,51,.07); }
+.tour-map { height: min(363px,100%); overflow: hidden; border-radius: 14px; box-shadow: 0 10px 28px rgba(47,57,51,.07); }
 .tour-map img { width: 100%; height: 100%; object-fit: cover; }
 
 .profile-page { padding-right: 28px; padding-left: 28px; }
-.profile-page-layout { height: 430px; display: grid; grid-template-columns: 318px 288px; justify-content: center; align-items: center; gap: 18px; padding-bottom: 4px; }
+.profile-page-layout { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(0,1.08fr) minmax(0,.98fr); justify-content: center; align-items: center; gap: 18px; padding-bottom: 4px; }
 .tour-profile-card { overflow: hidden; border: 1px solid #e1ddd5; border-radius: 14px; background: #fff; box-shadow: 0 10px 28px rgba(47,57,51,.06); }
 .tour-profile-card input, .tour-profile-card select { width: 100%; min-width: 0; height: 32px; padding: 0 9px; border: 1px solid #d9dde4; border-radius: 7px; background: #fff; color: #252d39; outline: none; font-family: inherit; font-size: 12px; }
 .tour-profile-card input::placeholder { color: #9aa3af; opacity: 1; }
@@ -123,7 +123,7 @@
 .tour-destination.singapore strong { font-size: 11px; }
 .tour-destination.singapore small { font-size: 10px; }
 
-.change-page-layout { height: 430px; display: grid; grid-template-columns: 300px 306px; justify-content: center; align-items: center; gap: 18px; padding-bottom: 2px; }
+.change-page-layout { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.02fr); justify-content: center; align-items: center; gap: 18px; padding-bottom: 2px; }
 .change-summary { display: grid; grid-template-rows: 88px 73px 82px; gap: 11px; }
 .tour-flight, .tour-moved, .tour-updated-plan { border: 1px solid #e1ddd5; border-radius: 14px; background: #fff; box-shadow: 0 8px 22px rgba(47,57,51,.06); }
 .tour-flight { display: grid; grid-template-columns: 82px minmax(0,1fr) 106px; align-items: center; gap: 10px; padding: 8px 10px; }
@@ -160,7 +160,7 @@
 .tour-updated-plan p strong { font-size: 13px; line-height: 1.35; }
 
 .journey-page h1 { font-size: 26px; }
-.journey-page-layout { height: 430px; display: grid; grid-template-columns: 1.08fr .92fr; justify-content: center; align-items: center; gap: 16px; padding: 0 5px 2px; }
+.journey-page-layout { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(0,1.08fr) minmax(0,.92fr); justify-content: center; align-items: center; gap: 16px; padding: 0 5px 2px; }
 .tour-services { display: grid; gap: 25px; padding: 0 4px 25px 8px; }
 .tour-services section { display: grid; grid-template-columns: 64px minmax(0,1fr); align-items: center; gap: 17px; }
 .tour-services section > span { width: 64px; height: 64px; display: grid; place-items: center; border-radius: 50%; background: #eaf4ff; color: #147bff; font-size: 24px; }
@@ -168,8 +168,58 @@
 .tour-services p { display: grid; gap: 6px; margin: 0; }
 .tour-services strong { font-family: inherit; font-size: 16px; }
 .tour-services small { color: #66738a; font-size: 11px; }
-.tour-phone { width: 276px; height: 401px; object-fit: contain; object-position: center; -webkit-mask-image: linear-gradient(to right,transparent 0,#000 8%,#000 92%,transparent 100%); mask-image: linear-gradient(to right,transparent 0,#000 8%,#000 92%,transparent 100%); }
+.tour-phone { width: 100%; max-width: 276px; height: 100%; max-height: 401px; object-fit: contain; object-position: center; -webkit-mask-image: linear-gradient(to right,transparent 0,#000 8%,#000 92%,transparent 100%); mask-image: linear-gradient(to right,transparent 0,#000 8%,#000 92%,transparent 100%); }
 
 @media (prefers-reduced-motion: reduce) {
   .first-run-dots button::after, .first-run-next { transition: none; }
+}
+
+@media (max-width: 520px) {
+  .first-run-tour-backdrop { padding: 16px; }
+  .first-run-tour { height: min(760px, calc(100dvh - 32px)); }
+  .first-run-page { padding: 24px 20px 16px; }
+  .first-run-page h1 { font-size: 25px; }
+  .profile-page-layout { height: auto; grid-template-columns: minmax(0, 1fr); padding-top: 24px; }
+  .profile-page .tour-destinations { display: none; }
+}
+
+/* Keep content above the shared footer; compact screens scroll the content only. */
+.first-run-page h1 { min-width: 0; overflow-wrap: anywhere; }
+.tour-updated-plan { max-height: 100%; }
+@media (max-width: 640px) {
+  .first-run-page:not(.personality-page) { grid-template-rows: auto auto; align-content: start; }
+  .intro-layout, .plan-page-layout, .profile-page-layout, .change-page-layout, .journey-page-layout {
+    height: auto; grid-template-columns: minmax(0,1fr); gap: 20px; padding: 0;
+  }
+  .intro-chat { width: min(300px,100%); height: 205px; justify-self: center; }
+  .intro-chat > img { top: 12px; }
+  .intro-chat p:nth-of-type(1) { top: 12px; }
+  .intro-chat p:nth-of-type(2) { top: 110px; }
+  .tour-arrow { display: none; }
+  .tour-trip-card { width: min(300px,100%); justify-self: center; }
+  .tour-trip-card > img { height: 120px; }
+  .tour-trip-card > div { gap: 6px; padding: 12px 16px; }
+  .tour-itinerary, .tour-map, .change-summary, .tour-updated-plan { width: 100%; min-width: 0; }
+  .tour-itinerary > div { grid-template-columns: 15px 40px minmax(0,1fr); gap: 7px; padding: 7px; }
+  .tour-itinerary img { width: 40px; height: 40px; }
+  .tour-map { height: 180px; }
+  .profile-page .tour-destinations { display: none; }
+  .tour-profile-field { grid-template-columns: 86px minmax(0,1fr); gap: 8px; padding: 8px 10px; }
+  .change-summary { grid-template-rows: 88px auto 82px; }
+  .tour-flight { grid-template-columns: 58px minmax(0,1fr) 92px; gap: 6px; padding: 8px; }
+  .tour-flight > img { width: 58px; height: 64px; }
+  .tour-flight > p b { padding: 6px; }
+  .tour-moved { width: 100%; }
+  .tour-updated-plan { height: 342px; max-height: none; }
+  .tour-updated-plan p strong { font-size: 12px; }
+  .tour-services { padding: 10px 0 0; gap: 18px; }
+  .tour-services section { grid-template-columns: 48px minmax(0,1fr); gap: 12px; }
+  .tour-services section > span { width: 48px; height: 48px; }
+  .tour-services strong { font-size: 15px; }
+  .tour-services small { font-size: 12px; }
+  .tour-phone { width: 200px; height: 290px; justify-self: center; }
+}
+@media (max-height: 650px) and (min-width: 641px) {
+  .first-run-page:not(.personality-page) { grid-template-rows: auto auto; }
+  .intro-layout, .plan-page-layout, .profile-page-layout, .change-page-layout, .journey-page-layout { height: 365px; }
 }

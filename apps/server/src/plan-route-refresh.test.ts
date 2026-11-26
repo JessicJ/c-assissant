@@ -68,3 +68,17 @@ test("route refresh fails without mutation-ready facts", async () => {
   unsupported.presentation!.routeSegments[0]!.mode = "rail";
   await assert.rejects(refreshPlanRouteFacts(unsupported, "route-1", maps), (error: unknown) => error instanceof PlanRouteRefreshError && error.code === "unsupported_mode");
 });
+
+test("does not geocode an intercity ferry corridor as a local walking origin", async () => {
+  const corridor = structuredClone(plan);
+  corridor.presentation!.places[0]!.category = "scenic inter-island ferry";
+  corridor.presentation!.places[0]!.locationLabel = "Wellington Terminal to Picton Terminal";
+  corridor.presentation!.routeSegments[0]!.mode = "walking";
+  const maps: PlanRouteMaps = {
+    geocodeAddress: async () => { throw new Error("A corridor must not be geocoded as one point."); },
+    drivingRoute: async () => { throw new Error("unused"); },
+    walkingRoute: async () => { throw new Error("unused"); },
+    transitRoute: async () => { throw new Error("unused"); }
+  };
+  await assert.rejects(refreshPlanRouteFacts(corridor, "route-1", maps), (error: unknown) => error instanceof PlanRouteRefreshError && error.code === "unsupported_mode");
+});

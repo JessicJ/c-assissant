@@ -1,0 +1,146 @@
+import test, { after } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import net from 'node:net';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
+import { bytesSha256, inspectReadonlyHistory, assertReadonlyHistoryFacts, retainedSchemaDifferences } from '../../../packages/storage/src/readonly-schema-admission.js';
+import { openReadonlyPlanningStore } from '../../../packages/storage/src/readonly-planning-store.js';
+import { createReadonlyDiagnosticServer } from './readonly-diagnostic-startup.js';
+import { readonlyDiagnosticConfig } from './readonly-diagnostic-policy.js';
+import { productionReadiness } from './production-readiness.js';
+
+const admissionPath = process.env.LANDI_TEST_READONLY_ADMISSION!;
+const admissionSha256 = process.env.LANDI_TEST_READONLY_ADMISSION_SHA256!;
+assert.ok(admissionPath && admissionSha256, 'Explicit existing snapshot evidence required; never create a fixture database.');
+const record = JSON.parse(fs.readFileSync(admissionPath, 'utf8'));
+const databasePath: string = record.snapshot.path;
+const directory = path.dirname(admissionPath);
+const hash = (file: string) => bytesSha256(fs.readFileSync(file));
+const before = hash(databasePath);
+const token = 'fictional-readonly-credential-1234567890';
+const env = () => ({ LANDI_DIAGNOSTIC_DATABASE_PATH: databasePath, LANDI_DIAGNOSTIC_PORT: '39889', LANDI_DIAGNOSTIC_ADMISSION_PATH: admissionPath, LANDI_DIAGNOSTIC_ADMISSION_SHA256: admissionSha256, LANDI_DIAGNOSTIC_TOKEN: token });
+const sqlite = createRequire(import.meta.url)('node:sqlite');
+const Native = sqlite.DatabaseSync;
+let opens = 0, closes = 0;
+sqlite.DatabaseSync = class extends Native {
+  constructor(file: string, options: { readOnly: boolean }) { assert.equal(file, databasePath, 'Only existing backup may be opened'); assert.equal(options.readOnly, true); super(file, options); opens++; }
+  exec(sql: string) { assert.equal(sql, 'PRAGMA query_only=ON'); return super.exec(sql); }
+  prepare(sql: string) { assert.match(sql, /^(SELECT |PRAGMA integrity_check|PRAGMA foreign_key_check)/); return super.prepare(sql); }
+  close() { super.close(); closes++; }
+};
+const listen = net.Server.prototype.listen;
+net.Server.prototype.listen = (() => { throw new Error('Tests must not start a listener'); }) as typeof listen;
+syncBuiltinESMExports();
+after(() => {
+  sqlite.DatabaseSync = Native; net.Server.prototype.listen = listen; syncBuiltinESMExports();
+  assert.equal(opens, closes); assert.equal(hash(databasePath), before);
+  assert.equal(hash(admissionPath), admissionSha256);
+  for (const suffix of ['-wal','-shm','-journal']) assert.equal(fs.existsSync(databasePath + suffix), false);
+});
+let negativeIndex = 0;
+function altered(change: (value: any) => void) {
+  const copy = structuredClone(record); change(copy);
+  const file = path.join(directory, `negative-record-${++negativeIndex}.json`);
+  fs.writeFileSync(file, JSON.stringify(copy), { mode: 0o600 });
+  return { file, sha256: hash(file) };
+}
+
+test('reviewed existing backup is admitted read-only with explicit historical provenance', () => {
+  const store = openReadonlyPlanningStore(databasePath, admissionPath, admissionSha256);
+  try {
+    assert.equal(store.provenance.scope, 'backup_snapshot');
+    assert.equal(store.provenance.backupSha256, before);
+    assert.equal(store.provenance.snapshotCreatedAt, record.snapshot.createdAt);
+    assert.equal(store.provenance.liveSessionMatch, 'unverified');
+    assert.equal(store.provenance.carrierRuntime, 'unverified');
+    assert.equal(store.provenance.receiptRuntime, 'unverified');
+    assert.equal(store.provenance.executable, false);
+    assert.equal(store.readPlanningReturnSnapshot('fictional-not-a-real-session'), null);
+  } finally { store.close(); }
+});
+
+test('missing pins and changed evidence digests are rejected without a database open', () => {
+  const count = opens;
+  assert.throws(() => openReadonlyPlanningStore(databasePath, admissionPath, '0'.repeat(64)), /digest_mismatch/);
+  assert.throws(() => readonlyDiagnosticConfig({ ...env(), LANDI_DIAGNOSTIC_ADMISSION_SHA256: '' }));
+  assert.throws(() => readonlyDiagnosticConfig({ ...env(), LANDI_DIAGNOSTIC_TOKEN: '' }));
+  assert.throws(() => readonlyDiagnosticConfig({ ...env(), LANDI_DIAGNOSTIC_PORT: '8787' }));
+  assert.equal(opens, count);
+});
+
+test('original database path and a changed snapshot identity are rejected before opening', () => {
+  const count = opens;
+  assert.throws(() => openReadonlyPlanningStore(record.sourceDatabasePath, admissionPath, admissionSha256), /original_database_forbidden/);
+  const bad = altered(v => { v.snapshot.sha256 = '0'.repeat(64); });
+  assert.throws(() => openReadonlyPlanningStore(databasePath, bad.file, bad.sha256), /snapshot_digest_mismatch/);
+  assert.equal(opens, count);
+});
+
+test('prior failure, references, audit and declared scope cannot be omitted or substituted', () => {
+  for (const change of [
+    (v: any) => { v.purpose = 'workbench'; },
+    (v: any) => { v.priorFailure.sha256 = '0'.repeat(64); },
+    (v: any) => { v.audit.sha256 = '0'.repeat(64); },
+    (v: any) => { v.references = []; },
+    (v: any) => { v.references[1].role = 'candidate'; },
+    (v: any) => { v.snapshot.createdAt = '2999-01-01T00:00:00Z'; }
+  ]) { const count = opens, bad = altered(change); assert.throws(() => openReadonlyPlanningStore(databasePath, bad.file, bad.sha256)); assert.equal(opens, count); }
+});
+
+test('schema version alone or dirty historical values cannot pass the structural gate', () => {
+  const fake = { prepare: () => ({ all: () => [] }) } as never;
+  assert.throws(() => inspectReadonlyHistory(fake), /schema_not_reviewed/);
+  const audit = JSON.parse(fs.readFileSync(record.audit.path, 'utf8'));
+  assert.deepEqual(audit.retainedDifferences, retainedSchemaDifferences);
+  assert.equal(audit.facts.counts.mah_generation_carriers, 0);
+  assert.equal(audit.facts.coverage.carrierRuntime, 'unverified');
+  for (const key of Object.keys(audit.facts.violations)) {
+    const facts = structuredClone(audit.facts); facts.violations[key] = 1;
+    assert.throws(() => assertReadonlyHistoryFacts(facts), /historical_data_invalid/);
+  }
+});
+
+test('injection: authenticate before snapshot queries and block all non-diagnostic operations', async () => {
+  const instance = createReadonlyDiagnosticServer(env());
+  const server = instance.server;
+  const headers = { authorization: `Bearer ${token}`, 'x-landi-instance-id': instance.instanceId };
+  try {
+    assert.equal(server.server.listening, false);
+    for (const options of [ {}, { headers: { ...headers, 'x-landi-instance-id': 'wrong' } }, { headers, remoteAddress: '198.51.100.2' } ]) {
+      assert.equal((await server.inject({ url: '/api/agent-readiness', ...options })).statusCode, 403);
+    }
+    const ready = await server.inject({ url: '/api/agent-readiness', headers });
+    assert.equal(ready.statusCode, 200); assert.equal(ready.headers['cache-control'], 'no-store');
+    const value = ready.json(); assert.equal(value.provenance.scope, 'backup_snapshot');
+    assert.equal(value.provenance.liveSessionMatch, 'unverified');
+    for (const key of ['generation','conversation','revision','unattendedEmail','hosting']) assert.equal(value[key], false);
+    for (const [method,url] of [['POST','/api/agent/chat'],['POST','/api/backups'],['POST','/api/tasks/resume'],['GET','/api/workspace']] as const) assert.equal((await server.inject({ method,url,headers })).statusCode, 503);
+    const unknown = (await server.inject({ url: '/api/planning-sessions/fictional-not-a-real-session/return-check', headers })).json();
+    assert.equal(unknown.comparison, 'missing'); assert.equal(unknown.provenance.liveSessionMatch, 'unverified');
+    assert.equal(server.server.listening, false);
+  } finally { await server.close(); }
+});
+
+test('snapshot version matching never establishes a live-session match', async () => {
+  const connection = new sqlite.DatabaseSync(databasePath, { readOnly: true });
+  let id: string;
+  try { connection.exec('PRAGMA query_only=ON'); id = String(connection.prepare('SELECT id FROM planning_sessions ORDER BY id LIMIT 1').get().id); }
+  finally { connection.close(); }
+  const instance = createReadonlyDiagnosticServer(env());
+  const headers = { authorization: `Bearer ${token}`, 'x-landi-instance-id': instance.instanceId };
+  try {
+    const first = (await instance.server.inject({ url: `/api/planning-sessions/${id}/return-check`, headers })).json();
+    assert.equal(first.comparison, 'unverified');
+    const query = new URLSearchParams({ expectedRevision: String(first.snapshot.revision), expectedProposalVersion: first.snapshot.proposalVersion === null ? 'none' : String(first.snapshot.proposalVersion) });
+    const second = (await instance.server.inject({ url: `/api/planning-sessions/${id}/return-check?${query}`, headers })).json();
+    assert.equal(second.comparison, 'matched'); assert.equal(second.provenance.scope, 'backup_snapshot');
+    assert.equal(second.provenance.liveSessionMatch, 'unverified'); assert.equal(second.executable, false);
+  } finally { await instance.server.close(); }
+});
+
+test('production readiness and independent evidence stay unchanged', () => {
+  assert.equal(productionReadiness().generation, false); assert.equal(productionReadiness().hosting, false);
+  assert.equal(hash(databasePath), before);
+  assert.equal(hash(record.priorFailure.path), record.priorFailure.sha256);
+});

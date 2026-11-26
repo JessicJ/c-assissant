@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "interface": "kern.proc_SPI_local_compatibility_not_stable_public_API",
+  "productionExecutable": false,
+  "platform": {
+    "system": "Darwin",
+    "release": "25.5.0",
+    "machine": "arm64",
+    "byteorder": "little"
+  },
+  "layout": {
+    "pointerSize": 8,
+    "timevalSize": 16,
+    "externProcSize": 296,
+    "eprocSize": 352,
+    "kinfoSize": 648,
+    "alignment": 8,
+    "offsets": {
+      "pid": 40,
+      "parentPid": 560,
+      "uid": 420,
+      "realUid": 392,
+      "startSeconds": 0,
+      "startMicroseconds": 8
+    }
+  },
+  "sdkRoot": "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk",
+  "headers": [
+    {
+      "path": "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/sys/proc.h",
+      "sha256": "593af71b2740ba6248995691280bcb15f8900d46b1d9868f7345084aa0692949"
+    },
+    {
+      "path": "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/sys/sysctl.h",
+      "sha256": "4a77c53e0ee4035ca1c9e6a910aeddbc8f6163ccb8415940bbe7e398013f3764"
+    },
+    {
+      "path": "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/sys/vm.h",
+      "sha256": "b35738bc54a422da2db724124a3059ce9b5e97fe3e62c3188762301ff1b1288c"
+    },
+    {
+      "path": "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/sys/types.h",
+      "sha256": "82111e1f1d0262bee191b4679842e5ff51de57310ce4da9f48d39af0d8e10284"
+    },
+    {
+      "path": "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/sys/param.h",
+      "sha256": "10d7a9553d341c5bc0b473444802920a7ec2e6222281eeaeb61b32dfff29c4b4"
+    },
+    {
+      "path": "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/sys/_types/_timeval.h",
+      "sha256": "f723018fec267200e915777897515b5d7ed20901bcb294873f94b1d835f9ae45"
+    },
+    {
+      "path": "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/sys/_types.h",
+      "sha256": "863c4f07045775002b63b7e616742d9f746e4a02da4441442d8fe1138bbd0ff9"
+    },
+    {
+      "path": "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/sys/proc_info.h",
+      "sha256": "e427fa96b348537b21552b9de71e01039410bcad2cedee5584c5e5fddafd70fc"
+    }
+  ],
+  "layoutEvidence": {
+    "path": "/private/tmp/landi-kinfo-contract-nky1zrt_/observation.json",
+    "sha256": "fc664fa797f780a63bf0a52c3635435faa26d27a4cb10b5bc3be3d1c9da61f7c"
+  },
+  "sources": [
+    "https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sysctl.c",
+    "https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/sysctl.h"
+  ]
+}

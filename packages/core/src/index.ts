@@ -1,7 +1,11 @@
+export { assessPolicyResearch, policyResearchForTrip, type PolicyResearchInput, type PolicyResearchSummary } from "./policy-research.js";
+export * from "./assistant-personality.js";
+import type { AssistantPersonalityId } from "./assistant-personality.js";
 import { randomUUID } from "node:crypto";
 import type { PlanCompilationOrigin } from "./plan-compiler.js";
 import type { DestinationArrivalEvent } from "./current-destination.js";
 import type { BlueprintAccommodationState, BlueprintActionRequirement, BlueprintBookingConstraint, BlueprintEvidenceRef, BlueprintExperienceTheme, BlueprintFieldEvidence, BlueprintGuideRelationshipGraph, BlueprintGuideTheme, BlueprintItineraryBlock, BlueprintLocalFood, BlueprintLocalProduct, BlueprintModuleIdentity, BlueprintMovementDisplayIntent, BlueprintOperationalCondition, BlueprintOperationalFacts, BlueprintPlanAlternative, BlueprintPlaceDisplayIntent, BlueprintPlaceGuideDisplay, BlueprintPlaceImage, BlueprintPreparationChecklistItem, BlueprintSchedulingEligibility, BlueprintSource, BlueprintTravelContext, BlueprintTravelTip, TripBlueprint } from "./trip-blueprint.js";
+import { isLodgingPlaceCategory } from "./trip-blueprint.js";
 
 export { recommendPlanTransport, type TransportMode, type TransportRecommendation, type TransportRouteFact } from "./transport.js";
 export { assessPolicyPreparation, type PolicyPreparationAssessment, type PolicyPreparationItem, type PolicyPreparationStatus } from "./policy-applicability.js";
@@ -9,11 +13,17 @@ export { compilePlanProposal, type PlanCompilationAudit, type PlanCompilationBlo
 export { resolveCurrentPlanDestination, type CurrentPlanDestination, type DestinationArrivalEvent } from "./current-destination.js";
 export {
   BLUEPRINT_PLAN_COMPILER_VERSION,
+  blueprintPlanCompilationIdentity,
+  resolveBlueprintPlanCompilationIdentity,
   compileTripBlueprint,
   type BlueprintPlanCompilation,
   type BlueprintPlanCompilerInput
 } from "./blueprint-plan-compiler.js";
 export {
+  DirectBlueprintHighImpactError,
+  previewDirectBlueprintRevisionImpact,
+  undoDirectBlueprintRevision,
+  type DirectBlueprintHighImpactPreview,
   applyDirectBlueprintRevision,
   applyDirectBlueprintRevisionBatchWithMetadata,
   applyDirectBlueprintRevisionWithMetadata,
@@ -56,6 +66,7 @@ export {
   MAP_COORDINATES_PENDING_SCHEDULING_REASON,
   assertResearchSetIntegrity,
   assertTripBlueprintIntegrity,
+  isLodgingPlaceCategory,
   effectiveBlueprintSchedulingDecision,
   researchSetIntegrityIssues,
   tripBlueprintIntegrityIssues,
@@ -105,6 +116,7 @@ export {
   type BlueprintPlacePriority,
   type BlueprintPlaceWorkspaceSignals,
   type BlueprintPreparationChecklistItem,
+  type BlueprintPreparationOrigin,
   type BlueprintPreparationGroup,
   type BlueprintPlaceRelationship,
   type BlueprintPlaceRelationshipKind,
@@ -134,7 +146,7 @@ export type ImmigrationStatus = "unknown" | "not_obtained" | "no_visa" | "short_
 export type AgentRuntimeKind = "codex" | "claude-code";
 export type RunStatus = "running" | "succeeded" | "failed" | "fallback";
 export type RunTrigger = "web" | "telegram" | "whatsapp";
-export type TransportPreference = "plan_recommended" | "taxi" | "public_transit" | "walking";
+export type TransportPreference = "plan_recommended" | "taxi" | "public_transit" | "walking" | "driving";
 export type LuggageLevel = "unknown" | "light" | "standard" | "heavy";
 export type TaskReminderDynamicFact = "weather";
 export type TaskPreparationCategory = "packing_item" | "documents" | "digital" | "booking" | "other_predeparture" | "not_applicable";
@@ -218,7 +230,7 @@ export interface Task {
   reminder?: TaskReminder;
   /** Stable Action Requirement identity used to preserve completion across Blueprint revisions. */
   requirementId?: string;
-  /** Version-bound provenance for a task compiled from a Country Pack proposal. */
+  /** Version-bound provenance for a task compiled from a historic preparation proposal. */
   origin?: PlanCompilationOrigin;
 }
 
@@ -448,7 +460,7 @@ export function blueprintPresentation(blueprint: TripBlueprint): PlanPresentatio
       ...(movement?.evidence.length ? { evidence: structuredClone(movement.evidence) } : {}),
       dayId: day.id,
       label: movement?.label ?? "Route needs verification",
-      detail: movement?.detail ?? "This adjacent movement is reconstructed from the itinerary order and needs route verification before execution.",
+      detail: movement?.detail ?? "Check the route and travel time before setting off.",
       ...(movement?.display ? { display: structuredClone(movement.display) } : {})
     };
   }));
@@ -633,8 +645,9 @@ export function planPresentationIntegrityIssues(presentation: PlanPresentation, 
   return [...new Set(issues)];
 }
 
-function placeRequiresVisitDuration(place: Pick<PlanPlace, "category" | "visitRole">): boolean {
-  return !/(?:accommodation|hotel|transport|airport|station)/i.test(`${place.category} ${place.visitRole ?? ""}`);
+function placeRequiresVisitDuration(place: Pick<PlanPlace, "category" | "visitRole" | "accommodation">): boolean {
+  return !place.accommodation && !isLodgingPlaceCategory(place.category, place.visitRole)
+    && !/(?:transport|airport|station)/i.test(`${place.category} ${place.visitRole ?? ""}`);
 }
 
 function itineraryClockMinutes(value?: string): number | undefined {
@@ -883,6 +896,7 @@ export interface InboxItem {
 }
 
 export interface Profile {
+  assistantPersonality?: AssistantPersonalityId;
   displayName: string;
   preferredLanguage: string;
   travelPreferences?: string;
@@ -933,7 +947,7 @@ export interface TaskReminderRun {
   updatedAt: string;
 }
 
-/** Minimized audit for one atomic Country Pack compilation into a new draft Plan version. */
+/** Minimized audit for one atomic historic preparation compilation into a new draft Plan version. */
 export interface PlanCompilationRun {
   id: string;
   kind: "plan_compilation";
@@ -950,8 +964,8 @@ export interface PlanCompilationRun {
   sourceEvidence: import("./plan-compiler.js").SourceEvidenceRef[];
 }
 
-/** One minimized internal Skill result belonging to a successful Country Pack compilation. */
-export interface CountryPackSkillRun {
+/** One minimized internal Skill result belonging to a successful historic preparation compilation. */
+export interface PreparationEvidenceRun {
   id: string;
   kind: "country_pack_skill";
   compilationRunId: string;
@@ -964,27 +978,13 @@ export interface CountryPackSkillRun {
   sourceEvidence: import("./plan-compiler.js").SourceEvidenceRef[];
 }
 
-/** A Telegram account bound to this single-user local instance. */
-export interface TelegramBinding {
-  chatId: string;
-  userId: string;
-  firstName: string;
-  username?: string;
-  pairedAt: string;
-}
-
-export interface TelegramPairingStatus {
-  state: "not_paired" | "waiting_for_start" | "paired";
-  expiresAt?: string;
-  binding?: TelegramBinding;
-}
-
 export interface WorkspaceSnapshot {
   profile: Profile;
   runtime: RuntimeSelection;
   activePlan: Plan;
   /** The versioned itinerary source of truth for a Blueprint-compiled current Plan. */
   activeBlueprint?: TripBlueprint;
+  latestDirectBlueprintRevision?: { id: string; planId: string; planVersion: number; blueprintId: string; blueprintVersion: number; baseBlueprintVersion: number; createdAt: string };
   planningSession?: PlanningSession;
   latestPlanChange?: PlanChangeSet;
   /** Present when the current draft was generated as a replacement for another Plan version. */
@@ -999,7 +999,6 @@ export interface WorkspaceSnapshot {
     core: "ready";
     storage: "local";
     runtime: "configured";
-    telegram: "not_configured";
     amap: "not_configured";
   };
 }
@@ -1009,6 +1008,7 @@ export interface CreatePlanInput {
 }
 
 export interface ProfileUpdate {
+  assistantPersonality?: AssistantPersonalityId;
   displayName: string;
   preferredLanguage: string;
   travelPreferences?: string;
@@ -1077,6 +1077,7 @@ export function createInitialWorkspace(): WorkspaceSnapshot {
 
   return {
     profile: {
+      assistantPersonality: "local_insider",
       displayName: "New explorer",
       preferredLanguage: "English",
       travelPreferences: "",
@@ -1121,7 +1122,6 @@ export function createInitialWorkspace(): WorkspaceSnapshot {
       core: "ready",
       storage: "local",
       runtime: "configured",
-      telegram: "not_configured",
       amap: "not_configured"
     }
   };
@@ -1258,28 +1258,63 @@ export function inferStagePresentationKind(title: string): StagePresentationKind
 
 
 export function confirmPlan(snapshot: WorkspaceSnapshot, planId: string): WorkspaceSnapshot {
+  return applyPlanActivation(snapshot, planId, "manual_confirmation");
+}
+
+/** 人工确认和客观变化共用唯一领域切换入口，分别保留真实语义。 */
+export function applyPlanActivation(snapshot: WorkspaceSnapshot, planId: string, basis: "manual_confirmation"|"objective_change"): WorkspaceSnapshot {
   if (snapshot.activePlan.id !== planId) {
     throw new Error(`Plan ${planId} was not found.`);
   }
+  const issues = planExecutionReadinessIssues(snapshot.activePlan);
+  if (issues.length) throw new Error(`Please finish the itinerary before starting it: ${issues.join("; ")}.`);
 
   return {
     ...snapshot,
     activePlan: {
       ...snapshot.activePlan,
       status: "active",
-      nextAction: "Complete the missing profile facts before policy-related tasks run."
+      nextAction: "Add the remaining traveler details so we can help you finish your travel preparations."
     },
     inbox: [
       {
-        id: `plan-confirmed-${snapshot.activePlan.version}`,
+        id: `${basis === "objective_change" ? "plan-applied" : "plan-confirmed"}-${snapshot.activePlan.version}`,
         tone: "ready",
-        title: "Plan activated",
-        body: "The Plan is active. Scheduler, Telegram, and external connectors are not connected yet.",
+        title: basis === "objective_change" ? "Itinerary updated" : "Plan activated",
+        body: basis === "objective_change" ? "The updated itinerary was applied based on verified objective changes." : "Your itinerary is confirmed. Review your travel preparations before you leave.",
         timestamp: "Just now"
       },
       ...snapshot.inbox
     ]
   };
+}
+
+/** Minimum execution contract shared by Web, email and imported itineraries.
+ * Untimed activities remain valid: their order follows the user's progress. */
+export function planExecutionReadinessIssues(plan: Plan): string[] {
+  const presentation = plan.presentation;
+  if (presentation?.kind !== "itinerary") return [];
+  const issues: string[] = [];
+  const places = new Map(presentation.places.map(place => [place.id, place]));
+  let activities = 0;
+  for (const day of presentation.days) {
+    if (!day.date || !/^\d{4}-\d{2}-\d{2}$/.test(day.date) || !Number.isFinite(Date.parse(day.date)) || new Date(day.date).toISOString().slice(0, 10) !== day.date) issues.push(`${day.label}: choose a valid date`);
+    if (!day.city?.trim()) issues.push(`${day.label}: add the city`);
+    const blocks = day.blocks?.filter(block => !["optional", "replacement", "excluded"].includes(block.planRole ?? "")) ?? [];
+    if (day.blocks?.length) for (const block of blocks) {
+      if (/^morning base$|^in-flight travel$/i.test(block.role ?? "")) continue;
+      activities++;
+      if (!(block.title ?? places.get(block.placeId ?? "")?.name ?? block.placeName)?.trim()) issues.push(`${day.label}: name the activity`);
+      if (block.placeId && !places.has(block.placeId)) issues.push(`${day.label}: add the destination`);
+      if (block.startTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(block.startTime)) issues.push(`${day.label}: check the activity time`);
+    } else for (const stop of day.stops?.length ? day.stops : day.placeIds.map(placeId => ({ placeId }))) {
+      activities++;
+      if (!places.has(stop.placeId)) issues.push(`${day.label}: add the destination`);
+      if ("time" in stop && typeof stop.time === "string" && stop.time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(stop.time)) issues.push(`${day.label}: check the activity time`);
+    }
+  }
+  if (!activities) issues.push("add the activities you want help with");
+  return [...new Set(issues)];
 }
 
 function inferLocation(request: string): string {
@@ -1298,3 +1333,15 @@ function inferDates(request: string): string {
   const year = request.match(/\b20\d{2}\b/);
   return year?.[0] ?? "Dates to be confirmed";
 }
+
+export { hasStatedBudgetAmount } from "./planning-budget.js";
+
+export type { EmailInlineAttachment } from "./email-presentation.js";
+export * from "./workspace-mutation-error.js";
+
+export * from "./booking-relationship.js";
+
+export * from "./booking-projection.js";
+export * from "./booking-source-selection.js";
+
+export * from "./travel-adjustment.js";

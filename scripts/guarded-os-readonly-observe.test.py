@@ -1,0 +1,88 @@
+"""New live-source adapter checks using only injected fictional OS replies."""
+import builtins,copy,hashlib,importlib.util,json,os,sys,tempfile
+from pathlib import Path
+from guarded_test_fixtures import resource_fixture, lease_fixture, trust as resource_trust, runtime as fixture_runtime
+ROOT=Path(__file__).resolve().parents[1];ENTRY=ROOT/'scripts/guarded-os-readonly-observe.py'
+spec=importlib.util.spec_from_file_location('live_observe',ENTRY);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+OUT=Path(tempfile.mkdtemp(prefix='landi-live-os-check-',dir=None)).resolve();os.chmod(OUT,0o700);checks=[]
+SUB=dict(databasePath='/fiction/work.sqlite',nodePath='/fiction/node',port=8787,managerLabel='io.landi.local',oldPid=2913,uid=501)
+def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+def save(name,value):
+ with (OUT/name).open('x') as f:json.dump(value,f,indent=2);f.write('\n');f.flush();os.fsync(f.fileno())
+ os.chmod(OUT/name,0o600)
+class Fake:
+ def __init__(self):self.calls=[];self.mutate=None;self.denied=False;self.reuse=False;self.path_change=False;self.missing=False;self.clock=101000
+ def metadata(self,path):
+  self.calls.append(('metadata',path))
+  if path.endswith(('-wal','-shm','-journal')):return dict(path=path,exists=False)
+  return dict(path=path,exists=not self.missing,device=7,inode=1 if path=='/fiction/node' else 2,nlink=1,uid=501,mode=0o600,size=100,mtimeNs=10)
+ def command(self,argv):
+  self.calls.append(('command',argv));rc=0;out=b'';err=b''
+  if argv[:2]==['/bin/launchctl','print']:rc=113;err=b'Could not find service "io.landi.local" in domain for user gui: 501\n'
+  elif argv[:2]==['/bin/launchctl','print-disabled']:out=b'"io.landi.local" => disabled\n'
+  elif argv[0]=='/usr/sbin/lsof':rc=1
+  else:out=b'101 1 501 Mon Oct 26 13:00:00 2026 node\n'
+  value=dict(returncode=rc,stdoutHex=out.hex(),stderrHex=err.hex(),timeout=False,truncated=False)
+  if self.mutate:self.mutate(argv,value)
+  return value
+ def identity(self,pid):
+  self.calls.append(('identity',pid));b=m.BSD();b.pid=pid;b.ppid=1;b.uid=501;b.ruid=501;b.startsec=100;b.startusec=123
+  if self.reuse and sum(c[0]=='identity' for c in self.calls)%2==0:b.startusec=999
+  return dict(returned=0 if self.denied else 136,errno=1 if self.denied else 0,bytesHex=bytes(b).hex())
+ def path(self,pid):
+  self.calls.append(('path',pid));data=b'/fiction/node'
+  if self.path_change and sum(c[0]=='path' for c in self.calls)%2==0:data=b'/fiction/other'
+  return dict(returned=len(data),errno=0,bytesHex=data.hex())
+def evaluate(fake=None,subject=None,clock=None):
+ fake=fake or Fake();s=copy.deepcopy(subject or SUB);before=copy.deepcopy(s)
+ r=m.collect(s,fake,clock=clock or (lambda:101000))
+ assert s==before and r['status']=='rejected' and not r['executable'] and not r['mayExempt']
+ assert r['realEvidenceAuthenticated'] is False and r['visibility']=='unverified_current_user_OS_view'
+ assert r['launcherStatus']=='unverified' and r['leaseStatus']=='unverified' and not r['productionExecutable'] and not r['compatibilityEnabled']
+ return r
+def reject(name,mutator=None,configure=None):
+ f=Fake();f.mutate=mutator
+ if configure:configure(f)
+ r=evaluate(f);assert r['collectionStopped'] and r['gaps'],name
+ checks.append(name);return f,r
+try:
+ protected={str(ENTRY):sha(ENTRY)}
+ r=evaluate();assert not r['collectionStopped'] and len(r['scans'])==2 and len(r['queries'])==10 and r['observationStatus']=='partial_local_observations_not_admission';checks.append('two_fixture_scans_save_raw_subject_times_still_reject')
+ assert all(s['processes'][0]['sameNodeFile'] for s in r['scans']);checks.append('same_Node_observed_never_exempted')
+ assert 'query_visibility_not_independently_established' in r['gaps'];checks.append('empty_lsof_does_not_prove_complete_visibility')
+ for field,value in [('timeout',True),('truncated',True),('returncode',False)]:
+  reject('query_'+field,lambda a,v,field=field,value=value:v.update({field:value}))
+ reject('malformed_utf8',lambda a,v:v.update(stdoutHex='ff') if a[0]=='/bin/ps' else None)
+ reject('permission_denied_file_query',lambda a,v:v.update(stderrHex=b'permission denied'.hex()) if a[0]=='/usr/sbin/lsof' else None)
+ reject('occupied_port',lambda a,v:v.update(returncode=0,stdoutHex=b'p101\nn*:8787\n'.hex()) if '-iTCP:8787' in a else None)
+ reject('occupied_work_file',lambda a,v:v.update(returncode=0,stdoutHex=b'p101\nn/alias\n'.hex()) if '--' in a else None)
+ reject('manager_present',lambda a,v:v.update(returncode=0,stdoutHex=b'active'.hex()) if a[:2]==['/bin/launchctl','print'] else None)
+ reject('disabled_conflict',lambda a,v:v.update(stdoutHex=b'"io.landi.local" => disabled\n"io.landi.local" => enabled\n'.hex()) if 'print-disabled' in a else None)
+ reject('inventory_duplicate',lambda a,v:v.update(stdoutHex=(bytes.fromhex(v['stdoutHex'])*2).hex()) if a[0]=='/bin/ps' else None)
+ f,r=reject('native_EPERM_stops_without_fallback',configure=lambda f:setattr(f,'denied',True));assert sum(c[0]=='identity' for c in f.calls)==1 and len(r['scans'])==1
+ checks.append('native_failure_no_retry_preserves_partial_receipts')
+ reject('PID_reuse',configure=lambda f:setattr(f,'reuse',True))
+ reject('kernel_path_changed',configure=lambda f:setattr(f,'path_change',True))
+ reject('node_missing',configure=lambda f:setattr(f,'missing',True))
+ s=copy.deepcopy(SUB);s['oldPid']=101;assert evaluate(subject=s)['collectionStopped'];checks.append('old_PID_present_rejected')
+ times=iter([101000,117000]*100);r=evaluate(clock=lambda:next(times));assert r['collectionStopped'] or r['observationStatus']=='unverified';checks.append('expired_or_clock_change_never_fresh')
+ invalid=copy.deepcopy(SUB);invalid['databasePath']='/fiction/../real';assert evaluate(subject=invalid)['collectionStopped'];checks.append('path_escape_rejected_before_query')
+ f=Fake();r=evaluate(f);assert all(c[1][0] in ['/bin/launchctl','/usr/sbin/lsof','/bin/ps'] for c in f.calls if c[0]=='command');checks.append('only_fixed_readonly_commands')
+ require_error=False
+ try:m.decode_identity(dict(returned=136,errno=0,bytesHex='00'),101)
+ except m.Gap:require_error=True
+ assert require_error;checks.append('native_short_buffer_rejected')
+ original=builtins.open
+ def denied(*a,**kw):raise AssertionError('unexpected filesystem read')
+ builtins.open=denied
+ try:assert not evaluate()['collectionStopped']
+ finally:builtins.open=original
+ checks.append('injected_checks_no_database_or_filesystem_content_read')
+ for p,h in protected.items():assert sha(p)==h
+ checks.append('existing_admission_authentication_Storage_artifacts_unchanged')
+ save('fictional-report.json',evaluate())
+ save('verification.json',dict(status='passed',newChecks=len(checks),checks=checks,entry=dict(path=str(ENTRY),sha256=sha(ENTRY)),protectedDigests=protected,OSQueriesRun=False,nativeCallsRun=False,databaseOpened=False,servicesStarted=False,compiled=False,historicalTestsRun=False,productionExecutable=False,compatibilityEnabled=False))
+ print(json.dumps(dict(status='passed',newChecks=len(checks),evidence=str(OUT))))
+except BaseException as error:
+ save('failure.json',dict(status='failed',passedChecks=checks,errorType=type(error).__name__,error=str(error)))
+ print(json.dumps(dict(status='failed',evidence=str(OUT))));raise

@@ -19,7 +19,7 @@ export function applyExternalPlanningFacts(session: PlanningSession, facts: Plan
   const previousVersion = session.proposal?.version ?? 0;
   const next: PlanningSession = { ...session, facts: nextFacts, updatedAt: timestamp };
   if (session.status === "proposal_confirmed") {
-    next.unresolved = missingGenerationQuestions(next.facts);
+    next.unresolved = missingGenerationQuestions(next.facts, next.messages);
     return next;
   }
   if (session.status === "collecting" || session.status === "proposal_ready") {
@@ -30,6 +30,7 @@ export function applyExternalPlanningFacts(session: PlanningSession, facts: Plan
       next.status = "proposal_ready";
       next.proposal = buildProposal(next, previousVersion);
       delete next.confirmedProposalVersion;
+      next.unresolved = missingGenerationQuestions(next.facts, next.messages);
     }
   }
   return next;

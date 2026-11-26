@@ -1,0 +1,19 @@
+{
+  "source": "User-supplied landi_important_update_kit_v1/assets",
+  "sha256": {
+    "map-pin-off": "fe1da788c67b2fbe81dc3a8b32cc275095cb70b73e3c256a6c8440354ced86ba",
+    "cloud-rain": "173fde3032f0d0825b22e06eca4f4a87562a7542483b70097de1c1bbb2f8bbc1",
+    "plane": "ddd08291c6c4771d09239495d81fd1938b3a6d143a81e49286830235a701c2eb",
+    "calendar-x": "bd0b310fcf14bc88e4a35da6871a27f190297328e344e076b679e5a9b3b3d716",
+    "clock-alert": "d96460c2d6fd04421071f206a2b4a9155df1f996d6b182c0779487e5e759a5f9",
+    "calendar-clock": "373be9e2e09b025d094603701b6c5f569413bcfb70a4f3387ac4214609d43ca9",
+    "building": "f008e33f71fe07d6d6bae021c6b165bfe620d76fc57f78cb8724eca8c0f48fb2",
+    "umbrella": "3347682813cfbb110f834e4f91277d5e655896685a63b5813a40e2d57761b4f6",
+    "clock-change": "9fafb90fdd6a465d0a826f28ff327dc48e88a04a13429e913baa3b977a0e3a2a",
+    "search": "c9ff7d61045603a8e1baacd626e0192b160657d082417a271632f57e40f5da0a",
+    "route": "f3c1254b5e2260b4379399f6f7d9f58e09c60f1bb97d0ee4c668b9e6f374fd6f",
+    "calendar": "4bbc624ba9ed2dbe8732caeee1f6221e23bac63805fbb903c2c0d7d2cd6dc4e9",
+    "info-circle": "d9d8c6da5ec7e8b7e7dcd07dd70553ec40f030ba88a09f8f8b4b0ef8e66a556c",
+    "check-circle": "a1c82fce592dfc5ecd30c2c40e8a4e0ee52e0675a8cc611c68d84a51bd47b9cb"
+  }
+}

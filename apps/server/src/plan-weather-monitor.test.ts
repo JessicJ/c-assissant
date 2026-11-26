@@ -21,7 +21,7 @@ test("weather attention ignores normal current conditions and flags material dis
   assert.equal(assessCurrentWeatherAttention("Paris", normalWeather), undefined);
   const storm = assessCurrentWeatherAttention("Paris", { ...normalWeather, current: { ...normalWeather.current, condition: "Thunderstorm", conditionCode: "THUNDERSTORM" } });
   assert.equal(storm?.kind, "storm");
-  assert.match(storm?.body ?? "", /indoor alternative/i);
+  assert.match(storm?.body ?? "", /impact and travel advice are awaiting review/);
 });
 
 test("Plan weather monitoring follows the current itinerary destination", async () => {
@@ -35,7 +35,7 @@ test("Plan weather monitoring follows the current itinerary destination", async 
     }
   });
   assert.deepEqual(addresses, ["London"]);
-  assert.equal(result.status, "normal");
+  assert.equal(result.status, "candidate");
 });
 
 test("an explicit arrival switches monitoring before the scheduled city date", async () => {

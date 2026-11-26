@@ -1,0 +1,56 @@
+{
+  "source": "User-provided Landi four-email visual reference",
+  "sourceSha256": "25184749fdd1d4f2b60dcc5da42c804ad6616368e97a96223df48bc440b007b9",
+  "usage": "Development preview illustrations; not hosted production email assets",
+  "assets": [
+    {
+      "name": "temple",
+      "width": 1200,
+      "height": 700,
+      "sourceSvgSha256": "1b91692589d077ebbf5e2242cc514c5db96861c8874b212e393c8c37bf304abe",
+      "pngSha256": "6cd81231f8b43e5d49e1c1a2c4201a867c68b69da21f7fa90c37aef0f6e5610a"
+    },
+    {
+      "name": "street",
+      "width": 1200,
+      "height": 700,
+      "sourceSvgSha256": "e920806b7679a6d0d507e5960883729fe370c3ffee59a47252f2651d5bf9a597",
+      "pngSha256": "b7cd510cec0e324d5668ee135f9940012866c4cd965c90147ea674ccdd1bb053"
+    },
+    {
+      "name": "river",
+      "width": 1200,
+      "height": 700,
+      "sourceSvgSha256": "ea4ddef4725f51eefd56c96da77d96dedb930d8f4c315259a082fc2d0190442c",
+      "pngSha256": "86f869a8f4b25fc812b2f9677237021a05d1e2bd100091a9b6c3471fb965493e"
+    },
+    {
+      "name": "shrine",
+      "width": 1200,
+      "height": 700,
+      "sourceSvgSha256": "30adb9e6d6f0160475b6ebe942807f7802f3b50e0ef77a6d1c0dfd816dd2703e",
+      "pngSha256": "790d5c8cdebdffb49123e2d01d7b49e9f4a7a03326fbdf1e571fe8d3486eb590"
+    },
+    {
+      "name": "noodles",
+      "width": 1200,
+      "height": 700,
+      "sourceSvgSha256": "585a760ba98ae4d88460a13c8b8e9ee85793d9d1e363015074e18b41c56c39a2",
+      "pngSha256": "be5a68e40f04f99b8b43ad038788f5e41bc66f9db7337116c2ebced94b9dba82"
+    },
+    {
+      "name": "beef",
+      "width": 1200,
+      "height": 700,
+      "sourceSvgSha256": "d5269cf488f06a43582f04fb6f27fb299e90dd9cc2c5b2620011840fa212cc9c",
+      "pngSha256": "363d621eaa44e63f78f8ce4de4ab63fdfd0e99bf2259c1b4d0dab38bab2842b6"
+    },
+    {
+      "name": "gyoza",
+      "width": 1200,
+      "height": 700,
+      "sourceSvgSha256": "868b1dd7fc27e37df25bc3b4c559180f0ceb28d9c8dc83b64e4367b45a8f464a",
+      "pngSha256": "ad4eb763150eb2274508fdeb6a0394d6718198a143125f108e8f2ffa0842f02b"
+    }
+  ]
+}

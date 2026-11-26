@@ -1,7 +1,10 @@
+import { bookingRelationshipAssessmentStructureIssues, reconcileBookingRelationshipAssessment, type BookingRelationshipAssessment, type BookingRelationshipProducer } from "./booking-relationship.js";
+import { assessPolicyResearch, policyResearchForTrip, policyPreparationItem } from "./policy-research.js";
 import {
   TRIP_BLUEPRINT_SCHEMA_VERSION,
   MAP_COORDINATES_PENDING_SCHEDULING_REASON,
   assertResearchSetIntegrity,
+  isLodgingPlaceCategory,
   tripBlueprintIntegrityIssues,
   type BlueprintActionRequirement,
   type BlueprintBookingConstraint,
@@ -64,6 +67,7 @@ export interface SkillResearchPlaceImageArtifact {
 }
 
 export interface SkillResearchSourceArtifact {
+  purpose?: BlueprintSource["purpose"];
   id?: string;
   title: string;
   authority: string;
@@ -171,6 +175,8 @@ export interface SkillExperienceThemeArtifact {
 }
 
 export interface SkillTravelTipArtifact {
+  pinned?: boolean;
+  hidden?: boolean;
   id?: string;
   title: string;
   body: string;
@@ -181,6 +187,8 @@ export interface SkillTravelTipArtifact {
 }
 
 export interface SkillPreparationChecklistArtifact {
+  origin?: BlueprintPreparationChecklistItem["origin"];
+  completed?: boolean;
   id?: string;
   title: string;
   description?: string;
@@ -192,6 +200,8 @@ export interface SkillPreparationChecklistArtifact {
 }
 
 export interface SkillResearchBatchArtifact {
+  /** Optional and untrusted; Core validates without blocking itinerary generation. */
+  policyResearch?: unknown;
   id: string;
   scopeLabel: string;
   places: SkillResearchPlaceArtifact[];
@@ -213,6 +223,7 @@ export interface SkillResearchBatchArtifact {
 }
 
 export interface SkillItineraryArtifact {
+  bookingRelationshipAssessment?: BookingRelationshipAssessment;
   title: string;
   summary: string;
   language: string;
@@ -240,6 +251,9 @@ export interface ResearchImportContext {
 }
 
 export interface BlueprintImportContext {
+  bookingRelationshipProducer?: BookingRelationshipProducer;
+  /** 仅服务器从精确持久 Blueprint 读取，模型与客户端不得提供。 */
+  bookingRelationshipAssessment?: BookingRelationshipAssessment;
   blueprintId: string;
   blueprintVersion: number;
   createdAt: string;
@@ -259,6 +273,7 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
       url,
       retrievedAt: artifact.retrievedAt.trim(),
       status: artifact.status ?? "recheck",
+      ...(artifact.purpose === undefined ? {} : { purpose: artifact.purpose }),
       ...(artifact.official === undefined ? {} : { official: artifact.official })
     });
   }
@@ -266,6 +281,7 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
     ...batch.places.flatMap((place) => place.sourceUrls ?? []),
     ...batch.places.flatMap((place) => place.images?.flatMap((image) => validHttpsUrls([image.sourceUrl, ...(image.sourceUrls ?? [])])) ?? []),
     ...batch.places.flatMap((place) => place.guideDisplay?.comparisonRows?.flatMap((row) => row.sourceUrls ?? []) ?? []),
+    ...(batch.relationships ?? []).flatMap((relationship) => relationship.sourceUrls ?? []),
     ...batch.events.flatMap((event) => event.sourceUrls ?? []),
     ...(batch.localFoods ?? []).flatMap((item) => item.sourceUrls ?? []),
     ...(batch.localProducts ?? []).flatMap((item) => item.sourceUrls ?? []),
@@ -440,6 +456,8 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
       id: stableIdentity("tip", artifact.id || `${artifact.title}\0${body}`),
       title: artifact.title.trim(),
       body,
+      ...(artifact.pinned === undefined ? {} : { pinned: artifact.pinned }),
+      ...(artifact.hidden === undefined ? {} : { hidden: artifact.hidden }),
       theme: artifact.theme ?? inferTravelTipTheme(`${artifact.title} ${body}`),
       context: artifact.context.trim(),
       ...(artifact.placeId ? { placeId: resolvePlaceId(artifact.placeId, inputPlaceIdMap, placeIds) } : {}),
@@ -453,6 +471,8 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
       title: artifact.title.trim(),
       ...(artifact.description?.trim() ? { description: artifact.description.trim() } : {}),
       group: artifact.group,
+      ...(artifact.origin === undefined ? {} : { origin: structuredClone(artifact.origin) }),
+      ...(artifact.completed === undefined ? {} : { completed: artifact.completed }),
       completionCondition: artifact.completionCondition.trim(),
       ...(artifact.requirementId ? { requirementId: resolveRequirementId(artifact.requirementId, inputRequirementIdMap, requirementIds) } : {}),
       ...(artifact.placeId ? { placeId: resolvePlaceId(artifact.placeId, inputPlaceIdMap, placeIds) } : {}),
@@ -462,6 +482,7 @@ export function importSkillResearchBatches(artifacts: SkillResearchBatchArtifact
   const eventIdByArtifact = new Map<string, string>();
   artifacts.flatMap((batch) => batch.events).forEach((artifact, index) => { if (artifact.id) eventIdByArtifact.set(artifact.id, events[index]!.id); });
   const batches: ResearchBatch[] = artifacts.map((artifact) => ({
+    policyResearch: assessPolicyResearch(artifact.policyResearch, sources, context.updatedAt),
     id: stableIdentity("batch", artifact.id),
     scopeLabel: artifact.scopeLabel.trim(),
     status: "completed",
@@ -501,6 +522,18 @@ export function importSkillItinerary(research: ResearchSet, artifact: SkillItine
   const travelTips = artifact.travelTips !== undefined ? structuredClone(artifact.travelTips) : normalizeTravelTips(research, reasonableItinerary.days);
   const preparationChecklist = artifact.preparationChecklist !== undefined ? structuredClone(artifact.preparationChecklist) : normalizePreparationChecklist(research);
   const sources = mergeBlueprintSources(research.sources, artifact.sources ?? []);
+  const policyResearch = research.batches.length
+    ? research.batches.map((batch) => policyResearchForTrip(batch.policyResearch, sources, context.createdAt, artifact.startDate, artifact.endDate))
+    : [assessPolicyResearch(undefined, sources, context.createdAt)];
+  const policyItems = policyResearch.map((summary) => policyPreparationItem(summary, stableIdentity("policy-review", research.id), sources));
+  const policyItem = { ...policyItems[0]!,
+    title: policyResearch.every((summary) => summary.status === "not_assessed") ? "Check entry and transit requirements" : "Review entry and transit requirements",
+    description: [...new Set(policyResearch.flatMap((summary) => summary.issues))].join(" "),
+    evidence: policyItems.flatMap((item) => item.evidence).filter((ref, index, all) => all.findIndex((other) => other.sourceId === ref.sourceId) === index)
+  };
+  const existingPolicyItem = preparationChecklist.findIndex((item) => item.id === policyItem.id);
+  if (existingPolicyItem < 0) preparationChecklist.push(policyItem);
+  else preparationChecklist[existingPolicyItem] = policyItem;
   const actionRequirements = mergeActionRequirements(research.actionRequirements, artifact.actionRequirements ?? []);
   const blueprint: TripBlueprint = {
     schemaVersion: TRIP_BLUEPRINT_SCHEMA_VERSION,
@@ -510,6 +543,7 @@ export function importSkillItinerary(research: ResearchSet, artifact: SkillItine
     proposalRef: research.proposalRef,
     skillLineage: research.skillLineage,
     researchSetId: research.id,
+    policyResearch,
     title: artifact.title.trim(),
     summary: artifact.summary.trim(),
     language: artifact.language.trim(),
@@ -524,7 +558,8 @@ export function importSkillItinerary(research: ResearchSet, artifact: SkillItine
     sources,
     days: reasonableItinerary.days,
     movements: reasonableItinerary.movements,
-    ...(context.bookingConstraints?.length ? { bookingConstraints: structuredClone(context.bookingConstraints) } : {}),
+    ...(context.bookingConstraints !== undefined ? { bookingConstraints: structuredClone(context.bookingConstraints) } : {}),
+    ...(context.bookingRelationshipAssessment ? {bookingRelationshipAssessment:structuredClone(context.bookingRelationshipAssessment)} : artifact.bookingRelationshipAssessment!==undefined ? { bookingRelationshipAssessment: structuredClone(artifact.bookingRelationshipAssessment) } : {}),
     actionRequirements,
     ...(research.localFoods?.length ? { localFoods: structuredClone(research.localFoods) } : {}),
     ...(research.localProducts?.length ? { localProducts: structuredClone(research.localProducts) } : {}),
@@ -535,6 +570,23 @@ export function importSkillItinerary(research: ResearchSet, artifact: SkillItine
     ...(artifact.researchGrounding?.length ? { researchGrounding: artifact.researchGrounding.map((item) => item.trim()).filter(Boolean) } : {}),
     createdAt: context.createdAt
   };
+  if(blueprint.bookingRelationshipAssessment) {
+    const assessment=blueprint.bookingRelationshipAssessment;
+    if(!context.bookingRelationshipAssessment) delete assessment.reviewedTargetDigests;
+    const structural=bookingRelationshipAssessmentStructureIssues(context.bookingRelationshipAssessment?blueprint:{id:assessment.blueprintId,version:assessment.blueprintVersion},assessment);
+    if(structural.length) throw new Error(`Trip Blueprint failed integrity: ${structural.join("；")}`);
+    if(!context.bookingRelationshipAssessment) {
+    assessment.blueprintId=context.blueprintId;assessment.blueprintVersion=context.blueprintVersion;assessment.status="candidate";
+    if(assessment.decision) {
+      assessment.decision.source="agent";
+      const producer=context.bookingRelationshipProducer;
+      if(producer?.actorId&&producer.model&&Number.isFinite(Date.parse(producer.decidedAt))&&producer.taskId) {
+        assessment.decision.actorId=producer.actorId;assessment.decision.model=producer.model;assessment.decision.decidedAt=producer.decidedAt;assessment.producerVerification="verified";assessment.producerTaskId=producer.taskId;
+      } else {assessment.decision.actorId="unverified-candidate";delete assessment.decision.model;assessment.producerVerification="unverified";delete assessment.producerTaskId;}
+    }
+    }
+  }
+  reconcileBookingRelationshipAssessment(blueprint);
   const issues = tripBlueprintIntegrityIssues(blueprint, { expectedResearchPlaceIds: research.places.map((place) => place.id) });
   if (issues.length) {
     const affectedDayIds = affectedIntegrityDayIds(issues, blueprint);
@@ -627,14 +679,52 @@ function normalizeItineraryReasonableness(research: ResearchSet, artifact: Skill
   const days = artifact.days.map((day) => {
     const stopIds = new Set(day.stops.map((stop) => stop.placeId));
     const candidates = enrichDayCandidates(day, research.places, stopIds);
+    const schedule = normalizeStopScheduleProjection(day.stops, normalizeItineraryBlocks(day));
     return {
       ...structuredClone(day),
       summary: enrichDaySummary(day),
-      blocks: normalizeItineraryBlocks(day),
+      stops: schedule.stops,
+      blocks: schedule.blocks,
       candidatePlaceIds: candidates
     };
   });
   return { days, movements: normalizeMovementsForReasonableness(artifact.movements, days, placeById) };
+}
+
+function normalizeStopScheduleProjection(stops: BlueprintItineraryDay["stops"], blocks: BlueprintItineraryBlock[]): { stops: BlueprintItineraryDay["stops"]; blocks: BlueprintItineraryBlock[] } {
+  const candidates = blocks.filter((block) => block.placeId && block.planRole !== "optional" && block.planRole !== "replacement" && (block.kind === "stop" || block.kind === "event" || block.display?.routeAnchor === true));
+  const used = new Set<string>();
+  const projectedStops = stops.map((stop) => {
+    const block = candidates.find((candidate) => candidate.placeId === stop.placeId && !used.has(candidate.id));
+    if (!block) return structuredClone(stop);
+    used.add(block.id);
+    if (!block.startTime && stop.time && canPromoteStopTime(block, stop.time)) {
+      block.startTime = stop.time;
+      block.display = { ...block.display, timingStatus: block.display?.timingStatus ?? "recheck" };
+    }
+    if (!block.startTime && stop.time && block.endTime === stop.time) {
+      const { time: _time, ...withoutStartTime } = stop;
+      return structuredClone(withoutStartTime);
+    }
+    return structuredClone(stop);
+  });
+  return { stops: projectedStops, blocks };
+}
+
+function canPromoteStopTime(block: BlueprintItineraryBlock, time: string): boolean {
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time)) return false;
+  if (block.endTime) {
+    if (block.endTime <= time) return false;
+    if (block.durationMinutes !== undefined) {
+      const [startHour, startMinute] = time.split(":").map(Number);
+      const [endHour, endMinute] = block.endTime.split(":").map(Number);
+      if ((endHour! * 60 + endMinute!) - (startHour! * 60 + startMinute!) !== block.durationMinutes) return false;
+    }
+  }
+  const label = block.display?.timeLabel?.trim();
+  const range = label && /^(\d{2}:\d{2})[–-](\d{2}:\d{2})$/.exec(label);
+  const point = label && /^(\d{2}:\d{2})$/.exec(label);
+  return (!range || (range[1] === time && range[2] === block.endTime)) && (!point || point[1] === time);
 }
 
 function normalizeItineraryBlocks(day: BlueprintItineraryDay): BlueprintItineraryBlock[] {
@@ -654,13 +744,32 @@ function normalizeItineraryBlocks(day: BlueprintItineraryDay): BlueprintItinerar
 }
 
 function normalizeItineraryBlock(block: BlueprintItineraryBlock, index: number): BlueprintItineraryBlock {
+  const startTime = normalizeLocalClockTime(block.startTime);
+  const endTime = normalizeLocalClockTime(block.endTime);
+  const approximateTime = (startTime !== undefined && startTime !== block.startTime && isApproximateClockTime(block.startTime))
+    || (endTime !== undefined && endTime !== block.endTime && isApproximateClockTime(block.endTime));
   return {
     ...structuredClone(block),
+    ...(startTime !== undefined ? { startTime } : {}),
+    ...(endTime !== undefined ? { endTime } : {}),
     ...(block.placeName?.trim() ? { placeName: block.placeName.trim() } : {}),
     order: index + 1,
-    ...(block.display ? { display: normalizeItineraryBlockDisplay(block.display) } : {}),
+    ...(block.display || approximateTime ? { display: {
+      ...(block.display ? normalizeItineraryBlockDisplay(block.display) : {}),
+      ...(approximateTime ? { timingStatus: "estimated" as const } : {})
+    } } : {}),
     evidence: structuredClone(block.evidence ?? [])
   };
+}
+
+function normalizeLocalClockTime(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const match = /^(?:(?:about|around|approximately|approx\.?|roughly|circa|约|大约|预计|~|≈)\s*)?([01]?\d|2[0-3]):([0-5]\d)\s*(?:(?:local time|local|当地时间|左右|上下|approx\.?|approximately)|\((?:local time|approx\.?|approximately)\))?$/iu.exec(value.trim());
+  return match ? `${match[1]!.padStart(2, "0")}:${match[2]}` : value;
+}
+
+function isApproximateClockTime(value: string | undefined): boolean {
+  return Boolean(value && /\b(?:about|around|approximately|approx|roughly|circa)\b|约|大约|预计|左右|上下|[~≈]/iu.test(value));
 }
 
 function normalizeItineraryBlockDisplay(display: NonNullable<BlueprintItineraryBlock["display"]>): NonNullable<BlueprintItineraryBlock["display"]> {
@@ -676,7 +785,7 @@ function normalizeItineraryBlockDisplay(display: NonNullable<BlueprintItineraryB
 function inferItineraryBlockKind(role: string | undefined): BlueprintItineraryBlock["kind"] {
   const text = normalizeSearchText(role ?? "");
   if (/\b(lunch|dinner|breakfast|meal|coffee|cafe|café|snack|dessert|bar)\b/.test(text)) return "meal";
-  if (/\b(hotel|lodging|check-in|checkout|luggage)\b/.test(text)) return "lodging";
+  if (isLodgingPlaceCategory(text) || /\b(check-in|checkout|luggage)\b/.test(text)) return "lodging";
   if (/\b(transfer|transit|rail|flight|airport|station)\b/.test(text)) return "transfer";
   if (/\b(rest|break|pause)\b/.test(text)) return "rest";
   if (/\b(flexible|optional|candidate|backup)\b/.test(text)) return "flexible";
@@ -809,7 +918,7 @@ function dayCandidateScore(day: BlueprintItineraryDay, place: BlueprintPlace, no
   if (!sameCity && day.kind === "scheduled") return 0;
   if (/\b(restaurant|food|ramen|sushi|market|coffee|cafe|café|tea|dessert|bakery|bar)\b/.test(category)) score += day.kind === "scheduled" ? 12 : 16;
   if (/\b(park|garden|neighborhood|shopping|street|onsen|bath|viewpoint)\b/.test(category)) score += 8;
-  if (/\b(airport|station|hotel|transport|rail|flight)\b/.test(category)) score += day.kind === "transit" ? 10 : -6;
+  if (/\b(airport|station|transport|rail|flight)\b/.test(category) || isLodgingPlaceCategory(category)) score += day.kind === "transit" ? 10 : -6;
   if (place.priority === "must") score += 4;
   if (place.priority === "preferred") score += 3;
   if (place.priority === "nearby") score += 2;
@@ -820,10 +929,10 @@ function dayCandidateScore(day: BlueprintItineraryDay, place: BlueprintPlace, no
 
 function enrichDaySummary(day: BlueprintItineraryDay): string {
   const summary = day.summary.trim();
-  if (summary.length > 380 || /\b(candidate|fallback|swap|low-energy|buffer|meal|café|coffee)\b/i.test(summary)) return summary;
+  if (summary.length > 380 || /\b(candidate|fallback|swap|low-energy|buffer|meal|café|coffee)\b/i.test(summary) || summary.includes("Keep this as a light logistics day;")) return summary;
   const sentence = day.kind === "scheduled"
-    ? " Treat the scheduled stops as the day’s spine, then use other researched options as meal, café, rainy-day, or low-energy swaps rather than extra obligations."
-    : " Keep this as a light logistics day; use other researched options only when timing, luggage, and energy make them easy.";
+    ? " You can swap in a nearby café or indoor visit if you’d prefer a change of pace or the weather turns."
+    : " Keep the rest of the day easy, and choose any extra stops only if you feel like them.";
   return `${summary}${sentence}`;
 }
 
@@ -869,14 +978,19 @@ function committedPhysicalAnchorIds(day: BlueprintItineraryDay): string[] {
 }
 
 function enrichMovement(movement: BlueprintMovement, origin?: BlueprintPlace, destination?: BlueprintPlace): BlueprintMovement {
-  const inferredMode = movement.mode === "unknown" ? inferMovementMode(origin, destination) : movement.mode;
-  const durationMinutes = movement.durationMinutes ?? (inferredMode === "unknown" ? undefined : estimateMovementMinutes(origin, destination, inferredMode));
+  const { durationMinutes: _rawDurationMinutes, ...movementWithoutDuration } = movement;
+  const airportTransferMislabelledAsFlight = movement.mode === "flight" && [origin, destination].filter((place) => /\b(airport|aerodrome)\b/i.test(`${place?.category ?? ""} ${place?.name ?? ""}`)).length === 1;
+  const inferredMode = airportTransferMislabelledAsFlight ? "unknown" : movement.mode === "unknown" ? inferMovementMode(origin, destination) : movement.mode;
+  const syntheticEstimate = !movement.evidence.length && /^(?:Allow about \d+ minutes\. )?(?:This is a conservative planning estimate; refresh live |This is an estimate; check the current )/u.test(movement.detail ?? "");
+  // Coordinates do not provide a road, rail, flight or walking duration. Do not
+  // regenerate a rejected duration after the Agent correctly removes it.
+  const durationMinutes = airportTransferMislabelledAsFlight || syntheticEstimate ? undefined : movement.durationMinutes;
   const status = movement.status === "verified" && evidenceIsFullyVerified(movement.evidence) ? "verified" : "recheck";
-  const label = movement.label?.trim() || movementLabel(inferredMode, destination);
-  const detail = movement.detail?.trim() || movementDetail(inferredMode, durationMinutes);
+  const label = airportTransferMislabelledAsFlight ? movementLabel(inferredMode, destination) : movement.label?.trim() || movementLabel(inferredMode, destination);
+  const detail = airportTransferMislabelledAsFlight || syntheticEstimate ? movementDetail(inferredMode, durationMinutes) : movement.detail?.trim() || movementDetail(inferredMode, durationMinutes);
   const display = normalizeMovementDisplayForStatus(movement, normalizeMovementDisplay(movement.display), status, label);
   return {
-    ...movement,
+    ...movementWithoutDuration,
     mode: inferredMode,
     status,
     ...(durationMinutes ? { durationMinutes } : {}),
@@ -936,27 +1050,16 @@ function normalizeMovementRefreshScope(scope: NonNullable<BlueprintMovement["dis
 }
 
 function inferMovementMode(origin?: BlueprintPlace, destination?: BlueprintPlace): BlueprintMovement["mode"] {
+  const originAirport = /\b(airport|aerodrome)\b/i.test(`${origin?.category ?? ""} ${origin?.name ?? ""}`);
+  const destinationAirport = /\b(airport|aerodrome)\b/i.test(`${destination?.category ?? ""} ${destination?.name ?? ""}`);
+  if (originAirport && destinationAirport) return "flight";
+  if (originAirport || destinationAirport) return "unknown";
   const text = normalizeSearchText(`${origin?.category ?? ""} ${origin?.name ?? ""} ${destination?.category ?? ""} ${destination?.name ?? ""}`);
-  if (/\b(airport|flight|terminal|lax|haneda|narita|kansai)\b/.test(text)) return "flight";
+  if (/\bflight\b/.test(text)) return "flight";
   if (estimatedDistanceMeters(origin, destination) !== undefined && estimatedDistanceMeters(origin, destination)! <= 1400) return "walking";
   // Geography alone does not prove a transport mode. In particular, a city
   // label mismatch must never silently become rail.
   return "unknown";
-}
-
-function estimateMovementMinutes(origin: BlueprintPlace | undefined, destination: BlueprintPlace | undefined, mode: BlueprintMovement["mode"]): number {
-  const distance = estimatedDistanceMeters(origin, destination);
-  if (mode === "flight") return 180;
-  if (mode === "rail") return distance && distance > 250000 ? 150 : 70;
-  if (mode === "walking") return distance ? Math.max(10, Math.ceil(distance / 70 / 5) * 5) : 15;
-  if (distance) {
-    if (distance <= 3000) return 25;
-    if (distance <= 15000) return 40;
-    if (distance <= 80000) return 75;
-    return 120;
-  }
-  if (origin?.city && destination?.city && normalizeSearchText(origin.city) === normalizeSearchText(destination.city)) return 35;
-  return 60;
 }
 
 function movementLabel(mode: BlueprintMovement["mode"], destination?: BlueprintPlace): string {
@@ -971,7 +1074,7 @@ function movementLabel(mode: BlueprintMovement["mode"], destination?: BlueprintP
 function movementDetail(mode: BlueprintMovement["mode"], durationMinutes?: number): string {
   const estimate = durationMinutes ? `Allow about ${durationMinutes} minutes. ` : "";
   const method = mode === "walking" ? "walking time" : mode === "rail" ? "rail timing" : mode === "flight" ? "airport timing" : "routing";
-  return `${estimate}This is a conservative planning estimate; refresh live ${method} before execution.`;
+  return `${estimate}This is an estimate; check the current ${method} before setting off.`;
 }
 
 function estimatedDistanceMeters(origin?: BlueprintPlace, destination?: BlueprintPlace): number | undefined {

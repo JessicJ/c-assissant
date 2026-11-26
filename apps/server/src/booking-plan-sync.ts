@@ -5,34 +5,7 @@ import type {
   TravelBooking
 } from "@c-assistant/core";
 
-export function blueprintBookingConstraintsFromTravelBookings(bookings: TravelBooking[]): BlueprintBookingConstraint[] {
-  return bookings
-    .filter((booking) => booking.status !== "cancelled")
-    .map((booking): BlueprintBookingConstraint => ({
-      id: `booking-${booking.id}`,
-      type: booking.type,
-      title: booking.title,
-      status: booking.status,
-      sourceLabel: booking.sourceLabel,
-      importedAt: booking.importedAt,
-      constraintStrength: booking.constraintStrength,
-      segments: booking.segments.map((segment) => ({
-        id: `segment-${segment.id}`,
-        segmentType: segment.segmentType,
-        title: segment.title,
-        ...(segment.startAtLocal ? { startAtLocal: segment.startAtLocal } : {}),
-        ...(segment.startTimeZone ? { startTimeZone: segment.startTimeZone } : {}),
-        ...(segment.endAtLocal ? { endAtLocal: segment.endAtLocal } : {}),
-        ...(segment.endTimeZone ? { endTimeZone: segment.endTimeZone } : {}),
-        ...(segment.origin ? { origin: segment.origin } : {}),
-        ...(segment.destination ? { destination: segment.destination } : {}),
-        ...(segment.location ? { location: segment.location } : {}),
-        constraintStrength: segment.constraintStrength,
-        fixedCommitment: segment.fixedCommitment,
-        needsReviewReasons: [...segment.needsReviewReasons]
-      }))
-    }));
-}
+export { blueprintBookingConstraintsFromTravelBookings } from "@c-assistant/core";
 
 export function planningFactsFromBooking(booking: TravelBooking): PlanningFact[] {
   if (booking.status === "cancelled") return [];

@@ -6,6 +6,8 @@ import type {
   ResearchSet,
   TripBlueprint
 } from "@c-assistant/core";
+import { isGateway } from "./gateway-node-completion.js";
+import { accommodationMatchesCity } from "./accommodation-location.js";
 
 export type DayPlanningClassification = "WELL_PLANNED" | "INTENTIONALLY_LIGHT" | "UNDER_PLANNED" | "OVER_PLANNED";
 export type UnderPlannedCause = "CANDIDATE_GAP" | "DEPENDENCY_GAP" | "COMPOSITION_FAILURE";
@@ -39,10 +41,25 @@ const ARRIVAL_DEPARTURE_WINDOW_MINUTES = 180;
 const MEANINGFUL_UNUSED_CAPACITY_MINUTES = 150;
 const MIN_SUBSTANTIVE_DAY_MINUTES = 210;
 const OVERPLANNED_TOTAL_MINUTES = 620;
+const LONG_EXCURSION_TOTAL_MINUTES = 900;
 
 export function assessBlueprintDayReasonableness(blueprint: TripBlueprint): DayPlanningAssessment[] {
   const placeById = new Map(blueprint.places.map((place) => [place.id, place] as const));
-  return blueprint.days.map((day) => assessDay(day, blueprint.movements, placeById));
+  return blueprint.days.map((day) => assessDay(day, blueprint.movements, placeById, blueprint.endDate));
+}
+
+/** Full destination days cannot be delivered with only lodging anchors. */
+export function emptyDestinationDayDates(blueprint: TripBlueprint): string[] {
+  const days = new Map(blueprint.days.map((day) => [day.id, day] as const));
+  return assessBlueprintDayReasonableness(blueprint)
+    .filter((assessment) => assessment.classification === "UNDER_PLANNED")
+    .filter((assessment) => {
+      const day = days.get(assessment.dayId);
+      return day && ["scheduled", "free_time", "rest"].includes(day.kind)
+        && day.stops.length === 0
+        && !(day.blocks ?? []).some((block) => block.planRole !== "optional" && block.planRole !== "replacement" && ["stop", "meal", "event"].includes(block.kind));
+    })
+    .map((assessment) => assessment.date);
 }
 
 export function completionTargetsForBlueprint(blueprint: TripBlueprint, research: ResearchSet): DayCompletionTarget[] {
@@ -93,6 +110,7 @@ export function buildCompletionItineraryRequest(baseRequest: string, targets: Da
     "The previous itinerary draft was evaluated for day-by-day reasonableness. Re-compose only the listed under-planned day(s) unless a necessary movement adjustment touches an adjacent day. Preserve already well-planned and intentionally light days, especially long/full-day anchors.",
     "Do not add generic lunch, generic dinner, rest, free time, flexible afternoon, slow morning, early night, or return-to-hotel blocks. Internal meals, rest, navigation, and buffer consume capacity but must remain internal unless tied to a concrete place or execution dependency.",
     "A sparse day is acceptable only for concrete reasons such as arrival, departure, long transport, a full-day experience, fixed commitment, explicit user preference, actual party/physical constraint, or real recovery requirement. Do not rely on relaxed pace, preserve energy, avoid rushing, easy day, or before departure by itself.",
+    "For a single full-day excursion, count outbound travel, on-site activity, return travel, and internal buffer exactly once. If a provider's package duration already includes travel, do not repeat that duration in separate transfer blocks. Do not add another major stop to a demanding excursion day merely to meet a stop count.",
     researchCalled ? "Supplemental targeted research has been merged into the Research Set. Choose normally from all eligible places; do not auto-schedule every new candidate." : "Use the existing Research Set candidates first. Choose only candidates that improve geographic coherence and experience complementarity.",
     `Completion targets: ${JSON.stringify(targetBriefs)}`
   ].join("\n");
@@ -118,26 +136,43 @@ export function buildTargetedCompletionResearchRequest(baseRequest: string, targ
   ].join("\n");
 }
 
-function assessDay(day: BlueprintItineraryDay, movements: BlueprintMovement[], placeById: Map<string, BlueprintPlace>): DayPlanningAssessment {
+function assessDay(day: BlueprintItineraryDay, movements: BlueprintMovement[], placeById: Map<string, BlueprintPlace>, endDate: string): DayPlanningAssessment {
   const visitMinutes = visitDurationMinutes(day, placeById);
   const movementMinutes = movements.filter((movement) => movement.dayId === day.id).reduce((sum, movement) => sum + (movement.durationMinutes ?? 0), 0);
   const fixedCommitmentMinutes = fixedCommitmentDurationMinutes(day);
   const usefulCapacityMinutes = usefulCapacityForDay(day);
-  const consumed = visitMinutes + movementMinutes + fixedCommitmentMinutes + DAY_INTERNAL_BUFFER_MINUTES;
+  // Event time is already part of visitMinutes. Transfer blocks and movements
+  // often describe the same journey, so count the larger available estimate.
+  const transferMinutes = (day.blocks ?? []).filter((block) => block.kind === "transfer").reduce((sum, block) => sum + (block.durationMinutes ?? 0), 0);
+  const lodgingMinutes = (day.blocks ?? []).filter((block) => block.kind === "lodging").reduce((sum, block) => sum + (block.durationMinutes ?? 0), 0);
+  const consumed = visitMinutes + Math.max(movementMinutes, transferMinutes) + lodgingMinutes + DAY_INTERNAL_BUFFER_MINUTES;
   const remainingUsefulCapacityMinutes = Math.max(0, usefulCapacityMinutes - consumed);
   const intensity = experienceIntensity(day, placeById, visitMinutes);
   const lightReason = intentionalLightReason(day, visitMinutes, fixedCommitmentMinutes, intensity);
-  if (consumed > OVERPLANNED_TOTAL_MINUTES) {
+  if (consumed > OVERPLANNED_TOTAL_MINUTES && !isSingleLongExcursion(day, placeById, consumed)) {
     return assessment(day, "OVER_PLANNED", visitMinutes, movementMinutes, usefulCapacityMinutes, remainingUsefulCapacityMinutes, fixedCommitmentMinutes, intensity, "The visible plan plus movement and internal buffer exceeds a comfortable day.");
+  }
+  if (isIntercityBaseChange(day, placeById)) {
+    return assessment(day, "INTENTIONALLY_LIGHT", visitMinutes, movementMinutes, usefulCapacityMinutes, remainingUsefulCapacityMinutes, fixedCommitmentMinutes, intensity, "A real transfer between overnight cities occupies the day even while its travel time awaits route confirmation.");
+  }
+  const formalBlocks = (day.blocks ?? []).filter((block) => block.planRole !== "optional" && block.planRole !== "replacement").sort((a, b) => a.order - b.order);
+  const endpoint = formalBlocks.at(-1);
+  const gateway = endpoint?.placeId ? placeById.get(endpoint.placeId) : undefined;
+  if (day.date === endDate && endpoint?.kind === "stop" && (isGateway(gateway, "airport") || isGateway(gateway, "station"))
+    && formalBlocks.some((block) => block.kind === "transfer")) {
+    return assessment(day, "INTENTIONALLY_LIGHT", visitMinutes, movementMinutes, usefulCapacityMinutes, remainingUsefulCapacityMinutes, fixedCommitmentMinutes, intensity, "The final route ends at a concrete departure gateway; retain time for luggage, travel and boarding rather than padding the sightseeing plan.");
   }
   if (lightReason) {
     return assessment(day, "INTENTIONALLY_LIGHT", visitMinutes, movementMinutes, usefulCapacityMinutes, remainingUsefulCapacityMinutes, fixedCommitmentMinutes, intensity, lightReason);
+  }
+  if (isSingleLongExcursion(day, placeById, consumed)) {
+    return assessment(day, "INTENTIONALLY_LIGHT", visitMinutes, movementMinutes, usefulCapacityMinutes, remainingUsefulCapacityMinutes, fixedCommitmentMinutes, intensity, "A single full-day excursion is the day's main activity, including its travel and recovery time.");
   }
   if (day.kind === "scheduled" && day.stops.length > 0 && visitMinutes === 0) {
     return assessment(day, "UNDER_PLANNED", visitMinutes, movementMinutes, usefulCapacityMinutes, remainingUsefulCapacityMinutes, fixedCommitmentMinutes, intensity, "Scheduled day is missing enough duration information for automatic day-completion research.", "COMPOSITION_FAILURE");
   }
   if (day.kind !== "scheduled") {
-    const cause: UnderPlannedCause = hasDependencyGap(day) ? "DEPENDENCY_GAP" : "COMPOSITION_FAILURE";
+    const cause: UnderPlannedCause = day.kind === "transit" ? "DEPENDENCY_GAP" : "CANDIDATE_GAP";
     return assessment(day, "UNDER_PLANNED", visitMinutes, movementMinutes, usefulCapacityMinutes, remainingUsefulCapacityMinutes, fixedCommitmentMinutes, intensity, "Non-sightseeing day lacks enough concrete logistics to justify preserving the full day.", cause);
   }
   if (remainingUsefulCapacityMinutes >= MEANINGFUL_UNUSED_CAPACITY_MINUTES && visitMinutes + movementMinutes < MIN_SUBSTANTIVE_DAY_MINUTES) {
@@ -145,6 +180,25 @@ function assessDay(day: BlueprintItineraryDay, movements: BlueprintMovement[], p
     return assessment(day, "UNDER_PLANNED", visitMinutes, movementMinutes, usefulCapacityMinutes, remainingUsefulCapacityMinutes, fixedCommitmentMinutes, intensity, "Normal sightseeing day has material unused capacity after internal buffer.", cause);
   }
   return assessment(day, "WELL_PLANNED", visitMinutes, movementMinutes, usefulCapacityMinutes, remainingUsefulCapacityMinutes, fixedCommitmentMinutes, intensity, "The day has enough concrete place time and movement for its usable window.");
+}
+
+function isIntercityBaseChange(day: BlueprintItineraryDay, placeById: Map<string, BlueprintPlace>): boolean {
+  if (!(day.blocks ?? []).some((block) => block.kind === "transfer")) return false;
+  const lodging = (day.blocks ?? []).filter((block) => block.kind === "lodging" && block.placeId)
+    .map((block) => placeById.get(block.placeId!)).filter((place): place is BlueprintPlace => Boolean(place));
+  if (lodging.length < 2) return false;
+  const origin = lodging[0]?.city?.trim().toLocaleLowerCase();
+  const destination = lodging.at(-1)?.city?.trim().toLocaleLowerCase();
+  return Boolean(origin && destination && origin !== destination && !accommodationMatchesCity(lodging.at(-1)!, origin));
+}
+
+function isSingleLongExcursion(day: BlueprintItineraryDay, placeById: Map<string, BlueprintPlace>, consumed: number): boolean {
+  if (day.kind !== "scheduled" || day.stops.length !== 1 || consumed > LONG_EXCURSION_TOTAL_MINUTES) return false;
+  const place = placeById.get(day.stops[0]!.placeId);
+  if (!place) return false;
+  const label = `${place.name} ${place.category} ${place.visitRole ?? ""} ${day.title}`;
+  if (!/\b(?:day trip|full.day|excursion|coach and cruise|coach & cruise)\b/iu.test(label)) return false;
+  return !(day.blocks ?? []).some((block) => block.kind === "transfer" && /\bflight\b/iu.test(`${block.title ?? ""} ${block.role ?? ""}`));
 }
 
 function assessment(
@@ -173,30 +227,32 @@ function visitDurationMinutes(day: BlueprintItineraryDay, placeById: Map<string,
 
 function fixedCommitmentDurationMinutes(day: BlueprintItineraryDay): number {
   return (day.blocks ?? []).reduce((sum, block) => {
-    if (block.kind !== "transfer" && block.kind !== "lodging" && block.kind !== "event") return sum;
+    if (block.kind !== "transfer" && block.kind !== "lodging") return sum;
     return sum + (block.durationMinutes ?? 0);
   }, 0);
 }
 
 function usefulCapacityForDay(day: BlueprintItineraryDay): number {
-  const text = dayText(day);
+  const text = travelLogisticsText(day);
   if (day.kind === "rest" || day.kind === "free_time") return ARRIVAL_DEPARTURE_WINDOW_MINUTES;
   if (/\b(arriv|depart|airport|flight|check-?out|immigration|customs)\b/i.test(text)) return ARRIVAL_DEPARTURE_WINDOW_MINUTES;
   return NORMAL_SIGHTSEEING_WINDOW_MINUTES;
 }
 
 function intentionalLightReason(day: BlueprintItineraryDay, visitMinutes: number, fixedCommitmentMinutes: number, intensity: DayPlanningAssessment["experienceIntensity"]): string | undefined {
-  const text = dayText(day);
+  const text = travelLogisticsText(day);
   if (/\b(arriv|airport|immigration|customs)\b/i.test(text)) return "Arrival logistics create a short usable travel window.";
   if (/\b(depart|flight leaves|checkout|check-out|airport journey)\b/i.test(text)) return "Departure logistics create a short usable travel window.";
   if (visitMinutes >= 360 || intensity === "high") return "A long or high-intensity scheduled experience consumes the practical sightseeing day.";
   if (fixedCommitmentMinutes >= 240) return "A fixed commitment consumes most of the practical sightseeing day.";
-  if (day.kind === "rest" && /\b(user requested|explicit|medical|mobility|recovery from overnight|overnight flight)\b/i.test(text)) return "The rest day is tied to an explicit traveler or physical constraint.";
+  if (day.kind === "rest" && /\b(user requested|explicit|medical|mobility|recovery from overnight|overnight flight)\b/i.test(dayText(day))) return "The rest day is tied to an explicit traveler or physical constraint.";
   return undefined;
 }
 
 function hasDependencyGap(day: BlueprintItineraryDay): boolean {
-  return /\b(lodging not selected|hotel not selected|base|baggage|check-?in|check-?out|transfer pending|pickup pending|route pending|meeting point|reservation required|ticket required)\b/i.test(dayText(day));
+  const text = dayText(day);
+  return /\b(?:lodging|hotel|accommodation|base|baggage|check-?in|check-?out|transfer|pickup|route|meeting point|reservation|ticket)\b[^.;]{0,70}\b(?:not selected|pending|unresolved|not confirmed|requires? confirmation)\b/i.test(text)
+    || /\b(?:not selected|pending|unresolved|not confirmed|requires? confirmation)\b[^.;]{0,70}\b(?:lodging|hotel|accommodation|base|baggage|check-?in|check-?out|transfer|pickup|route|meeting point|reservation|ticket)\b/i.test(text);
 }
 
 function experienceIntensity(day: BlueprintItineraryDay, placeById: Map<string, BlueprintPlace>, visitMinutes: number): DayPlanningAssessment["experienceIntensity"] {
@@ -307,6 +363,12 @@ function sameText(left: string | undefined, right: string | undefined): boolean 
 
 function dayText(day: BlueprintItineraryDay): string {
   return `${day.kind} ${day.title} ${day.summary} ${(day.blocks ?? []).map((block) => `${block.kind} ${block.title ?? ""} ${block.summary ?? ""} ${block.role ?? ""}`).join(" ")}`;
+}
+
+function travelLogisticsText(day: BlueprintItineraryDay): string {
+  return `${day.kind} ${day.title} ${day.summary} ${(day.blocks ?? [])
+    .filter((block) => block.kind === "transfer" && /\b(?:airport|flight|train|ferry|immigration|customs)\b/i.test(`${block.title ?? ""} ${block.summary ?? ""} ${block.role ?? ""}`))
+    .map((block) => `${block.title ?? ""} ${block.summary ?? ""} ${block.role ?? ""}`).join(" ")}`;
 }
 
 function normalize(value: string | undefined): string {

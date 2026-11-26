@@ -1,0 +1,302 @@
+{
+  "provenance": {
+    "sourceHead": "7bda1fccc6c694215631c9367d5065c2014ebc77",
+    "compilerVersion": "2.0.0",
+    "sourceFiles": [
+      {
+        "path": "packages/core/src/blueprint-plan-compiler.ts",
+        "sha256": "b14b64c243b43131e7dba5f204225a277c88ed176f25600e07cf57d8cdb39913"
+      },
+      {
+        "path": "packages/core/src/trip-blueprint.ts",
+        "sha256": "9a5de3aca26c2e6790a2e1ce6437cc01f2f8bef48028dafad334fe0966735776"
+      }
+    ],
+    "description": "从该 HEAD 原始源码隔离转译并调用旧编译器；未使用新版编译器或改写版本标签。映射字段是旧完整性校验允许的输入扩展，旧编译结果由原始函数实际产生。"
+  },
+  "cases": [
+    {
+      "name": "无源映射",
+      "blueprint": {
+        "schemaVersion": 1,
+        "id": "旧编译无源蓝图",
+        "version": 1,
+        "generationKey": "旧无源生成",
+        "proposalRef": {
+          "sessionId": "旧规划会话",
+          "proposalVersion": 1
+        },
+        "skillLineage": {
+          "skillId": "landi-trip-blueprint",
+          "skillVersion": "1.0.0"
+        },
+        "researchSetId": "旧无源研究",
+        "title": "虚构旧版旅行",
+        "summary": "仅供隔离持久回归",
+        "language": "zh",
+        "destinations": [
+          "虚构海湾"
+        ],
+        "startDate": "2026-12-01",
+        "endDate": "2026-12-01",
+        "places": [],
+        "events": [],
+        "sources": [],
+        "days": [
+          {
+            "id": "旧日程",
+            "date": "2026-12-01",
+            "kind": "free_time",
+            "city": "虚构海湾",
+            "title": "虚构自由日",
+            "summary": "隔离验收",
+            "stops": [],
+            "candidatePlaceIds": []
+          }
+        ],
+        "movements": [],
+        "actionRequirements": [],
+        "travelTips": [
+          {
+            "id": "旧提示",
+            "title": "虚构出行提醒",
+            "body": "出发前核对资料",
+            "theme": "weather",
+            "context": "虚构天气",
+            "evidence": []
+          }
+        ],
+        "bookingConstraints": [
+          {
+            "id": "booking-旧原始预订",
+            "type": "ticket",
+            "title": "虚构旧预订",
+            "status": "needs_review",
+            "sourceLabel": "旅行者测试声明",
+            "importedAt": "2026-11-01T00:00:00.000Z",
+            "constraintStrength": "soft",
+            "segments": [
+              {
+                "id": "segment-旧分段",
+                "segmentType": "event_window",
+                "title": "虚构旧分段",
+                "startAtLocal": "2026-12-01T10:00",
+                "startTimeZone": "UTC",
+                "location": "虚构展馆",
+                "constraintStrength": "soft",
+                "fixedCommitment": false,
+                "needsReviewReasons": []
+              }
+            ]
+          }
+        ],
+        "createdAt": "2026-11-01T00:00:00.000Z"
+      },
+      "compilation": {
+        "plan": {
+          "id": "plan-zflkg9",
+          "version": 1,
+          "title": "虚构旧版旅行",
+          "location": "虚构海湾",
+          "dates": "2026-12-01 – 2026-12-01",
+          "status": "draft",
+          "knownInformation": [
+            "Destinations: 虚构海湾",
+            "Travel dates: 2026-12-01 to 2026-12-01",
+            "1 days to explore, with 0 places to visit, eat or stay."
+          ],
+          "assumptions": [
+            "Imported ticket '虚构旧预订' needs review before it can constrain the itinerary."
+          ],
+          "nextAction": "Have a look through your itinerary and preparations. Confirm the plan when it feels right for your trip.",
+          "configuration": {
+            "accommodation": {
+              "status": "not_set"
+            },
+            "arrival": {},
+            "transport": {
+              "preference": "plan_recommended"
+            },
+            "travelContext": {
+              "luggage": "unknown"
+            }
+          },
+          "stages": [
+            {
+              "id": "stage-1ld7ol5",
+              "title": "Imported booking constraints",
+              "description": "Confirmed or reviewed bookings that shape the trip. These records come from traveler-imported confirmations, not from Landi booking on your behalf.",
+              "presentationKind": "reservations",
+              "tasks": [
+                {
+                  "id": "task-15kbwr",
+                  "requirementId": "booking:booking-旧原始预订:segment-旧分段",
+                  "title": "Review imported ticket: 虚构旧分段",
+                  "description": "虚构旧预订 · Starts 2026-12-01T10:00 · at 虚构展馆",
+                  "owner": "user",
+                  "status": "waiting_user",
+                  "dueLabel": "2026-12-01T10:00",
+                  "preparationCategory": "booking"
+                }
+              ]
+            }
+          ],
+          "sources": [],
+          "createdAt": "2026-11-01T00:00:00.000Z"
+        },
+        "lineage": {
+          "planId": "plan-zflkg9",
+          "planVersion": 1,
+          "blueprintId": "旧编译无源蓝图",
+          "blueprintVersion": 1,
+          "compilerVersion": "2.0.0",
+          "compilationKey": "旧编译无源蓝图:1:2.0.0",
+          "createdAt": "2026-11-01T00:00:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "有明确源映射",
+      "blueprint": {
+        "schemaVersion": 1,
+        "id": "旧编译有源蓝图",
+        "version": 1,
+        "generationKey": "旧有源生成",
+        "proposalRef": {
+          "sessionId": "旧规划会话",
+          "proposalVersion": 1
+        },
+        "skillLineage": {
+          "skillId": "landi-trip-blueprint",
+          "skillVersion": "1.0.0"
+        },
+        "researchSetId": "旧有源研究",
+        "title": "虚构旧版旅行",
+        "summary": "仅供隔离持久回归",
+        "language": "zh",
+        "destinations": [
+          "虚构海湾"
+        ],
+        "startDate": "2026-12-01",
+        "endDate": "2026-12-01",
+        "places": [],
+        "events": [],
+        "sources": [],
+        "days": [
+          {
+            "id": "旧日程",
+            "date": "2026-12-01",
+            "kind": "free_time",
+            "city": "虚构海湾",
+            "title": "虚构自由日",
+            "summary": "隔离验收",
+            "stops": [],
+            "candidatePlaceIds": []
+          }
+        ],
+        "movements": [],
+        "actionRequirements": [],
+        "travelTips": [
+          {
+            "id": "旧提示",
+            "title": "虚构出行提醒",
+            "body": "出发前核对资料",
+            "theme": "weather",
+            "context": "虚构天气",
+            "evidence": []
+          }
+        ],
+        "bookingConstraints": [
+          {
+            "id": "booking-旧原始预订",
+            "sourceBookingId": "旧原始预订",
+            "type": "ticket",
+            "title": "虚构旧预订",
+            "status": "needs_review",
+            "sourceLabel": "旅行者测试声明",
+            "importedAt": "2026-11-01T00:00:00.000Z",
+            "constraintStrength": "soft",
+            "segments": [
+              {
+                "id": "segment-旧分段",
+                "sourceSegmentId": "旧分段",
+                "status": "needs_review",
+                "segmentType": "event_window",
+                "title": "虚构旧分段",
+                "startAtLocal": "2026-12-01T10:00",
+                "startTimeZone": "UTC",
+                "location": "虚构展馆",
+                "constraintStrength": "soft",
+                "fixedCommitment": false,
+                "needsReviewReasons": []
+              }
+            ]
+          }
+        ],
+        "createdAt": "2026-11-01T00:00:00.000Z"
+      },
+      "compilation": {
+        "plan": {
+          "id": "plan-zsp02c",
+          "version": 1,
+          "title": "虚构旧版旅行",
+          "location": "虚构海湾",
+          "dates": "2026-12-01 – 2026-12-01",
+          "status": "draft",
+          "knownInformation": [
+            "Destinations: 虚构海湾",
+            "Travel dates: 2026-12-01 to 2026-12-01",
+            "1 days to explore, with 0 places to visit, eat or stay."
+          ],
+          "assumptions": [
+            "Imported ticket '虚构旧预订' needs review before it can constrain the itinerary."
+          ],
+          "nextAction": "Have a look through your itinerary and preparations. Confirm the plan when it feels right for your trip.",
+          "configuration": {
+            "accommodation": {
+              "status": "not_set"
+            },
+            "arrival": {},
+            "transport": {
+              "preference": "plan_recommended"
+            },
+            "travelContext": {
+              "luggage": "unknown"
+            }
+          },
+          "stages": [
+            {
+              "id": "stage-nr0c1k",
+              "title": "Imported booking constraints",
+              "description": "Confirmed or reviewed bookings that shape the trip. These records come from traveler-imported confirmations, not from Landi booking on your behalf.",
+              "presentationKind": "reservations",
+              "tasks": [
+                {
+                  "id": "task-rbq29e",
+                  "requirementId": "booking:booking-旧原始预订:segment-旧分段",
+                  "title": "Review imported ticket: 虚构旧分段",
+                  "description": "虚构旧预订 · Starts 2026-12-01T10:00 · at 虚构展馆",
+                  "owner": "user",
+                  "status": "waiting_user",
+                  "dueLabel": "2026-12-01T10:00",
+                  "preparationCategory": "booking"
+                }
+              ]
+            }
+          ],
+          "sources": [],
+          "createdAt": "2026-11-01T00:00:00.000Z"
+        },
+        "lineage": {
+          "planId": "plan-zsp02c",
+          "planVersion": 1,
+          "blueprintId": "旧编译有源蓝图",
+          "blueprintVersion": 1,
+          "compilerVersion": "2.0.0",
+          "compilationKey": "旧编译有源蓝图:1:2.0.0",
+          "createdAt": "2026-11-01T00:00:00.000Z"
+        }
+      }
+    }
+  ]
+}

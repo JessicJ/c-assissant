@@ -46,6 +46,26 @@ test("ordinary itinerary stops do not create notification noise", () => {
   assert.deepEqual(due, []);
 });
 
+test("first daily departure can use an unbooked recommended hotel when its route is verified", () => {
+  const withProvisionalHotel = plan();
+  withProvisionalHotel.presentation!.places.push({
+    id: "london-hotel", name: "Recommended London Hotel", locationLabel: "London", city: "London", coordinates: [51.51, -0.11],
+    category: "hotel", priority: "preferred", whyWorthIt: "Provisional base", plan: "Compare before booking", detailSections: [], sourceRefs: [],
+    accommodation: { state: "recommended" }
+  });
+  withProvisionalHotel.presentation!.days[1]!.startContext = { label: "Recommended London Hotel", status: "recommended_property", placeId: "london-hotel" };
+  withProvisionalHotel.presentation!.routeSegments.push({
+    id: "hotel-to-park", dayId: "london", originPlaceId: "london-hotel", destinationPlaceId: "park",
+    mode: "walking", durationMinutes: 20, verification: "verified", label: "Walk · 20 min", sourceRefs: []
+  });
+  const due = dueItineraryDepartureReminders(withProvisionalHotel, new Map([["london", "Europe/London"]]), new Date("2026-08-19T08:35:00.000Z"));
+  assert.equal(due.length, 1);
+  assert.equal(due[0]?.leaveAt.toISOString(), "2026-08-19T08:30:00.000Z");
+  assert.equal(due[0]?.origin?.id, "london-hotel");
+  assert.match(formatItineraryDepartureReminder(withProvisionalHotel, due[0]!), /provisional route base/i);
+  assert.match(formatItineraryDepartureReminder(withProvisionalHotel, due[0]!), /Recommended London Hotel/);
+});
+
 test("narrative visit roles do not turn ordinary sightseeing into fixed-stop reminders", () => {
   const ordinary = plan();
   ordinary.presentation!.places.find((place) => place.id === "park")!.visitRole = "arrival-day architectural introduction";

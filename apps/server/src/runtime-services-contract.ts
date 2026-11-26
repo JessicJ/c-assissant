@@ -1,14 +1,20 @@
-import type { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeKind } from "@c-assistant/agent-adapters";
-import type { AgentRuntimeKind } from "@c-assistant/core";
+import type { GenerationAdmission } from './generation-admission.js';
+import type { RuntimeKind } from "@c-assistant/agent-adapters";
+import type { BlueprintRuntime, BusinessRuntime, LocalRuntimeDiagnostics } from "./agent-work-contract.js";
 import type { PlanningGenerationService } from "./planning-generation-service.js";
+import type { MahPlanningConversationService } from "./mah-planning-conversation.js";
 
-export type RuntimeAdapter = CodexRuntimeAdapter | ClaudeCodeRuntimeAdapter;
+
 
 export interface RuntimeServices {
-  runtimes: Record<RuntimeKind, RuntimeAdapter>;
+  runtimes: Record<RuntimeKind, LocalRuntimeDiagnostics>;
+  business: BusinessRuntime;
+  planningConversation?: MahPlanningConversationService;
   planningGeneration: PlanningGenerationService;
+  generationAdmission?: GenerationAdmission;
   getGeneratingPlan(): boolean;
   setGeneratingPlan(running: boolean): void;
-  selectedRuntimeAdapter(kind: AgentRuntimeKind): RuntimeAdapter;
-  abortGenerationJobs(): void;
+  itineraryContentReview?: BlueprintRuntime["reviewSkillItinerary"];
+  recoverMahGenerations(): Promise<void>;
+  abortGenerationJobs(): Promise<void>;
 }

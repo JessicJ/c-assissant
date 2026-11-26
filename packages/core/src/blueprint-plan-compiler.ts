@@ -1,12 +1,28 @@
+import { bookingRelationshipDigest, bookingRelationshipSourceUnits, bookingTaskRequirementId } from "./booking-relationship.js";
 import type { Plan, PlanBlueprintLineage, Stage, StagePresentationKind, Task } from "./index.js";
 import { assertTripBlueprintIntegrity, type BlueprintActionRequirement, type BlueprintBookingConstraint, type BlueprintBookingSegment, type TripBlueprint } from "./trip-blueprint.js";
 
-export const BLUEPRINT_PLAN_COMPILER_VERSION = "1.0.0";
+export const BLUEPRINT_PLAN_COMPILER_VERSION = "2.1.0";
+const SUPPORTED_BLUEPRINT_PLAN_COMPILER_VERSIONS: readonly string[] = ["2.0.0", BLUEPRINT_PLAN_COMPILER_VERSION];
+
+/** 仅证明已知编译版本的创建身份，不重编历史业务语义。 */
+export function blueprintPlanCompilationIdentity(blueprintId:string, blueprintVersion:number, compilerVersion:string):{planId:string;compilationKey:string} {
+  if(!blueprintId.trim()||!Number.isSafeInteger(blueprintVersion)||blueprintVersion<1||!SUPPORTED_BLUEPRINT_PLAN_COMPILER_VERSIONS.includes(compilerVersion)) throw new Error("蓝图编译创建身份不受支持。");
+  const compilationKey=`${blueprintId}:${blueprintVersion}:${compilerVersion}`;
+  return {planId:stableId("plan",compilationKey),compilationKey};
+}
+
+/** 从唯一规范版本目录核对出生身份，不使用可推进的当前 lineage。 */
+export function resolveBlueprintPlanCompilationIdentity(blueprintId:string,blueprintVersion:number,planId:string):{planId:string;compilationKey:string;compilerVersion:string}|undefined {
+  const matches=SUPPORTED_BLUEPRINT_PLAN_COMPILER_VERSIONS.map(compilerVersion=>({...blueprintPlanCompilationIdentity(blueprintId,blueprintVersion,compilerVersion),compilerVersion})).filter(identity=>identity.planId===planId);
+  return matches.length===1?matches[0]:undefined;
+}
 
 export interface BlueprintPlanCompilerInput {
   createdAt: string;
   compilerVersion?: string;
   completedRequirementIds?: Iterable<string>;
+  previousCompilation?: {blueprint:TripBlueprint;plan:Plan;lineage:PlanBlueprintLineage};
 }
 
 export interface BlueprintPlanCompilation {
@@ -18,12 +34,12 @@ export function compileTripBlueprint(blueprint: TripBlueprint, input: BlueprintP
   assertTripBlueprintIntegrity(blueprint);
   if (!Number.isFinite(Date.parse(input.createdAt))) throw new Error("Plan compilation needs a valid creation time.");
   const compilerVersion = input.compilerVersion ?? BLUEPRINT_PLAN_COMPILER_VERSION;
-  if (!compilerVersion.trim()) throw new Error("Plan compilation needs a compiler version.");
-  const compilationKey = `${blueprint.id}:${blueprint.version}:${compilerVersion}`;
-  const planId = stableId("plan", compilationKey);
+  if (compilerVersion !== BLUEPRINT_PLAN_COMPILER_VERSION) throw new Error("只能使用当前编译器版本生成执行计划。");
+  const { compilationKey, planId } = blueprintPlanCompilationIdentity(blueprint.id, blueprint.version, compilerVersion);
   const completed = new Set(input.completedRequirementIds ?? []);
+  for(const identity of carriedLegacyBookingCompletionIds(blueprint,input.previousCompilation)) completed.add(identity);
   const bookingConstraints = blueprint.bookingConstraints ?? [];
-  const stages = [...compileBookingStages(bookingConstraints, compilationKey), ...compilePackingStages(blueprint, compilationKey, completed), ...compileStages(blueprint.actionRequirements, compilationKey, completed)];
+  const stages = [...compileBookingStages(bookingConstraints, compilationKey, completed), ...compileStages(blueprint.actionRequirements, compilationKey, completed)];
   const recheckCount = countRechecks(blueprint);
   const bookingKnown = bookingConstraints.flatMap(bookingKnownInformation);
   const bookingAssumptions = bookingConstraints.flatMap(bookingAssumptionsForConstraint);
@@ -36,17 +52,16 @@ export function compileTripBlueprint(blueprint: TripBlueprint, input: BlueprintP
     dates: `${blueprint.startDate} – ${blueprint.endDate}`,
     status: "draft",
     knownInformation: [
-      `Trip Blueprint: ${blueprint.id} v${blueprint.version}`,
       `Destinations: ${blueprint.destinations.join(", ")}`,
       `Travel dates: ${blueprint.startDate} to ${blueprint.endDate}`,
-      `Place Catalog: ${blueprint.places.length} places across ${blueprint.days.length} itinerary days`,
+      `${blueprint.days.length} days to explore, with ${blueprint.places.length} places to visit, eat or stay.`,
       ...bookingKnown
     ],
     assumptions: [
-      ...(recheckCount ? [`${recheckCount} travel fact${recheckCount === 1 ? "" : "s"} or map detail${recheckCount === 1 ? "" : "s"} remain marked for recheck.`] : []),
+      ...(recheckCount ? ["Some opening hours and travel details need checking closer to your trip."] : []),
       ...bookingAssumptions
     ],
-    nextAction: "Review the complete Trip Blueprint and execution work. Confirm this Draft Plan only when both are correct.",
+    nextAction: "Have a look through your itinerary and preparations. Confirm the plan when it feels right for your trip.",
     configuration,
     stages,
     sources: blueprint.sources.map((source) => ({ title: source.title, authority: source.authority, url: source.url, retrievedAt: source.retrievedAt })),
@@ -66,12 +81,47 @@ export function compileTripBlueprint(blueprint: TripBlueprint, input: BlueprintP
   };
 }
 
-function compileBookingStages(constraints: BlueprintBookingConstraint[], compilationKey: string): Stage[] {
+function carriedLegacyBookingCompletionIds(blueprint:TripBlueprint,previous:BlueprintPlanCompilerInput["previousCompilation"]):string[] {
+  if(!previous) return [];
+  const {plan,lineage,blueprint:prior}=previous;
+  const legacyKey=`${prior.id}:${prior.version}:2.0.0`;
+  if(lineage.compilerVersion!=="2.0.0"||lineage.compilationKey!==legacyKey||lineage.planVersion!==1||plan.id!==stableId("plan",legacyKey)||plan.id!==lineage.planId||!Number.isInteger(plan.version)||plan.version<lineage.planVersion||plan.createdAt!==lineage.createdAt||prior.id!==lineage.blueprintId||prior.version!==lineage.blueprintVersion||blueprint.id!==prior.id) return [];
+  try{assertTripBlueprintIntegrity(prior);}catch{return [];}
+  const legacyTasks=previous.plan.stages.flatMap(stage=>stage.tasks);
+  if(new Set(legacyTasks.map(task=>task.id)).size!==legacyTasks.length||new Set(legacyTasks.flatMap(task=>task.requirementId?[task.requirementId]:[])).size!==legacyTasks.filter(task=>task.requirementId).length) return [];
+  const oldUnits=(previous.blueprint.bookingConstraints??[]).flatMap(constraint=>constraint.segments.map(segment=>({constraint,segment,identity:`booking:${constraint.id}:${segment.id}`})));
+  const carried:string[]=[];
+  for(const {constraint,segment,identity} of oldUnits) {
+    if(oldUnits.filter(unit=>unit.identity===identity).length!==1) continue;
+    const tasks=legacyTasks.filter(task=>task.requirementId===identity);
+    if(tasks.length!==1||tasks[0]!.status!=="completed") continue;
+    const task=tasks[0]!;
+    const stage=plan.stages.find(stage=>stage.tasks.includes(task));
+    if(!stage||stage.id!==stableId("stage",`${legacyKey}:booking-constraints`)||stage.presentationKind!=="reservations"||constraint.status==='cancelled'||segment.constraintStrength==='ignored') continue;
+    // 2.0 的任务字段与现有纯任务投影相同，差异只有 requirementId；不冒充旧版完整编译。
+    const expected={...compileBookingTask(constraint,segment,legacyKey,false),requirementId:identity};
+    const stableTask=(item:Task)=>({...item,status:undefined,reminder:undefined});
+    if(bookingRelationshipDigest(stableTask(task))!==bookingRelationshipDigest(stableTask(expected))) continue;
+    if(task.reminder!==undefined&&bookingRelationshipDigest(task.reminder)!==bookingRelationshipDigest(expected.reminder??null)) continue;
+    const next=(blueprint.bookingConstraints??[]).find(candidate=>candidate.id===constraint.id);
+    const nextSegment=next?.segments.find(candidate=>candidate.id===segment.id);
+    if(!next||!nextSegment||next.status==='cancelled'||next.constraintStrength==='ignored'||nextSegment.status==='cancelled'||nextSegment.constraintStrength==='ignored') continue;
+    // 源身份全等（包括双方均缺失的旧记录）才比较相同任务协议下的完整完成语义。
+    if(constraint.sourceBookingId!==next.sourceBookingId||segment.sourceSegmentId!==nextSegment.sourceSegmentId||constraint.segments.length!==next.segments.length||constraint.segments.some(old=>!next.segments.some(current=>current.id===old.id))) continue;
+    if(bookingTaskRequirementId(constraint,segment.id)!==bookingTaskRequirementId(next,nextSegment.id)) continue;
+    if(bookingRelationshipSourceUnits([constraint]).find(unit=>unit.segmentId===segment.id)?.sourceDigest!==bookingRelationshipSourceUnits([next]).find(unit=>unit.segmentId===nextSegment.id)?.sourceDigest) continue;
+    if(bookingRelationshipDigest({status:constraint.status,strength:constraint.constraintStrength})!==bookingRelationshipDigest({status:next.status,strength:next.constraintStrength})) continue;
+    carried.push(bookingTaskRequirementId(next,nextSegment.id));
+  }
+  return carried;
+}
+
+function compileBookingStages(constraints: BlueprintBookingConstraint[], compilationKey: string, completed: Set<string>): Stage[] {
   const tasks = constraints
-    .filter((constraint) => constraint.status !== "cancelled")
+    .filter((constraint) => constraint.status !== "cancelled" && constraint.constraintStrength !== "ignored")
     .flatMap((constraint) => constraint.segments
-      .filter((segment) => segment.constraintStrength !== "ignored")
-      .map((segment) => compileBookingTask(constraint, segment, compilationKey)));
+      .filter((segment) => segment.constraintStrength !== "ignored" && segment.status !== "cancelled")
+      .map((segment) => compileBookingTask(constraint, segment, compilationKey, completed.has(bookingTaskRequirementId(constraint,segment.id)))));
   if (!tasks.length) return [];
   return [{
     id: stableId("stage", `${compilationKey}:booking-constraints`),
@@ -82,18 +132,18 @@ function compileBookingStages(constraints: BlueprintBookingConstraint[], compila
   }];
 }
 
-function compileBookingTask(constraint: BlueprintBookingConstraint, segment: BlueprintBookingSegment, compilationKey: string): Task {
+function compileBookingTask(constraint: BlueprintBookingConstraint, segment: BlueprintBookingSegment, compilationKey: string, isCompleted: boolean): Task {
   const hard = segment.constraintStrength === "hard";
   const timing = [segment.startAtLocal ? `Starts ${segment.startAtLocal}` : "", segment.endAtLocal ? `ends ${segment.endAtLocal}` : ""].filter(Boolean).join("; ");
   const location = [segment.origin ? `from ${segment.origin}` : "", segment.destination ? `to ${segment.destination}` : "", segment.location ? `at ${segment.location}` : ""].filter(Boolean).join("; ");
-  const reminder = hard ? bookingReminder(segment, constraint) : undefined;
+  const reminder = hard && !isCompleted ? bookingReminder(segment, constraint) : undefined;
   return {
     id: stableId("task", `${compilationKey}:booking:${constraint.id}:${segment.id}`),
-    requirementId: `booking:${constraint.id}:${segment.id}`,
+    requirementId: bookingTaskRequirementId(constraint,segment.id),
     title: hard ? `Use confirmed ${bookingTypeLabel(constraint.type)}: ${segment.title}` : `Review imported ${bookingTypeLabel(constraint.type)}: ${segment.title}`,
     description: [constraint.title, timing, location, segment.needsReviewReasons.join(" ")].filter(Boolean).join(" · "),
     owner: hard ? "external" : "user",
-    status: hard ? "scheduled" : "waiting_user",
+    status: isCompleted ? "completed" : hard ? "scheduled" : "waiting_user",
     dueLabel: segment.startAtLocal ?? segment.endAtLocal ?? "Before this booking affects the itinerary",
     preparationCategory: "booking",
     ...(reminder ? { reminder } : {})
@@ -115,20 +165,22 @@ function bookingReminder(segment: BlueprintBookingSegment, constraint: Blueprint
 }
 
 function bookingKnownInformation(constraint: BlueprintBookingConstraint): string[] {
+  if(constraint.status === "cancelled" || constraint.constraintStrength === "ignored") return [];
   return constraint.segments
-    .filter((segment) => segment.constraintStrength === "hard")
+    .filter((segment) => segment.constraintStrength === "hard" && segment.status !== "cancelled")
     .map((segment) => `Confirmed ${bookingTypeLabel(constraint.type)}: ${constraint.title}${segment.startAtLocal ? ` starts ${segment.startAtLocal}` : ""}${segment.endAtLocal ? ` ends ${segment.endAtLocal}` : ""}${segment.location ? ` at ${segment.location}` : ""}${segment.origin || segment.destination ? ` (${[segment.origin, segment.destination].filter(Boolean).join(" to ")})` : ""}`);
 }
 
 function bookingAssumptionsForConstraint(constraint: BlueprintBookingConstraint): string[] {
+  if(constraint.status === "cancelled" || constraint.constraintStrength === "ignored") return [];
   return constraint.segments
-    .filter((segment) => segment.constraintStrength === "soft")
+    .filter((segment) => segment.constraintStrength === "soft" && segment.status !== "cancelled")
     .map((segment) => `Imported ${bookingTypeLabel(constraint.type)} '${constraint.title}' needs review before it can constrain the itinerary.${segment.needsReviewReasons.length ? ` ${segment.needsReviewReasons.join(" ")}` : ""}`);
 }
 
 function bookingConfiguration(constraints: BlueprintBookingConstraint[]): Plan["configuration"] {
   const configuration: Plan["configuration"] = { accommodation: { status: "not_set" }, arrival: {}, transport: { preference: "plan_recommended" }, travelContext: { luggage: "unknown" } };
-  const hardSegments = constraints.flatMap((constraint) => constraint.segments.map((segment) => ({ constraint, segment }))).filter(({ constraint, segment }) => constraint.status !== "cancelled" && segment.constraintStrength === "hard");
+  const hardSegments = constraints.flatMap((constraint) => constraint.segments.map((segment) => ({ constraint, segment }))).filter(({ constraint, segment }) => constraint.status !== "cancelled" && constraint.constraintStrength !== "ignored" && segment.status !== "cancelled" && segment.constraintStrength === "hard");
   const accommodation = hardSegments.find(({ segment }) => segment.segmentType === "hotel_stay" && (segment.location || segment.destination));
   if (accommodation) {
     configuration.accommodation = {
@@ -156,80 +208,6 @@ function subtractHoursLocal(value: string, hours: number): string | undefined {
   const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5])));
   date.setUTCHours(date.getUTCHours() - hours);
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}T${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")}`;
-}
-
-type PackingItem = { id: string; title: string; description: string };
-
-function compilePackingStages(blueprint: TripBlueprint, compilationKey: string, completed: Set<string>): Stage[] {
-  const items = packingItemsForBlueprint(blueprint);
-  if (!items.length) return [];
-  return [{
-    id: stableId("stage", `${compilationKey}:packing`),
-    title: "Packing list",
-    description: "Physical items to carry for this trip, derived from the trip dates, places, activities, and movement pattern.",
-    presentationKind: "details",
-    tasks: items.map((item) => ({
-      id: stableId("task", `${compilationKey}:packing:${item.id}`),
-      requirementId: `packing:${item.id}`,
-      title: item.title,
-      description: item.description,
-      owner: "user",
-      status: completed.has(`packing:${item.id}`) ? "completed" : "waiting_user",
-      dueLabel: blueprint.startDate ? `Before ${blueprint.startDate}` : "Before departure",
-      preparationCategory: "packing_item"
-    }))
-  }];
-}
-
-function packingItemsForBlueprint(blueprint: TripBlueprint): PackingItem[] {
-  const text = [
-    blueprint.title,
-    blueprint.summary,
-    blueprint.destinations.join(" "),
-    ...blueprint.days.flatMap((day) => [day.city, day.title, day.summary]),
-    ...blueprint.places.flatMap((place) => [place.name, place.localizedName, place.category, place.area, place.whyWorthIt, place.plan, place.tip])
-  ].filter(Boolean).join(" ");
-  const normalized = text.toLocaleLowerCase();
-  const months = monthNumbers(blueprint);
-  const multiCity = new Set(blueprint.destinations.map((destination) => destination.trim().toLocaleLowerCase()).filter(Boolean)).size > 1;
-  const items: PackingItem[] = [
-    { id: "passport-wallet", title: "Passport, payment cards, and a small cash wallet", description: "Keep the items you need for hotel check-in, rail tickets, reservations, and small cash-only stops in one reachable pouch." },
-    { id: "phone-power", title: "Charged phone, cable, and power bank", description: "The itinerary depends on maps, booking pages, translation, and live route checks throughout the day." },
-    { id: "walking-shoes-socks", title: "Broken-in walking shoes and spare socks", description: "The route combines transfers, neighborhoods, cultural stops, meals, and outdoor walking." },
-    { id: "day-bag", title: "Light day bag", description: "Carry essentials while larger luggage is stored, forwarded, or left at the accommodation." }
-  ];
-  if (months.some((month) => month >= 9 && month <= 11)) {
-    items.push({ id: "light-layer", title: "Light jacket, cardigan, or thin overshirt", description: "Autumn sightseeing can move from warm afternoons to cooler river, garden, and evening routes." });
-  }
-  if (months.some((month) => month >= 6 && month <= 10) || /rain|typhoon|river|garden|park|outdoor|walk/.test(normalized)) {
-    items.push({ id: "rain-gear", title: "Compact umbrella or packable rain shell", description: "Useful for station transfers, gardens, and outdoor walks until a date-specific forecast is confirmed." });
-  }
-  if (/bath|spa|onsen|sento|laqua|hot spring/.test(normalized)) {
-    items.push({ id: "bath-kit", title: "Bath kit: small towel, fresh socks, and hair tie if needed", description: "Spa and public-bath stops are easier when you can reset afterward without relying on rentals." });
-  }
-  if (/temple|shrine|tatami|shoes off/.test(normalized)) {
-    items.push({ id: "temple-socks", title: "Clean socks for shoes-off stops", description: "Some temples, traditional spaces, and dining rooms may ask you to remove shoes." });
-  }
-  if (/museum|gallery|restaurant|reservation|ticket|booking|official/.test(normalized)) {
-    items.push({ id: "reservation-copies", title: "Offline reservation and ticket screenshots", description: "Save timed-entry, restaurant, hotel, and transport details before each long day." });
-  }
-  if (multiCity || /shinkansen|rail|train|station|luggage|forward/.test(normalized)) {
-    items.push({ id: "luggage-transfer-kit", title: "Luggage tag and compact lock", description: "Helpful if you use luggage forwarding, station storage, or a hotel luggage room between trip areas." });
-  }
-  return dedupePackingItems(items);
-}
-
-function monthNumbers(blueprint: TripBlueprint): number[] {
-  const values = [blueprint.startDate, blueprint.endDate, ...blueprint.days.map((day) => day.date)];
-  return values.flatMap((value) => {
-    const match = /^\d{4}-(\d{2})-\d{2}$/.exec(value);
-    return match ? [Number(match[1])] : [];
-  });
-}
-
-function dedupePackingItems(items: PackingItem[]): PackingItem[] {
-  const seen = new Set<string>();
-  return items.filter((item) => !seen.has(item.id) && Boolean(seen.add(item.id)));
 }
 
 function compileStages(requirements: BlueprintActionRequirement[], compilationKey: string, completed: Set<string>): Stage[] {
@@ -270,12 +248,12 @@ function stageKey(requirement: BlueprintActionRequirement): string {
 }
 
 function stageDescriptor(key: string): { title: string; description: string; presentationKind: StagePresentationKind } {
-  if (key === "reservations") return { title: "Reservations", description: "Bookings or slots that require an accountable decision or external completion.", presentationKind: "reservations" };
-  if (key === "travel-authorization") return { title: "Travel authorization", description: "Entry or visa preparation whose applicability and evidence must remain explicit.", presentationKind: "details" };
-  if (key === "transport") return { title: "Transport preparation", description: "Travel movements that require preparation beyond the itinerary itself.", presentationKind: "transport" };
-  if (key === "preparation") return { title: "Before departure", description: "Concrete traveler or Landi preparation required before the trip.", presentationKind: "details" };
-  if (key === "rechecks") return { title: "Time-sensitive rechecks", description: "Facts that Landi should verify again near their use date.", presentationKind: "details" };
-  return { title: "Other trip actions", description: "Additional accountable work associated with this trip.", presentationKind: "details" };
+  if (key === "reservations") return { title: "Reservations", description: "Choose the rooms, tickets and tour times you’d like, then complete your bookings.", presentationKind: "reservations" };
+  if (key === "travel-authorization") return { title: "Travel authorization", description: "Check what each traveler needs to enter your destination before leaving.", presentationKind: "details" };
+  if (key === "transport") return { title: "Transport preparation", description: "Get your flights and journeys between towns ready before setting off.", presentationKind: "transport" };
+  if (key === "preparation") return { title: "Before departure", description: "A few things to sort out before departure, so your trip runs more smoothly.", presentationKind: "details" };
+  if (key === "rechecks") return { title: "Time-sensitive rechecks", description: "Check these details again closer to your visit, when current information is more useful.", presentationKind: "details" };
+  return { title: "Other trip actions", description: "A few other arrangements for your trip.", presentationKind: "details" };
 }
 
 function preparationCategory(requirement: BlueprintActionRequirement): NonNullable<Task["preparationCategory"]> {

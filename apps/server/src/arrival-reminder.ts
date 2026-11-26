@@ -44,8 +44,7 @@ export function shouldRenewExpiredArrivalLocationRequest(planStatus: Plan["statu
 }
 
 export function formatArrivalReminder(plan: Plan, arrivalTask?: Task): string {
-  const currentStep = arrivalTask ? `\n\nCurrent step is ready: ${arrivalTask.title}\nIt is not marked complete.` : "";
-  return `Arrival check-in\n${plan.title}\n${plan.location}\n\nYour scheduled arrival time has begun. Open your current Plan to review the next step:\n${plan.nextAction}${currentStep}\n\nUse /plan for the Plan summary. No ride, booking, payment, or location request has been started.`;
+  return `Are you arriving in ${plan.location}?\nHere's what's next:\n${arrivalTask ? arrivalTask.title : plan.nextAction}\n\nIf you're still on the way, let me know below. Use /plan whenever you'd like to see your itinerary.`;
 }
 
 function offsetAt(instant: number, timeZone: string): number {

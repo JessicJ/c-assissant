@@ -1,0 +1,43 @@
+export interface LocalFoodGuideSourceInput {
+  id: string;
+  sourceSnapshotId: string;
+  authority: string;
+  titleOriginal: string;
+  url: string;
+  retrievedAt: string;
+  contentHash: string;
+}
+
+export interface LocalFoodGuideFactInput {
+  id: string;
+  nameOriginal: string;
+  nameEnglish: string;
+  descriptionEnglish: string;
+  sourceId: string;
+}
+
+export type DigitalLifeCapability = "mobile_connectivity" | "communication" | "map_navigation" | "local_payments";
+
+export interface DigitalLifeSetupItemInput {
+  id: string;
+  nameOriginal: string;
+  nameEnglish: string;
+  category: DigitalLifeCapability;
+  reasonEnglish: string;
+  stepsEnglish: string[];
+  sourceId: string;
+}
+
+export interface JapanEvidenceInput {
+  id: string;
+  sourceId: string;
+  authority: string;
+  titleOriginal: string;
+  url: string;
+  retrievedAt: string;
+  contentHash: string;
+}
+
+export interface JapanReferenceItem { id: string; capability: string; nameOriginal: string; nameEnglish: string; explanationEnglish: string; sourceId: string }
+
+export interface JapanFoodFact { id: string; nameOriginal: string; nameEnglish: string; explanationEnglish: string; sourceId: string }

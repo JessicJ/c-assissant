@@ -1,7 +1,6 @@
 import type { ConnectorResult, GeocodedPlaceFact, WeatherSnapshot } from "@c-assistant/connectors";
 import type { Plan, WorkspaceSnapshot } from "@c-assistant/core";
 import type { SqliteWorkspaceStore } from "@c-assistant/storage";
-import type { CountryPackResolution } from "./country-pack-resolver.js";
 import { resolvePlanArrivalTimeZone } from "./plan-arrival-timezone.js";
 import { refreshGeneratedPlanRoutes } from "./plan-route-refresh.js";
 
@@ -17,34 +16,14 @@ interface GeneratedPlanEvidenceWeather {
   weather(input: { coordinates: string; locationName: string; adminArea?: string; country?: string; language?: "en" | "zh" }): Promise<ConnectorResult<WeatherSnapshot>>;
 }
 
-interface GeneratedPlanEvidenceSourcePreparation {
-  prepareCurrentPlan(input: { planId: string; now?: string }): Promise<{ status: "ready" | "blocked" }>;
-}
-
 export function createGeneratedPlanEvidencePreparer(dependencies: {
   store: SqliteWorkspaceStore;
   getMaps: () => GeneratedPlanEvidenceMaps;
   getWeather: () => GeneratedPlanEvidenceWeather;
-  resolvePlanCountryPack: (planId: string) => Promise<CountryPackResolution>;
-  sourcePreparation: {
-    china: GeneratedPlanEvidenceSourcePreparation;
-    japan: GeneratedPlanEvidenceSourcePreparation;
-  };
 }) {
-  const { store, getMaps, getWeather, resolvePlanCountryPack, sourcePreparation } = dependencies;
+  const { store, getMaps, getWeather } = dependencies;
 
   return async function prepareGeneratedPlanEvidence(planId: string): Promise<{ workspace: WorkspaceSnapshot; status: "verified" | "partial" }> {
-    let sourcesVerified = false;
-    try {
-      const resolution = await resolvePlanCountryPack(planId);
-      if (resolution.status === "resolved") {
-        const result = resolution.countryPackId === "japan"
-          ? await sourcePreparation.japan.prepareCurrentPlan({ planId })
-          : await sourcePreparation.china.prepareCurrentPlan({ planId });
-        sourcesVerified = result.status === "ready";
-      }
-    } catch { /* Route enrichment can still proceed when destination evidence is partial. */ }
-    let routesVerified = true;
     try {
       const workspace = store.getWorkspace();
       const maps = getMaps();
@@ -63,19 +42,13 @@ export function createGeneratedPlanEvidencePreparer(dependencies: {
           walkingRoute: (input) => maps.walkingRoute(input),
           transitRoute: (input) => maps.transitRoute(input)
         });
-        const savedRoutes = routeResult.refreshed.length
-          ? store.saveGeneratedPlanRouteRefresh({ planId, expectedVersion: plan.version, provider: "google_maps", routes: routeResult.refreshed })
-          : undefined;
-        routesVerified = routeResult.failedSegmentIds.length === 0
-          && routeResult.refreshed.length === eligibleRoutes.length
-          && !savedRoutes?.scheduleConflictDayIds.length;
-      } else if (eligibleRoutes.length) {
-        routesVerified = false;
+        if (routeResult.refreshed.length) store.saveGeneratedPlanRouteRefresh({ planId, expectedVersion: plan.version, provider: "google_maps", routes: routeResult.refreshed });
       }
     } catch {
-      routesVerified = false;
+      // Keep the saved draft reviewable when route enrichment fails.
     }
-    return { workspace: store.getWorkspace(), status: sourcesVerified && routesVerified ? "verified" : "partial" };
+    // Map and timezone enrichment does not verify policy or all destination facts.
+    return { workspace: store.getWorkspace(), status: "partial" };
   };
 }
 

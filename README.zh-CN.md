@@ -1,36 +1,50 @@
 # Landi
 
-> 暂时代号。一个面向“地区助手”生态的开源项目。
+> 开源旅行助手，正在接入 MAH。
 
-Landi 的目标不是只做旅行问答，而是帮助来到某个国家或地区的人更快适应当地生活。首个 Country Pack 面向中国，V1 聚焦来华准备与吃、住、行，并为以后扩展法律、银行、经商等能力保留模块化结构。
+Landi 是私人旅行助手：了解旅行需求、制定和调整行程，并通过邮件持续协助。当前范围以 [产品范围](docs/product-scope.md)为准；不再发展 Country Pack、地区助手生态、Telegram 或 WhatsApp。
 
 Landi 采用 [Apache License 2.0](LICENSE) 开源许可证。
 
-项目已完成一条本地 V1 闭环：Web 工作台、Core HTTP 服务与调度器、本地 SQLite、Profile、Plan、已真实验证的 Codex 草案、Claude Code 预览适配器、中国 Country Pack 完整编排、官方来源刷新与追溯、Google 地点/路线及覆盖范围内的天气事实、Telegram 配对/完整审阅/提醒/定位交接和 Plan 确认已经连通。Claude Code 已有契约测试，但没有可用付费账号完成真实 V1 验收，因此 `0.1.0` 正式支持 Codex，Claude Code 只作为自愿启用的预览能力。两种底座的登录凭据与 Connector 密钥都不会写入领域数据或传给 Skill。V1 仍保持明确边界：不根据网页正文替用户作受监管资格结论，也不点餐、订房、叫车或支付。
+## 使用前先了解 MAH 依赖
 
-## 已确定的产品形态
+- 无需先安装 MAH，就可以打开本地工作台、填写并保存旅行需求。提交前的文字在浏览器存储可用时保留于本机浏览器；收到保存成功提示后，需求已保存至本地服务端。保存需求不会启动 Agent 处理或计划生成。
+- 生成计划依赖 MAH。用户在 MAH 中配置 Agent 使用权限，由 MAH 管理和选择 Agent；Landi 不再要求用户选择或配置 Agent。
+- MAH 是独立的闭源软件。Landi 的 Apache-2.0 许可证不覆盖 MAH，也不包含 MAH 或其中配置的 Agent 服务的使用权限。请分别确认它们当前的条款与使用条件；下载 Landi 不代表获得这些服务。
+- 生成草案与批准该版本计划执行是两个步骤。旅行数据、版本、业务校验与用户确认仍由 Landi 管理。
 
-- 每位用户一套实例，使用自己的 Codex 或 Claude Code 账号。
-- Telegram 是默认移动端入口，负责对话、提醒、定位请求和快捷操作；WhatsApp Business Platform 是不影响实例就绪的可选 Connector。
-- Web 工作台是完整桌面端入口，不是运维后台。
-- Core 保存长期 Profile、当前 Plan、Task、Reminder、Event、Run 等结构化状态。
-- Agent 每次按需运行，不承担常驻进程、定时调度或长期记忆。
-- China 与 Japan Country Pack 分别对外整体发布，内部由隔离、可测试的 Skills 组成并由 Core 自动编排。
-- Google Maps Platform 作为 V1 地点、周边发现、路线事实与非打车行动交接底座；Uber 负责打车交接。
-- 预订、叫车、支付等不可逆动作在第三方应用中由用户完成。
+## 当前接入状态
 
-可选 WhatsApp Connector 使用 `pnpm configure:whatsapp` 配置。交互命令会隐藏访问口令和 App Secret 的输入、验证号码身份、生成 Webhook Verify Token，并且只写入 Git 忽略的本机 `.env`。不要把 WhatsApp 凭据粘贴到聊天、源码或提交中。
+MAH 接入仍在验证。历史基线 MAH `0.1.1968` 缺少 Landi 设计所需的公开任务物化与后台服务合同。2026-10-22 对 `0.1.2008` 的只读核实仍未建立完整执行与服务托管证据，见 [MAH 后台承载合同](docs/mah-background-runtime.md)；因此**经 MAH 生成计划、由 MAH 持续托管运行尚未就绪**。仅安装 MAH 不能证明这些能力可用。
+
+目标流程为先安装并配置 MAH → 从 MAH 打开 Landi → 保存需求 → 公开执行准入核实后明确继续生成 → 审阅草案 → 另行批准精确版本执行。当前完整流程仍未通过端到端验收；首次引导与桌面工作台保留，规划区分别核对配置、执行和会话。返回 MAH、重新检查或刷新均只读，不自动启动；旧下载弹窗退役。原保存结果未知时先核对原消息回执，保留草稿与身份。详细行为以 [工作区需求](docs/blueprint-workspace-generation-requirements.md#web-conversational-intake) 为准。
+
+现有直连 Codex/Claude Adapter 保留为迁移实现，不是绕过 MAH 故障的生产后备路径；历史直连测试不证明 MAH 接入。旧 macOS LaunchAgent 工具与安装、预览、卸载命令已移除，现有用户服务及数据保持不变。面向用户的本地启停仅采用 [启动包设计](docs/macos-local-launch-package.md)规定的规范启动器；源码开发命令不承担该职责。Landi 保留旅行规则、数据与明确确认；迁移期间现有本地定时器保留，MAH 托管仍须等待正式公开合同。
+
+自带运行环境的 macOS 启动包仍待最终交付与验收。下面的源码开发命令不等于可下载、已验证的启动包。边界和剩余门禁见 [macOS 启动包设计](docs/macos-local-launch-package.md)与 [MAH 后台承载合同](docs/mah-background-runtime.md)。
+
+## 产品形态
+
+- Web 工作台：旅行需求、提案确认、行程审阅与编辑、历史和设置。
+- 邮件：唯一主动通知渠道，承接每日行程、转场、餐饮与重要变化；重大调整需回 Landi 工作台审阅并明确确认。
+- MAH：目标负责 Agent 的管理和选择、AI、定时和执行，接入状态如上文所述，仍待验收。
+- Landi Core 与 Storage：拥有旅行数据、版本、确认与业务校验；迁移期间保留现有监测和提醒模块。
+- 目的地研究：旅行所需的来源核验、天气、路线和当地准备；用户不选择或安装国家能力包。
+
+Telegram 与 WhatsApp 不再是可选渠道。旧账号绑定与历史数据保留，不自动转为邮件发送授权。邮件设计见 [邮件执行](docs/email-execution.md)与 [手机邮件模板](docs/mobile-email-templates.md)。
 
 ## 核心原则
 
-- 少问、边用边补：大致日期、要做的事情和地点足以先生成 Plan 骨架；随后每次只追问一个对下一步最有价值的关键事实。
-- 渐进完善、最终完整确认：用户每次回答后只更新相关部分；信息不足只阻塞依赖它的 Task，关键信息足够后才展示完整计划供一次确认。
+- 先收集需求、再生成完整计划：每次只追问一个关键事实；生成前先确认最新版本提案。
+- 生成与执行分别确认：关键信息足够后生成完整草案，用户审阅后再明确批准该版本执行。
 - 计划确认后少干预：在确认范围内按计划自动执行提醒和可逆准备。
 - 本次出行默认由 Plan 根据上下文决定交通方式；用户只在有明确偏好时才覆盖它。
 - 同行人数和行李情况只在确实影响本次出行时才补充，并仅保存到当前 Plan。
 - 最新且可追溯：政策和手续结论必须附带最新官方来源。
 - 明确事实边界：AI 负责区域与方案决策，Connector 提供可验证事实，第三方应用完成交易。
 - 隐私最小化：精确位置只为当前任务短期使用，不写入长期 Profile。
+
+邮件执行的现行设计见 [邮件执行](docs/email-execution.md)与 [手机邮件模板](docs/mobile-email-templates.md)。模板预览和 SMTP 接受不等于实际收信或真机显示通过。
 
 ## 计划中的技术基线
 
@@ -39,17 +53,19 @@ Landi 采用 [Apache License 2.0](LICENSE) 开源许可证。
 - SQLite
 - React + Vite Web
 - HTTP + SSE
-- Telegram Bot
-- Codex / Claude Code Runtime Adapter
+- 邮件通知与 Landi 工作台审阅确认
+- MAH 生成接入；现有 Codex / Claude Code Runtime Adapter 保留为迁移实现
 - 本地 MCP Tool Gateway
 
 详细设计从 [docs/README.md](docs/README.md) 开始阅读。
 
-## 当前状态
+MAH 依赖、Landi 开源许可与 MAH 独立闭源软件的区别，以及当前接入尚未就绪的状态，见本文使用说明与规划入口。首次引导保留原有设计。称呼必填，当前首次引导使用英语，性别与目的地签证/居留状态可选；引导不会安装或核验 MAH。规划设计要求先保存需求、确认最新版本提案，生成草案后再单独批准执行；这一 MAH 完整流程仍待验收。
 
-## 运行本地演示
+设置中的 Agent 控件标为本机诊断；本机登录检测、选择和诊断测试都不能证明 MAH 已就绪。工作台标识为私人旅行助手，规划入口会再次说明 MAH 生成和持续运行尚未通过验收。
 
-需要 Node.js 22 及以上版本与 pnpm：
+## 本地源码开发
+
+需要 Node.js 22 及以上版本，以及 [package.json](package.json) 固定的 pnpm 版本。请在包含本 README 的 Landi 组件目录运行；这些命令不配置 MAH，也不证明生成能力就绪。开发检查使用隔离配置与数据，不复用正在使用的数据库、凭据、端口或已启用的消息发送。
 
 ```bash
 pnpm install
@@ -66,52 +82,26 @@ pnpm check:workspace
 
 这个检查会验证 Vite 工作台、Core 服务健康状态、Web 代理健康端点和 `/api/workspace`。输出会说明更可能是前端、后端、代理端口，还是 workspace 数据本身的问题。需要检查非默认环境时，可以传入 `--web-url`、`--core-url`、`--core-port` 或 `--timeout-ms`。
 
-长期运行时先构建，再只启动一个 Landi 服务进程：
-
-```bash
-pnpm build
-pnpm start
-```
-
-随后打开 `http://127.0.0.1:8787/`。这个生产入口会同时提供 Web 工作台、Core API、Telegram 轮询和 Reminder 调度；不再需要长期运行 Vite 开发服务器。进程守护与开机启动仍由部署环境负责。
-
-在 macOS 上，可以先预览、再安装当前用户的常驻服务：
-
-```bash
-pnpm run service:preview:macos
-pnpm run service:install:macos
-```
-
-安装后，Landi 会在当前用户登录时启动，并在异常退出后自动拉起。安装文件不包含 Connector 或 Agent 凭据，服务继续从项目根目录的本地 `.env` 和各运行底座自己的登录状态读取配置。卸载常驻服务使用 `pnpm run service:remove:macos`；该操作保留 Profile、Plans、数据库、`.env` 和日志。
-
 浏览器测试使用隔离的临时 Core 服务端口 `8765`。这个端口只用于测试，不应作为日常手动打开工作台的地址。
 
-可使用下列命令验证：
+贡献者可按实际改动选择下列验证命令；列出命令不表示当前工作树已通过，也不要求每次重复全量检查：
 
 ```bash
 pnpm build
 pnpm typecheck
 pnpm test
+pnpm test:supplemental
+pnpm test:guarded-contracts
 pnpm test:browser
 pnpm release:check
 ```
 
-`pnpm release:check` 会先执行不访问外部账号的结构与 Git 跟踪文件安全预检，再执行完整构建、类型检查与单元/集成测试。`pnpm test:browser` 会构建产品，并用隔离的临时 SQLite 数据库运行 Chromium 规划流程测试；不会调用 Agent Runtime 或 Connector。Pull Request 以及向 `master`/`main` 的推送会在 GitHub Actions 中执行两类验收。
+`pnpm release:check` 会先执行不访问外部账号的结构与 Git 跟踪文件安全预检，再执行构建、类型、应用、补充与 guarded 合同测试。guarded 合成夹具验证需要 Node.js 24 及以上和 Python 3.9 及以上，不读取真实部署证据或操作服务。每次浏览器验证使用独立临时数据库与空配置，并阻止远程动作和子进程启动。`pnpm test:browser` 会构建产品，并用隔离的临时 SQLite 数据库运行 Chromium 规划流程测试；不会调用 Agent Runtime 或 Connector。Pull Request 以及向 `master`/`main` 的推送会在 GitHub Actions 中执行两类验收。
 
 首次启动会在 `data/c-assistant.sqlite` 创建本地数据库。配置本地 `.env` 后，Google Maps Platform 可提供地点、周边餐饮与住宿、驾车、步行和公共交通事实，并把非打车路线交接给用户自行打开；Uber 负责打车交接。Google Weather 仅在其支持的坐标范围内提供天气；不支持某个地点时会明确降级，不猜测天气、不切换地区型天气服务，也不阻塞 Plan 的其余部分。住宿只有在用户明确表示已完成第三方预订后才会标记为已确认，系统不会点餐、预订、叫车或支付。
 
 Settings 会显示 SQLite schema 与完整性状态，并允许用户显式创建经过再次校验的本地备份。备份保存到 `data/backups`（自定义数据库则保存在其旁边），权限为 `0600`，不包含 Codex/Claude Code 登录凭据或 Connector 密钥。恢复会覆盖当前 workspace，因此 V1 不自动执行恢复。
 
-配置 `TELEGRAM_BOT_TOKEN` 后，可在 Settings 验证 Bot 并创建一次性私聊配对链接。长期 Profile 是创建 Plan 的前置条件；Telegram 用户需要先通过 `/profile` 完成资料。首次普通文本或 `/new <事项>` 会使用本机已登录且在 Settings 选定的 Codex 或 Claude Code，结合已确认的 Profile 生成待确认 Plan；身份字段只作计划上下文，不能作为政策资格结论。用户创建的 Plan 仍为草案时，后续普通文本会作为一句话修订，`/new` 则始终新建独立 Plan。Plan 激活后，局部意图不会擅自创建或展示另一份完整 Plan：例如 `I prefer taxi` 只更新本次 Plan 的临时交通偏好，并可为当前抵达路线提供一次性定位按钮；暂不支持的局部请求会保持当前 Plan 不变。只有 `/new` 或明确表达创建新计划、修改整个计划时，才进入完整 Plan 生成和展示。修订失败不会用模板覆盖原草案。新草案和 `/plan` 都会把完整 Plan 自动分页发送到 Telegram，确认按钮只出现在最后一页，并绑定当前 Plan ID 与版本；旧按钮不能确认已替换或已修改的草案。Web 工作台也保留同一套完整审阅和确认能力。
+## 后续资料
 
-Web Plan 页面或 Telegram `/prepare` 会刷新已批准且缓存过期的官方来源，收集 Google 地点、路线以及可用的天气事实，依次运行 China Pack 的七个 supporting Skills 与组合 Skill，并原子保存新的完整草稿版本。目的地不在 Google Weather 覆盖范围内时，天气 Skill 降级，但不会因此阻塞其余 Plan 编译。首批当地特色饮食目录覆盖上海、北京和广州；只有地点匹配且存在对应官方英文城市门户的新鲜快照时，五项保留中文原名的英文介绍才会进入完整 Plan 并附原文来源。每个依赖官方资料的 Task、编排 Run 和逐 Skill Run 都会保留准确的快照 ID 与内容指纹，但不复制官方正文；不存在或指纹不符的证据会让写入整体回滚。Web 会在对应 Task 下显示可读的官方依据链接，Telegram 则用编号把 Task 指向完整计划末尾的原文来源，不向用户展示内部 ID 或哈希。缺少住宿路线、Profile 或时间等关键事实时，只返回需要补充的项目并保留原草稿；成功后仍必须完整审阅并确认，Task 和 Reminder 才会激活。
-
-东京演示由 Japan Country Pack V1 支持。Server 只依据 Google Maps 返回的规范化国家事实选择 Pack，不根据自由文本里是否出现 “Tokyo” 猜测。Japan Pack 使用独立 `jp-` 官方来源白名单，要求国籍、旅行目的、停留时间、日期和用户确认的护照状态，并把 MOFA、Visit Japan Web、JNTO、JR East、羽田机场与 GO TOKYO 的快照 ID/哈希绑定到 Plan、Task 和 Run。缺失或过期的政策证据会 fail closed；缺失天气、住宿或路线事实会明确降级。90/30/7 天、72 小时、抵达、返程和结束节点会成为待确认草稿中的 Task/Reminder；现有后台只会自动刷新显式声明的天气，政策复查仍是用户显式执行的 Task。Japan Pack 不判断签证资格，也不预订、付款、买票或自动叫车。
-
-`/profile` 可直接在 Telegram 查看和补充长期基础资料。资料未完成时不能创建 Plan；姓名、语言和国籍只有在用户先点选字段后才会读取下一条文本，15 分钟自动失效；性别和来华签证/居留状态使用白名单按钮。命令与定位消息不会被误保存，资料不完整时也不会被错误标记为 ready，更不会被当作政策资格结论。
-
-Web 首次打开且 Profile 未完成时，会显示不可跳过的个人基础设置弹窗。用户需要保存称呼、偏好语言、国籍、性别选择和来华身份后才能进入工作台。点击“制定计划”后不再填写旅行问卷，而是像聊天一样说明目的地、大致时间和最重要的目标。Landi 先保存 Planning Session，并在信息足够时展示一份版本化提案；用户可以继续对话修改方向，只有确认最新版本提案后，选定 Runtime 才会生成具体完整 Plan。关闭弹窗后，同一会话仍可在当前计划页继续。
-
-`/weather` 可按当前 Plan 地点显式查询天气：Google Maps 负责解析地点，Google Weather 在覆盖范围内返回实况和带日期的三天预报，并保留来源与抓取时间。地点不受支持时会明确告知，不会猜测或调用高德、QWeather 等地区型兜底；查询不会创建 Reminder，也不会把天气写入 Profile 或 Plan。
-
-Plan 激活并设置预计抵达时间后，Bot 会在该时刻发送到达提醒。“我还没到达”或五分钟无回应才会触发一次明确的位置请求；共享 GPS 只用于当次路线计算，不写入 Profile 或数据库。到达只把明确标记的任务推进为 ready，只有用户点击“我已完成此步骤”才会记为 completed。所有 Connector 凭据都留在本地 Server，不显示在 Web，也不传给 Agent。
+请从 [产品范围](docs/product-scope.md)、[产品基线](docs/landi-product-baseline.md)和 [设计索引](docs/README.md)阅读当前设计。旧渠道处理器、国家包与注册器已移除；有用的旅行函数和来源资料迁入 `packages/travel-support`。历史数据格式保留供审计，历史验收不表示当前 MAH 接入已完成。

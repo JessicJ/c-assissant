@@ -11,20 +11,16 @@ test("connector response status maps provider states to HTTP status codes", () =
   assert.equal(connectorResponseStatus("unsupported"), 400);
 });
 
-test("local configuration snapshot is based on environment and connector state", () => {
+test("local configuration snapshot is does not expose retired chat channels even with old environment values", () => {
   const previousMapsKey = process.env.GOOGLE_MAPS_API_KEY;
   const previousAllowedNumber = process.env.WHATSAPP_ALLOWED_USER_NUMBER;
   try {
     process.env.GOOGLE_MAPS_API_KEY = "maps-key";
     process.env.WHATSAPP_ALLOWED_USER_NUMBER = "+14155552671";
-    const snapshot = createLocalConfigurationSnapshot({
-      configurationStatus: () => ({ status: "available", data: { state: "verified" } })
-    } as never);
-
+    const snapshot = createLocalConfigurationSnapshot();
     assert.equal(snapshot.google.configured, true);
-    assert.equal(snapshot.whatsapp.configured, true);
-    assert.equal(snapshot.whatsapp.state, "verified");
-    assert.equal(snapshot.whatsapp.paired, true);
+    assert.equal("whatsapp" in snapshot, false);
+    assert.equal("telegram" in snapshot, false);
   } finally {
     restoreEnv("GOOGLE_MAPS_API_KEY", previousMapsKey);
     restoreEnv("WHATSAPP_ALLOWED_USER_NUMBER", previousAllowedNumber);

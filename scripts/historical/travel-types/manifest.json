@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "originalPath": "packages/travel-support/src/index.ts",
+  "archivePath": "declarations.ts.txt",
+  "originalByteOffset": 22133,
+  "declarationNames": [
+    "LocalFoodGuideSourceInput",
+    "LocalFoodGuideFactInput",
+    "DigitalLifeCapability",
+    "DigitalLifeSetupItemInput",
+    "JapanEvidenceInput",
+    "JapanReferenceItem",
+    "JapanFoodFact"
+  ],
+  "sha256": "d0993000ff86d62be4e8f25d94c9ca96113ebd7422525c0959bb1b4c5daa995b",
+  "bytes": 1163,
+  "originalFileSha256": "6ee33e1c2ce7f0e9c400fb27b452a48326da789d4cd9e1853a2be9641a5cf838",
+  "remainingFileSha256": "99ca9db477df582a8e6cb9b98cb238d0b4a7b925f2ae47ccbffc78417a7cf1e3"
+}

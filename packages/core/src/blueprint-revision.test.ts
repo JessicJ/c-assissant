@@ -1,3 +1,4 @@
+import {bookingRelationshipReviewContext} from "./booking-relationship.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -542,6 +543,11 @@ test("Direct Blueprint Revision routes standalone fixed bookings through assiste
     }]
   }];
 
+  booked.bookingConstraints[0]!.sourceBookingId="原预订";
+  booked.bookingConstraints[0]!.segments[0]!.sourceSegmentId="原场次";
+  const context=bookingRelationshipReviewContext(booked);
+  Object.assign(booked,applyDirectBlueprintRevisionBatchWithMetadata(booked,[{kind:"review_booking_relationships",createdAt:"2026-08-26T01:00:00Z",assessment:{schemaVersion:1,blueprintId:booked.id,blueprintVersion:booked.version,universeDigest:context.universeDigest,status:"reviewed",decision:{source:"traveler",actorId:"local-traveler",decidedAt:"2026-08-26T01:00:00Z",rationale:"核对已确认场次",evidenceRefs:["traveler-declaration:合成审阅"],obligations:["核对全部直接、间接及跨日依赖"]},units:context.units.map(unit=>({...unit,coverage:"complete",rationale:"全部依赖已审阅",evidenceRefs:["traveler-declaration:合成审阅"],relations:[{id:"固定关系",scope:"occurrence",targets:[{kind:"occurrence",dayId:"d1",placeId:"b"}],role:"direct_commitment",operations:["move","remove","priority","add"],rationale:"真实固定承诺",evidenceRefs:["traveler-declaration:合成审阅"]}]}))}}]).blueprint);
+
   assert.throws(() => applyDirectBlueprintRevision(booked, {
     kind: "move_place_within_day",
     placeId: "b",
@@ -575,6 +581,11 @@ test("Direct Blueprint Revision routes standalone fixed bookings through assiste
     title: "Tokyo stay",
     segments: [{ ...booked.bookingConstraints[0]!.segments[0]!, id: "segment-hotel", title: "Hotel stay", segmentType: "hotel_stay", location: "Tokyo" }]
   }];
+  assert.throws(()=>applyDirectBlueprintRevision(broadHotel,{kind:"move_place_within_day",placeId:"b",dayId:"d1",position:{kind:"start"},createdAt:"2026-08-27T00:00:00Z"}),DirectBlueprintReplanRequirementError);
+  broadHotel.bookingConstraints[0]!.sourceBookingId="原酒店预订";
+  broadHotel.bookingConstraints[0]!.segments[0]!.sourceSegmentId="原酒店住宿";
+  const hotelContext=bookingRelationshipReviewContext(broadHotel);
+  Object.assign(broadHotel,applyDirectBlueprintRevisionBatchWithMetadata(broadHotel,[{kind:"review_booking_relationships",createdAt:"2026-08-27T00:00:00Z",assessment:{schemaVersion:1,blueprintId:broadHotel.id,blueprintVersion:broadHotel.version,universeDigest:hotelContext.universeDigest,status:"reviewed",decision:{source:"traveler",actorId:"local-traveler",decidedAt:"2026-08-27T00:00:00Z",rationale:"酒店与此场次无关联，已核对全部依赖",evidenceRefs:["traveler-declaration:合成审阅"],obligations:["核对全部直接、间接及跨日依赖"]},units:hotelContext.units.map(unit=>({...unit,coverage:"complete",relations:[],rationale:"明确无关联",evidenceRefs:["traveler-declaration:合成审阅"]}))}}]).blueprint);
   assert.doesNotThrow(() => applyDirectBlueprintRevision(broadHotel, {
     kind: "move_place_within_day",
     placeId: "b",
@@ -677,10 +688,10 @@ test("Direct Blueprint Revision batch applies multiple itinerary edits with one 
     }
   ]);
 
-  assert.equal(result.blueprint.version, 3);
+  assert.equal(result.blueprint.version, 2);
   assert.deepEqual(result.blueprint.days[0]?.stops.map((stop) => [stop.placeId, stop.order]), [["b", 1], ["a", 2], ["c", 3]]);
   assert.equal(result.metadata.baseBlueprintVersion, 1);
-  assert.equal(result.metadata.appliedBlueprintVersion, 3);
+  assert.equal(result.metadata.appliedBlueprintVersion, 2);
   assert.equal(result.metadata.revisionCount, 2);
   assert.deepEqual(result.metadata.kinds, ["add_place_to_day", "move_place_within_day"]);
   assert.deepEqual(result.metadata.affectedDayIds, ["d1"]);
@@ -809,4 +820,130 @@ test("Direct Blueprint Revision batch rejects invalid edits without mutating the
   assert.deepEqual(original.days[0]?.stops.map((stop) => stop.placeId), ["a", "b"]);
   assert.deepEqual(original.days[0]?.candidatePlaceIds, ["c"]);
   assert.deepEqual(original.movements.map((movement) => movement.id), ["m1"]);
+});
+
+test("提示状态与来源准备项整批仅产生一个版本且不创建执行要求", () => {
+  const original = blueprint();
+  original.travelTips = [{id:"tip",title:"雨具",body:"雨天随身携带雨具。",context:"雨天",theme:"weather",placeId:"a",evidence:[]}];
+  const createdAt = "2026-08-27T00:00:00Z";
+  const result = applyDirectBlueprintRevisionBatchWithMetadata(original, [
+    {kind:"set_tip_state",tipId:"tip",pinned:true,hidden:true,createdAt},
+    {kind:"create_preparation",origin:{kind:"tip",id:"tip",blueprintId:original.id,blueprintVersion:1},createdAt},
+    {kind:"create_preparation",origin:{kind:"tip",id:"tip",blueprintId:original.id,blueprintVersion:1},createdAt},
+    {kind:"set_preparation_completed",preparationId:"preparation-tip-tip",completed:true,createdAt}
+  ]);
+  assert.equal(result.blueprint.version, 2);
+  assert.equal(result.metadata.appliedBlueprintVersion,2);
+  assert.equal(result.blueprint.travelTips![0]!.pinned,true);
+  assert.equal(result.blueprint.travelTips![0]!.hidden,true);
+  assert.equal(result.blueprint.preparationChecklist!.length,1);
+  assert.equal(result.blueprint.preparationChecklist![0]!.completed,true);
+  assert.equal(result.blueprint.preparationChecklist![0]!.placeId,"a");
+  assert.deepEqual(result.blueprint.preparationChecklist![0]!.origin,{kind:"tip",id:"tip",blueprintId:original.id,blueprintVersion:1});
+  assert.deepEqual(result.blueprint.actionRequirements, original.actionRequirements);
+  assert.throws(() => applyDirectBlueprintRevision(original,{kind:"create_preparation",origin:{kind:"place",id:"a",blueprintId:original.id,blueprintVersion:2},createdAt}),/来源版本已变化/);
+});
+
+test("必访删除必须确认精确批次影响且不能先降级绕过", async () => {
+  const {DirectBlueprintHighImpactError,previewDirectBlueprintRevisionImpact} = await import("./blueprint-revision.js");
+  const original = blueprint(); original.places[0]!.priority="must";
+  const revisions = [{kind:"update_place_priority" as const,placeId:"a",priority:"preferred" as const,createdAt:"2026-08-27T00:00:00Z"},{kind:"remove_place_from_day" as const,placeId:"a",dayId:"d1",createdAt:"2026-08-27T00:00:00Z"}];
+  assert.throws(() => applyDirectBlueprintRevisionBatchWithMetadata(original,revisions),DirectBlueprintHighImpactError);
+  const impact=previewDirectBlueprintRevisionImpact(original,revisions)!;
+  assert.deepEqual(impact.dates,["2026-09-01"]);
+  assert.deepEqual(impact.movementIds,["m1"]);
+  assert.deepEqual(impact.nextActions,["confirm_removal","cancel","assisted_replanning"]);
+  const result=applyDirectBlueprintRevisionBatchWithMetadata(original,revisions,{highImpactConfirmation:impact.id});
+  assert.equal(result.blueprint.places[0]!.priority,"preferred");
+  assert.deepEqual(result.blueprint.days[0]!.stops.map(stop=>stop.placeId),["b"]);
+  const booked=blueprint(); booked.places[0]!.priority="booked";
+  assert.throws(()=>applyDirectBlueprintRevisionBatchWithMetadata(booked,[revisions[1]!],{highImpactConfirmation:impact.id}),DirectBlueprintReplanRequirementError);
+});
+
+test("删除关联块保留原提示解释与日期地点证据并撤销时恢复关联", async()=>{
+  const {undoDirectBlueprintRevision}=await import("./blueprint-revision.js");const original=blueprint();
+  original.days[0]!.blocks=[{id:"block-a",kind:"stop",order:1,placeId:"a",title:"甲",evidence:[]},{id:"block-b",kind:"stop",order:2,placeId:"b",title:"乙",evidence:[]}];
+  original.travelTips=[{id:"tip",title:"提醒",body:"保留完整解释",theme:"timing",context:"游览",dayId:"d1",blockId:"block-a",placeId:"a",evidence:[]}];
+  const after=applyDirectBlueprintRevision(original,{kind:"remove_place_from_day",placeId:"a",dayId:"d1",createdAt:"2026-08-27T00:00:00Z"});
+  assert.equal(after.travelTips![0]!.blockId,undefined);assert.equal(after.travelTips![0]!.body,"保留完整解释");assert.equal(after.travelTips![0]!.dayId,"d1");assert.equal(after.travelTips![0]!.placeId,"a");
+  const restored=undoDirectBlueprintRevision(after,original,after,"2026-08-27T00:01:00Z");assert.equal(restored.travelTips![0]!.blockId,"block-a");
+});
+
+test("撤销只恢复受影响字段并保留独立完成状态与无关内容",async()=>{
+  const {undoDirectBlueprintRevision}=await import("./blueprint-revision.js");const original=blueprint();original.preparationChecklist=[{id:"p",title:"准备",group:"other",completionCondition:"确认完成",completed:false,evidence:[]}];
+  const after=applyDirectBlueprintRevision(original,{kind:"update_place_priority",placeId:"c",priority:"must",createdAt:"2026-08-27T00:00:00Z"});
+  const current=structuredClone(after);current.preparationChecklist![0]!.completed=true;current.summary="保留无关说明";
+  current.sources.push({id:"photo",title:"公开图片",authority:"景点",url:"https://example.com/photo",retrievedAt:"2026-08-27T00:00:00Z",status:"verified",purpose:"inspiration"});
+  current.places.find(place=>place.id==="c")!.images=[{url:"https://example.com/photo.jpg",alt:"新增景点图片",sourceId:"photo"}];
+  const restored=undoDirectBlueprintRevision(current,original,after,"2026-08-27T00:01:00Z");assert.equal(restored.preparationChecklist![0]!.completed,true);assert.equal(restored.summary,"保留无关说明");assert.deepEqual(restored.places.find(place=>place.id==="c")!.images,current.places.find(place=>place.id==="c")!.images);assert.deepEqual(restored.sources,current.sources);assert.equal(restored.places.find(place=>place.id==="c")!.priority,"preferred");
+});
+
+
+test("关联执行任务的准备项拒绝直接完成或取消，混合批次保持原蓝图不变", async () => {
+  const { WorkspaceMutationError } = await import("./workspace-mutation-error.js");
+  const original = blueprint();
+  original.actionRequirements = [{id:"linked-requirement",kind:"preparation",title:"核对虚构材料",description:"独立测试",accountableParty:"traveler",completionCondition:"旅行者确认",evidence:[]}];
+  original.preparationChecklist = [
+    {id:"linked",title:"核对虚构材料",group:"documents",completionCondition:"旅行者确认",requirementId:"linked-requirement",evidence:[]},
+    {id:"independent",title:"准备雨具",group:"other",completionCondition:"旅行者确认",completed:false,evidence:[]}
+  ];
+  const createdAt = "2026-08-27T00:00:00Z";
+  for (const completed of [true, false]) {
+    original.preparationChecklist[0]!.completed = !completed;
+    const before = structuredClone(original);
+    const linkedEdit = {kind:"set_preparation_completed" as const,preparationId:"linked",completed,createdAt};
+    const rejected = (error: unknown) => {
+      assert.ok(error instanceof WorkspaceMutationError);
+      assert.equal(error.code, "invalid_edit");
+      assert.match(error.message, /通过任务清单更新完成状态/);
+      return true;
+    };
+    assert.throws(() => applyDirectBlueprintRevision(original, linkedEdit), rejected);
+    assert.throws(() => applyDirectBlueprintRevisionBatchWithMetadata(original, [
+      {kind:"update_place_priority",placeId:"a",priority:"must",createdAt},
+      {kind:"set_preparation_completed",preparationId:"independent",completed:true,createdAt},
+      linkedEdit
+    ]), rejected);
+    assert.deepEqual(original, before);
+  }
+  const completed = applyDirectBlueprintRevision(original, {kind:"set_preparation_completed",preparationId:"independent",completed:true,createdAt});
+  assert.equal(completed.preparationChecklist![1]!.completed, true);
+  assert.deepEqual(completed.preparationChecklist![0], original.preparationChecklist[0]);
+  const reopened = applyDirectBlueprintRevision(completed, {kind:"set_preparation_completed",preparationId:"independent",completed:false,createdAt});
+  assert.equal(reopened.preparationChecklist![1]!.completed, false);
+  assert.equal(reopened.version, original.version + 2);
+  assert.deepEqual(reopened.actionRequirements, original.actionRequirements);
+});
+
+test("优先级投影覆盖全部真实出现日且混合批次保留真实并集", async () => {
+  const {previewDirectBlueprintRevisionImpact} = await import("./blueprint-revision.js");
+  const original = blueprint();
+  original.endDate = "2026-09-03";
+  original.movements = [];
+  original.days[0]!.blocks = [{id:"首次",kind:"stop",order:1,placeId:"a",evidence:[]},{id:"再次",kind:"stop",order:2,placeId:"a",evidence:[]}];
+  original.days.push(
+    {...structuredClone(original.days[0]!),id:"d2",date:"2026-09-02",stops:[{placeId:"b",order:1}],blocks:[]},
+    {...structuredClone(original.days[0]!),id:"d3",date:"2026-09-03",stops:[{placeId:"b",order:1}],blocks:[{id:"跨日",kind:"stop",order:1,placeId:"a",evidence:[]}]}
+  );
+  const context = {planId:"计划",planVersion:1,blueprintId:original.id,blueprintVersion:original.version,sourceSetDigest:"a".repeat(64),adoptedUnits:[],pendingSources:[{sourceBookingId:"待采用真实来源",sourceDigest:"b".repeat(64)}],resolutionIssues:[]};
+  const priority = {kind:"update_place_priority" as const,placeId:"a",priority:"must" as const,createdAt:"2026-08-27T00:00:00Z"};
+  const impact = previewDirectBlueprintRevisionImpact(original,[priority],context)!;
+  assert.deepEqual(impact.dayIds,["d1","d3"]);assert.deepEqual(impact.dates,["2026-09-01","2026-09-03"]);
+  assert.equal(impact.bookingImpact.canConfirm,false);assert.equal(impact.bookingImpact.unknown[0]!.kind,"source_obligation");
+  const extra = {kind:"remove_place_from_day" as const,placeId:"b",dayId:"d2",createdAt:priority.createdAt};
+  for(const batch of [[priority,extra],[extra,priority]]) {
+    const mixed = previewDirectBlueprintRevisionImpact(original,batch,context)!;
+    assert.deepEqual(mixed.dayIds,["d1","d2","d3"]);assert.deepEqual(mixed.dates,["2026-09-01","2026-09-02","2026-09-03"]);
+  }
+  const saved = applyDirectBlueprintRevisionWithMetadata(original,priority);
+  assert.deepEqual(saved.metadata.affectedDayIds,["d1","d3"]);assert.deepEqual(saved.metadata.routeRefresh.dayIds,[]);
+  const global = previewDirectBlueprintRevisionImpact(original,[{...priority,placeId:"c"}],context)!;
+  assert.deepEqual(global.dayIds,[]);assert.deepEqual(global.dates,[]);assert.deepEqual(global.placeIds,["c"]);assert.equal(global.bookingImpact.canConfirm,false);
+});
+
+test("仅有具体块排程的地点不能直接归档", () => {
+  const current = blueprint();
+  current.movements = [];
+  current.days[0]!.blocks = [{id:"具体出现",kind:"stop",order:1,placeId:"c",evidence:[]}];
+  assert.throws(()=>applyDirectBlueprintRevision(current,{kind:"update_place_priority",placeId:"c",priority:"archive",createdAt:"2026-08-27T00:00:00Z"}),error=>error instanceof DirectBlueprintReplanRequirementError && error.replanRequirement.reasonCode === "scheduled_archive");
 });

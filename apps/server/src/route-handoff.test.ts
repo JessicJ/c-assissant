@@ -21,5 +21,5 @@ test("expected-arrival guidance discloses that arrival is not confirmed", () => 
   const text = formatExpectedArrivalGuidance(plan);
   assert.match(text, /approaching Riverside Hotel/);
   assert.match(text, /上海市静安区一号路 1 号/);
-  assert.match(text, /does not mean Landi has confirmed/i);
+  assert.match(text, /If you're still on the way/i);
 });

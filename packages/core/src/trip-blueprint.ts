@@ -1,3 +1,6 @@
+import { bookingRelationshipAssessmentIssues } from "./booking-relationship.js";
+import type { BookingRelationshipAssessment } from "./booking-relationship.js";
+import type { PolicyResearchSummary } from "./policy-research.js";
 export const TRIP_BLUEPRINT_SCHEMA_VERSION = 1 as const;
 
 export type BlueprintEvidenceStatus = "verified" | "recheck" | "stale";
@@ -222,7 +225,16 @@ export interface BlueprintGuideRelationshipGraph {
   relationships: BlueprintPlaceRelationship[];
 }
 
+export interface BlueprintPreparationOrigin {
+  kind: "tip" | "place" | "local_food" | "local_product" | "experience_theme";
+  id: string;
+  blueprintId: string;
+  blueprintVersion: number;
+}
+
 export interface BlueprintTravelTip {
+  pinned?: boolean;
+  hidden?: boolean;
   id: string;
   title: string;
   body: string;
@@ -235,6 +247,8 @@ export interface BlueprintTravelTip {
 }
 
 export interface BlueprintPreparationChecklistItem {
+  origin?: BlueprintPreparationOrigin;
+  completed?: boolean;
   id: string;
   title: string;
   description?: string;
@@ -256,6 +270,7 @@ export interface BlueprintProposalRef {
 }
 
 export interface BlueprintSource {
+  purpose?: "evidence" | "inspiration";
   id: string;
   title: string;
   authority: string;
@@ -351,6 +366,8 @@ export type BlueprintBookingSegmentType = "flight_leg" | "train_leg" | "hotel_st
 
 export interface BlueprintBookingSegment {
   id: string;
+  status?: "pending" | "confirmed" | "cancelled" | "needs_review";
+  sourceSegmentId?: string;
   segmentType: BlueprintBookingSegmentType;
   title: string;
   startAtLocal?: string;
@@ -367,6 +384,7 @@ export interface BlueprintBookingSegment {
 
 export interface BlueprintBookingConstraint {
   id: string;
+  sourceBookingId?: string;
   type: BlueprintBookingType;
   title: string;
   status: "pending" | "confirmed" | "cancelled" | "needs_review";
@@ -377,6 +395,7 @@ export interface BlueprintBookingConstraint {
 }
 
 export interface ResearchBatch {
+  policyResearch?: PolicyResearchSummary;
   id: string;
   scopeLabel: string;
   status: "pending" | "running" | "completed" | "failed" | "cancelled";
@@ -569,6 +588,7 @@ export interface BlueprintMovementRefreshScope {
 }
 
 export interface TripBlueprint {
+  policyResearch?: PolicyResearchSummary[];
   schemaVersion: typeof TRIP_BLUEPRINT_SCHEMA_VERSION;
   id: string;
   version: number;
@@ -591,6 +611,7 @@ export interface TripBlueprint {
   days: BlueprintItineraryDay[];
   movements: BlueprintMovement[];
   bookingConstraints?: BlueprintBookingConstraint[];
+  bookingRelationshipAssessment?: BookingRelationshipAssessment;
   actionRequirements: BlueprintActionRequirement[];
   localFoods?: BlueprintLocalFood[];
   localProducts?: BlueprintLocalProduct[];
@@ -618,6 +639,7 @@ export function researchSetIntegrityIssues(research: ResearchSet): string[] {
   const placeIds = uniqueIdentityIssues("research.places", research.places.map((place) => place.id), issues);
   const eventIds = uniqueIdentityIssues("research.events", research.events.map((event) => event.id), issues);
   const sourceIds = uniqueIdentityIssues("research.sources", research.sources.map((source) => source.id), issues);
+  for (const source of research.sources) if (source.purpose !== undefined && !["evidence", "inspiration"].includes(source.purpose)) issues.push("研究来源用途无效");
   uniqueIdentityIssues("research.guideRelationships", (research.guideRelationships ?? []).map((relationship) => relationship.id), issues);
   uniqueIdentityIssues("research.localFoods", (research.localFoods ?? []).map((item) => item.id), issues);
   uniqueIdentityIssues("research.localProducts", (research.localProducts ?? []).map((item) => item.id), issues);
@@ -661,6 +683,7 @@ export function tripBlueprintIntegrityIssues(blueprint: TripBlueprint, options: 
   const placeIds = uniqueIdentityIssues("blueprint.places", blueprint.places.map((place) => place.id), issues);
   const eventIds = uniqueIdentityIssues("blueprint.events", blueprint.events.map((event) => event.id), issues);
   const sourceIds = uniqueIdentityIssues("blueprint.sources", blueprint.sources.map((source) => source.id), issues);
+  for (const source of blueprint.sources) if (source.purpose !== undefined && !["evidence", "inspiration"].includes(source.purpose)) issues.push("蓝图来源用途无效");
   const dayIds = uniqueIdentityIssues("blueprint.days", blueprint.days.map((day) => day.id), issues);
   uniqueIdentityIssues("blueprint.movements", blueprint.movements.map((movement) => movement.id), issues);
   uniqueIdentityIssues("blueprint.bookingConstraints", (blueprint.bookingConstraints ?? []).map((constraint) => constraint.id), issues);
@@ -681,6 +704,7 @@ export function tripBlueprintIntegrityIssues(blueprint: TripBlueprint, options: 
   }
   for (const requirement of blueprint.actionRequirements) validateRequirement(requirement, placeIds, sourceIds, issues);
   for (const constraint of blueprint.bookingConstraints ?? []) validateBookingConstraint(constraint, issues);
+  issues.push(...bookingRelationshipAssessmentIssues(blueprint));
   for (const item of blueprint.localFoods ?? []) validateLocalFood(item, placeIds, sourceIds, issues, `local food ${item.id || "<missing>"}`);
   for (const item of blueprint.localProducts ?? []) validateLocalProduct(item, placeIds, sourceIds, issues, `local product ${item.id || "<missing>"}`);
   for (const item of blueprint.experienceThemes ?? []) validateExperienceTheme(item, placeIds, sourceIds, issues, `experience theme ${item.id || "<missing>"}`);
@@ -765,7 +789,7 @@ function validatePlace(place: BlueprintPlace, sourceIds: Set<string>, placeIds: 
   if (place.coordinates && !validCoordinates(place.coordinates)) issues.push(`${path} has invalid coordinates`);
   if (place.accommodation) {
     if (!["confirmed", "selected", "recommended", "pending"].includes(place.accommodation.state)) issues.push(`${path} has invalid accommodation state`);
-    if (place.accommodation.state !== "pending" && !/\b(hotel|accommodation|lodg|villa|resort|inn|guesthouse|stay)\b/i.test(`${place.category} ${place.visitRole ?? ""}`)) issues.push(`${path} accommodation state requires a lodging place`);
+    if (place.accommodation.state !== "pending" && !isLodgingPlaceCategory(place.category, place.visitRole)) issues.push(`${path} accommodation state requires a lodging place (category: ${JSON.stringify(place.category)}, role: ${JSON.stringify(place.visitRole ?? "")})`);
     if (place.accommodation.stayStartDate && !validDate(place.accommodation.stayStartDate)) issues.push(`${path} has invalid accommodation start date`);
     if (place.accommodation.stayEndDate && !validDate(place.accommodation.stayEndDate)) issues.push(`${path} has invalid accommodation end date`);
   }
@@ -777,6 +801,10 @@ function validatePlace(place: BlueprintPlace, sourceIds: Set<string>, placeIds: 
   validateSchedulingEligibilityShape(place.schedulingEligibility, issues, path);
   if (place.possibleDuplicateOf?.some((id) => !placeIds.has(id) || id === place.id)) issues.push(`${path} has invalid possible duplicate reference`);
   validateEvidence(place.evidence, sourceIds, issues, path);
+}
+
+export function isLodgingPlaceCategory(category: string, visitRole?: string): boolean {
+  return /\b(?:accommodation|hotels?|motels?|hostels?|lodg(?:e|es|ing|ings)|villas?|resorts?|inns?|guest\s*houses?|homestays?|apartments?|aparthotels?|cabins?|campgrounds?|campsites?|holiday\s+parks?|stays?|b&b|bed\s*(?:and|&)\s*breakfasts?)\b/i.test(`${category} ${visitRole ?? ""}`);
 }
 
 function validateOperationalFacts(facts: BlueprintPlace["operationalFacts"] | undefined, sourceIds: Set<string>, issues: string[], path: string): void {
@@ -909,6 +937,8 @@ function guideDisplayTextFields(display: BlueprintPlaceGuideDisplay): Partial<Re
 function validateRequirement(requirement: BlueprintActionRequirement, placeIds: Set<string>, sourceIds: Set<string>, issues: string[]): void {
   if (!requirement.id.trim() || !requirement.title.trim() || !requirement.description.trim() || !requirement.completionCondition.trim()) issues.push(`action requirement ${requirement.id || "<missing>"} is incomplete`);
   if (requirement.placeId && !placeIds.has(requirement.placeId)) issues.push(`action requirement ${requirement.id} references unknown place ${requirement.placeId}`);
+  if (!["assistant", "traveler", "external"].includes(requirement.accountableParty)) issues.push(`行动要求 ${requirement.id} 缺少有效行动责任人`);
+  if (!["reservation", "travel_authorization", "time_sensitive_recheck", "preparation", "transport", "other"].includes(requirement.kind)) issues.push(`行动要求 ${requirement.id} 缺少有效行动类型`);
   validateEvidence(requirement.evidence, sourceIds, issues, `action requirement ${requirement.id}`);
 }
 
@@ -1042,7 +1072,6 @@ function validatePlaceRelationship(relationship: BlueprintPlaceRelationship, pla
 
 function validateLocalFood(item: BlueprintLocalFood, placeIds: Set<string>, sourceIds: Set<string>, issues: string[], path: string): void {
   if (!item.id.trim() || !item.title.trim() || !item.description.trim() || !item.context.trim()) issues.push(`${path} is incomplete`);
-  if (!item.diningPlaceIds.length) issues.push(`${path} needs at least one dining place`);
   for (const placeId of item.diningPlaceIds) if (!placeIds.has(placeId)) issues.push(`${path} references unknown dining place ${placeId}`);
   if (new Set(item.diningPlaceIds).size !== item.diningPlaceIds.length) issues.push(`${path} contains duplicate dining places`);
   validateEvidence(item.evidence, sourceIds, issues, path);
@@ -1050,7 +1079,6 @@ function validateLocalFood(item: BlueprintLocalFood, placeIds: Set<string>, sour
 
 function validateLocalProduct(item: BlueprintLocalProduct, placeIds: Set<string>, sourceIds: Set<string>, issues: string[], path: string): void {
   if (!item.id.trim() || !item.title.trim() || !item.description.trim() || !item.context.trim()) issues.push(`${path} is incomplete`);
-  if (!item.purchasePlaceIds.length) issues.push(`${path} needs at least one purchase place`);
   for (const placeId of item.purchasePlaceIds) if (!placeIds.has(placeId)) issues.push(`${path} references unknown purchase place ${placeId}`);
   if (new Set(item.purchasePlaceIds).size !== item.purchasePlaceIds.length) issues.push(`${path} contains duplicate purchase places`);
   validateEvidence(item.evidence, sourceIds, issues, path);
@@ -1058,7 +1086,6 @@ function validateLocalProduct(item: BlueprintLocalProduct, placeIds: Set<string>
 
 function validateExperienceTheme(item: BlueprintExperienceTheme, placeIds: Set<string>, sourceIds: Set<string>, issues: string[], path: string): void {
   if (!item.id.trim() || !item.title.trim() || !item.description.trim() || !item.context.trim()) issues.push(`${path} is incomplete`);
-  if (!item.offeringPlaceIds.length) issues.push(`${path} needs at least one concrete offering place`);
   for (const placeId of item.offeringPlaceIds) if (!placeIds.has(placeId)) issues.push(`${path} references unknown offering place ${placeId}`);
   if (new Set(item.offeringPlaceIds).size !== item.offeringPlaceIds.length) issues.push(`${path} contains duplicate offering places`);
   validateEvidence(item.evidence, sourceIds, issues, path);
@@ -1070,11 +1097,15 @@ function validateTravelTip(tip: BlueprintTravelTip, placeIds: Set<string>, dayId
   if (tip.placeId && !placeIds.has(tip.placeId)) issues.push(`${path} references unknown place ${tip.placeId}`);
   if (tip.dayId && dayIds.size && !dayIds.has(tip.dayId)) issues.push(`${path} references unknown day ${tip.dayId}`);
   if (tip.blockId && blockIds.size && !blockIds.has(tip.blockId)) issues.push(`${path} references unknown block ${tip.blockId}`);
+  if (tip.pinned !== undefined && typeof tip.pinned !== "boolean") issues.push(`${path} 置顶状态无效`);
+  if (tip.hidden !== undefined && typeof tip.hidden !== "boolean") issues.push(`${path} 隐藏状态无效`);
   validateEvidence(tip.evidence, sourceIds, issues, path);
 }
 
 function validatePreparationItem(item: BlueprintPreparationChecklistItem, placeIds: Set<string>, requirementIds: Set<string>, sourceIds: Set<string>, issues: string[], path: string): void {
   if (!item.id.trim() || !item.title.trim() || !item.completionCondition.trim()) issues.push(`${path} is incomplete`);
+  if (item.completed !== undefined && typeof item.completed !== "boolean") issues.push(`${path} 完成状态无效`);
+  if (item.origin && (!["tip", "place", "local_food", "local_product", "experience_theme"].includes(item.origin.kind) || !item.origin.id?.trim() || !item.origin.blueprintId?.trim() || !Number.isInteger(item.origin.blueprintVersion) || item.origin.blueprintVersion < 1)) issues.push(`${path} 准备项来源无效`);
   if (!validPreparationGroup(item.group)) issues.push(`${path} has invalid group`);
   if (item.placeId && !placeIds.has(item.placeId)) issues.push(`${path} references unknown place ${item.placeId}`);
   if (item.requirementId && !requirementIds.has(item.requirementId)) issues.push(`${path} references unknown action requirement ${item.requirementId}`);
@@ -1106,11 +1137,15 @@ function validateFieldEvidence(items: BlueprintFieldEvidence[], sourceIds: Set<s
 function validateBookingConstraint(constraint: BlueprintBookingConstraint, issues: string[]): void {
   if (!constraint.id.trim() || !constraint.title.trim() || !constraint.sourceLabel.trim()) issues.push(`booking constraint ${constraint.id || "<missing>"} is incomplete`);
   if (!["hard", "soft", "ignored"].includes(constraint.constraintStrength)) issues.push(`booking constraint ${constraint.id} has invalid strength`);
-  if (!constraint.segments.length) issues.push(`booking constraint ${constraint.id} needs at least one segment`);
+  if(constraint.sourceBookingId!==undefined&&(typeof constraint.sourceBookingId!=="string"||!constraint.sourceBookingId.trim())) issues.push("预订源身份无效。");
+  if(!["pending","confirmed","cancelled","needs_review"].includes(constraint.status)) issues.push("预订状态无效。");
+
   uniqueIdentityIssues(`booking constraint ${constraint.id}.segments`, constraint.segments.map((segment) => segment.id), issues);
   for (const segment of constraint.segments) {
     if (!segment.id.trim() || !segment.title.trim()) issues.push(`booking segment ${segment.id || "<missing>"} is incomplete`);
     if (!["hard", "soft", "ignored"].includes(segment.constraintStrength)) issues.push(`booking segment ${segment.id} has invalid strength`);
+    if(segment.sourceSegmentId!==undefined&&(typeof segment.sourceSegmentId!=="string"||!segment.sourceSegmentId.trim())) issues.push("预订分段源身份无效。");
+    if(segment.status!==undefined&&!["pending","confirmed","cancelled","needs_review"].includes(segment.status)) issues.push("预订分段状态无效。");
     if (segment.constraintStrength === "hard" && !((segment.startAtLocal || segment.endAtLocal) && (segment.location || segment.origin || segment.destination))) {
       issues.push(`hard booking segment ${segment.id} needs timing and location`);
     }

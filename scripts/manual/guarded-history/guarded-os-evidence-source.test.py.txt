@@ -1,0 +1,88 @@
+"""New fictional OS reply checks only; no live commands or native APIs."""
+import builtins,copy,hashlib,importlib.util,json,os,sys,tempfile
+from pathlib import Path
+ROOT=Path(__file__).resolve().parents[1];ENTRY=ROOT/'scripts/guarded-os-evidence-source.py'
+spec=importlib.util.spec_from_file_location('os_source',ENTRY);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+OUT=Path(tempfile.mkdtemp(prefix='landi-os-source-check-',dir='/private/tmp'));os.chmod(OUT,0o700);checks=[]
+def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+def save(name,v):
+ p=OUT/name
+ with p.open('x') as f:json.dump(v,f,indent=2);f.write('\n');f.flush();os.fsync(f.fileno())
+ os.chmod(p,0o600)
+def fixture(s):
+ def query(argv,rc=0,text='',err=''):return dict(argv=argv,returncode=rc,stdout=text.encode(),stderr=err.encode())
+ ident=dict(pid=101,parentPid=1,uid=501,realUid=501,startSeconds=1,startMicroseconds=123)
+ exe=dict(path='/fiction/node',device=7,inode=30,sha256='a'*64)
+ path=s['workFile']['path'];label=s['managerLabel'];uid=s['controllerIdentity']['uid']
+ return dict(startedAtMs=100000,endedAtMs=100300,subjectSha256=m._scope.canonical_sha256(s),
+  metadata=[dict(path=path,exists=True,file=s['workFile'],canonicalPath=path)]+[dict(path=path+x,exists=False) for x in ['-wal','-shm','-journal']],
+  nativeFrames=[dict(errno=0,bytesReturned=136,identityBefore=ident,identityAfter=copy.deepcopy(ident),executableBefore=exe,executableAfter=copy.deepcopy(exe))],
+  queries=dict(inventory=query(['/bin/ps','-axo','pid=,ppid=,uid=,lstart=,comm='],text='101 1 501 Mon Oct 26 13:00:00 2026 node\n'),
+   manager=query(['/bin/launchctl','print',f'gui/{uid}/{label}'],113,err=f'Could not find service "{label}" in domain for user gui: {uid}\n'),
+   disabled=query(['/bin/launchctl','print-disabled',f'gui/{uid}'],text=f' "{label}" => disabled\n'),
+   listeners=query(['/usr/sbin/lsof','-nP','-iTCP:'+str(s['port']),'-sTCP:LISTEN','-Fpcftn'],1),
+   fileUsers=query(['/usr/sbin/lsof','-nP','-Fpcftn','--',path],1)))
+def evaluate(s,raw=None,**kw):
+ raw=fixture(s) if raw is None else raw;before=copy.deepcopy(raw);sb=copy.deepcopy(s)
+ r=m.OSReadOnlySource(fixture_replies=raw).observe(s,now_ms=kw.get('now',101000),lock_binding=kw.get('binding'))
+ assert raw==before and s==sb
+ assert r['status']=='rejected' and r['realEvidenceAuthenticated'] is False and r['executable'] is False and r['mayExempt'] is False
+ assert r['launcherStatus']=='unverified' and r['leaseStatus']=='unverified' and not r['productionExecutable'] and not r['compatibilityEnabled']
+ assert 'trust' not in r and 'lease' not in r
+ return r
+def reject(name,mutate):
+ raw=fixture(SUB);mutate(raw);r=evaluate(SUB,raw);assert r['observationStatus']=='unverified',name;checks.append(name)
+try:
+ py='/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/bin/python3.14'
+ assert os.path.samefile(sys.executable,py) and sha(py)=='4f00ea2ad53d62437a6a3946b73c73614a97e8accdc5b96dc095ea1a0d9c6a56'
+ prior=Path('/private/tmp/landi-evidence-verifier-check-mg579re0/verification.json');pv=json.loads(prior.read_text());assert pv['status']=='passed' and pv['newChecks']==36
+ protected=dict(pv['protectedDigests']);protected[pv['entry']['path']]=pv['entry']['sha256'];protected[str(prior)]=sha(prior)
+ src=Path('/private/tmp/landi-resource-scope-check-1vr5o4l0/fictional-example.json');SUB=json.loads(src.read_text())['evidence']['subject'];protected[str(src)]=sha(src)
+ for p,h in protected.items():assert sha(p)==h
+ save('reuse-binding.json',dict(path=str(prior),sha256=sha(prior),reusedChecks=36,historicalTestsRun=False))
+ r=evaluate(SUB);assert r['observationStatus']=='consistent_fixture_observation_only' and r['reasons']==['launcher_source_unverified','actual_lease_capability_unverified'];checks.append('clean_OS_fixture_still_rejects_missing_launch_and_lease')
+ default=m.OSReadOnlySource().observe(SUB,now_ms=101000);assert default['reasons']==['real_OS_collection_not_connected'];checks.append('default_live_source_disabled')
+ cases=[('stale_reply',lambda r:r.update(startedAtMs=0)),('future_reply',lambda r:r.update(endedAtMs=102000)),
+ ('scope_mismatch',lambda r:r.update(subjectSha256='0'*64)),('missing_query',lambda r:r['queries'].pop('fileUsers')),
+ ('unexpected_command',lambda r:r['queries']['inventory'].update(argv=['/bin/sh'])),
+ ('invalid_UTF8',lambda r:r['queries']['inventory'].update(stdout=b'\xff')),
+ ('oversized_reply',lambda r:r['queries']['inventory'].update(stdout=b'x'*(m.LIMIT+1))),
+ ('permission_denied',lambda r:r['queries']['fileUsers'].update(stderr=b'permission denied')),
+ ('port_owner',lambda r:r['queries']['listeners'].update(returncode=0,stdout=b'p101\nn*:8787\n')),
+ ('database_owner',lambda r:r['queries']['fileUsers'].update(returncode=0,stdout=b'p101\nn/alias\n')),
+ ('false_empty_success',lambda r:r['queries']['listeners'].update(returncode=0)),
+ ('duplicate_disabled',lambda r:r['queries']['disabled'].update(stdout=b'"io.landi.local" => disabled\n"io.landi.local" => enabled\n')),
+ ('manager_present',lambda r:r['queries']['manager'].update(returncode=0,stdout=b'active')),
+ ('sidecar_present',lambda r:r['metadata'][1].update(exists=True)),
+ ('missing_sidecar_metadata',lambda r:r['metadata'].pop()),
+ ('work_replaced',lambda r:r['metadata'][0].update(file=dict(path='/changed',device=7,inode=999))),
+ ('native_permission_denied',lambda r:r['nativeFrames'][0].update(errno=1,bytesReturned=0)),
+ ('PID_reuse',lambda r:r['nativeFrames'][0]['identityAfter'].update(startMicroseconds=124)),
+ ('kernel_path_changed',lambda r:r['nativeFrames'][0]['executableAfter'].update(inode=999)),
+ ('inventory_missing_native',lambda r:r.update(nativeFrames=[])),
+ ('duplicate_inventory',lambda r:r['queries']['inventory'].update(stdout=r['queries']['inventory']['stdout']*2)),
+ ('boolean_returncode',lambda r:r['queries']['inventory'].update(returncode=False))]
+ for name,mutate in cases:reject(name,mutate)
+ owner=SUB['controllerIdentity'];binding=dict(holderIdentity=owner,holderFd=8,phase='before_business_spawn',receiverIdentity=None,receiverFd=None,inheritedIdentityMatched=False)
+ r=evaluate(SUB,binding=binding);assert r['lockRequirements']['reason']=='business_child_not_created_inheritance_pending' and r['lockRequirements']['inheritedIdentityMatched'] is False;checks.append('before_spawn_inheritance_explicitly_pending')
+ bad=copy.deepcopy(binding);bad['inheritedIdentityMatched']=True;r=evaluate(SUB,binding=bad);assert r['observationStatus']=='unverified';checks.append('future_inheritance_not_claimed_early')
+ child=dict(pid=222,parentPid=owner['pid'],uid=501,realUid=501,startSeconds=2,startMicroseconds=1)
+ lock=SUB['lockFile'];binding=dict(holderIdentity=owner,holderFd=8,phase='after_business_spawn',receiverIdentity=child,receiverFd=9,holderLockFile=lock,receiverLockFile=copy.deepcopy(lock))
+ r=evaluate(SUB,binding=binding);assert r['lockRequirements']['status']=='unverified' and not r['lockRequirements']['heldContinuously'];checks.append('matching_fixture_FDs_not_continuous_lease_proof')
+ bad=copy.deepcopy(binding);bad['receiverIdentity']['parentPid']=999;r=evaluate(SUB,binding=bad);assert r['observationStatus']=='unverified';checks.append('wrong_inheritance_parent_rejected')
+ bad=copy.deepcopy(binding);bad['receiverLockFile']['inode']=999;r=evaluate(SUB,binding=bad);assert r['observationStatus']=='unverified';checks.append('different_inherited_lock_rejected')
+ adapter=m.OSReadOnlySource(fixture_replies=fixture(SUB));adapter.observe(SUB,now_ms=101000);assert adapter.observe(SUB,now_ms=101000)['reasons']==['source_session_already_attempted'];checks.append('source_session_single_attempt')
+ original=builtins.open
+ def denied(*a,**kw):raise AssertionError('unexpected filesystem access')
+ builtins.open=denied
+ try:assert evaluate(SUB)['observationStatus']=='consistent_fixture_observation_only'
+ finally:builtins.open=original
+ checks.append('adapter_no_filesystem_access')
+ for p,h in protected.items():assert sha(p)==h
+ checks.append('existing_verifier_evaluator_controller_Storage_artifacts_unchanged')
+ save('fictional-result.json',evaluate(SUB))
+ save('verification.json',dict(status='passed',newChecks=len(checks),checks=checks,entry=dict(path=str(ENTRY),sha256=sha(ENTRY)),protectedDigests=protected,fixtureSourcesOnly=True,OSQueriesRun=False,nativeCallsRun=False,databaseOpened=False,servicesStarted=False,controllerIntegrated=False,storageIntegrated=False,productionExecutable=False,compatibilityEnabled=False,compiled=False,mahCommandsRun=False,historicalTestsRun=False))
+ print(json.dumps(dict(status='passed',newChecks=len(checks),evidence=str(OUT))))
+except BaseException as error:
+ save('failure.json',dict(status='failed',passedChecks=checks,errorType=type(error).__name__,error=str(error)))
+ print(json.dumps(dict(status='failed',evidence=str(OUT))));raise

@@ -10,6 +10,8 @@ export function buildProposal(session: PlanningSession, previousVersion: number)
   const timing = valueOf(session.facts, "travel_dates") ?? valueOf(session.facts, "timing") ?? "dates to be confirmed";
   const purpose = valueOf(session.facts, "purpose") ?? "complete the trip goal";
   const interests = valueOf(session.facts, "interests");
+  const constraints = valueOf(session.facts, "constraints");
+  const budgetScope = valueOf(session.facts, "budget_scope");
   return {
     version: previousVersion + 1,
     title: `${destination} · ${purpose.slice(0, 28)}`,
@@ -17,8 +19,8 @@ export function buildProposal(session: PlanningSession, previousVersion: number)
     theme: interests ?? purpose,
     segments: ["Pre-departure preparation and key milestones", `Core experiences and daily rhythm in ${destination}`, "Backup options for transport, accommodation, and unexpected changes"],
     skeleton: [`Arrival and adjustment: shape the first day around ${timing}`, "Core itinerary: place the most important goal at the best time for energy and access", "Flexibility and alternatives: leave room for weather, transport, and changing preferences"],
-    tradeoffs: ["Protect the core goal first, then balance depth with a comfortable pace", "Mark uncertain details for confirmation instead of presenting assumptions as facts"],
-    assumptions: ["Accommodation, budget, and other unbooked items can be added after the complete plan is generated; confirmed arrival details will anchor the first-day route"],
+    tradeoffs: ["Protect the core goal first, then balance depth with a comfortable pace", ...(constraints ? [`Respect the stated constraints: ${constraints}`] : []), "Mark uncertain details for confirmation instead of presenting assumptions as facts"],
+    assumptions: [budgetScope ? `Confirmed budget coverage: ${budgetScope}` : "If a total budget is stated, confirm whether it includes international flights before generation.", "Unbooked accommodation and transport remain recommendations; the confirmed arrival details anchor the first-day route"],
     decisionPoints: ["Whether the goal and scope are right", "Whether the current pace and backup tradeoffs work", "Which unknowns should be resolved first after generation"]
   };
 }

@@ -1,65 +1,18 @@
-import Fastify from "fastify";
-import { SqliteWorkspaceStore } from "@c-assistant/storage";
-import { startServerLifecycle } from "./server-lifecycle.js";
-import { registerAppRoutes } from "./app-routes.js";
-import { loadServerConfig } from "./server-config.js";
-import { createAppServices } from "./app-services.js";
-
-const server = Fastify({ logger: true });
-const {
-  projectRoot,
-  envPath,
-  databasePath,
-  blueprintGenerationEnabled,
-  semanticShadow,
-  semanticDraftCanary,
-  webAssetsPath,
-  webTripMapPath,
-  webIndexPath,
-  port,
-  host
-} = loadServerConfig(import.meta.url);
-const store = new SqliteWorkspaceStore(databasePath);
-const {
-  connectorServices,
-  countryPackServices,
-  runtimeServices,
-  messagingServices,
-  prepareGeneratedPlanEvidence
-} = createAppServices({
-  projectRoot,
-  store,
-  semanticShadow,
-  semanticDraftCanary,
-  uberClientId: () => process.env.UBER_CLIENT_ID,
-  allowedWhatsAppUserNumber: () => process.env.WHATSAPP_ALLOWED_USER_NUMBER,
-  logGenerationFailure: (details, message) => server.log.error(details, message),
-  logWarning: (details, message) => server.log.warn(details, message),
-  logWarningMessage: (message) => server.log.warn(message)
-});
-
-await registerAppRoutes(server, {
-  store,
-  envPath,
-  webAssetsPath,
-  webTripMapPath,
-  webIndexPath,
-  blueprintGenerationEnabled,
-  getConnectors: connectorServices.getConnectors,
-  replaceConnectors: connectorServices.replaceConnectors,
-  runtimeServices,
-  messagingServices,
-  countryPackServices,
-  getLocalConfiguration: connectorServices.getLocalConfiguration,
-  prepareGeneratedPlanEvidence
-});
-
-await startServerLifecycle({
-  server,
-  store,
-  port,
-  host,
-  pollTelegram: () => messagingServices.pollTelegram(),
-  activePlanMonitoring: messagingServices.activePlanMonitoring,
-  abortGenerationJobs: runtimeServices.abortGenerationJobs
-});
+// Select the branch before loading .env, normal storage, runtimes, or background services.
+const mode = process.env.LANDI_SERVER_MODE;
+if (mode === 'maintenance-bootstrap') {
+  const { startMaintenanceBootstrap } = await import('./maintenance-bootstrap-startup.js');
+  await startMaintenanceBootstrap(process.env);
+} else if (mode === 'guarded-workbench') {
+  const { startGuardedWorkbench } = await import('./guarded-workbench-startup.js');
+  await startGuardedWorkbench(process.env);
+} else if (mode === 'readonly-diagnostics') {
+  const { startReadonlyDiagnostics } = await import('./readonly-diagnostic-startup.js');
+  await startReadonlyDiagnostics(process.env);
+} else if (mode === undefined || mode === 'standard') {
+  const { startStandardServer } = await import('./standard-server-startup.js');
+  await startStandardServer(import.meta.url);
+} else {
+  throw new Error('Unsupported LANDI_SERVER_MODE; no service was started.');
+}
+export {};

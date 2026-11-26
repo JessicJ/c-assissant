@@ -32,6 +32,7 @@ export async function refreshPlanRouteFacts(plan: Plan, segmentId: string, maps:
   const origin = presentation.places.find((place) => place.id === segment.originPlaceId);
   const destination = presentation.places.find((place) => place.id === segment.destinationPlaceId);
   if (!origin || !destination) throw new PlanRouteRefreshError("missing_place", "The route references a place that is no longer in this Plan.");
+  if (isTransportCorridor(origin) || isTransportCorridor(destination)) throw new PlanRouteRefreshError("unsupported_mode", "Select the actual arrival or departure terminal before refreshing a local route; an intercity service is not a single walking or driving point.");
   if (segment.mode !== "driving" && segment.mode !== "walking" && segment.mode !== "transit") throw new PlanRouteRefreshError("unsupported_mode", "Automatic refresh currently supports driving, walking, and public-transit segments only.");
 
   const [originResult, destinationResult] = await Promise.all([
@@ -53,6 +54,11 @@ export async function refreshPlanRouteFacts(plan: Plan, segmentId: string, maps:
     destinationCoordinates: parseCoordinates(destinationResult.data.location),
     ...(route.data.geometry?.length ? { geometry: route.data.geometry } : {})
   };
+}
+
+function isTransportCorridor(place: { category: string; locationLabel: string }): boolean {
+  return /\b(?:ferry|rail|train|flight|coach)\b/i.test(place.category)
+    && /\b(?:to|via)\b|[–—]/i.test(place.locationLabel);
 }
 
 export async function refreshGeneratedPlanRoutes(plan: Plan, maps: PlanRouteMaps, options: number | { concurrency?: number; segmentIds?: string[] } = 3): Promise<{ refreshed: RefreshedPlanRouteFacts[]; failedSegmentIds: string[] }> {

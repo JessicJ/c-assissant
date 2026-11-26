@@ -1,6 +1,16 @@
+---
+status: converged
+---
+
 # Booking Confirmation Requirements
 
+Design review: 2026-11-17
+
+T2-1 acceptance covers the desktop workspace path for establishing, reviewing, and correcting booking relationships, previewing impacts, and saving or undoing a versioned change. Live generation remains subject to T1-1 acceptance. The Later items below retain their own design and verification requirements.
+
 ## Purpose
+
+预订关系闭环规范：以下 Booking Itinerary Assessment 是关系事实、来源生命周期和保护判断的唯一规范。实现与隔离验收证据分别记录，指导或单项验证不代表正式交付，也不证明外部规划服务已可用。
 
 Landi should use confirmed and pending travel bookings such as hotels, flights, trains, rental cars, restaurants, tickets, and tours as foundation facts for Plan generation.
 
@@ -8,7 +18,7 @@ The feature is inspired by TREK's reservation, accommodation, and transport mode
 
 ## Product Principles
 
-- Booking data begins as Planning Session evidence when it is provided before generation, then becomes Plan-scoped after the generated Plan is reviewed and saved. It must not be written to the long-term Profile unless the traveler explicitly asks to save a reusable preference.
+- 预订在生成前作为 Planning Session 证据保存；生成后通过 Blueprint 的明确源引用成为逻辑 Plan-linked Booking，原始 owner 与稳定 ID 不变，不复制或搬移记录。旅行者未明确要求保存可复用偏好时，不写长期 Profile。
 - A discovered booking, imported file, or external link never becomes a confirmed booking without either reliable parsed evidence or explicit traveler confirmation.
 - Traveler-initiated import confirms that the source material should be considered Booking Evidence, but it does not automatically confirm every parsed field as a hard Booking Constraint.
 - Opening a booking, map, airline, rental, or payment link does not prove completion.
@@ -45,7 +55,7 @@ The Planning Session should accept booking facts alongside normal conversational
 
 Imported confirmation content immediately becomes Booking Evidence after the traveler submits it. Parsed fields from that content become Proposed Booking Constraints until the traveler accepts them in preview or correction flow.
 
-Booking Import does not create a Plan, Draft Plan, Trip Blueprint, or Blueprint Generation by itself. It enriches the current Planning Session and must survive browser refresh or session reopening. Booking Evidence and accepted Booking Constraints are promoted to Plan-linked bookings only after Blueprint Publication and Draft Plan compilation.
+Booking Import does not create a Plan, Draft Plan, Trip Blueprint, or Blueprint Generation by itself. It enriches the current Planning Session and must survive browser refresh or session reopening. Blueprint Publication 与 Draft Plan 编译后，通过不可变 Blueprint 的源引用将证据和接受的约束逻辑关联到 Plan；不产生第二份可编辑 booking。
 
 If no Planning Session exists, Booking Import may create one. Import alone must not auto-create a Planning Proposal or start Blueprint Generation. Landi should first ask the traveler whether to plan around the imported booking evidence and collect any missing trip intent.
 
@@ -132,7 +142,7 @@ The first Landi version should support:
 - Flight, train or long-distance transport, and rental-car records that can seed arrival/departure facts, movement assumptions, and fixed time windows.
 - Semi-structured event, ticket, tour, restaurant, and other booking records without full parser coverage.
 - Confirmation code, supplier, status, local times, notes, source/evidence, and document attachment metadata.
-- Inclusion of booking-derived facts in the generation context passed to Agent Runtime and Country Pack workflows.
+- Inclusion of privacy-minimized booking facts in the Landi generation context and capability-based research where needed.
 - A booking review surface in Web.
 - Reminder generation for check-in, check-out, flight departure, car pickup/return, and "review booking details before trip".
 - Explicit "needs review" state for incomplete or imported bookings.
@@ -152,7 +162,7 @@ Later phases may add:
 
 ## Domain Model
 
-Add a first-class `TravelBooking` aggregate. Before generation it may be linked to a `PlanningSession`; after generation it should be linked to a `Plan`. It should be separate from `Task` and `PlanPlace`, but linkable to both.
+A `TravelBooking` is a separate aggregate that can be referenced by `Task` and `PlanPlace`. The owning `PlanningSession` or `Plan` stays fixed. After generation, the accepted Blueprint source references and compilation lineage link the booking to the generated Plan.
 
 ### TravelBooking
 
@@ -212,6 +222,40 @@ Fields:
 - `missingRequiredFields`
 - `updatedAt`
 
+### Booking Itinerary Assessment（预订行程关系评估）
+
+本节唯一拥有预订与行程关系的语义、覆盖、来源、审阅和有效性。关系评估随不可变 Trip Blueprint Version 保存，规范字段为 `bookingRelationshipAssessment`。TravelBooking 拥有真实预订与私密执行资料，Blueprint Booking Constraint 是其隐私最小化输入快照；TravelBooking 不另存可编辑日程关系，任何查询索引只能从 Blueprint 快照生成，不成为第二事实源。
+
+每个评估单元绑定稳定的 `bookingConstraintId` 与精确 `segmentId`；没有分段的预订使用明确 booking 级单元，不得遗漏。保留可逆、唯一且经服务端校验的源 booking／segment 身份映射，以及源结构的规范语义摘要（对规范字段递归按键排序的 UTF-8 JSON 取 SHA-256）；审阅基准另保留 Blueprint ID/version，不维护第二套可任选的源修订事实。摘要覆盖接受的时间、地点、状态、强度、分段和语义来源；确认码、原邮件、旅客姓名和其他私密非结构资料不进入 Blueprint 或摘要输入审计文本，也不因这些资料更正而强制重审。
+
+关系目标必须明确区分下列作用域：
+
+- `occurrence`：有 blocks 时以 `dayId + blockId` 指向具体物理出现，并核验 `placeId` 一致；同日酒店的入住、取行李等多次出现分别保留。只有旧的无 blocks 且 stops 同日 Place 唯一的记录才使用 `dayId + placeId`。跨日同 Place 是不同目标；不引入不存在的 stopId，不以 order、名称或日期相似替代身份，不把 block 目标降级成 stop-only。按 dayId/placeId 删除的现有命令若移除全部同地点 blocks，必须展开其实际移除的全部出现位置；单 block 删除需要先演进命令和请求摘要合同。
+- `place_global`：旅行者或 Agent 明确声明对该 Place 全部出现位置的关系。本轮采用“任一所列出现位置变化需复核”的明确语义；缺 dayId 不能自动成为全局关系。
+- `dependency`：显式记录预订／分段依赖的 occurrence 或 movement 及受影响的其他 occurrence／movement，可跨日表示住宿基地、取还车和转乘。保存方向、业务作用（直接承诺、资源依赖或行程上下文）、触发操作及理由；审阅时列出完整依赖集合，不从同日、时间交叠、文本或任意图可达性推断业务影响。
+
+每条关系及“明确无关联”决定均保留安全来源引用、理由、决定来源（旅行者或 Agent）、负责身份、时间、基准 Blueprint 版本、源语义摘要和目标集合摘要。complete 单元或含正关系的单元、每条正关系及其负责决定均须有非空安全 evidenceRefs；旅行者的明确声明可以用 traveler-declaration 来源记录，不冒充外部核实。partial／unknown 且无正关系可保留空来源，不能产生排除事实。coverage=complete 是唯一类型化的全量直接、间接和跨日责任声明，不另设重复确认字段，也不按理由关键词判断；decision.obligations 保存非空职责说明。Agent 候选还保留实际 Agent、model、rationale、evidence references 与 obligations，身份来自可信调用边界，不接受客户端自称 Agent。确定性代码只校验结构、归属、摘要和版本，不能代替语义判断。
+
+每个单元声明 `coverage=complete|partial|unknown`。覆盖宇宙包括当前 Blueprint 全部日程出现位置、全局地点、movement、显式依赖及全部已采用预订单元，保留规范全量集合摘要；取消、忽略和排除单元也要有可追溯状态，不能因过滤而隐去缺口。complete 要求审阅者明确已考虑直接、间接及跨日依赖，并且所有单元及引用齐备有效。只有有效且已审阅的 `complete + []` 才表示明确无关联；字段缺失、空数组、漏分段、partial、坏引用及过期结果均不证明无影响。纯 Blueprint 离线计算只评价该快照，零单元不证明当前真实来源集合完整，也不证明外部没有预订。
+
+真实工作区调用由 Storage 的单一 resolver 提供可信运行时 `BookingRelationshipSourceContext`：精确 Plan ID/version、Blueprint ID/version、sourceSetDigest、已采用真实源当前投影的单元摘要、pendingSources 的真实 sourceBookingId/sourceDigest，以及缺源、坏映射、无法验证祖先或来源范围的 typed resolutionIssues。当前直接归属、已采用引用及经核实精确祖先产生待核对义务；仅为候选的兄弟来源不产生义务。该 context 不持久化为另一成员表，不接受客户端提交，也不把 pending 伪装成 adopted constraint 或改写历史 universeDigest。Core 验证精确 Blueprint 身份与字段，affected/unaffected 只包含已采用约束；unknown 保留约束单元分支，并明确区分 source_obligation 与 source_resolution，无可用真实源身份时保留范围级问题。源已变化时旧正关系也不能冒充有效。assessmentDigest 与高影响 token 绑定完整 context，事务内重新解析，源变化即使 Plan 未变也不能复用确认。
+
+同一 context 必须贯通公开 single、batch、每个子预览、固定保护、关系审阅和 Undo。高影响预览响应返回该 context 的独立只读投影；真实工作区必须提供并核对精确当前 Plan／Blueprint 身份，缺失、错身份、遗漏已采用单元或 pending／resolution 义务的响应一律拒绝可确认展示。客户端在核对未知集合的来源覆盖前，先验证该集合及每个条目的结构，结构异常须直接拒绝，不能继续解引用条目核对来源覆盖；再复用 Core 规范影响计算核对完整三态集合、来源覆盖及 assessment digest，不另立关系语义；离线快照计算可省略 context，客户端不能将该投影作为可信写入输入。single 与 metadata 的 options 确认和既有 remove 命令确认归一为同一值，两处冲突必须拒绝。待核对来源使关系操作未知且不能确认，Tip／准备项等不改变关系目标语义的编辑继续保存并通过精确祖先保留义务；来源选择只采用明确选择项，余项仍 pending。有 pending 或解析缺口时不能接受完整关系审阅，须先选择真实来源再独立审阅。固定保护仅解引用真实已采用约束，pending 的强度不证明它与目标有直接承诺；booked／reservation 独立保护不变。
+
+Core 对具体编辑批次同时返回已知受影响、已知不受影响和未知：有效关系命中是已知影响；完整有效覆盖且无交集才可排除；其他单元保留未知原因和复核义务。局部已知影响不消除其他未知。Core 接受审阅时派生并保存 `reviewedTargetDigests`，以精确目标 kind/day/block/place/movement 身份为键，摘要覆盖目标旅行语义及显式跨日依赖的完整成员、方向与目标集；客户端不能提供该字段作为可信判断。某单元源摘要与相关目标／依赖摘要仍有效时，其明确正关系可以保留已知影响，同时其他单元或覆盖缺口保持未知；已知不受影响仍须该单元源摘要和全量宇宙 complete 均有效，不能由局部摘要扩大排除。影响集合只列真实命中的预订及分段，未知单列；与本次操作有关且尚未排除的未知阻止生成确认凭据，必须提供可恢复审阅，不能永久拒绝。Core 在唯一保护分类中区分已知 fixed 直接承诺与约束单元未知下的保守固定保护；写入沿用任一成立即拒绝，source_obligation／source_resolution 不伪装固定约束。Web 只读快照按真实 day／place 与完整最终操作（含插入 position.kind／afterPlaceId）展示已知固定与独立未知提示，位置缺省、after 和 end 不得复用同一派生缓存，已知固定不被其他未知覆盖；缺快照保持关系未知，不从名称／位置推断关联，也不宣称当前真实来源完整。关联不自动成为硬保护，软关联即使受影响仍可经精确高影响确认处理；独立 booked、reservation requirement 及显式 fixed/hard 直接承诺优先保护，不能通过改关系或先降优先级再删除绕过。
+
+Core 与 API 的日期范围按完整原始编辑批次及精确原蓝图投影：dayId 编辑保留真实目标日，priority 展开 Place 所有 stop／block 所在日，按蓝图顺序去重并逐项对应日期；priority 保存后的影响摘要也覆盖全部出现日，但不制造路线刷新。未排程 priority／归档的全局影响允许 dayIds／dates 成对为空，仍保留准确 placeIds、三态、来源义务与 token，不推导可确认性；blocks-only 排程仍阻止直接归档。Server 原样传递 Core 投影，不补当前日、首日或全行程。
+
+无法定位到具体约束或真实源的范围级 resolutionIssue 只增加 source_resolution 未知项，不撤销另有真实源摘要及目标摘要证明的局部 affected 关系。仅当 missing_source、invalid_mapping 或 source_scope_unresolved 精确定位该约束／来源，或该单元实际源摘要失配时，撤销对应单元的已知关系；全局 unverified_ancestor 不得扩大为全部已采用来源失效。范围级未知仍阻止关系操作确认和完整审阅，保留已知影响不等于放行。
+
+最小真实生产者是旅行者在现有 Web 工作区选择预订／分段、查看全量目标和跨日依赖、明确关联或无关联、确认理由后审阅接受或更正。流程必须贯通真实 Web → 类型化 API → Core → Storage 新版本事务，不能依靠夹具、控制台、脚本或数据库注入。Agent 生成只提供结构化候选，合法候选可因来源或目标过期成为 invalidated／unknown，绝不自动升为 reviewed；缺候选保持未知。服务器可在结构校验后把候选绑定到后分配的真实 Blueprint ID/version，作为导入元数据，不认证其自述来源，不补造覆盖摘要或证明；已有受信评估只在精确同 Blueprint lineage 保留历史基准后 reconcile，跨 Blueprint 不搬移 reviewed 结论。接受候选、批准 Blueprint 生成与激活 Execution Plan 是三个独立决定。
+
+审阅写入绑定精确 Plan ID/version、Blueprint ID/version、源语义版本、完整审阅输入及 requestId；同身份异载荷拒绝。关系变动产生新版 Blueprint 和 Draft Plan，旧执行 Plan 连续。审阅提交的 assessment 保留真实输入基准 N，事务产物为 N+1；持久消费者不得将合法历史基准误当陈旧提交，也不得改写基准冒充 N+1。写入准入仍要求精确当前版本；持久严格读取仅在 reviewed、同一 Blueprint lineage、合法版本边界及来源/宇宙/全量目标结构等价时允许该历史基准，继续核验完整覆盖、生产者证明及真实源/分段身份。语义目标或来源变化、未核实 Agent、缺失真实身份仍失败关闭。高影响确认凭据同时绑定这些基准、完整原始编辑批次及规范 assessment digest，服务端确认时重新核对。新增预订、分段增删／更正、状态／强度／时间／地点变化或目标／movement／依赖变化使相应评估失效，新增单元使整体覆盖不完整；非语义变动仅在可证明结构等价并记录延续依据时保留审阅，不因任意版本递增永久清空，也不沿用实际语义变化前的 complete。
+
+删除行程目标不删除或取消真实预订。历史版本及审计保留关系，当前版本保留原目标快照并标记目标移除／待复核，不能伪装成有效悬空引用或静默丢弃。Undo 先从精确 before/after 与 current 三方恢复生成保留无关当前内容的目标快照，并确定实际逆向日程操作；booked／独立预约保护仍检查 current，预订关系固定保护与三态影响统一在精确恢复目标及其历史审阅证明上，使用当前持久来源 context 重校。不能以删除后 current 的覆盖失效把已证明无关的硬承诺扩大为固定保护，也不能直接用 before 替代恢复目标或省略关系未知、源变化及真正命中固定承诺的拒绝；不再可证明安全时返回 typed 来源待审拒绝或辅助重规划，保留重新审阅／编辑入口，不发明另一 Undo 确认协议，也不能先删除目标再仅标 invalidated。纯内容撤销可继续。恢复涉及的关系与覆盖后仍重校当前源，不能复活过期 complete，来源选择的撤销也不能抹去来源义务。before/after、审计、回执、Blueprint、编译草稿与 lineage 同事务提交，故障回滚；保留合法预订任务、提醒、完成状态和旧执行 Plan，复核义务不授权外部取消或执行切换。
+
+旧无字段数据一律未知。名称／位置匹配不得作为精确事实源或并行保护回退：旧固定预订缺关系时进入未知审阅，明确审阅证明无关后可解除该项未知，但不能解除独立 booked／预约保护。readiness 等诊断也必须消费同一关系或标未知，不能以文本匹配输出正式“已支持”。
+
 ### BookingEndpoint
 
 Transport and location-based bookings need ordered endpoints.
@@ -261,7 +305,7 @@ Behavior:
 - A hotel confirmation usually creates one hotel-stay Booking Segment; extras such as breakfast, late checkout, or shuttle notes remain add-ons unless they create fixed time windows.
 - A rental-car confirmation usually creates pickup and return segments under one TravelBooking.
 - Blueprint Generation uses accepted Booking Segments as the time-bound units that constrain itinerary structure.
-- Ignored segments remain available in Plan-linked booking detail but do not become Blueprint Booking Constraints and do not generate Dormant Reminders.
+- 取消或 ignored 分段在隐私最小化 Blueprint Booking Constraints 中保留稳定源身份与状态，供覆盖审阅、历史和失效校验；它们不塑造生成行程，不编译执行任务或 Dormant Reminders。其他旅行的 out-of-scope 证据仍不自动纳入当前源集合。
 - Soft segments may shape the proposal or create review work, but should not generate time-sensitive action reminders until upgraded to hard.
 
 ### AccommodationStay
@@ -448,7 +492,7 @@ The generated Plan should include:
 - visible warnings for unresolved booking fields;
 - source references linking generated details back to the booking evidence.
 
-The generated Trip Blueprint should include privacy-minimized Blueprint Booking Constraints when those constraints shape itinerary structure. A Blueprint Booking Constraint may include timing, location, role, segment type, constraint strength, and short source labels. It must not include confirmation codes, protected attachment content, or sensitive raw confirmation details.
+生成的 Trip Blueprint 保存塑造行程结构的隐私最小化 Blueprint Booking Constraints，并按上方 Booking Itinerary Assessment 保存关系候选与审阅状态。真实生成输入须携带稳定 booking／segment 身份、源语义版本和覆盖宇宙；生成输出、检查点恢复、语义 structurer、Importer 及持久化须传递该结构并校验完整性。Importer 的受信 Context 仅由服务器从精确持久 Blueprint 取得已有 assessment，保留原生产者、决定、历史基准及 Core 派生证明，按新结构 reconcile；该 Context 不接客户端自述。普通模型 artifact 永远为候选并清除自述证明，只绑定当前实际 carrier 生产者；修复候选不复用被拒初稿身份。重启继续读取规范持久 Blueprint 和 Task 工件摘要映射，不依赖内存弱映射保存历史证明。Importer 重映射目标身份时同步校验关系，不得丢字段、以名称修复关系或把缺失／空集合默认 complete。生成候选缺失仍可保留可读草稿，但相关删除必须先完成关系审阅。确认码、保护附件及敏感原始确认内容不进入这些产物。
 
 Integrity checks should reject or warn when:
 
@@ -483,6 +527,7 @@ Integration with existing UI:
 - `TravelPlanAdditions` should evolve from accommodation-only into a compact "Trip logistics" panel that can also import bookings after a Draft Plan or Execution Plan exists.
 - `ReservationView` should render first-class `TravelBooking` records instead of relying only on generic Tasks.
 - Booking-related preparation tasks should link back to their source booking.
+- 关系建立、审阅接受和更正复用现有工作区；三态预览、未知恢复、待确认编辑保留及精确确认交互由 [Blueprint 工作区需求的 Editing and Impact Rules](blueprint-workspace-generation-requirements.md#editing-and-impact-rules) 拥有，关系语义遵循本设计 Booking Itinerary Assessment。
 
 ## API Requirements
 
@@ -509,7 +554,13 @@ All write endpoints should require:
 - Zod or equivalent schema validation.
 - No silent mutation of active Plans when the booking affects execution.
 
-Generation endpoints should include booking-derived facts in the persisted Agent Run input audit without leaking sensitive raw confirmation text into normal logs.
+生成端点应在持久输入审计中记录隐私最小化预订事实、源语义版本和关系候选来源，不泄漏原确认文本。
+
+关系审阅／更正 API 必须通过同一 Core 审阅命令复用现有版本化修订、请求身份、回执和未知结果恢复合同；读接口返回全量审阅宇宙、当前源语义版本、已知影响及未知原因，写接口接受完整审阅决定并返回新 Blueprint／Draft Plan 身份。预订 CRUD／补充导入改变结构时与覆盖失效原子保存；Server 不另算相关性。关系确认与高影响编辑确认分别绑定本设计规定的版本与 assessment digest，不能以普通 booking PATCH 绕开。具体路由与输入输出 Schema 须在实施时共同落实，本设计不宣称端点已可用。
+
+无会话的导入先只读取得 `/api/planning-sessions/bookings/context` 的存在性及 revision；默认确认请求必须原样绑定 `expectedSessionId`（明确 `null` 表示当时不存在）与 `expectedRevision`。事务核对存在性后才创建会话，不在提交时选择最新会话或补当前版本。路径中明确 sessionId 的确认绑定该会话 revision。回执安全身份保存这些原始基准，私密正文只以原载荷摘要参与幂等，不进入回执正文。
+
+无 Blueprint 的旧执行 Plan 不新增来源绑定机制。新预订或现有预订结构更正明确拒绝并全部回滚；现有真实源的非结构资料可经记录 CAS 保存，但不改变批准 Plan、配置、时刻、任务或提醒。旅行者须先重新规划获得可审阅 Blueprint；MAH 不可用时保留原资料及执行安排，不声称旧 `reviseGeneratedPlan` 能更正原 owner。旧无 Blueprint 草稿仅保留合法自身来源操作，底层保存原语不得绕开上述执行门禁。已有 Blueprint 的旧无关系记录仍通过来源选择及独立关系审阅恢复。
 
 ## Storage Requirements
 
@@ -521,7 +572,10 @@ Add durable SQLite tables:
 - `booking_endpoints`
 - `accommodation_stays`
 - `booking_attachments`
-- `booking_plan_links`
+
+日程关系唯一保存在不可变 Blueprint JSON 快照的 Booking Itinerary Assessment 中，不新增 `booking_plan_links` 可编辑表。若需要查询索引，必须标注来源 Blueprint 版本且只从快照生成。
+
+本轮预订保存回执采用追加 Schema 30：新增 `booking_mutation_receipts(request_id,request_digest,result_json,created_at)`，仅存原请求安全身份投影、摘要和原结果身份，不存私密正文或第二份关系。既有 1–29 编号、历史内容和编译 lineage 不重写。初始化与该编号标记处于同一事务，失败不留下新表；开发验收仅升级独立合成 SQLite。受控打开的唯一校验 owner `packages/storage/src/guarded-schema.ts` 在既有完整指纹绑定之外，核对回执表精确列、约束、表属性、PK 自动索引及完整迁移集合；DDL 复用迁移的唯一声明。显式历史只读准入保持原版本语义。此增量不改变启动包或发布协议，也不代表已执行任何生产迁移。
 
 Indexes:
 
@@ -536,9 +590,9 @@ Indexes:
 
 Promotion behavior:
 
-- Bookings created during Planning Session are linked to the generated Plan when the draft Plan is persisted.
-- The generated Plan stores a snapshot of the booking-derived facts it used.
-- The generated Trip Blueprint stores privacy-minimized Blueprint Booking Constraints that shaped itinerary content.
+- Planning Session 的原始预订在草稿保存时由 Blueprint 的经校验源映射引用，原 owner、ID 与附件不变。
+- 生成 Plan 通过既有 Compilation Lineage 引用源 Blueprint 版本；预订关系及审阅只有该不可变 Blueprint 快照一个事实源，Plan 投影不能独立编辑。
+- 生成 Trip Blueprint 保存隐私最小化 Booking Constraints 及本设计规定的关系、覆盖与审阅；读取旧快照不补造 complete。
 - Plan-linked bookings store execution details that do not belong in the Trip Blueprint, such as confirmation codes, protected attachment metadata, supplier links, notes, and user-visible logistics.
 - The Planning Session retains import history, source hash, and accepted constraint snapshots after promotion.
 - Protected attachment content should be associated by source or attachment id rather than copied into multiple records.
@@ -546,6 +600,22 @@ Promotion behavior:
 - Booking Import before generation does not create a Plan or Draft Plan.
 
 Migration should preserve existing `Plan.configuration.accommodation` data by creating an accommodation stay only when enough property/date data exists. Otherwise, keep existing configuration and do not fabricate dates.
+
+### 当前预订源与已批准快照
+
+`TravelBooking` 原始 owner 不可变，修改请求的目标 Plan 是独立字段，不能通过搬移 owner、复制改 ID 或复制私密内容来连接新草稿。当前源读取 `listCurrentTravelBookingSourcesForPlan` 服务于关系审阅、导入和变更监测；已批准快照读取 `get/listApprovedBookingConstraintsForPlan` 仅通过精确 Compilation Lineage 提供执行安排与提醒内容。快照不能伪装成缺少私密字段、sourceHash 等事实的 TravelBooking。监测可读取当前源，但集合仅限旧执行 Plan 已明确绑定的来源，只提示变化，不改写批准安排。
+
+源映射保存经校验的 `sourceBookingId`／`sourceSegmentId`。旧数据保留直接 plan_id 真记录和历史 Blueprint；无可靠映射不猜 session 或 ID 前缀，不自动合并分歧 session／clone。恢复总是分两步，复用同一 direct batch、请求身份和回执：先通过独立 `select_booking_sources` 命令显式选择合法真实记录，绑定 `sourceBookingIds`、`expectedSourceSetDigest` 及需要恢复的 `legacyBindings`；服务端可信解析及重投影新版 Blueprint 后，再取得新上下文，以独立 `review_booking_relationships` 命令接受完整关系。来源选择不是关系审阅，不与关系或原删除批次混提，也不自动重绑原待确认草稿。原 owner、旧执行 Plan 与历史版本不变。生成 promotion 移除复制 booking 并改 ID 的旧生产路径，保留原源。
+
+每个 `legacyBindings` 条目由旅行者明确声明 `bookingConstraintId`、`sourceBookingId`、逐旧 `segmentId` 对应真实 `sourceSegmentId` 的 `segments`、理由与非空安全 `evidenceRefs`；不能预选最佳匹配。缺可靠映射的旧 hard 或任一 hard/fixed 分段约束必须完整声明，既有可靠映射不可改写。受保护 booking 按整个聚合及全部分段逐对应保全：type、status、title、强度、完整分段成员，以及每段类型、状态、title、全部起止时刻/时区/地点、固定性和复核理由相同；只剥离来源展示元数据与正在恢复的身份字段。不能靠数量、文本、匿名集合或交叉分段配对判定同物；两个旧约束或分段不得复用同一真实源身份。真实持久旧投影缺 segment.status 时，仅用其旧 booking.status 作本次保护比较基准；选中真实状态必须与该基准相同，不回写旧历史，也不泛化其他缺字段为已知值。固定结构差异返回 typed `assisted_replanning_required`/409，格式或非法来源为 `invalid_edit`/400，并发为 `version_conflict`/409，全部事务不写。
+
+绑定、理由与证据原样进入规范请求摘要及 fingerprint；Core 修订元数据 `sourceSelectionAudit` 另保存由可信 Storage/API 绑定的本地旅行者责任、服务端时间与使用的有界旧状态规则，不接受客户端 Agent 身份。只读候选展示完整安全 booking 层强度及全部分段结构，不带保护附件或私密原文；客户端不能提交任意 resolvedConstraints。已明确采用的真实源不能因漏选而移除，取消和 ignored 也保留来源单元；原无映射约束不能用空选择抹成零预订。来源更正改变结构时保留原草稿并要求重新审阅。当前直接 owner 的未采用资料及经精确原提交结果验证的正规父 Plan 义务仍为 unknown；候选池中的兄弟/后继来源不自动变成本 Plan 义务。选择一部分后剩余义务经不可变修订/导入回执的确切祖先链继续保留，不按时间、名称或“最新”猜祖先，不另建成员表。软无关资料可明确纳入后逐项审阅为 complete+[]，不以漏选或无审计排除证明无预订。
+
+正规 direct／import／Undo 的不可变创建回执证明结果 Plan 与原 expected Plan 的父边；当前 lineage 可因同 Plan 的路线刷新或执行修复推进，只证明当前投影，不能要求等于创建时版本。创建结果须符合原编译器规范身份与创建基线，before／after 快照、审计行和原结果须交叉一致、同 Blueprint／session／proposal 范围，结果版本不超过当前投影。父 expected 版本须为正安全整数、不超过父持久版本；父投影仍指向 before 时还须不低于该 lineage 的 Plan 版本。父投影已推进时，旧正规已提交回执作为当时 CAS 见证，不用当前投影反推历史版本；禁止自环、多父及跨范围继承。
+
+新 direct／import／Undo 回执在原 result_json 顶层记录服务端事务内捕获的 beforeIdentity（planId、planVersion、blueprintId、blueprintVersion，四字段齐备），与原请求及不可变 before 快照核对。Undo 保留原工作区结果结构，附加身份仅属于持久回执；客户端不能提交该身份。非 Blueprint 自身资料更新不伪造创建父边。整个字段缺失的旧记录按历史已提交 CAS 与版本边界兼容；字段存在但损坏不得回退。旧合法区间内单字段 expectedVersion 改写可能无独立证据可判，不宣称逐版本防篡改。真正损坏祖先保留范围未知，来源选择不能修复审计；须保留旧草稿并经正规辅助重新生成入口建立新明确基准，服务不可用时如实提示。
+
+历史祖先验证信任正规事务已提交且应用不会删除的创建回执；检查仍存在记录的身份不一致、越界和必需引用缺损。整条回执被数据库外操作删除时，现有证据可能无法独立区别合法无父根节点，不能以 Blueprint 版本、名称或 ID 前缀补造根证明，也不宣称能够检出所有历史删除。原子事务故障必须保留无部分提交的证据。
 
 ## Reminder and Monitoring Requirements
 
@@ -602,7 +672,7 @@ Changes that may update only Plan-linked booking data:
 - price, cancellation summary, provider contact details, and manage-booking links;
 - protected attachment replacement that does not change accepted Booking Constraints.
 
-For an active Execution Plan, structural booking changes should follow the existing impact-preview and replacement-draft flow. Non-structural booking changes may update the Plan-linked booking record without rewriting the Trip Blueprint.
+执行中 Plan 的结构性预订变更沿既有影响预览与替换草稿流程，并按 Booking Itinerary Assessment 使相关覆盖失效；非结构执行资料可只更新 Plan-linked Booking。关系审阅、更正、删除及撤销的源版本重校、原子保存和历史语义统一由该节规定；不得在另一持久路径保留旧 complete 或恢复过期判断。
 
 ## Import and Extraction Requirements
 
@@ -692,13 +762,10 @@ When extraction is added:
 - Add AI extraction fallback.
 - Add optional mailbox connectors only after explicit authorization, duplicate handling, and retention rules are defined.
 - Add optional flight-status or calendar connectors.
-- Add booking-aware in-trip Telegram assistance.
+- Use the existing email execution design for approved booking-aware assistance.
 
-## Open Questions
+## Decisions and Follow-up
 
-- Should pre-generation booking records live inside Planning Session JSON at first, or immediately use normalized booking tables with nullable `planId`?
-- Should generated Plans snapshot booking-derived facts only, or full booking records as of generation time?
-- Should active Plan booking edits always create replacement drafts, or can low-impact fields such as notes and confirmation code update in place?
-- Do attachments need encrypted-at-rest storage in the first implementation?
-- Which local map/search connector should power airport, station, and hotel place resolution?
-- Should the Web view be named "Bookings", "Reservations", or "Trip Logistics"?
+Planning Session bookings use the normalized records in Storage Requirements. The Change and Versioning Requirements define when an edit requires a replacement draft and when execution details can be updated in place. The existing booking entry remains the workspace entry for relationship review.
+
+Attachment encryption policy and provider selection for place resolution require their own decisions if that scope advances. The current design retains the protected attachment and source verification requirements above.

@@ -1,0 +1,394 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://landi.local/contracts/landi-mah-stage-result.v2.schema.json",
+  "title": "Landi MAH 普通队列阶段结果",
+  "description": "与请求 Schema 3 严格配对的候选外层；公开执行来源核验后才可导入。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "requestId",
+    "carrierTaskId",
+    "generationKey",
+    "proposalRef",
+    "skillLineage",
+    "operation",
+    "attempt",
+    "inputSha256",
+    "outcome",
+    "businessContract",
+    "payload",
+    "diagnostics",
+    "provenance",
+    "requestSha256",
+    "parentCheckpoint"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 2
+    },
+    "kind": {
+      "const": "landi_generation_stage_result"
+    },
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "carrierTaskId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "generationKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "proposalRef": {
+      "$ref": "#/$defs/proposalRef"
+    },
+    "skillLineage": {
+      "$ref": "#/$defs/skillLineage"
+    },
+    "operation": {
+      "$ref": "#/$defs/operation"
+    },
+    "batchId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "inputSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "outcome": {
+      "const": "succeeded"
+    },
+    "businessContract": {
+      "type": "string",
+      "enum": [
+        "landi.skill-research-batch.v1",
+        "landi.skill-itinerary.v1",
+        "landi.skill-itinerary-review.v1",
+        "landi.planned-place-image-enrichment.v1",
+        "landi.semantic-plan.v1",
+        "landi.semantic-validation.v1",
+        "landi.semantic-repair.v1"
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "minProperties": 1
+    },
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1200
+          }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "carrier",
+        "taskId",
+        "agentId",
+        "startedAt",
+        "completedAt",
+        "modelId"
+      ],
+      "properties": {
+        "carrier": {
+          "const": "mah_task"
+        },
+        "taskId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "agentId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "modelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "description": "候选生成工作的来源自述：实际 Agent 与 model 必须同公开执行来源精确一致；时间须满足公开执行开始 <= 候选开始 <= 候选完成 <= 公开执行完成。候选不必预知 Task 最终完成瞬间；执行时限仅按公开生命周期核定，自述不是来源证明。"
+    },
+    "requestSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "parentCheckpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "artifactSha256"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "researchSetId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "blueprintId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "blueprintVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "artifactSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "research_batch"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "required": [
+          "batchId"
+        ],
+        "properties": {
+          "batchId": {
+            "$ref": "#/properties/batchId"
+          },
+          "businessContract": {
+            "const": "landi.skill-research-batch.v1"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "enum": [
+              "itinerary_draft",
+              "itinerary_repair"
+            ]
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "businessContract": {
+            "const": "landi.skill-itinerary.v1"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "itinerary_review"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "businessContract": {
+            "const": "landi.skill-itinerary-review.v1"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "planned_place_image_enrichment"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "businessContract": {
+            "const": "landi.planned-place-image-enrichment.v1"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "semantic_plan"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "businessContract": {
+            "const": "landi.semantic-plan.v1"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "semantic_validation"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "businessContract": {
+            "const": "landi.semantic-validation.v1"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "semantic_repair"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "businessContract": {
+            "const": "landi.semantic-repair.v1"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "proposalRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionId",
+        "proposalVersion"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "proposalVersion": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "skillLineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "skillId",
+        "skillVersion"
+      ],
+      "properties": {
+        "skillId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "skillVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        }
+      }
+    },
+    "operation": {
+      "type": "string",
+      "enum": [
+        "research_batch",
+        "itinerary_draft",
+        "itinerary_review",
+        "itinerary_repair",
+        "planned_place_image_enrichment",
+        "semantic_plan",
+        "semantic_validation",
+        "semantic_repair"
+      ]
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

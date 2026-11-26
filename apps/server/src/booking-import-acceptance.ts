@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { WorkspaceMutationError } from "@c-assistant/core";
 import type {
   BookingConstraintStrength,
   BookingSegment,
@@ -10,7 +11,12 @@ import type {
 type BookingScope = { planningSessionId?: string; planId?: string };
 
 export function normalizeAcceptedBooking(input: TravelBooking | undefined, scope: BookingScope & { planVersionCreated?: number }): TravelBooking {
-  if (!input) throw new Error("Choose a booking preview to accept.");
+  if (!input || typeof input !== "object" || !Array.isArray(input.segments) || input.segments.some(segment=>!segment||typeof segment!=="object")) throw new WorkspaceMutationError("请选择完整预订预览后确认。","invalid_edit");
+  for(const key of ["id","title","providerName","sourceHash","sourceLabel","importedAt","notes"] as const) if(input[key]!==undefined&&typeof input[key]!=="string")throw new WorkspaceMutationError("预订字段格式无效，请重新核对预览。","invalid_edit");
+  for(const segment of input.segments) {
+    for(const key of ["id","title","startAtLocal","startTimeZone","endAtLocal","endTimeZone","origin","destination","location"] as const)if(segment[key]!==undefined&&typeof segment[key]!=="string")throw new WorkspaceMutationError("预订分段字段格式无效。","invalid_edit");
+    if((segment.needsReviewReasons!==undefined&&(!Array.isArray(segment.needsReviewReasons)||segment.needsReviewReasons.some(reason=>typeof reason!=="string")))||(segment.fixedCommitment!==undefined&&typeof segment.fixedCommitment!=="boolean"))throw new WorkspaceMutationError("预订分段审阅信息格式无效。","invalid_edit");
+  }
   const now = new Date().toISOString();
   const segments = (input.segments.length ? input.segments : [fallbackSegment(input.title)]).map((segment): BookingSegment => {
     const constraintStrength = normalizeConstraintStrength(segment.constraintStrength);
@@ -29,11 +35,11 @@ export function normalizeAcceptedBooking(input: TravelBooking | undefined, scope
       ...(segment.destination?.trim() ? { destination: segment.destination.trim().slice(0, 180) } : {}),
       ...(segment.location?.trim() ? { location: segment.location.trim().slice(0, 240) } : {}),
       constraintStrength,
-      fixedCommitment: constraintStrength === "hard",
+      fixedCommitment: constraintStrength === "hard" || segment.fixedCommitment === true,
       needsReviewReasons
     };
   });
-  const status = segments.some((segment) => segment.needsReviewReasons.length) ? "needs_review" : normalizeBookingStatus(input.status);
+  const status = input.status === "cancelled" ? "cancelled" : segments.some((segment) => segment.status !== "cancelled" && segment.needsReviewReasons.length) ? "needs_review" : normalizeBookingStatus(input.status);
   return {
     id: input.id || randomUUID(),
     ...scope,

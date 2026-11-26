@@ -2,6 +2,8 @@
 
 These documents describe the Landi project itself: the travel experience it provides, the system that supports it, and the path from planning to long-running travel assistance.
 
+Current scope is [Personal Travel Assistant](product-scope.md): Web, email, and MAH/Codex. Country Pack products, Telegram and WhatsApp are retired. Older documents preserve implementation history and do not reopen those product directions.
+
 ## Primary reading path
 
 1. [Product Baseline](landi-product-baseline.md) — The product purpose, traveler experience, scope, and non-negotiable behavior.
@@ -14,17 +16,12 @@ These documents describe the Landi project itself: the travel experience it prov
 
 5. [Travel Planning and Execution Flow](travel-planning-and-execution-flow.md) — The complete project flow from initial travel intent through monitoring, adjustment, in-trip assistance, and completion.
 
-6. [Regional Capability Design: China V1](china-pack-v1.md) — The China-specific source-backed preparation workflow and its contribution to a Landi Plan.
-
-7. [Regional Capability Design: Japan V1](japan-pack-v1.md) — The Japan-specific source-backed preparation workflow and Tokyo demonstration path.
-
-8. [Blueprint Workspace Generation Requirements](blueprint-workspace-generation-requirements.md) — The next-generation modular travel blueprint and Web workspace presentation requirements.
+6. [Blueprint Workspace Generation Requirements](blueprint-workspace-generation-requirements.md) — The next-generation modular travel blueprint and Web workspace presentation requirements.
 
 ## Contributor references
 
 These contracts support implementation and extension work. They are not part of the primary product-design reading path.
 
-- [Skill Contract](skill-contract.md)
 - [Connector Contract](connector-contract.md)
 - [Agent Runtime Adapter Contract](agent-runtime-adapter.md)
 
@@ -32,6 +29,9 @@ These contracts support implementation and extension work. They are not part of 
 
 These documents preserve earlier implementation decisions, release evidence, or interface detail. They are useful for maintenance but are not current top-level product design.
 
+- [Historical Skill Contract](skill-contract.md)
+- [Historical China preparation implementation](china-pack-v1.md)
+- [Historical Japan preparation implementation](japan-pack-v1.md)
 - [Legacy Web Workspace Notes](web-workspace.md)
 - [Legacy Conversational Workspace Plan](conversational-plan-workspace.md)
 - [V1 Release Checklist](v1-release-checklist.md)

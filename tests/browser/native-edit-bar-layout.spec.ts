@@ -1,6 +1,7 @@
-import { expect, test } from "@playwright/test";
+import { test } from './evidence-test';
+import { expect } from "@playwright/test";
 
-test("nearby option edits use a quiet toolbar outside the trip workspace", async ({ page }) => {
+test("nearby option edits show a review toolbar above the itinerary", async ({ page }) => {
   await page.route("**/api/workspace", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({
     profile: { status: "ready", displayName: "Trip tester", preferredLanguage: "en", nationality: "Singapore", gender: "prefer_not_to_say", immigrationStatus: "short_term_visitor" },
     runtime: { selectedKind: "codex" }, inbox: [],
@@ -24,44 +25,12 @@ test("nearby option edits use a quiet toolbar outside the trip workspace", async
   }) }));
 
   await page.goto("/#day=d1&poi=garden");
-  await expect(page.getByRole("region", { name: "Interactive trip plan" })).toBeVisible();
-  await page.locator(".candidate-add").first().click();
-  await expect(page.locator(".native-map-edit-bar")).toBeVisible();
-  await expect(page.locator(".native-map-edit-bar")).toContainText("1 change pending");
-  await expect(page.locator(".native-map-edit-bar")).not.toContainText("Review before saving");
-
-  const layout = await page.evaluate(() => {
-    const bar = document.querySelector<HTMLElement>(".native-map-edit-bar");
-    const workspace = document.querySelector<HTMLElement>(".native-trip-workspace");
-    const host = document.querySelector<HTMLElement>(".native-trip-workspace > div");
-    const mapStage = host?.shadowRoot?.querySelector<HTMLElement>(".map-stage");
-    if (!bar || !workspace) throw new Error("Missing edit toolbar or workspace");
-    const style = getComputedStyle(bar);
-    const barBox = bar.getBoundingClientRect();
-    const workspaceBox = workspace.getBoundingClientRect();
-    const mapBox = mapStage?.getBoundingClientRect();
-    return {
-      insideWorkspace: workspace.contains(bar),
-      beforeWorkspaceDom: Boolean(bar.compareDocumentPosition(workspace) & Node.DOCUMENT_POSITION_FOLLOWING),
-      left: Math.round(barBox.left),
-      top: Math.round(barBox.top),
-      mapLeft: mapBox ? Math.round(mapBox.left) : null,
-      bottom: Math.round(barBox.bottom),
-      height: Math.round(barBox.height),
-      workspaceTop: Math.round(workspaceBox.top),
-      borderTopWidth: style.borderTopWidth,
-      boxShadow: style.boxShadow,
-      backgroundColor: style.backgroundColor
-    };
-  });
-
-  expect(layout.insideWorkspace).toBe(false);
-  expect(layout.beforeWorkspaceDom).toBe(true);
-  expect(Math.abs((layout.left - layout.mapLeft!) - 5)).toBeLessThanOrEqual(2);
-  expect(layout.top).toBeGreaterThanOrEqual(layout.workspaceTop + 8);
-  expect(layout.top).toBeLessThanOrEqual(layout.workspaceTop + 12);
-  expect(layout.height).toBeLessThanOrEqual(36);
-  expect(layout.borderTopWidth).toBe("0px");
-  expect(layout.boxShadow).toBe("none");
-  expect(layout.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+  const workspace = page.getByRole("region", { name: "Landi Blueprint workspace" });
+  await expect(workspace).toBeVisible();
+  await page.getByLabel("Itinerary side panel").locator(".blueprint-guide-card").filter({ hasText: "Ningyocho Snack Street" }).getByRole("button", { name: "Add", exact: true }).click();
+  await page.getByRole("button", { name: "Add to draft" }).click();
+  const bar = page.getByRole("toolbar", { name: "Unsaved itinerary edits" });
+  await expect(bar).toContainText("1 unsaved change");
+  await expect(bar.getByRole("button", { name: "Apply" })).toBeVisible();
+  expect(await bar.evaluate((element) => element.closest(".blueprint-topbar") !== null && element.closest(".blueprint-itinerary-grid") === null)).toBe(true);
 });

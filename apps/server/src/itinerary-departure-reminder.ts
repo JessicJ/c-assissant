@@ -16,13 +16,15 @@ export interface DueItineraryDepartureReminder {
   leaveAt: Date;
   scheduledTime: string;
   travelMinutes: number;
+  provisionalHotel: boolean;
   reminderKey: string;
 }
 
 /**
- * Turns a formal itinerary into restrained mobile assistance. Only fixed or
- * reservation-sensitive stops are eligible; ordinary sightseeing stops do not
- * become notifications simply because they appear on the timeline.
+ * Turns a formal itinerary into restrained mobile assistance. Fixed stops and
+ * a day's first departure from its hotel are eligible when travel time is
+ * verified. Other sightseeing stops do not become notifications merely
+ * because they appear on the timeline.
  */
 export function dueItineraryDepartureReminders(
   plan: Plan,
@@ -45,8 +47,11 @@ export function dueItineraryDepartureReminders(
     return (day.stops ?? []).flatMap((stop, index) => {
       if (!/^\d{2}:\d{2}$/.test(stop.time ?? "")) return [];
       const place = places.get(stop.placeId);
-      if (!place || !isKeyStop(place, stop.role)) return [];
+      if (!place) return [];
       const route = routes.get(`${day.id}\0${stop.placeId}`);
+      const hotelOrigin = index === 0 && route?.originPlaceId === day.startContext?.placeId
+        && (day.startContext?.status === "recommended_property" || day.startContext?.status === "selected_property" || day.startContext?.status === "confirmed_property");
+      if (!isKeyStop(place, stop.role) && !hotelOrigin) return [];
       const verifiedRouteTravel = route?.verification === "verified" ? route.durationMinutes : undefined;
       const verifiedFirstStopTravel = index === 0 && day.accommodationDeparture?.verification === "verified" ? day.accommodationDeparture.durationMinutes : undefined;
       const travelMinutes = verifiedRouteTravel ?? verifiedFirstStopTravel;
@@ -70,6 +75,7 @@ export function dueItineraryDepartureReminders(
         leaveAt,
         scheduledTime: stop.time!,
         travelMinutes,
+        provisionalHotel: hotelOrigin && day.startContext?.status === "recommended_property",
         reminderKey: `itinerary-departure:${day.id}:${stop.placeId}:${scheduledAt.toISOString()}`
       }];
     });
@@ -79,7 +85,8 @@ export function dueItineraryDepartureReminders(
 export function formatItineraryDepartureReminder(plan: Plan, item: DueItineraryDepartureReminder): string {
   const movement = item.route?.label?.trim() || `${modeLabel(item.route?.mode)} · about ${item.travelMinutes} min`;
   const origin = item.origin ? `From: ${item.origin.name}\n` : "";
-  return `Landi itinerary reminder\n${plan.title}\n\nLeave by ${localClock(item.leaveAt, item.timeZone)}\nNext: ${item.place.name} at ${item.scheduledTime}\n${origin}Planned journey: ${movement}\n\nThis reminder is limited to a fixed or reservation-sensitive stop. No booking, ride, payment, or external action has been started.`;
+  const provisional = item.provisionalHotel ? "The hotel is a provisional route base. Update it if you choose another stay.\n" : "";
+  return `Landi itinerary reminder\n${plan.title}\n\nLeave by ${localClock(item.leaveAt, item.timeZone)}\nNext: ${item.place.name} at ${item.scheduledTime}\n${origin}${provisional}Planned journey: ${movement}\n\nNo booking, ride, payment, or external action has been started.`;
 }
 
 export function itineraryPlaceMapUrl(place: PlanPlace): string | undefined {

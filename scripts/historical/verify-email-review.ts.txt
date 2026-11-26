@@ -1,0 +1,57 @@
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import { randomBytes } from "node:crypto";
+import { resolve } from "node:path";
+import { mkdir,writeFile } from "node:fs/promises";
+import { chromium } from "@playwright/test";
+import { SqliteWorkspaceStore } from "../packages/storage/src/index.js";
+import { emailReplacementFixture } from "../apps/server/src/email-test-fixture.js";
+import { registerLocalWebRoutes } from "../apps/server/src/local-web-routes.js";
+import { registerEmailReviewRoutes } from "../apps/server/src/email-review-routes.js";
+import { issueReviewCapability } from "../apps/server/src/email-review-capability.js";
+import { pendingEmailReview } from "../apps/server/src/email-plan-review.js";
+
+const projectRoot=new URL("../",import.meta.url).pathname;
+const {default:Fastify}=await import(createRequire(new URL("../apps/server/package.json",import.meta.url)).resolve("fastify"));
+const output=resolve(projectRoot,process.argv[2] ?? "output/email-review-verification");await mkdir(output,{recursive:true});
+const store=new SqliteWorkspaceStore(":memory:");const server=Fastify({logger:false});const now=()=>new Date("2026-11-10T08:40:00Z");
+let configuration={baseUrl:"http://127.0.0.1",signingKey:randomBytes(32).toString("hex")};let activations=0;
+await registerLocalWebRoutes(server,{store,webAssetsPath:"/unused-in-test",webTripMapPath:"/unused-in-test",webIndexPath:"/unused-in-test",emailReviewOrigin:()=>configuration.baseUrl});
+registerEmailReviewRoutes(server,{store,getConfiguration:()=>configuration,now,startActivePlanMonitoring:()=>{activations++;}});
+const origin=await server.listen({host:"127.0.0.1",port:0});configuration={...configuration,baseUrl:origin};
+const browser=await chromium.launch();const checks:unknown[]=[];const startedAt=new Date().toISOString();
+try{
+  const fixture=emailReplacementFixture(store);const scope=pendingEmailReview(store)!;
+  const token=issueReviewCapability(scope,configuration,now().getTime()+3600_000);
+  const open=async(value:string,width:number,colorScheme:"light"|"dark"="light")=>{
+    const context=await browser.newContext({viewport:{width,height:844},colorScheme,timezoneId:"Asia/Shanghai"});
+    await context.route("**/*",route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
+    const page=await context.newPage();page.setDefaultTimeout(10000);
+    // Put the synthetic capability in memory before the page reads it. The GET URL,
+    // screenshots and report never contain a capability or sender credential.
+    await page.addInitScript(value=>{location.hash="token="+encodeURIComponent(value);},value);
+    await page.goto(`${origin}/email-review`);
+    await page.evaluate(()=>{const note=document.createElement("p");note.textContent="Development example · fictional itinerary · no real email";note.style.cssText="font-size:12px;padding:12px;text-align:center;background:#F2EDE5;color:#6C7B72";document.body.prepend(note);});
+    return {context,page};
+  };
+  for(const width of [375,390,430]){
+    const {context,page}=await open(token,width);await page.getByRole("button",{name:"Confirm updated itinerary",exact:true}).waitFor();
+    assert.equal(store.getExecutionPlan()?.id,fixture.base.id);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    const heights=await page.locator("button").evaluateAll(buttons=>buttons.map(button=>button.getBoundingClientRect().height));assert.ok(heights.every(height=>height>=44));
+    assert.equal(await page.getByRole("heading",{name:"Original itinerary",exact:true}).count(),1);assert.equal(await page.getByRole("heading",{name:"Proposed complete itinerary",exact:true}).count(),1);
+    assert.ok(!page.url().includes("token="));await page.screenshot({path:`${output}/review-${width}.png`,fullPage:true});checks.push({scenario:"mobile-review",width,passed:true});
+    if(width===390){await page.getByRole("button",{name:"Keep the current itinerary for now",exact:true}).click();assert.equal(store.getExecutionPlan()?.id,fixture.base.id);checks.push({scenario:"keep-original-is-inert",passed:true});}
+    await context.close();
+  }
+  const scanner=await server.inject({method:"GET",url:"/email-review"});assert.equal(scanner.statusCode,200);assert.equal(store.getExecutionPlan()?.id,fixture.base.id);checks.push({scenario:"scanner-get-is-inert",passed:true});
+  const confirmed=await open(token,390);await confirmed.page.getByRole("button",{name:"Confirm updated itinerary",exact:true}).click();await confirmed.page.getByRole("status").filter({hasText:"confirmed and active"}).waitFor();
+  assert.equal(store.getExecutionPlan()?.id,fixture.draft.id);assert.equal(activations,1);assert.ok(store.email.list().some(job=>job.kind==="change"));
+  await confirmed.page.screenshot({path:`${output}/review-confirmed-390.png`,fullPage:true});checks.push({scenario:"explicit-confirmation",passed:true});await confirmed.context.close();
+  const replay=await open(token,390);await replay.page.getByRole("status").filter({hasText:"confirmed and active"}).waitFor();assert.equal(activations,1);checks.push({scenario:"confirmed-link-reopen",passed:true});await replay.context.close();
+  const expiry=issueReviewCapability(scope,configuration,now().getTime()-1);
+  const expired=await open(expiry,375);await expired.page.getByRole("status").filter({hasText:"unavailable or out of date"}).waitFor();assert.equal(store.getExecutionPlan()?.id,fixture.draft.id);await expired.page.screenshot({path:`${output}/review-expired-375.png`,fullPage:true});checks.push({scenario:"expired-link",passed:true});await expired.context.close();
+  emailReplacementFixture(store);const nextScope=pendingEmailReview(store)!;const nextToken=issueReviewCapability(nextScope,configuration,now().getTime()+3600_000);
+  const dark=await open(nextToken,390,"dark");await dark.page.getByRole("button",{name:"Confirm updated itinerary",exact:true}).waitFor();assert.equal(await dark.page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);await dark.page.screenshot({path:`${output}/review-dark-390.png`,fullPage:true});checks.push({scenario:"dark-review",passed:true});await dark.context.close();
+  await writeFile(`${output}/browser-report.json`,JSON.stringify({startedAt,finishedAt:new Date().toISOString(),liveSending:false,publicDeploymentTested:false,checks},null,2));console.log(`Passed ${checks.length} isolated mobile review scenarios: ${output}`);
+}finally{await browser.close();await server.close();store.close();}

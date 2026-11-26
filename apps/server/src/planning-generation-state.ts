@@ -90,7 +90,9 @@ export function generationFailurePath(error: unknown, stage: BlueprintGeneration
 }
 
 export function planGenerationFailureCode(error: unknown): string {
-  return error instanceof RuntimeAdapterError ? error.code : "generation_failed";
+  if (error instanceof RuntimeAdapterError) return error.code;
+  if (error instanceof Error && "code" in error && typeof error.code === "string" && error.code.length <= 120) return error.code;
+  return "generation_failed";
 }
 
 export function errorDiagnostic(error: unknown): string | undefined {

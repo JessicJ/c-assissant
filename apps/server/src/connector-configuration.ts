@@ -1,44 +1,44 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { normalizeWhatsAppUserNumber } from "./whatsapp-number.js";
 
 export type LocalConfigurationUpdate = {
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpUser?: string;
+  smtpPassword?: string;
+  smtpDirectInterface?: string;
+  smtpDirectDns?: string;
+  smtpDnsHttpsProxy?: string;
+  emailFrom?: string;
+  emailReviewBaseUrl?: string;
+  emailActionSecret?: string;
   googleMapsApiKey?: string;
   uberClientId?: string;
-  telegramBotToken?: string;
-  whatsappAccessToken?: string;
-  whatsappPhoneNumberId?: string;
-  whatsappBusinessAccountId?: string;
-  whatsappAppSecret?: string;
-  whatsappVerifyToken?: string;
-  whatsappAllowedUserNumber?: string;
-  whatsappReminderTemplateName?: string;
-  whatsappGraphApiVersion?: string;
 };
 
 export function saveLocalConfiguration(envPath: string, update: LocalConfigurationUpdate): void {
+  if (Object.keys(update).some(key => key.startsWith("telegram") || key.startsWith("whatsapp"))) {
+    throw new Error("Chat channels are retired. Configure email assistance instead.");
+  }
   const values: Record<string, string> = {};
+  if (update.smtpHost) values.LANDI_SMTP_HOST = update.smtpHost;
+  if (update.smtpPort) values.LANDI_SMTP_PORT = String(update.smtpPort);
+  if (update.smtpUser) values.LANDI_SMTP_USER = update.smtpUser;
+  if (update.smtpPassword) values.LANDI_SMTP_PASSWORD = update.smtpPassword;
+  if (update.smtpDirectInterface !== undefined) values.LANDI_SMTP_DIRECT_INTERFACE = update.smtpDirectInterface;
+  if (update.smtpDirectDns !== undefined) values.LANDI_SMTP_DIRECT_DNS = update.smtpDirectDns;
+  if (update.smtpDnsHttpsProxy !== undefined) values.LANDI_SMTP_DNS_HTTPS_PROXY = update.smtpDnsHttpsProxy;
+  if (update.emailReviewBaseUrl !== undefined) values.LANDI_EMAIL_REVIEW_BASE_URL=update.emailReviewBaseUrl;
+  if (update.emailActionSecret) values.LANDI_EMAIL_ACTION_SECRET=update.emailActionSecret;
+  if (update.emailFrom) values.LANDI_EMAIL_FROM = update.emailFrom;
   if (update.googleMapsApiKey?.trim()) values.GOOGLE_MAPS_API_KEY = update.googleMapsApiKey.trim();
   if (update.uberClientId?.trim()) values.UBER_CLIENT_ID = update.uberClientId.trim();
-  if (update.telegramBotToken?.trim()) values.TELEGRAM_BOT_TOKEN = update.telegramBotToken.trim();
-  if (update.whatsappAccessToken?.trim()) values.WHATSAPP_ACCESS_TOKEN = update.whatsappAccessToken.trim();
-  if (update.whatsappPhoneNumberId?.trim()) values.WHATSAPP_PHONE_NUMBER_ID = update.whatsappPhoneNumberId.trim();
-  if (update.whatsappBusinessAccountId?.trim()) values.WHATSAPP_BUSINESS_ACCOUNT_ID = update.whatsappBusinessAccountId.trim();
-  if (update.whatsappAppSecret?.trim()) values.WHATSAPP_APP_SECRET = update.whatsappAppSecret.trim();
-  if (update.whatsappVerifyToken?.trim()) values.WHATSAPP_VERIFY_TOKEN = update.whatsappVerifyToken.trim();
-  if (update.whatsappAllowedUserNumber?.trim()) {
-    const normalized = normalizeWhatsAppUserNumber(update.whatsappAllowedUserNumber);
-    if (!normalized) throw new Error("WhatsApp user number must include a valid international country code.");
-    values.WHATSAPP_ALLOWED_USER_NUMBER = normalized;
-  }
-  if (update.whatsappReminderTemplateName?.trim()) values.WHATSAPP_REMINDER_TEMPLATE_NAME = update.whatsappReminderTemplateName.trim();
-  if (update.whatsappGraphApiVersion?.trim()) values.WHATSAPP_GRAPH_API_VERSION = update.whatsappGraphApiVersion.trim();
   if (!Object.keys(values).length) return;
 
   let content = existsSync(envPath) ? readFileSync(envPath, "utf8") : "";
   for (const [key, value] of Object.entries(values)) {
-    const line = `${key}=${value.replaceAll(/\r?\n/g, "")}`;
+    const line = `${key}=${key === "LANDI_SMTP_PASSWORD" ? JSON.stringify(value) : value.replaceAll(/\r?\n/g, "")}`;
     const pattern = new RegExp(`^${key}=.*$`, "m");
-    content = pattern.test(content) ? content.replace(pattern, line) : `${content.trimEnd()}\n${line}\n`;
+    content = pattern.test(content) ? content.replace(pattern, () => line) : `${content.trimEnd()}\n${line}\n`;
     process.env[key] = value;
   }
   writeFileSync(envPath, content, { encoding: "utf8", mode: 0o600 });

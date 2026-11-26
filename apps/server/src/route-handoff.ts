@@ -38,5 +38,5 @@ export function formatExpectedArrivalGuidance(plan: Plan): string {
   const stay = plan.configuration.accommodation;
   const destination = stay.name?.trim() || plan.location;
   const address = stay.address?.trim();
-  return `You should be approaching ${destination}.\n\nWhen you arrive, show this address at reception:${address ? `\n${address}` : "\nOpen the saved destination in your current Plan."}\n\nThis message follows Landi's estimated timeline. It does not mean Landi has confirmed your location, ride, or arrival. If everything is proceeding normally, you do not need to reply.`;
+  return `How's the journey? You may be approaching ${destination}.\n\nWhen you get there, you can show this address at reception:${address ? `\n${address}` : "\nYou'll find it in your Plan."}\n\nIf you're still on the way, tap I haven't arrived and I'll give you more time.`;
 }

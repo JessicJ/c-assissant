@@ -11,8 +11,8 @@ test("reports a fully ready Codex instance without requiring Claude Code", () =>
       { kind: "claude-code", installed: true, authenticated: false }
     ],
     googleConfigured: true,
-    telegramConfigured: true,
-    telegramPaired: true
+    emailConfigured: true,
+    emailVerified: true
   });
 
   assert.equal(result.status, "ready");
@@ -26,8 +26,8 @@ test("explains that the selected installed runtime needs login", () => {
     selectedRuntime: "claude-code",
     runtimeChecks: [{ kind: "claude-code", installed: true, authenticated: false }],
     googleConfigured: true,
-    telegramConfigured: true,
-    telegramPaired: true
+    emailConfigured: true,
+    emailVerified: true
   });
 
   assert.equal(result.status, "needs_attention");
@@ -35,16 +35,16 @@ test("explains that the selected installed runtime needs login", () => {
   assert.equal(result.nextAction, "Claude Code is installed but needs login on this computer.");
 });
 
-test("guides a configured Telegram bot to the pairing step", () => {
+test("guides a configured sender to recipient verification", () => {
   const result = assessSetupReadiness({
     profileStatus: "ready",
     selectedRuntime: "codex",
     runtimeChecks: [{ kind: "codex", installed: true, authenticated: true }],
     googleConfigured: true,
-    telegramConfigured: true,
-    telegramPaired: false
+    emailConfigured: true,
+    emailVerified: false
   });
 
   assert.equal(result.readyCount, 3);
-  assert.equal(result.nextAction, "The bot is configured; pair your private Telegram account.");
+  assert.equal(result.nextAction, "Save and verify your recipient address in Travel emails.");
 });

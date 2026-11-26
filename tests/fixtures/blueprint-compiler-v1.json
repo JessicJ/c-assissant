@@ -1,0 +1,212 @@
+{
+  "baselineCommit": "d279d37a51db4c4451694d6c68f290c9fce18150",
+  "blueprint": {
+    "schemaVersion": 1,
+    "id": "持久蓝图",
+    "version": 1,
+    "generationKey": "持久生成",
+    "proposalRef": {
+      "sessionId": "fictional-session",
+      "proposalVersion": 1
+    },
+    "skillLineage": {
+      "skillId": "landi-trip-blueprint",
+      "skillVersion": "1.0.0"
+    },
+    "researchSetId": "持久研究",
+    "title": "虚构旅行",
+    "summary": "隔离测试",
+    "language": "zh",
+    "destinations": [
+      "东京"
+    ],
+    "startDate": "2026-09-01",
+    "endDate": "2026-09-01",
+    "places": [
+      {
+        "id": "a",
+        "name": "虚构景点",
+        "locationLabel": "东京",
+        "category": "sight",
+        "priority": "must",
+        "coordinates": [
+          35.68,
+          139.76
+        ],
+        "whyWorthIt": "测试",
+        "plan": "游览",
+        "evidence": []
+      }
+    ],
+    "events": [],
+    "sources": [],
+    "days": [
+      {
+        "id": "d",
+        "date": "2026-09-01",
+        "kind": "scheduled",
+        "city": "东京",
+        "title": "第一天",
+        "summary": "测试",
+        "stops": [
+          {
+            "placeId": "a",
+            "order": 1
+          }
+        ],
+        "candidatePlaceIds": []
+      }
+    ],
+    "movements": [],
+    "actionRequirements": [
+      {
+        "id": "historical-preparation",
+        "kind": "preparation",
+        "title": "核对虚构材料",
+        "description": "隔离历史编译测试",
+        "accountableParty": "traveler",
+        "completionCondition": "旅行者确认",
+        "evidence": []
+      }
+    ],
+    "travelTips": [
+      {
+        "id": "t",
+        "title": "雨具",
+        "body": "随身携带雨具",
+        "theme": "weather",
+        "context": "雨天",
+        "evidence": []
+      }
+    ],
+    "createdAt": "2026-08-26T00:00:00Z"
+  },
+  "compilation": {
+    "plan": {
+      "id": "plan-jrzuw0",
+      "version": 1,
+      "title": "虚构旅行",
+      "location": "东京",
+      "dates": "2026-09-01 – 2026-09-01",
+      "status": "draft",
+      "knownInformation": [
+        "Destinations: 东京",
+        "Travel dates: 2026-09-01 to 2026-09-01",
+        "1 days to explore, with 1 places to visit, eat or stay."
+      ],
+      "assumptions": [],
+      "nextAction": "Have a look through your itinerary and preparations. Confirm the plan when it feels right for your trip.",
+      "configuration": {
+        "accommodation": {
+          "status": "not_set"
+        },
+        "arrival": {},
+        "transport": {
+          "preference": "plan_recommended"
+        },
+        "travelContext": {
+          "luggage": "unknown"
+        }
+      },
+      "stages": [
+        {
+          "id": "stage-17l9ejl",
+          "title": "Packing list",
+          "description": "A few useful things to pack for the places and activities on your trip.",
+          "presentationKind": "details",
+          "tasks": [
+            {
+              "id": "task-5ro2ev",
+              "requirementId": "packing:passport-wallet",
+              "title": "Passport, payment cards, and a small cash wallet",
+              "description": "Keep the items you need for hotel check-in, rail tickets, reservations, and small cash-only stops in one reachable pouch.",
+              "owner": "user",
+              "status": "waiting_user",
+              "dueLabel": "Before 2026-09-01",
+              "preparationCategory": "packing_item"
+            },
+            {
+              "id": "task-19jlneb",
+              "requirementId": "packing:phone-power",
+              "title": "Charged phone, cable, and power bank",
+              "description": "Keep your phone charged for maps, tickets, translation and checking your journey along the way.",
+              "owner": "user",
+              "status": "waiting_user",
+              "dueLabel": "Before 2026-09-01",
+              "preparationCategory": "packing_item"
+            },
+            {
+              "id": "task-vvor1p",
+              "requirementId": "packing:walking-shoes-socks",
+              "title": "Broken-in walking shoes and spare socks",
+              "description": "Choose shoes you’re comfortable walking in, and pack spare socks for outdoor days.",
+              "owner": "user",
+              "status": "waiting_user",
+              "dueLabel": "Before 2026-09-01",
+              "preparationCategory": "packing_item"
+            },
+            {
+              "id": "task-hcp07m",
+              "requirementId": "packing:day-bag",
+              "title": "Light day bag",
+              "description": "Carry essentials while larger luggage is stored, forwarded, or left at the accommodation.",
+              "owner": "user",
+              "status": "waiting_user",
+              "dueLabel": "Before 2026-09-01",
+              "preparationCategory": "packing_item"
+            },
+            {
+              "id": "task-1ehk6qn",
+              "requirementId": "packing:light-layer",
+              "title": "Light jacket, cardigan, or thin overshirt",
+              "description": "Pack a light layer for cooler evenings, lakeside walks and changes in the weather.",
+              "owner": "user",
+              "status": "waiting_user",
+              "dueLabel": "Before 2026-09-01",
+              "preparationCategory": "packing_item"
+            },
+            {
+              "id": "task-1dzmv4p",
+              "requirementId": "packing:rain-gear",
+              "title": "Compact umbrella or packable rain shell",
+              "description": "Useful for station transfers, gardens, and outdoor walks until a date-specific forecast is confirmed.",
+              "owner": "user",
+              "status": "waiting_user",
+              "dueLabel": "Before 2026-09-01",
+              "preparationCategory": "packing_item"
+            }
+          ]
+        },
+        {
+          "id": "stage-mgev6j",
+          "title": "Before departure",
+          "description": "A few things to sort out before departure, so your trip runs more smoothly.",
+          "presentationKind": "details",
+          "tasks": [
+            {
+              "id": "task-1te65tu",
+              "requirementId": "historical-preparation",
+              "title": "核对虚构材料",
+              "description": "隔离历史编译测试",
+              "owner": "user",
+              "status": "completed",
+              "dueLabel": "Before this requirement affects the trip",
+              "preparationCategory": "other_predeparture"
+            }
+          ]
+        }
+      ],
+      "sources": [],
+      "createdAt": "2026-08-26T00:00:00Z"
+    },
+    "lineage": {
+      "planId": "plan-jrzuw0",
+      "planVersion": 1,
+      "blueprintId": "持久蓝图",
+      "blueprintVersion": 1,
+      "compilerVersion": "1.0.0",
+      "compilationKey": "持久蓝图:1:1.0.0",
+      "createdAt": "2026-08-26T00:00:00Z"
+    }
+  }
+}

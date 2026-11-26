@@ -1,0 +1,66 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import net from 'node:net';
+import tls from 'node:tls';
+import dgram from 'node:dgram';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+import { initializePlanningContinuityFixture } from './planning-continuity-fixture.mjs';
+const workspaceFixtureScenarios = ['planning-continuity'];
+import { createPlanningContinuityTransport } from './planning-continuity-transport.mjs';
+import { publishOwnerAtomically } from '../../scripts/isolated-browser-owner.mjs';
+
+for (const resource of ['../../apps/server/lib/index.js', '../../apps/web/dist/index.html']) if (!fs.existsSync(new URL(resource, import.meta.url))) throw Error('请先构建本次真实 Server 与 Web 资产。');
+
+const args = process.argv.slice(2);
+const directory = path.resolve(args[args.indexOf('--data-dir') + 1] ?? '');
+const port = Number(args[args.indexOf('--port') + 1]);
+const scenario = args.includes('--scenario') ? args[args.indexOf('--scenario') + 1] : 'planning-continuity';
+if (!args.includes('--data-dir') || !args.includes('--port') || !Number.isInteger(port) || port < 1024 || port > 65535) throw Error('必须指定隔离目录与合法端口。');
+if (!workspaceFixtureScenarios.includes(scenario)) throw Error('未知隔离验收场景。');
+const marker = path.join(directory, 'landi-development-fixture.json');
+if (fs.existsSync(directory) && fs.lstatSync(directory).isSymbolicLink()) throw Error('隔离目录不能使用符号链接。');
+fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+if (fs.readdirSync(directory).length && !fs.existsSync(marker)) throw Error('目录缺少本夹具所有权标记，拒绝使用。');
+if (!fs.existsSync(marker)) fs.writeFileSync(marker, JSON.stringify({ kind: 'landi_isolated_development_fixture', version: 1 }), { mode: 0o600 });
+if (JSON.parse(fs.readFileSync(marker, 'utf8')).kind !== 'landi_isolated_development_fixture') throw Error('隔离目录所有权标记无效。');
+const ownership = path.join(directory, 'owner.json');
+if (fs.existsSync(ownership)) {
+  const owner = JSON.parse(fs.readFileSync(ownership, 'utf8'));
+  if (owner.kind !== 'landi_isolated_development_fixture') throw Error('隔离实例身份不一致。');
+  let alive = false;
+  try { process.kill(owner.pid, 0); alive = true; } catch (error) { if (error.code !== 'ESRCH') throw error; }
+  if (alive) throw Error('原隔离实例仍在运行，拒绝覆盖或重置。');
+}
+const databasePath = path.join(directory, 'workspace.sqlite');
+for (const file of [marker, databasePath, ownership, path.join(directory, 'transport.json'), path.join(directory, 'empty.env')]) if (fs.existsSync(file) && fs.lstatSync(file).isSymbolicLink()) throw Error('隔离实例文件不能使用符号链接。');
+if (args.includes('--reset')) throw Error('隔离验收禁止重置已有数据。');
+const bindingPath = path.join(directory, 'transport.json');
+const sourceOrigin = `http://127.0.0.1:${port}`;
+if (fs.existsSync(bindingPath) && JSON.parse(fs.readFileSync(bindingPath, 'utf8')).origin !== sourceOrigin) throw Error('隔离来源地址与原实例不匹配，拒绝修改旧数据。');
+if (fs.existsSync(bindingPath) && (JSON.parse(fs.readFileSync(bindingPath, 'utf8')).scenario ?? 'workspace') !== scenario) throw Error('隔离场景与原实例不匹配，请使用新的自有空目录。');
+if (!fs.existsSync(bindingPath) && fs.existsSync(databasePath)) throw Error('已有夹具缺少来源绑定，请使用新的自有空目录。');
+const envPath = path.join(directory, 'empty.env');
+fs.writeFileSync(envPath, '', { mode: 0o600 });
+const keep = new Set(['PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL', 'TZ']);
+for (const key of Object.keys(process.env)) if (!keep.has(key)) delete process.env[key];
+Object.assign(process.env, { NODE_ENV: 'test', LANDI_SERVER_MODE: 'standard', C_ASSISTANT_HOST: '127.0.0.1', C_ASSISTANT_ENV_PATH: envPath, C_ASSISTANT_DATA_PATH: databasePath, LANDI_BLUEPRINT_GENERATION: '0', LANDI_SEMANTIC_SHADOW: '0', LANDI_SEMANTIC_DRAFT_CANARY: '0' });
+const probe = net.createServer();
+await new Promise((resolve, reject) => { probe.once('error', reject); probe.listen(port, '127.0.0.1', () => probe.close(resolve)); });
+const internalProbe = net.createServer();
+await new Promise((resolve, reject) => { internalProbe.once('error', reject); internalProbe.listen(0, '127.0.0.1', resolve); });
+const upstreamPort = internalProbe.address().port;
+await new Promise(resolve => internalProbe.close(resolve));
+process.env.C_ASSISTANT_PORT = String(upstreamPort);
+if (!fs.existsSync(databasePath)) initializePlanningContinuityFixture(databasePath);
+if (!fs.existsSync(bindingPath)) fs.writeFileSync(bindingPath, JSON.stringify({ origin: sourceOrigin, scenario }), { mode: 0o600 });
+const transport = createPlanningContinuityTransport({ databasePath, port, upstreamPort });
+process.once('SIGTERM', () => transport.close());
+process.once('SIGINT', () => transport.close());
+// 与现有 browser-test-isolation 相同的外部副作用隔离，仍使用真实主 Storage 与 Server。
+const blocked = () => { throw Error('隔离开发实例禁止外部网络与子进程。'); };
+net.Socket.prototype.connect = blocked; tls.connect = blocked; dgram.Socket.prototype.send = blocked; globalThis.fetch = blocked;
+for (const method of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']) childProcess[method] = blocked;
+syncBuiltinESMExports();
+publishOwnerAtomically(ownership, { kind: 'landi_isolated_development_fixture', pid: process.pid, port, startedAt: new Date().toISOString(), entry: import.meta.url });
+try { await import('../../apps/server/lib/index.js'); await transport.listen(); } catch (error) { transport.close(); throw error; }

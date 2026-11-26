@@ -1,0 +1,401 @@
+{
+  "version": 1,
+  "license": "Apache-2.0",
+  "originalArtwork": true,
+  "viewBox": "0 0 64 64",
+  "colors": {
+    "ink": "#285347",
+    "cloud": "#DFE8E1",
+    "shade": "#BED0C4",
+    "sun": "#DFC38A",
+    "sunStroke": "#B88C4D",
+    "rain": "#6D9694",
+    "paper": "#FAF8F4"
+  },
+  "icons": [
+    {
+      "id": "clear-day",
+      "label": "Sunny",
+      "labelZh": "晴朗",
+      "cid": "landi-weather-v1-clear-day@landi.assets",
+      "svg": {
+        "path": "svg/clear-day.svg",
+        "sha256": "6c064e93d5140a8bc0f9f60ce5af70721e4c6daaf389a300b47871bfd6dc011b"
+      },
+      "png": {
+        "48": {
+          "path": "png/clear-day-48.png",
+          "sha256": "667885f16d67e3bd3abc866c378305c2d032245712cb8f73ad5d58b25c97a889"
+        },
+        "96": {
+          "path": "png/clear-day-96.png",
+          "sha256": "5f8126c6424ea2baf9990f1343703023be8ecbc24f099bb1102450f53ed28f69"
+        },
+        "192": {
+          "path": "png/clear-day-192.png",
+          "sha256": "6357985b70208ad003fc81f5b8c0e980c82a60bd5ce0b1e9c55e94560995a2d8"
+        }
+      }
+    },
+    {
+      "id": "clear-night",
+      "label": "Clear night",
+      "labelZh": "晴夜",
+      "cid": "landi-weather-v1-clear-night@landi.assets",
+      "svg": {
+        "path": "svg/clear-night.svg",
+        "sha256": "9f020d1441867f994f60dc28c2fa616a4f99db828d8583b1262de21da3f8c5a5"
+      },
+      "png": {
+        "48": {
+          "path": "png/clear-night-48.png",
+          "sha256": "cc3238263f4c75581b1f88c437a19873f7b8059aed1fe324cd4d765e8084e695"
+        },
+        "96": {
+          "path": "png/clear-night-96.png",
+          "sha256": "77b9fa03eba8110a2a05fe5805c6fc65d09cd86307ecbafa90cf87a0e554e906"
+        },
+        "192": {
+          "path": "png/clear-night-192.png",
+          "sha256": "c04c56d6783e45750c89d014a1668a893cfe76ce42a95a2b5283c99a1af02186"
+        }
+      }
+    },
+    {
+      "id": "partly-cloudy-day",
+      "label": "Partly cloudy",
+      "labelZh": "局部多云",
+      "cid": "landi-weather-v1-partly-cloudy-day@landi.assets",
+      "svg": {
+        "path": "svg/partly-cloudy-day.svg",
+        "sha256": "066534e24b656e591277cb5da49cd6cfe158fa9c13eca5891adb6e08daa3984e"
+      },
+      "png": {
+        "48": {
+          "path": "png/partly-cloudy-day-48.png",
+          "sha256": "34bcbbcafdc8b30a40e88a5f8b75ba30d1909e80fe6ecb9800104c7b451bf4e9"
+        },
+        "96": {
+          "path": "png/partly-cloudy-day-96.png",
+          "sha256": "a72468caa6006a546f5f82ee4ede2c3756962a44fcf83af81421d2966b287d30"
+        },
+        "192": {
+          "path": "png/partly-cloudy-day-192.png",
+          "sha256": "cf783b35566d80b5d217d4fc2c1aaddb5a1a8855d81acc186685b81cddbd0887"
+        }
+      }
+    },
+    {
+      "id": "partly-cloudy-night",
+      "label": "Cloudy night",
+      "labelZh": "夜间多云",
+      "cid": "landi-weather-v1-partly-cloudy-night@landi.assets",
+      "svg": {
+        "path": "svg/partly-cloudy-night.svg",
+        "sha256": "6f3c97d967d98e39c2cfab51bf6e1a97b4ddd2af6fbe8865257ec5cca4b9094f"
+      },
+      "png": {
+        "48": {
+          "path": "png/partly-cloudy-night-48.png",
+          "sha256": "0b452ddcce53a7e59f6ccb9a8bad6075d1843718bffe6611aa5788aed51e1a0a"
+        },
+        "96": {
+          "path": "png/partly-cloudy-night-96.png",
+          "sha256": "1783050473162043678e6d516f0ece39ba72f9ce7493b2d7eda3ed3f09610532"
+        },
+        "192": {
+          "path": "png/partly-cloudy-night-192.png",
+          "sha256": "0f4f656c9e212b9f56e65949f6d8cebc52ac0e2fa56ea3ed3918c0e496b259c3"
+        }
+      }
+    },
+    {
+      "id": "cloudy",
+      "label": "Cloudy",
+      "labelZh": "多云",
+      "cid": "landi-weather-v1-cloudy@landi.assets",
+      "svg": {
+        "path": "svg/cloudy.svg",
+        "sha256": "5bfed1adfd6bd74392e8a1c8cbad13285fc6356c909f3e4f35021a8b7ecb17c1"
+      },
+      "png": {
+        "48": {
+          "path": "png/cloudy-48.png",
+          "sha256": "57b41b90c0c6a10fd11e6fe7307af5a5a050348a62471030fcb464ffe449bc5b"
+        },
+        "96": {
+          "path": "png/cloudy-96.png",
+          "sha256": "8dcc18ae9511c7bac22e41eae223d9c895fbbcd12241c0a89473137661ef493a"
+        },
+        "192": {
+          "path": "png/cloudy-192.png",
+          "sha256": "84bb94aa1ca3d26514477a6e57d5927d44b3fcf73f400f55bb3bcbfb4f7c7899"
+        }
+      }
+    },
+    {
+      "id": "overcast",
+      "label": "Overcast",
+      "labelZh": "阴天",
+      "cid": "landi-weather-v1-overcast@landi.assets",
+      "svg": {
+        "path": "svg/overcast.svg",
+        "sha256": "2f10cde6e40a880561d25d3485a095233a862c801c631f4538b2494ca7807219"
+      },
+      "png": {
+        "48": {
+          "path": "png/overcast-48.png",
+          "sha256": "0bcd280716c13b23678c4a0c084c8b85a3d519220adf529f43a6a5a1701a6c2e"
+        },
+        "96": {
+          "path": "png/overcast-96.png",
+          "sha256": "5166466a860c59b30d35888824f2580bd0bae0641d81d218945b113ceb13db64"
+        },
+        "192": {
+          "path": "png/overcast-192.png",
+          "sha256": "b15392b481b6aa1a05ec00af9e2b57c760081ca1dfe2c3ebaefe5321799d6cbe"
+        }
+      }
+    },
+    {
+      "id": "light-rain",
+      "label": "Light rain",
+      "labelZh": "小雨",
+      "cid": "landi-weather-v1-light-rain@landi.assets",
+      "svg": {
+        "path": "svg/light-rain.svg",
+        "sha256": "3d19fe419e33cb4a1c9f8a21b86215fde5b50c27904aba8dd79008415f241b7e"
+      },
+      "png": {
+        "48": {
+          "path": "png/light-rain-48.png",
+          "sha256": "cb989668aa593e8e43c9f5374959125764b9b98fc43cac7a18dfce747cc92849"
+        },
+        "96": {
+          "path": "png/light-rain-96.png",
+          "sha256": "1e18ad3443dfb25ff5cd9bd764e44ccb4161622d70178349c8560ad564bf9ac9"
+        },
+        "192": {
+          "path": "png/light-rain-192.png",
+          "sha256": "c35cbc26e0df738222d597d9d55a885c6b20e4a582c9883211f523f6dd6049ff"
+        }
+      }
+    },
+    {
+      "id": "moderate-rain",
+      "label": "Moderate rain",
+      "labelZh": "中雨",
+      "cid": "landi-weather-v1-moderate-rain@landi.assets",
+      "svg": {
+        "path": "svg/moderate-rain.svg",
+        "sha256": "cafe9b210144167af0f645ab22666815698891e58e5520859178e9b4ad66d071"
+      },
+      "png": {
+        "48": {
+          "path": "png/moderate-rain-48.png",
+          "sha256": "bd6b287593ec4bb193a8970e1e0902613a13d9f813a8580304681fcb39ce46b6"
+        },
+        "96": {
+          "path": "png/moderate-rain-96.png",
+          "sha256": "33e8b08e71e59bb563dc0c88e1912184da36bf45e2b9ce6aca4865d8d394319d"
+        },
+        "192": {
+          "path": "png/moderate-rain-192.png",
+          "sha256": "dfae8276aa5d51f27f4015f5b28bb333033cba0090bf1a5849f923fe3db9cdbe"
+        }
+      }
+    },
+    {
+      "id": "heavy-rain",
+      "label": "Heavy rain",
+      "labelZh": "大雨",
+      "cid": "landi-weather-v1-heavy-rain@landi.assets",
+      "svg": {
+        "path": "svg/heavy-rain.svg",
+        "sha256": "c7ad9316393ab5f5de133768f96d18a5fafc699ce53036707f63b3cb1d9d7005"
+      },
+      "png": {
+        "48": {
+          "path": "png/heavy-rain-48.png",
+          "sha256": "aa95c51e622c7eacf59e90b0b98c1b17a25c47d00bf6b68f6cc2bb4ca9c77266"
+        },
+        "96": {
+          "path": "png/heavy-rain-96.png",
+          "sha256": "dbe450125fc00e2213a4066017cf7adac61ee40ccc07de49726f766fd201f629"
+        },
+        "192": {
+          "path": "png/heavy-rain-192.png",
+          "sha256": "7f229fe43339aea37b7bf0a44ffa73537e0284f15e6cd6d7f6cd1d52bcdbb0f5"
+        }
+      }
+    },
+    {
+      "id": "showers",
+      "label": "Showers",
+      "labelZh": "阵雨",
+      "cid": "landi-weather-v1-showers@landi.assets",
+      "svg": {
+        "path": "svg/showers.svg",
+        "sha256": "c63c566c432baea5d6a61a213963520188553d6bc2c075b4e06283948c679aea"
+      },
+      "png": {
+        "48": {
+          "path": "png/showers-48.png",
+          "sha256": "2926d5f9db67f13520e982b0b4635638d23979d27584a2f2b1809a99f76cdae3"
+        },
+        "96": {
+          "path": "png/showers-96.png",
+          "sha256": "8da374e85f60e6fbf2a9cde18cf11ba93bd59761b3849357b523db022aa8d050"
+        },
+        "192": {
+          "path": "png/showers-192.png",
+          "sha256": "334ddacbc76eeaedb974e0af1479e761e94330f1d4ff661414cf6793b4f3c49a"
+        }
+      }
+    },
+    {
+      "id": "thunderstorm",
+      "label": "Thunderstorm",
+      "labelZh": "雷雨",
+      "cid": "landi-weather-v1-thunderstorm@landi.assets",
+      "svg": {
+        "path": "svg/thunderstorm.svg",
+        "sha256": "3d233bbfb6acb079d3ef181ae98411e2f44ae61cbc0fdd75dcf856c32c4df267"
+      },
+      "png": {
+        "48": {
+          "path": "png/thunderstorm-48.png",
+          "sha256": "b77aee273be4a9885f616f866e29d45d26bea6591e6eadaa072ab089fa74b2e5"
+        },
+        "96": {
+          "path": "png/thunderstorm-96.png",
+          "sha256": "5a362bca25762d571bc70db9686947ff99cefa607eabde24083d27037a2a7b0d"
+        },
+        "192": {
+          "path": "png/thunderstorm-192.png",
+          "sha256": "4a598fa66da1238b12e828d7d163123a9d0ebc22b29511271b659a2f9d254b38"
+        }
+      }
+    },
+    {
+      "id": "snow",
+      "label": "Snow",
+      "labelZh": "下雪",
+      "cid": "landi-weather-v1-snow@landi.assets",
+      "svg": {
+        "path": "svg/snow.svg",
+        "sha256": "5dd42e1517bdb2cbe34947c5d0ba13c6c3629d4a6f190b77c2b4f4ab227c7f72"
+      },
+      "png": {
+        "48": {
+          "path": "png/snow-48.png",
+          "sha256": "a151e489b1cf1cac6df22b80f558e36e7262b49963c0b5abbe5708b590dea6be"
+        },
+        "96": {
+          "path": "png/snow-96.png",
+          "sha256": "fab0d60f6b5117aebc17c8fd98e1e82937f6506d0eda669ed32eba2b0d48bca9"
+        },
+        "192": {
+          "path": "png/snow-192.png",
+          "sha256": "20d60b9e3b19e9aff3eabb7afa828f228f36fa77da1644b25f4acbfb750f8698"
+        }
+      }
+    },
+    {
+      "id": "sleet",
+      "label": "Sleet",
+      "labelZh": "雨夹雪",
+      "cid": "landi-weather-v1-sleet@landi.assets",
+      "svg": {
+        "path": "svg/sleet.svg",
+        "sha256": "356c80c3a4e66235ceb49a2c67aa7674d6369a174f3df7fc14c510b8843591f3"
+      },
+      "png": {
+        "48": {
+          "path": "png/sleet-48.png",
+          "sha256": "29a917bf421b6abbca33129160e11b1548f79fd711d88de6316e7ece5407fcb8"
+        },
+        "96": {
+          "path": "png/sleet-96.png",
+          "sha256": "7eed4b013902450de5706938c1b19bee4a81c06cdb316367eb59e77bd599a5f5"
+        },
+        "192": {
+          "path": "png/sleet-192.png",
+          "sha256": "4eac6dd116a4d069c9692de603006f8d193d83494d228c0a3b050fccc5bb2ba9"
+        }
+      }
+    },
+    {
+      "id": "fog",
+      "label": "Fog",
+      "labelZh": "雾",
+      "cid": "landi-weather-v1-fog@landi.assets",
+      "svg": {
+        "path": "svg/fog.svg",
+        "sha256": "265cc3cd35dd2d558f7d694fb9fde4590c970909acb9ae3f8dc7cc215fe11b81"
+      },
+      "png": {
+        "48": {
+          "path": "png/fog-48.png",
+          "sha256": "ac478b88ea93194728e7f6379f6794e2e139afedc5758d01a529515ebcbe560c"
+        },
+        "96": {
+          "path": "png/fog-96.png",
+          "sha256": "f2a202e07570996bd4c9d2ed9e86119820fb41a7ce8071de2847ee33c88cfd02"
+        },
+        "192": {
+          "path": "png/fog-192.png",
+          "sha256": "726c0caa281d1921176c72a36da89503bcc2d3cdcf3b36596d7c8a10a4b0a98b"
+        }
+      }
+    },
+    {
+      "id": "wind",
+      "label": "Windy",
+      "labelZh": "大风",
+      "cid": "landi-weather-v1-wind@landi.assets",
+      "svg": {
+        "path": "svg/wind.svg",
+        "sha256": "7ddf03a1e90b9a9977ab8f9a99afb824fae6af52e6b5fe9b0872ea6b0c3b3fe6"
+      },
+      "png": {
+        "48": {
+          "path": "png/wind-48.png",
+          "sha256": "b886c3f4de3f8cdae82d27b82ab783e4acb49e05d073dd208f5c2cd5c16c4e61"
+        },
+        "96": {
+          "path": "png/wind-96.png",
+          "sha256": "ed8b9ce8cb9e69caad930552bf56993914f63c2bfcae73f4e3a1ff15728b5f3c"
+        },
+        "192": {
+          "path": "png/wind-192.png",
+          "sha256": "e6c0ea12bb7b004fc597923e233b53a4b63b48eb80bf5b7f2483ba523661e495"
+        }
+      }
+    },
+    {
+      "id": "unavailable",
+      "label": "Unavailable",
+      "labelZh": "暂不可用",
+      "cid": "landi-weather-v1-unavailable@landi.assets",
+      "svg": {
+        "path": "svg/unavailable.svg",
+        "sha256": "551708a07bf44a6c62b7243e0d3aaea024b5b6f66cd27db731c0b184f336c76b"
+      },
+      "png": {
+        "48": {
+          "path": "png/unavailable-48.png",
+          "sha256": "62afc5da73ac9ed01d020c46583b43939dee7c1f847d794c3b484e65d4c0ba6e"
+        },
+        "96": {
+          "path": "png/unavailable-96.png",
+          "sha256": "ccee1dcdea9f7046347e425ee4ce4d92c459dd92641879805e52fd85afb1bbc1"
+        },
+        "192": {
+          "path": "png/unavailable-192.png",
+          "sha256": "badf7c06ef49b77d9a683349399938f92c97ba9ca0e47206c4d38dc5e018da75"
+        }
+      }
+    }
+  ]
+}

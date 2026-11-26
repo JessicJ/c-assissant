@@ -381,3 +381,7 @@ body[data-composer-mode="revise_plan"] .editorial-composer { width: min(1120px, 
   .empty-plan-copy, .empty-plan-composer { animation-duration: 120ms; transform: none; }
   .empty-plan-composer button { transition-duration: 120ms; }
 }
+
+.plan-composer .tour-mah-dependency { padding: 12px 14px; border: 1px solid #dce7f4; border-radius: 12px; background: #f4f8fd; color: #3d4654; font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.plan-composer .tour-mah-dependency strong { color: #0c1424; }
+.plan-composer .tour-mah-dependency p { margin: 6px 0 0; }

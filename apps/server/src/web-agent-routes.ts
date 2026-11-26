@@ -1,80 +1,134 @@
+import type { GenerationAdmission } from './generation-admission.js';
+import { MahCarrierError } from './mah-generation-contract.js';
+import { MahBusinessTaskReadbackError } from './mah-business-gateway.js';
+import { MahBusinessContractError } from './mah-business-contract.js';
+import { planOperationError, planOperationRouteOptions, planOperationRejection } from "./plan-operation-error.js";
+import { WorkspaceMutationError } from "@c-assistant/core";
+import { productionReadiness } from "./production-readiness.js";
+import type { BusinessRuntime } from "./agent-work-contract.js";
+import { AgentExecutionBlocked } from "./agent-work-contract.js";
+import { AgentWorkError } from "@c-assistant/storage";
+import { personalityMessage } from "./personality-messages.js";
 import type { FastifyInstance } from "fastify";
-import { RuntimeAdapterError, type ClaudeCodeRuntimeAdapter, type CodexRuntimeAdapter } from "@c-assistant/agent-adapters";
-import { prepareDirectBlueprintAssistedReplanningHandoff, type AgentRuntimeKind, type DirectBlueprintAssistedReplanningHandoff, type PlanChangeImpactPreview, type TripBlueprint } from "@c-assistant/core";
+import { RuntimeAdapterError, type CodexRuntimeAdapter } from "@c-assistant/agent-adapters";
+import { prepareDirectBlueprintAssistedReplanningHandoff, type DirectBlueprintAssistedReplanningHandoff, type PlanChangeImpactPreview, type TripBlueprint } from "@c-assistant/core";
 import type { SqliteWorkspaceStore } from "@c-assistant/storage";
-import { planRefinementState } from "./plan-refinement.js";
 import { previewPlanChange } from "./plan-change-impact.js";
-import { runtimeName } from "./runtime-display.js";
-import { completedTasksForRevision, planDraftForRevision } from "./telegram-plan.js";
 import { applyAgentPlanningTurn, prepareConfirmedPlanningSession } from "./planning-session.js";
 import { planningGenerationReuse } from "./planning-session-generation.js";
-import { assertWebAgentPlanUnchanged, formatWebAgentPlanReply, parseWebAgentTurn } from "./web-agent.js";
+import { assistedBlueprintReplan } from "./assisted-blueprint-replanning.js";
+import { missingGenerationQuestions, missingQuestions } from "./planning-session-facts.js";
+import { parseWebAgentTurn } from "./web-agent.js";
 import type { PlanningGenerationService } from "./planning-generation-service.js";
+import type { MahPlanningConversationService } from "./mah-planning-conversation.js";
+import type { RuntimeServices } from "./runtime-services-contract.js";
+import { isIsolatedGenerationRuntimeServices } from "./runtime-services.js";
 
-type RuntimeAdapter = CodexRuntimeAdapter | ClaudeCodeRuntimeAdapter;
 
-export function registerWebAgentRoutes(server: FastifyInstance, dependencies: {
+type WebAgentRouteDependencies = {
   store: SqliteWorkspaceStore;
   blueprintGenerationEnabled: boolean;
+  itineraryContentReview?: (request: Parameters<CodexRuntimeAdapter["reviewSkillItinerary"]>[0]) => ReturnType<CodexRuntimeAdapter["reviewSkillItinerary"]>;
   generation: PlanningGenerationService;
+  generationAdmission?: GenerationAdmission;
   getGeneratingPlan: () => boolean;
   setGeneratingPlan: (running: boolean) => void;
-  selectedRuntimeAdapter: (kind: AgentRuntimeKind) => RuntimeAdapter;
+  business: BusinessRuntime;
+  planningConversation?: MahPlanningConversationService;
   prepareGeneratedPlanEvidence: (planId: string) => Promise<{ workspace: ReturnType<SqliteWorkspaceStore["getWorkspace"]>; status: "verified" | "partial" }>;
-}): void {
+};
+
+export function registerWebAgentRoutes(server: FastifyInstance, dependencies: WebAgentRouteDependencies): void {
+  registerRoutes(server, dependencies, false);
+}
+
+/** 隔离服务身份由内部工厂持有，不能由请求或配置反序列化取得。 */
+export function registerIsolatedGenerationWebAgentRoutes(server: FastifyInstance, dependencies: WebAgentRouteDependencies, services: RuntimeServices): void {
+  if (!isIsolatedGenerationRuntimeServices(services) || dependencies.generation !== services.planningGeneration
+    || dependencies.business !== services.business) throw new Error("隔离生成服务的组合身份不一致。");
+  registerRoutes(server, dependencies, true);
+}
+
+function registerRoutes(server: FastifyInstance, dependencies: WebAgentRouteDependencies, isolatedGeneration: boolean): void {
   const {
     store,
     blueprintGenerationEnabled,
     generation,
     getGeneratingPlan,
     setGeneratingPlan,
-    selectedRuntimeAdapter,
+    business,
     prepareGeneratedPlanEvidence
   } = dependencies;
 
-  server.post<{ Body: unknown }>("/api/agent/chat", async (request, reply) => {
+  server.post<{ Body: unknown }>("/api/agent/chat", planOperationRouteOptions, async (request, reply) => {
     let turn: ReturnType<typeof parseWebAgentTurn>;
     try {
       turn = parseWebAgentTurn(request.body);
     } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : "The Agent request is invalid." });
+      return reply.code(planOperationError(error).status).send(planOperationError(error).body);
     }
-    if (getGeneratingPlan()) return reply.code(409).send({ error: "The Agent is already working on a Plan. Please wait for that response." });
+    if (getGeneratingPlan()) return reply.code(409).send(planOperationRejection("generation_busy"));
 
     if (turn.mode === "new_plan") {
-      setGeneratingPlan(true);
-      let backgroundQueued = false;
+      let saved: ReturnType<SqliteWorkspaceStore['savePlanningMessage']> | undefined;
       try {
-        const workspace = store.getWorkspace();
-        if (workspace.profile.status !== "ready") return reply.code(409).send({ error: "Complete the required Profile basics before creating or revising a Plan." });
-        const current = workspace.planningSession && workspace.planningSession.status !== "draft_ready" && workspace.planningSession.status !== "failed"
-          ? workspace.planningSession
-          : store.createPlanningSession("travel");
-        const runtime = selectedRuntimeAdapter(workspace.runtime.selectedKind);
-        const agentTurn = await runtime.continuePlanningConversation({
-          message: turn.message,
-          session: current,
-          profile: { preferredLanguage: workspace.profile.preferredLanguage, nationality: workspace.profile.nationality, gender: workspace.profile.gender, immigrationStatus: workspace.profile.immigrationStatus }
-        });
-        const result = applyAgentPlanningTurn(current, turn.message, agentTurn);
-        store.savePlanningSession(result.session);
-        if (result.session.status === "proposal_confirmed" && result.session.unresolved.length === 0) {
-          const job = generation.enqueuePlanningSessionGeneration(result.session, workspace);
-          backgroundQueued = true;
-          return reply.code(202).send({ reply: result.reply, workspace: store.getWorkspace(), planningSession: store.getPlanningSessionById(result.session.id), planningStatus: "generating", generated: false, accepted: true, generation: generation.publicGenerationJob(job) });
+        const body = request.body as Record<string, unknown>;
+        if (Object.keys(body).some(key => !['mode', 'message', 'sessionId', 'messageId', 'expectedRevision', 'checkResultOnly'].includes(key))
+          || (body.checkResultOnly !== undefined && typeof body.checkResultOnly !== 'boolean')) {
+          return reply.code(400).send({ code: 'planning_request_invalid', error: 'Refresh the workspace before submitting this request.' });
         }
-        const updated = store.getWorkspace();
+        if (typeof body.messageId !== "string" || !Number.isSafeInteger(body.expectedRevision) || (body.sessionId !== undefined && typeof body.sessionId !== "string")) return reply.code(409).send({ error: "Refresh the workspace before saving these requirements.", code: "planning_identity_required" });
+        if (body.checkResultOnly === true) {
+          const receipt = typeof body.sessionId === 'string' ? store.readPlanningMessageReceipt(body.sessionId, body.messageId) : null;
+          const original = receipt ? store.getPlanningSessionById(receipt.sessionId)?.messages.find(item => item.id === receipt.messageId && item.role === 'user') : undefined;
+          const work = receipt ? store.agentWork.findByScope({ kind: 'conversation', sessionId: receipt.sessionId,
+            messageId: receipt.messageId, revision: receipt.savedRevision }) : undefined;
+          if (!receipt || !original || original.text !== turn.message || receipt.expectedRevision !== body.expectedRevision || !work) {
+            throw new AgentWorkError('planning_work_identity_invalid');
+          }
+        }
+        saved = store.savePlanningMessage({ messageId: body.messageId, expectedRevision: body.expectedRevision as number, text: turn.message, ...(typeof body.sessionId === "string" ? { sessionId: body.sessionId } : {}) });
+        const saveReceipt = { sessionId: saved.session.id, messageId: body.messageId, expectedRevision: body.expectedRevision as number, savedRevision: saved.savedRevision };
+        if (dependencies.planningConversation) {
+          return { ...await dependencies.planningConversation.continueSavedMessage(saved, body.messageId, body.checkResultOnly === true), requirementsSaved: true, saveReceipt };
+        }
+        const work = store.agentWork.prepare({ kind: "conversation", sessionId: saved.session.id, messageId: body.messageId, revision: saved.savedRevision }, { sessionId: saved.session.id, messageId: body.messageId, revision: saved.savedRevision });
+        if (work.status === "prepared") store.agentWork.transition(work.workId, "blocked");
         return {
-          reply: result.reply,
-          workspace: updated,
-          planningSession: result.session,
-          planningStatus: result.session.status,
-          generated: false
+          workspace: store.getWorkspace(), planningSession: saved.session, planningStatus: saved.session.status,
+          planningRevision: saved.revision, savedRevision: saved.savedRevision, reused: saved.reused,
+          requirementsSaved: true, saveReceipt, generated: false, blocked: true, code: "public_mah_contract_missing",
+          reply: "Requirements saved. MAH integration is not ready, so Agent processing and plan generation have not started."
         };
       } catch (error) {
-        return reply.code(400).send({ error: error instanceof Error ? error.message : "The planning session could not be updated." });
-      } finally {
-        if (!backgroundQueued) setGeneratingPlan(false);
+        if (saved) {
+          const body = request.body as Record<string, unknown>;
+          if (dependencies.planningConversation && error instanceof MahBusinessContractError) {
+            const work = store.agentWork.findByScope({ kind: 'conversation', sessionId: saved.session.id,
+              messageId: String(body.messageId), revision: saved.savedRevision });
+            const observed = error instanceof MahBusinessTaskReadbackError
+              ? [...error.observations].reverse().find(item => item.taskId === work?.carrierTaskId && item.projectMatched) : undefined;
+            const received = Boolean(observed);
+            const replyText = received
+              ? observed?.status === 'failed'
+                ? 'Requirements saved. MAH received the request, but its task failed before a verified planning result was returned.'
+                : 'Requirements saved. MAH received the request. A verified planning result is not available yet.'
+              : 'Requirements saved. MAH task receipt or its planning result could not be verified. Keep this request to check its status.';
+            return { workspace: store.getWorkspace(), planningSession: store.getPlanningSessionById(saved.session.id),
+              planningStatus: saved.session.status, planningRevision: store.getPlanningRevision(saved.session.id),
+              savedRevision: saved.savedRevision, requirementsSaved: true,
+              saveReceipt: { sessionId: saved.session.id, messageId: body.messageId, expectedRevision: body.expectedRevision, savedRevision: saved.savedRevision },
+              generated: false, blocked: true, processingPending: Boolean(observed && ['active', 'queued', 'running'].includes(observed.status ?? '')),
+              processingCode: error.code,
+              ...(work ? { mahTask: { taskId: work.carrierTaskId, received, status: observed?.status ?? 'unverified' } } : {}),
+              reply: replyText };
+          }
+          return reply.code(503).send({ requirementsSaved: true,
+            saveReceipt: { sessionId: saved.session.id, messageId: body.messageId, expectedRevision: body.expectedRevision, savedRevision: saved.savedRevision },
+            planningRevision: saved.revision, savedRevision: saved.savedRevision, generated: false,
+            code: "planning_processing_unverified", error: "Requirements saved. The subsequent processing status could not be verified." });
+        }
+        return reply.code(error instanceof AgentWorkError ? 409 : 400).send({ error: error instanceof AgentWorkError ? "The planning session changed. Refresh the workspace; your existing requirements are preserved." : "Unable to save these requirements.", code: error instanceof AgentWorkError ? error.code : "planning_save_failed" });
       }
     }
 
@@ -82,68 +136,80 @@ export function registerWebAgentRoutes(server: FastifyInstance, dependencies: {
     let runId: string | undefined;
     try {
       const workspace = store.getWorkspace();
-      if (workspace.profile.status !== "ready") return reply.code(409).send({ error: "Complete the required Profile basics before creating or revising a Plan." });
+      if (workspace.profile.status !== "ready") return reply.code(409).send(planOperationRejection("profile_required"));
       let changeImpact: PlanChangeImpactPreview | undefined;
       let assistedHandoff: DirectBlueprintAssistedReplanningHandoff | undefined;
       if (turn.mode === "revise_plan") {
-        if (turn.expectedPlanId !== workspace.activePlan.id || turn.expectedVersion !== workspace.activePlan.version) return reply.code(409).send({ error: "The Plan changed before this revision could start. Refresh the workspace and review the latest version." });
+        if (turn.expectedPlanId !== workspace.activePlan.id || turn.expectedVersion !== workspace.activePlan.version) return reply.code(409).send(planOperationRejection("version_conflict"));
         if (workspace.activeBlueprint) {
-          if (!turn.assistedReplanning) return reply.code(409).send({
-            error: "This Plan is backed by a Trip Blueprint. Use an assisted itinerary handoff for Blueprint-backed replanning so Landi can preserve version and route boundaries."
-          });
-          try {
-            assistedHandoff = validateAssistedBlueprintHandoff(workspace.activeBlueprint, turn.assistedReplanning, turn.message);
-          } catch (error) {
-            return reply.code(409).send({ error: error instanceof Error ? error.message : "The assisted itinerary handoff no longer matches the current Trip Blueprint." });
+          if (turn.assistedReplanning) {
+            try {
+              assistedHandoff = validateAssistedBlueprintHandoff(workspace.activeBlueprint, turn.assistedReplanning, turn.message);
+            } catch (error) {
+              const failure = planOperationError(error); return reply.code(failure.status).send(failure.body);
+            }
+            changeImpact = blueprintAssistedReplanningImpact(workspace.activePlan.id, workspace.activePlan.version, assistedHandoff);
+          } else {
+            changeImpact = previewPlanChange(workspace.activePlan, turn.message);
+            if (changeImpact.requiresConfirmation && !turn.impactConfirmed) return reply.code(409).send({ code: "high_impact_confirmation_required", error: "This high-impact Plan change needs explicit confirmation before replanning.", impactPreview: changeImpact });
           }
-          changeImpact = blueprintAssistedReplanningImpact(workspace.activePlan.id, workspace.activePlan.version, assistedHandoff);
         } else {
           changeImpact = previewPlanChange(workspace.activePlan, turn.message);
-          if (changeImpact.requiresConfirmation && !turn.impactConfirmed) return reply.code(409).send({ error: "This high-impact Plan change needs explicit confirmation before replanning.", impactPreview: changeImpact });
+          if (changeImpact.requiresConfirmation && !turn.impactConfirmed) return reply.code(409).send({ code: "high_impact_confirmation_required", error: "This high-impact Plan change needs explicit confirmation before replanning.", impactPreview: changeImpact });
         }
       }
+      if (!workspace.activeBlueprint) return reply.code(409).send({ code: "legacy_plan_conversion_required", error: "This saved plan needs a reviewed conversion before AI editing. Its data and current version are preserved." });
       runId = store.startPlanGenerationRun({ runtimeKind: workspace.runtime.selectedKind, trigger: "web" }).id;
-      const runtime = selectedRuntimeAdapter(workspace.runtime.selectedKind);
-      const draft = await runtime.generatePlanDraft({
-        request: assistedHandoff?.request ?? turn.message,
-        ...(turn.mode === "revise_plan" ? {
-          currentPlan: planDraftForRevision(workspace.activePlan),
-          completedTasks: completedTasksForRevision(workspace.activePlan)
-        } : {}),
-        profile: {
-          preferredLanguage: workspace.profile.preferredLanguage,
-          nationality: workspace.profile.nationality,
-          gender: workspace.profile.gender,
-          immigrationStatus: workspace.profile.immigrationStatus
-        }
-      });
-      assertWebAgentPlanUnchanged(workspace.activePlan, store.getWorkspace().activePlan);
-      let updated = turn.mode === "revise_plan"
-        ? store.reviseGeneratedPlan({ draft, runtime: workspace.runtime.selectedKind, expectedPlanId: workspace.activePlan.id, expectedVersion: workspace.activePlan.version, ...(changeImpact ? { changeImpact } : {}) })
-        : store.createGeneratedPlan(draft, workspace.runtime.selectedKind);
-      const evidence = await prepareGeneratedPlanEvidence(updated.activePlan.id);
-      updated = evidence.workspace;
-      store.finishPlanGenerationRun({ runId, status: "succeeded", outputPlanId: updated.activePlan.id });
-      const refinement = planRefinementState(updated.activePlan);
-      return {
-        reply: formatWebAgentPlanReply({ runtimeName: runtimeName(workspace.runtime.selectedKind), mode: turn.mode, plan: updated.activePlan, ...(refinement.followUpQuestion ? { followUpQuestion: refinement.followUpQuestion } : {}) }),
-        workspace: updated,
-        readyForReview: refinement.readyForReview,
-        evidenceStatus: evidence.status,
-        ...(refinement.followUpQuestion ? { followUpQuestion: refinement.followUpQuestion } : {})
-      };
+      if (workspace.activeBlueprint) {
+        const runtime = business;
+        if (!("generateSkillItinerary" in runtime) || typeof runtime.generateSkillItinerary !== "function") throw new Error("Blueprint itinerary editing is unavailable right now. The current plan is unchanged.");
+        const session = store.getPlanningSessionById(workspace.activeBlueprint.proposalRef.sessionId);
+        if (!session) throw new Error("The saved planning details are unavailable. The current plan is unchanged.");
+        let updated = await assistedBlueprintReplan({
+          store, runtime, base: workspace.activeBlueprint, session,
+          request: assistedHandoff?.request ?? turn.message,
+          profile: { assistantPersonality: workspace.profile.assistantPersonality ?? "local_insider", displayName: workspace.profile.displayName, preferredLanguage: "English", nationality: workspace.profile.nationality, gender: workspace.profile.gender, immigrationStatus: workspace.profile.immigrationStatus },
+          expectedPlanId: workspace.activePlan.id, expectedPlanVersion: workspace.activePlan.version,
+          ...(dependencies.itineraryContentReview ? { reviewContent: dependencies.itineraryContentReview } : {}),
+          ...(assistedHandoff ? { handoff: assistedHandoff } : {})
+        });
+        let evidenceStatus: "verified" | "partial" = "partial";
+        try {
+          const evidence = await prepareGeneratedPlanEvidence(updated.activePlan.id);
+          updated = evidence.workspace;
+          evidenceStatus = evidence.status;
+        } catch { /* The saved itinerary remains reviewable when optional source enrichment fails. */ }
+        store.finishPlanGenerationRun({ runId, status: "succeeded", outputPlanId: updated.activePlan.id });
+        return { reply: personalityMessage("The updated itinerary is saved as a draft. Review it before activation.", workspace.profile), workspace: updated, readyForReview: true, evidenceStatus };
+      }
+
     } catch (error) {
       if (runId) store.finishPlanGenerationRun({ runId, status: "failed", failureCode: generation.planGenerationFailureCode(error) });
-      return reply.code(runtimeErrorStatusCode(error)).send({
-        error: error instanceof Error ? error.message : "The Agent could not respond right now."
-      });
+      if (error instanceof AgentExecutionBlocked) return reply.code(503).send({ code: error.code, error: "Travel planning is temporarily unavailable. Your saved trip details and current itinerary are retained." });
+      if (error instanceof RuntimeAdapterError) return reply.code(runtimeErrorStatusCode(error)).send({ code: error.code, error: "Travel planning did not finish. Check the service status before continuing. Your current itinerary is retained." });
+      const failure = planOperationError(error); return reply.code(failure.status).send(failure.body);
     } finally {
       setGeneratingPlan(false);
     }
   });
 
-  server.post<{ Params: { sessionId: string }; Body: { proposalVersion?: number } }>("/api/planning-sessions/:sessionId/confirm", async (request, reply) => {
+  server.post<{ Params: { sessionId: string }; Body: { proposalVersion?: number; expectedRevision?: number } }>("/api/planning-sessions/:sessionId/confirm", async (request, reply) => {
     if (!blueprintGenerationEnabled) return reply.code(503).send({ error: "Blueprint generation is disabled for this local instance. Landi will not fall back to the legacy Plan generator." });
+    if (dependencies.generationAdmission) {
+      const { expectedRevision, proposalVersion } = request.body ?? {};
+      if (!Number.isSafeInteger(expectedRevision) || Number(expectedRevision) < 0 || !Number.isSafeInteger(proposalVersion)
+        || Object.keys(request.body ?? {}).some(key => !['expectedRevision', 'proposalVersion'].includes(key))) {
+        return reply.code(400).send({ code: 'generation_identity_required', error: 'Confirm the current saved proposal and revision.' });
+      }
+      try {
+        await dependencies.generationAdmission.authorize({ sessionId: request.params.sessionId,
+          revision: expectedRevision!, proposalVersion: proposalVersion! });
+      } catch (error) {
+        return reply.code(error instanceof MahCarrierError && error.code === 'generation_identity_changed' ? 409 : 503)
+          .send({ code: error instanceof MahCarrierError ? error.code : 'generation_submission_unverified', error: 'This saved proposal cannot be submitted for generation right now.' });
+      }
+    }
+    if (!dependencies.generationAdmission && !isolatedGeneration && !productionReadiness().generation) return reply.code(503).send({ code: "public_mah_contract_unverified", error: "MAH generation is not ready. Your saved requirements are preserved." });
     const existingJob = generation.jobs.get(request.params.sessionId);
     if (existingJob?.status === "running") {
       return reply.code(202).send({
@@ -170,6 +236,8 @@ export function registerWebAgentRoutes(server: FastifyInstance, dependencies: {
       if (reuse === "reuse") {
         return { reply: "A complete plan already exists for this proposal, so no duplicate was created.", workspace: current, generated: true, reused: true };
       }
+      const missing = [...existing.unresolved.filter((item) => item.status === "open"), ...missingQuestions(existing.facts), ...missingGenerationQuestions(existing.facts, existing.messages)];
+      if (missing.length) return reply.code(409).send({ error: `Before generating the plan, please confirm: ${missing[0]!.question}` });
       const workspace = current;
       if (workspace.profile.status !== "ready") return reply.code(409).send({ error: "Complete the required Profile basics before creating or revising a Plan." });
       const confirmed = store.confirmPlanningSession(request.params.sessionId, proposalVersion);
@@ -177,11 +245,11 @@ export function registerWebAgentRoutes(server: FastifyInstance, dependencies: {
       if (prepared.session.unresolved.length) {
         setGeneratingPlan(true);
         try {
-          const runtime = selectedRuntimeAdapter(workspace.runtime.selectedKind);
+          const runtime = business;
           const agentTurn = await runtime.continuePlanningConversation({
-            message: "The user has just confirmed the plan direction. Continue naturally and ask only for the single most important missing detail. Reply in English only.",
+            message: `The user has just confirmed the plan direction. Continue naturally and ask only for the single most important missing detail. Reply in English.`,
             session: prepared.session,
-            profile: { preferredLanguage: workspace.profile.preferredLanguage, nationality: workspace.profile.nationality, gender: workspace.profile.gender, immigrationStatus: workspace.profile.immigrationStatus }
+            profile: { assistantPersonality: workspace.profile.assistantPersonality ?? "local_insider", displayName: workspace.profile.displayName, preferredLanguage: "English", nationality: workspace.profile.nationality, gender: workspace.profile.gender, immigrationStatus: workspace.profile.immigrationStatus }
           });
           const messages = [...prepared.session.messages];
           const last = messages.at(-1);
@@ -191,6 +259,9 @@ export function registerWebAgentRoutes(server: FastifyInstance, dependencies: {
           // Keep the deterministic question only as an availability fallback.
         }
       }
+      prepared.reply = personalityMessage(prepared.reply, workspace.profile);
+      const lastPreparedReply = prepared.session.messages.at(-1);
+      if (lastPreparedReply?.role === "assistant") lastPreparedReply.text = prepared.reply;
       store.savePlanningSession(prepared.session);
       if (prepared.session.unresolved.length) {
         return {
@@ -206,7 +277,7 @@ export function registerWebAgentRoutes(server: FastifyInstance, dependencies: {
       const job = generation.enqueuePlanningSessionGeneration(prepared.session, workspace);
       backgroundQueued = true;
       return reply.code(202).send({
-        reply: "Got it. I have enough to start building the plan.",
+        reply: personalityMessage("Got it. I have enough to start building the plan.", workspace.profile),
         workspace: store.getWorkspace(),
         planningSession: store.getPlanningSessionById(prepared.session.id),
         planningStatus: "generating",
@@ -238,17 +309,17 @@ function runtimeErrorStatusCode(error: unknown): number {
 
 function validateAssistedBlueprintHandoff(blueprint: TripBlueprint, handoff: DirectBlueprintAssistedReplanningHandoff, message: string): DirectBlueprintAssistedReplanningHandoff {
   if (handoff.baseBlueprintId !== blueprint.id || handoff.baseBlueprintVersion !== blueprint.version) {
-    throw new Error("The Trip Blueprint changed before assisted replanning could start. Refresh the workspace and review the latest version.");
+    throw new WorkspaceMutationError("The Trip Blueprint changed before assisted replanning could start. Refresh the workspace and review the latest version.", "version_conflict");
   }
   const prepared = prepareDirectBlueprintAssistedReplanningHandoff(blueprint, {
     replanRequirement: handoff.replanRequirement,
     revisions: handoff.revisions
   });
   if (prepared.request.trim() !== handoff.request.trim() || prepared.request.trim() !== message.trim()) {
-    throw new Error("The assisted itinerary handoff no longer matches the prepared replanning request.");
+    throw new WorkspaceMutationError("The assisted itinerary handoff no longer matches the prepared replanning request.", "request_identity_conflict");
   }
   if (!sameStringSet(prepared.affectedDayIds, handoff.affectedDayIds) || !sameStringSet(prepared.affectedPlaceIds, handoff.affectedPlaceIds)) {
-    throw new Error("The assisted itinerary handoff no longer matches the affected itinerary scope.");
+    throw new WorkspaceMutationError("The assisted itinerary handoff no longer matches the affected itinerary scope.", "request_identity_conflict");
   }
   return prepared;
 }

@@ -1,7 +1,7 @@
+import { planOperationError, planOperationRouteOptions, planOperationRejection } from "./plan-operation-error.js";
 import type { FastifyInstance } from "fastify";
 import { blueprintPresentation, type Plan, type PlanPresentation, type WorkspaceSnapshot } from "@c-assistant/core";
 import type { SqliteWorkspaceStore } from "@c-assistant/storage";
-import { connectorResponseStatus } from "./connector-bundle.js";
 import { PlanRouteRefreshError, refreshGeneratedPlanRoutes, refreshPlanRouteFacts, type PlanRouteMaps } from "./plan-route-refresh.js";
 
 type PlanPresentationMaps = PlanRouteMaps & {
@@ -14,46 +14,43 @@ export function registerPlanPresentationRoutes(server: FastifyInstance, dependen
 }): void {
   const { store, getMaps } = dependencies;
 
-  server.post<{ Params: { planId: string; segmentId: string }; Body: { expectedVersion?: number; expectedBlueprintVersion?: number } }>("/api/plans/:planId/presentation/routes/:segmentId/refresh", async (request, reply) => {
+  server.post<{ Params: { planId: string; segmentId: string }; Body: { expectedVersion?: number; expectedBlueprintVersion?: number } }>("/api/plans/:planId/presentation/routes/:segmentId/refresh", planOperationRouteOptions, async (request, reply) => {
     const expectedVersion = Number(request.body?.expectedVersion);
-    if (!Number.isInteger(expectedVersion) || expectedVersion <= 0) return reply.code(400).send({ error: "A route refresh needs the current Plan version." });
+    if (!Number.isInteger(expectedVersion) || expectedVersion <= 0) return reply.code(400).send( planOperationRejection("invalid_edit"));
     const expectedBlueprintVersion = routeRefreshExpectedBlueprintVersion(request.body?.expectedBlueprintVersion);
-    if (expectedBlueprintVersion === false) return reply.code(400).send({ error: "A route refresh needs a valid Trip Blueprint version." });
+    if (expectedBlueprintVersion === false) return reply.code(400).send( planOperationRejection("invalid_edit"));
     const workspace = store.getWorkspace();
-    if (workspace.activePlan.id !== request.params.planId || workspace.activePlan.version !== expectedVersion) return reply.code(409).send({ error: "The Plan changed before this route refresh started. Review the latest version and try again." });
-    if (expectedBlueprintVersion !== undefined && workspace.activeBlueprint && workspace.activeBlueprint.version !== expectedBlueprintVersion) return reply.code(409).send({ error: "The Trip Blueprint changed before this route refresh started. Review the latest version and try again." });
+    if (workspace.activePlan.id !== request.params.planId || workspace.activePlan.version !== expectedVersion) return reply.code(409).send( planOperationRejection("version_conflict"));
+    if (expectedBlueprintVersion !== undefined && workspace.activeBlueprint && workspace.activeBlueprint.version !== expectedBlueprintVersion) return reply.code(409).send( planOperationRejection("version_conflict"));
     try {
       const maps = getMaps();
       const facts = await refreshPlanRouteFacts(routeRefreshPlanForWorkspace(workspace), request.params.segmentId, routeRefreshMaps(maps));
       const { segmentId: _segmentId, geometry: _geometry, ...routeFacts } = facts;
       const updated = store.savePlanRouteRefresh({ planId: request.params.planId, segmentId: request.params.segmentId, expectedVersion, ...(expectedBlueprintVersion !== undefined ? { expectedBlueprintVersion } : {}), provider: "google_maps", ...routeFacts });
       return { workspace: updated, segment: updated.activePlan.presentation?.routeSegments.find((segment) => segment.id === request.params.segmentId) };
-    } catch (error) {
-      if (!(error instanceof PlanRouteRefreshError)) return reply.code(409).send({ error: error instanceof Error ? error.message : "The route refresh could not be saved." });
-      return reply.code(routeRefreshStatus(error)).send({ error: error.message, code: error.code });
-    }
+    } catch (error) { const failure = planOperationError(error); return reply.code(failure.status).send(failure.body); }
   });
 
-  server.post<{ Params: { planId: string }; Body: { expectedVersion?: number; expectedBlueprintVersion?: number; segmentIds?: unknown } }>("/api/plans/:planId/presentation/routes/refresh", async (request, reply) => {
+  server.post<{ Params: { planId: string }; Body: { expectedVersion?: number; expectedBlueprintVersion?: number; segmentIds?: unknown } }>("/api/plans/:planId/presentation/routes/refresh", planOperationRouteOptions, async (request, reply) => {
     const expectedVersion = Number(request.body?.expectedVersion);
     const expectedBlueprintVersion = routeRefreshExpectedBlueprintVersion(request.body?.expectedBlueprintVersion);
     const segmentIds = routeRefreshSegmentIds(request.body?.segmentIds);
-    if (!Number.isInteger(expectedVersion) || expectedVersion <= 0) return reply.code(400).send({ error: "A route refresh needs the current Plan version." });
-    if (expectedBlueprintVersion === false) return reply.code(400).send({ error: "A route refresh needs a valid Trip Blueprint version." });
-    if (!segmentIds.length) return reply.code(400).send({ error: "Choose at least one route leg to refresh." });
-    if (segmentIds.length > 36) return reply.code(400).send({ error: "Refresh 36 route legs or fewer at once." });
+    if (!Number.isInteger(expectedVersion) || expectedVersion <= 0) return reply.code(400).send( planOperationRejection("invalid_edit"));
+    if (expectedBlueprintVersion === false) return reply.code(400).send( planOperationRejection("invalid_edit"));
+    if (!segmentIds.length) return reply.code(400).send( planOperationRejection("empty_route_selection"));
+    if (segmentIds.length > 36) return reply.code(400).send( planOperationRejection("too_many_route_legs"));
     const workspace = store.getWorkspace();
-    if (workspace.activePlan.id !== request.params.planId || workspace.activePlan.version !== expectedVersion) return reply.code(409).send({ error: "The Plan changed before this route refresh started. Review the latest version and try again." });
-    if (expectedBlueprintVersion !== undefined && workspace.activeBlueprint && workspace.activeBlueprint.version !== expectedBlueprintVersion) return reply.code(409).send({ error: "The Trip Blueprint changed before this route refresh started. Review the latest version and try again." });
+    if (workspace.activePlan.id !== request.params.planId || workspace.activePlan.version !== expectedVersion) return reply.code(409).send( planOperationRejection("version_conflict"));
+    if (expectedBlueprintVersion !== undefined && workspace.activeBlueprint && workspace.activeBlueprint.version !== expectedBlueprintVersion) return reply.code(409).send( planOperationRejection("version_conflict"));
     try {
       const plan = routeRefreshPlanForWorkspace(workspace);
       const validationError = batchRouteRefreshValidationError(plan, segmentIds);
-      if (validationError) return reply.code(routeRefreshStatus(validationError)).send({ error: validationError.message, code: validationError.code });
+      if (validationError) { const failure = planOperationError(validationError); return reply.code(failure.status).send(failure.body); }
       const refreshed = await refreshGeneratedPlanRoutes(plan, routeRefreshMaps(getMaps()), { segmentIds });
       const refreshedIds = new Set(refreshed.refreshed.map((route) => route.segmentId));
       const failedSegmentIds = [...new Set([...refreshed.failedSegmentIds, ...segmentIds.filter((segmentId) => !refreshedIds.has(segmentId))])];
       if (failedSegmentIds.length && !refreshed.refreshed.length) {
-        return reply.code(424).send({ error: "Some route legs could not be refreshed. The itinerary was not changed.", failedSegmentIds });
+        return reply.code(424).send( { ...planOperationRejection("route_refresh_unavailable"), failedSegmentIds });
       }
       const saved = store.saveGeneratedPlanRouteRefresh({ planId: request.params.planId, expectedVersion, ...(expectedBlueprintVersion !== undefined ? { expectedBlueprintVersion } : {}), provider: "google_maps", routes: refreshed.refreshed });
       return {
@@ -65,15 +62,12 @@ export function registerPlanPresentationRoutes(server: FastifyInstance, dependen
           ...(failedSegmentIds.length ? { failedSegmentIds } : {})
         }
       };
-    } catch (error) {
-      if (!(error instanceof PlanRouteRefreshError)) return reply.code(409).send({ error: error instanceof Error ? error.message : "The route refresh could not be saved." });
-      return reply.code(routeRefreshStatus(error)).send({ error: error.message, code: error.code });
-    }
+    } catch (error) { const failure = planOperationError(error); return reply.code(failure.status).send(failure.body); }
   });
 
-  server.patch<{ Params: { planId: string }; Body: { expectedVersion?: number; assignments?: Record<string, string>; priorities?: Record<string, string>; orders?: Record<string, string[]> } }>("/api/plans/:planId/presentation", async (request, reply) => {
+  server.patch<{ Params: { planId: string }; Body: { expectedVersion?: number; assignments?: Record<string, string>; priorities?: Record<string, string>; orders?: Record<string, string[]> } }>("/api/plans/:planId/presentation", planOperationRouteOptions, async (request, reply) => {
     const expectedVersion = Number(request.body?.expectedVersion);
-    if (!Number.isInteger(expectedVersion) || expectedVersion <= 0 || !request.body?.assignments || !request.body?.priorities || !request.body?.orders) return reply.code(400).send({ error: "Itinerary edits need the current Plan version and complete map state." });
+    if (!Number.isInteger(expectedVersion) || expectedVersion <= 0 || !request.body?.assignments || !request.body?.priorities || !request.body?.orders) return reply.code(400).send( planOperationRejection("invalid_edit"));
     const before = store.getWorkspace().activePlan;
     const affectedDayIds = before.id === request.params.planId && before.version === expectedVersion && before.presentation?.kind === "itinerary"
       ? itineraryEditAffectedDayIds(before.presentation, request.body.assignments, request.body.orders)
@@ -92,9 +86,7 @@ export function registerPlanPresentationRoutes(server: FastifyInstance, dependen
         server.log.warn({ error, planId: plan.id }, "Edited itinerary routes could not be refreshed automatically");
         return saved;
       }
-    } catch (error) {
-      return reply.code(409).send({ error: error instanceof Error ? error.message : "The itinerary edits could not be saved." });
-    }
+    } catch (error) { const failure = planOperationError(error); return reply.code(failure.status).send(failure.body); }
   });
 }
 
@@ -136,13 +128,6 @@ function batchRouteRefreshValidationError(plan: Plan, segmentIds: string[]): Pla
     if (!placeIds.has(segment.originPlaceId) || !placeIds.has(segment.destinationPlaceId)) return new PlanRouteRefreshError("missing_place", "The route references a place that is no longer in this Plan.");
   }
   return undefined;
-}
-
-function routeRefreshStatus(error: PlanRouteRefreshError): number {
-  if (error.connectorStatus) return connectorResponseStatus(error.connectorStatus);
-  if (error.code === "unsupported_mode") return 422;
-  if (error.code === "missing_segment") return 404;
-  return 400;
 }
 
 function itineraryEditAffectedDayIds(presentation: PlanPresentation, assignments: Record<string, string>, orders: Record<string, string[]>): Set<string> {

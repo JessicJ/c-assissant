@@ -9,7 +9,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/index.test.ts"
+    "test": "tsx --test src/index.test.ts src/assistant-personality.test.ts src/generation-carrier-store.test.ts src/booking-source-ancestry.test.ts src/guarded-schema.test.ts src/travel-adjustment.test.ts"
   },
   "dependencies": {
     "@c-assistant/core": "workspace:*"
@@ -17,5 +17,15 @@
   "devDependencies": {
     "@types/node": "^22.10.2",
     "tsx": "^4.19.2"
+  },
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./readonly-planning-store": {
+      "types": "./lib/readonly-planning-store.d.ts",
+      "default": "./lib/readonly-planning-store.js"
+    }
   }
 }

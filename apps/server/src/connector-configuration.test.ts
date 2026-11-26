@@ -8,31 +8,29 @@ import { saveLocalConfiguration } from "./connector-configuration.js";
 test("local configuration save updates existing keys and appends new sanitized values", () => {
   const envPath = join(mkdtempSync(join(tmpdir(), "landi-config-")), ".env");
   const previousMapsKey = process.env.GOOGLE_MAPS_API_KEY;
-  const previousWhatsappUser = process.env.WHATSAPP_ALLOWED_USER_NUMBER;
+  const previousUber = process.env.UBER_CLIENT_ID;
   try {
     saveLocalConfiguration(envPath, { googleMapsApiKey: "old-key" });
     saveLocalConfiguration(envPath, {
       googleMapsApiKey: "new-key",
-      whatsappAllowedUserNumber: "+1 (415) 555-2671",
-      telegramBotToken: "token\nignored"
+      uberClientId: "public-id\ntrimmed"
     });
 
     const content = readFileSync(envPath, "utf8");
     assert.match(content, /^GOOGLE_MAPS_API_KEY=new-key$/m);
-    assert.match(content, /^WHATSAPP_ALLOWED_USER_NUMBER=14155552671$/m);
-    assert.match(content, /^TELEGRAM_BOT_TOKEN=tokenignored$/m);
+    assert.match(content, /^UBER_CLIENT_ID=public-idtrimmed$/m);
     assert.equal(process.env.GOOGLE_MAPS_API_KEY, "new-key");
-    assert.equal(process.env.WHATSAPP_ALLOWED_USER_NUMBER, "14155552671");
+
   } finally {
     restoreEnv("GOOGLE_MAPS_API_KEY", previousMapsKey);
-    restoreEnv("WHATSAPP_ALLOWED_USER_NUMBER", previousWhatsappUser);
+    restoreEnv("UBER_CLIENT_ID", previousUber);
   }
 });
 
-test("local configuration save rejects invalid WhatsApp user numbers", () => {
+test("retired chat configuration is rejected before any settings are saved", () => {
   const envPath = join(mkdtempSync(join(tmpdir(), "landi-config-")), ".env");
 
-  assert.throws(() => saveLocalConfiguration(envPath, { whatsappAllowedUserNumber: "not-a-number" }), /valid international country code/);
+  assert.throws(() => saveLocalConfiguration(envPath, { googleMapsApiKey: "must-not-save", ...({ whatsappAllowedUserNumber: "old-binding" } as object) }), /Chat channels are retired/);
 });
 
 function restoreEnv(key: string, value: string | undefined): void {

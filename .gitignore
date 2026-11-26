@@ -13,9 +13,24 @@ test-results/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+!tests/browser/fixtures/empty-source-snapshot.sqlite
+!tests/browser/fixtures/missing-source-snapshot.sqlite
 data/
+# Public official-source registries are package inputs, not runtime data.
+!packages/travel-support/data/
+packages/travel-support/data/*
+!packages/travel-support/data/china/
+!packages/travel-support/data/japan/
+packages/travel-support/data/china/*
+packages/travel-support/data/japan/*
+!packages/travel-support/data/china/official-source-registry.json
+!packages/travel-support/data/japan/official-source-registry.json
 runtime/
 secrets/
 .pnpm-store/
 output/
 apps/server/output/
+
+# Python development bytecode is local runtime output.
+__pycache__/
+*.py[cod]

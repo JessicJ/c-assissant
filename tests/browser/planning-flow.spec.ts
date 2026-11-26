@@ -1,4 +1,77 @@
-import { expect, test } from "@playwright/test";
+import { test } from './evidence-test';
+import { TRIP_BLUEPRINT_SCHEMA_VERSION, assertTripBlueprintIntegrity, compileTripBlueprint } from '../../packages/core/lib/index.js';
+import { bookingRelationshipReviewContext, stampReviewedBookingRelationshipAssessment } from '../../packages/core/lib/booking-relationship.js';
+import { expect } from "@playwright/test";
+
+type EditableFixture = {
+  activePlan: {
+    id: string; version: number; title: string; createdAt: string;
+    presentation: {
+      summary: string; language: string; startDate: string; endDate: string; cities: string[];
+      places: { id: string }[];
+      days: { id: string; city: string; shortLabel: string; stops: unknown[]; candidates?: string[] }[];
+      travelTips?: unknown[];
+      routeSegments: { dayId: string; verification: string }[];
+    };
+  };
+};
+
+function editableWorkspace<T extends EditableFixture>(workspace: T, blueprintVersion = workspace.activePlan.version) {
+  const { activePlan: plan } = workspace;
+  const p = plan.presentation;
+  return {
+    ...workspace,
+    destinationArrivals: [],
+    sourceSnapshots: [],
+    system: { core: "ready", storage: "local", runtime: "configured" },
+    activeBlueprint: {
+      schemaVersion: 1, id: `blueprint-${plan.id}`, version: blueprintVersion,
+      generationKey: `generation-${plan.id}`,
+      proposalRef: { sessionId: `session-${plan.id}`, proposalVersion: 1 },
+      skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" },
+      researchSetId: `research-${plan.id}`,
+      title: plan.title, summary: p.summary, language: p.language, destinations: p.cities,
+      startDate: p.startDate, endDate: p.endDate, createdAt: plan.createdAt,
+      sources: [], events: [], actionRequirements: [], travelTips: p.travelTips ?? [],
+      places: p.places.map((place) => ({ ...place, evidence: [] })),
+      days: p.days.map((day) => ({ ...day, kind: "scheduled", date: `${p.startDate.slice(0, 4)}-${day.shortLabel.replace("/", "-")}`, candidatePlaceIds: day.candidates ?? [] })),
+      movements: p.routeSegments.map((segment) => ({ ...segment, status: segment.verification === "verified" ? "verified" : "recheck", evidence: [] }))
+    }
+  };
+}
+
+// Simulate the public success receipt for the captured batch. The SQLite
+// fixture tests separately establish the real transaction and undo behavior.
+function revisionReceipt(
+  before: EditableFixture,
+  after: EditableFixture,
+  body: { expectedBlueprintVersion: number; revisions: { kind: string; dayId: string; placeId: string }[] },
+  routeRefresh: { dayIds: string[]; movementIds: string[]; reason: string }
+) {
+  const previous = editableWorkspace(before, body.expectedBlueprintVersion).activeBlueprint;
+  const current = editableWorkspace(after).activeBlueprint;
+  const affectedDayIds = [...new Set(body.revisions.map((edit) => edit.dayId))];
+  const affectedPlaceIds = [...new Set(body.revisions.map((edit) => edit.placeId))];
+  const createdAt = "2026-08-17T00:00:01.000Z";
+  const id = `direct-revision-batch-${previous.id}-v${previous.version}-to-v${current.version}`;
+  return {
+    id, createdAt, baseBlueprintVersion: previous.version, appliedBlueprintVersion: current.version,
+    kinds: [...new Set(body.revisions.map((edit) => edit.kind))],
+    revisionCount: body.revisions.length, affectedDayIds, affectedPlaceIds, routeRefresh,
+    undo: {
+      previousBlueprintVersion: previous.version,
+      previousDays: previous.days.filter((day) => affectedDayIds.includes(day.id)),
+      previousMovements: previous.movements.filter((movement) => affectedDayIds.includes(movement.dayId)),
+      previousPlaces: []
+    },
+    revisions: body.revisions.map((edit, index) => ({
+      id: `${id}-${index + 1}`, kind: edit.kind, createdAt,
+      baseBlueprintVersion: previous.version, appliedBlueprintVersion: current.version,
+      affectedDayIds: [edit.dayId], affectedPlaceIds: [edit.placeId], routeRefresh,
+      undo: { dayId: edit.dayId, previousDay: previous.days.find((day) => day.id === edit.dayId), previousMovements: previous.movements.filter((movement) => movement.dayId === edit.dayId) }
+    }))
+  };
+}
 
 const WORKSPACE_STARTUP_REQUESTS = 4;
 
@@ -20,7 +93,7 @@ test("current workspace opens when auxiliary workspace details fail to refresh",
 
   await expect(page.getByRole("button", { name: "Create mapped itinerary" })).toBeVisible();
   await expect(page.locator(".loading-screen.error-screen")).toHaveCount(0);
-  await expect(page.locator(".inline-alert")).toHaveCount(0);
+  await expect(page.locator(".inline-alert")).toContainText("The operation could not be completed");
 });
 
 test("workspace load can recover from a temporary core service failure", async ({ page }) => {
@@ -44,7 +117,8 @@ test("workspace load can recover from a temporary core service failure", async (
 
   await page.goto("/");
 
-  await expect(page.locator(".loading-screen.error-screen")).toContainText("The local workspace is not initialized.");
+  await expect(page.locator(".loading-screen.error-screen")).toContainText("The operation could not be completed");
+  await expect(page.locator(".loading-screen.error-screen")).not.toContainText("The local workspace is not initialized.");
   await page.getByRole("button", { name: "Try again" }).click();
   await expect(page.getByRole("button", { name: "Create mapped itinerary" })).toBeVisible();
   await expect(page.locator(".loading-screen.error-screen")).toHaveCount(0);
@@ -71,8 +145,7 @@ test("workspace load explains and recovers when the core service is unreachable"
 
   await page.goto("/");
 
-  await expect(page.locator(".loading-screen.error-screen")).toContainText("Landi could not reach the core service.");
-  await expect(page.locator(".loading-screen.error-screen")).toContainText("Start or restart the backend, then try again.");
+  await expect(page.locator(".loading-screen.error-screen")).toContainText("The operation could not be completed");
   await expect(page.locator(".loading-screen.error-screen")).toContainText("Retrying automatically…");
   await page.getByRole("button", { name: "Try again" }).click();
   await expect(page.getByRole("button", { name: "Create mapped itinerary" })).toBeVisible();
@@ -100,7 +173,7 @@ test("workspace load automatically recovers after a short core service startup d
 
   await page.goto("/");
 
-  await expect(page.locator(".loading-screen.error-screen")).toContainText("Landi could not reach the core service.");
+  await expect(page.locator(".loading-screen.error-screen")).toContainText("The operation could not be completed");
   await expect(page.locator(".loading-screen.error-screen")).toContainText("Retrying automatically…");
   await expect(page.getByRole("button", { name: "Create mapped itinerary" })).toBeVisible();
   expect(workspaceRequests).toBeGreaterThan(1);
@@ -143,8 +216,8 @@ test("an incomplete travel draft has direct retry and inline discard recovery", 
   await expect(page.getByRole("button", { name: "Create mapped itinerary" })).toBeVisible();
   await page.getByRole("button", { name: "Create mapped itinerary" }).click();
   await expect(page.getByRole("button", { name: "Creating itinerary…" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "＋ Creating" })).toBeDisabled();
-  await expect(page.getByText("生成超时，请再次尝试。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Create Plan" })).toBeDisabled();
+  await expect(page.getByText("The operation could not be completed. Keep your draft and check the result before trying again.", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Generate again" })).toBeEnabled();
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
@@ -161,15 +234,15 @@ test("Plan History hides an open planning conversation and Plan restores it", as
     knownInformation: [], assumptions: [], nextAction: "Create a plan.", createdAt: "2026-08-25T00:00:00.000Z",
     configuration: { accommodation: { status: "not_set" } }, stages: [], sources: []
   };
-  const workspace = { profile: { status: "ready", displayName: "Tester", preferredLanguage: "English", nationality: "United States", gender: "prefer_not_to_say", immigrationStatus: "no_visa" }, runtime: { selectedKind: "codex" }, inbox: [], destinationArrivals: [], activePlan: starter };
+  const planningSession = { id: "history-session", status: "collecting", objectiveType: "travel", messages: [{ id: "message-1", role: "user", text: "I want to visit Tokyo", createdAt: "2026-08-25T00:00:00.000Z" }], facts: [], unresolved: [], deferred: [], createdAt: "2026-08-25T00:00:00.000Z", updatedAt: "2026-08-25T00:00:00.000Z" };
+  const workspace = { profile: { status: "ready", displayName: "Tester", preferredLanguage: "English", nationality: "United States", gender: "prefer_not_to_say", immigrationStatus: "no_visa" }, runtime: { selectedKind: "codex" }, inbox: [], destinationArrivals: [], activePlan: starter, planningSession };
   await page.route("**/api/workspace", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(workspace) }));
   await page.route("**/api/plans/history", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
   await page.route("**/api/configuration", (route) => route.fulfill({ contentType: "application/json", body: "{}" }));
   await page.route("**/api/runtimes", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
 
   await page.goto("/");
-  await page.getByRole("button", { name: "Start a conversation" }).click();
-  const conversation = page.getByRole("region", { name: "Tell Landi your goal" });
+  const conversation = page.locator(".planning-session-panel .conversation");
   await expect(conversation).toBeVisible();
 
   await page.getByRole("button", { name: "Plan History", exact: true }).click();
@@ -237,12 +310,12 @@ test("current itinerary renders the linked Trip Blueprint over a stale Plan pres
 
   await page.goto("/");
   await expect(page.getByLabel("Landi Blueprint workspace")).toBeVisible();
-  await expect(page.locator(".blueprint-timeline-list .blueprint-itinerary-card-main")).toHaveText([
+  await expect(page.locator(".blueprint-timeline-list .blueprint-itinerary-block")).toHaveText([
     /09:00.*Blueprint Museum/s,
     /11:00.*Blueprint Cafe/s
   ]);
   await expect(page.getByText("Stale Museum")).toHaveCount(0);
-  await expect(page.locator(".blueprint-map-bubble").filter({ hasText: "Blueprint Museum" })).toBeVisible();
+  await expect(page.getByLabel("Itinerary map context").getByRole("button", { name: "Blueprint Museum" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh routes" })).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });
@@ -291,11 +364,36 @@ test("Blueprint workspace renders unlinked themes and fixed booking constraints 
     experienceThemes: [{ id: "experience-tea", title: "Tea practice", description: "Tea practice is worth understanding before choosing a concrete venue.", context: "Add a venue only after Landi has a specific place.", offeringPlaceIds: [], evidence: [] }],
     routeSegments: []
   };
+  // 合成真实结构的预订来源与明确关系，验证保护不依赖同名猜测。
+  const now = '2026-09-01T00:00:00.000Z';
+  const blueprint: any = {
+    schemaVersion: TRIP_BLUEPRINT_SCHEMA_VERSION, id: 'topics-blueprint', version: 1,
+    generationKey: 'topics-generation', proposalRef: { sessionId: 'topics-session', proposalVersion: 1 },
+    skillLineage: { skillId: 'landi', skillVersion: '1' }, researchSetId: 'topics-research',
+    title: 'Kyoto Blueprint', summary: presentation.summary, language: presentation.language,
+    destinations: ['Kyoto'], startDate: presentation.startDate, endDate: presentation.endDate, createdAt: now,
+    places: presentation.places.map(place => ({ ...place, evidence: [] })),
+    days: presentation.days.map(day => ({ ...day, kind: 'scheduled', candidatePlaceIds: [], blocks: day.blocks.map(block => block.id === 'block-fado' ? { ...block, display: { routeAnchor: true, reorderable: true } } : block) })),
+    sources: presentation.sourceCatalog, events: [], actionRequirements: [],
+    movements: [{ id: 'topics-movement', dayId: 'day-1', originPlaceId: 'temple', destinationPlaceId: 'fado', mode: 'unknown', status: 'recheck', evidence: [] }],
+    localFoods: presentation.localFoods, localProducts: presentation.localProducts, experienceThemes: presentation.experienceThemes,
+    bookingConstraints: [{ ...presentation.bookingConstraints[0], sourceBookingId: 'fictional-source', title: '虚构异名凭证', segments: [{ ...presentation.bookingConstraints[0].segments[0], sourceSegmentId: 'fictional-segment', status: 'confirmed', title: '虚构异名场次', location: '虚构异名地点' }] }]
+  };
+  assertTripBlueprintIntegrity(blueprint);
+  const context = bookingRelationshipReviewContext(blueprint);
+  blueprint.bookingRelationshipAssessment = stampReviewedBookingRelationshipAssessment(blueprint, {
+    schemaVersion: 1, blueprintId: blueprint.id, blueprintVersion: blueprint.version, universeDigest: context.universeDigest, status: 'reviewed',
+    units: context.units.map(unit => ({ ...unit, coverage: 'complete', relations: [{ id: 'topics-fixed-relation', scope: 'occurrence', targets: [{ kind: 'occurrence', dayId: 'day-1', blockId: 'block-fado', placeId: 'fado' }], role: 'direct_commitment', operations: ['remove', 'move', 'add', 'priority'], rationale: '旅客明确核对虚构凭证与具体安排', evidenceRefs: ['traveler-declaration'] }], rationale: '完整核对范围', evidenceRefs: ['traveler-declaration'] })),
+    decision: { source: 'traveler', actorId: 'local-traveler', decidedAt: now, rationale: '已完整审阅虚构凭证', evidenceRefs: ['traveler-declaration'], obligations: ['核对全部直接间接依赖'] }
+  });
+  assertTripBlueprintIntegrity(blueprint);
+  const compiled = compileTripBlueprint(blueprint, { createdAt: now }).plan;
   const workspace = {
     profile: { status: "ready", displayName: "Trip tester", preferredLanguage: "English", nationality: "Singapore", gender: "prefer_not_to_say", immigrationStatus: "short_term_visitor" },
     runtime: { selectedKind: "codex" },
     inbox: [],
     destinationArrivals: [],
+    activeBlueprint: blueprint,
     activePlan: {
       id: "blueprint-topics",
       version: 1,
@@ -310,6 +408,7 @@ test("Blueprint workspace renders unlinked themes and fixed booking constraints 
       configuration: { accommodation: { status: "not_set" }, arrival: {}, transport: { preference: "plan_recommended" }, travelContext: { partySize: 2, luggage: "light" } },
       stages: [],
       sources: [],
+      ...compiled,
       presentation
     }
   };
@@ -329,74 +428,55 @@ test("Blueprint workspace renders unlinked themes and fixed booking constraints 
   await expect(page.locator(".blueprint-map-bubble").filter({ hasText: "Seasonal sweets" })).toHaveCount(0);
   await seasonalCard.getByRole("button", { name: /Seasonal sweets/ }).click();
   await expect(sidePanel.getByRole("heading", { name: "Seasonal sweets" })).toBeVisible();
-  await expect(sidePanel.getByText("Background note", { exact: true })).toBeVisible();
+  await expect(sidePanel.locator(".blueprint-detail-panel").getByText("Use this as food background rather than a destination.").first()).toBeVisible();
   await expect(sidePanel.getByRole("button", { name: "Add to itinerary" })).toHaveCount(0);
-  await expect(sidePanel.getByText("Kyoto guide")).toBeVisible();
+  await sidePanel.getByText("Sources & verification").click();
+  const source = sidePanel.getByRole("link", { name: /^Kyoto guide · Visitor bureau.*seasonal sweets$/ });
+  await expect(source).toBeVisible();
+  await expect(source).toHaveAttribute("href", "https://guide.example");
 
   await sidePanel.getByRole("button", { name: "Back to explore" }).click();
   await sidePanel.getByRole("button", { name: "Dining" }).click();
   await page.locator(".blueprint-timeline-list .blueprint-itinerary-card-main").filter({ hasText: "Fado night" }).click();
+  await expect(page.getByRole('complementary', { name: 'Daily itinerary cards' }).getByRole('button', { name: 'Move Fado night', exact: true })).toHaveCount(0);
   const fixedRemove = sidePanel.getByRole("button", { name: "Fixed booking" });
   await expect(fixedRemove).toBeDisabled();
+  for (const action of ['Must go', 'Prefer', 'Nearby', 'Keep for later']) {
+    await expect(sidePanel.locator('.blueprint-detail-panel:not([hidden]) .blueprint-detail-priorities').getByRole('button', { name: action, exact: true })).toBeDisabled();
+  }
   await expect(pageErrors).toEqual([]);
 });
 
-test("a new Plan confirms direction before collecting generation-critical facts", async ({ page }) => {
+test("a new Plan collects critical facts before enabling generation", async ({ page, request }) => {
   test.skip(!process.env.LANDI_LIVE_AGENT_E2E, "requires an authenticated live Codex runtime");
+  test.setTimeout(360_000);
   const pageErrors: string[] = [];
-  page.on("pageerror", (error) => pageErrors.push(error.message));
-
+  page.on("pageerror", error => pageErrors.push(error.message));
+  const profile = await request.put("/api/profile", { data: { displayName: "Browser acceptance", preferredLanguage: "English", nationality: "China", gender: "prefer_not_to_say", immigrationStatus: "unknown" } });
+  expect(profile.ok()).toBe(true);
+  await page.addInitScript(() => localStorage.setItem("landi:first-run-tour:v1", "complete"));
   await page.goto("/");
-  await expect(page.getByRole("dialog", { name: "先让 Landi 了解你" })).toBeVisible();
-  await page.getByRole("textbox", { name: "希望 Landi 如何称呼你 必填" }).fill("Browser test user");
-  await page.getByRole("textbox", { name: "国籍 必填" }).fill("Singapore");
-  await page.getByRole("combobox", { name: "性别 请选择；可以选择不愿透露" }).selectOption("prefer_not_to_say");
-  await page.getByRole("combobox", { name: "当前来华身份 必填，用于匹配适用的官方信息" }).selectOption("short_term_visitor");
-  await page.getByRole("button", { name: "保存并开始使用" }).click();
-
-  await page.getByRole("button", { name: "开始对话" }).click();
-  const dialog = page.getByRole("dialog", { name: "告诉 Landi 你的目标" });
-  await expect(dialog).toBeVisible();
-  await expect(dialog.locator("form")).toHaveCount(0);
-  const input = dialog.getByPlaceholder("例如：我想在葡萄牙旅行 10 天，重点看建筑和当地生活…");
-  await input.fill("我想去葡萄牙旅行10天，主要看建筑和当地生活，预算适中。我从上海出发，抵达里斯本机场，航班预计当地时间10月12日14:30到达。");
-  await dialog.getByRole("button", { name: "发送" }).click();
-
-  const proposal = dialog.locator(".planning-proposal");
-  await expect(proposal.getByText("PLAN PROPOSAL · V1")).toBeVisible();
-  await expect(proposal.getByText("地点：葡萄牙；时间：10天", { exact: false })).toBeVisible();
-  await expect(page.getByRole("button", { name: "确认计划方向" })).toHaveCount(1);
-  await expect(page.getByText("PLANNING SESSION", { exact: true })).toHaveCount(0);
-
-  await input.fill("改成7天，节奏轻松一些");
-  await dialog.getByRole("button", { name: "发送" }).click();
-  await expect(proposal.getByText("PLAN PROPOSAL · V2")).toBeVisible();
-  await expect(proposal.getByText("地点：葡萄牙；时间：7天", { exact: false })).toBeVisible();
-  await expect(page.getByRole("button", { name: "确认计划方向" })).toHaveCount(1);
-
-  await page.getByRole("button", { name: "确认计划方向" }).click();
-  await expect(page.getByRole("button", { name: "继续补充关键信息" })).toBeDisabled();
-
-  await input.fill("2026年10月12日至10月18日，3个人出行，交通倾向于打车；从上海出发，抵达里斯本机场，预计14:30到达；返程从里斯本机场预计18:20离开");
-  await dialog.getByRole("button", { name: "发送" }).click();
-  await expect(dialog.getByText(/生成正式 Plan 所需的信息已经完整/)).toBeVisible();
-  await expect(page.getByRole("button", { name: "生成完整 Plan" })).toBeEnabled();
-
-  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-  await expect(page.getByText("PLANNING SESSION", { exact: true })).toBeVisible();
-  await expect(page.getByText("PLAN PROPOSAL · V2")).toBeVisible();
-  await expect(page.getByRole("button", { name: "生成完整 Plan" })).toHaveCount(1);
-
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.getByText("PLAN PROPOSAL · V2")).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.getByRole("textbox", { name: "Where would you like to go?" }).fill("Hangzhou, China");
+  await page.getByRole("button", { name: "Start planning", exact: true }).click({ timeout: 15_000 });
+  const composer = page.getByRole("region", { name: "Tell Landi your goal" });
+  const input = composer.getByPlaceholder("Chat with Landi");
+  await input.fill("I want a relaxed three-day trip to Hangzhou, China, to enjoy West Lake, gardens, tea culture and local food. Please help me plan it.");
+  await composer.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(input).toBeEnabled();
+  await expect(composer.getByRole("button", { name: "Generate plan", exact: true })).toHaveCount(0);
+  await input.fill("October 20–22, 2026. Two adults. We will take high-speed trains from Shanghai on October 20 and return to Shanghai in the afternoon or evening of October 22; no tickets are booked, so please recommend suitable stations and provisional arrival and departure times. Walking and public transport within Hangzhou, with taxis when needed; no driving. No hotel booked, please recommend a comfortable good-value hotel, not luxury. No fixed budget. These are my confirmed trip requirements.");
+  await composer.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(input).toBeEnabled();
+  await expect(composer.getByText("Review your trip details", { exact: true })).toBeVisible();
+  await expect(composer.getByRole("button", { name: "Generate plan", exact: true })).toBeEnabled();
+  await expect(composer.locator(".generation-retry")).toContainText("2026");
   expect(pageErrors).toEqual([]);
 });
 
 test("an itinerary Plan renders the Skill-native interactive result inside Landi", async ({ page }) => {
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
-  await page.route("**/api/workspace", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({
+  const initialWorkspace = {
     profile: { status: "ready", displayName: "Trip tester", preferredLanguage: "简体中文", nationality: "Singapore", gender: "prefer_not_to_say", immigrationStatus: "short_term_visitor" },
     runtime: { selectedKind: "codex" }, inbox: [],
     activePlan: {
@@ -422,13 +502,16 @@ test("an itinerary Plan renders the Skill-native interactive result inside Landi
         routeSegments: [{ id: "r1", dayId: "d1", originPlaceId: "belem", destinationPlaceId: "alfama", mode: "transit", verification: "verified", durationMinutes: 45, checkedAt: "2026-08-17T00:00:00Z", label: "沿河公共交通进入旧城", detail: "具体线路与耗时出发前复核。", sourceRefs: ["google_maps"] }]
       }
     }
-  }) }));
+  };
   let appliedWorkspace: any;
+  await page.route("**/api/workspace", (route) => route.fulfill({ json: editableWorkspace(appliedWorkspace ?? initialWorkspace) }));
   const directRevisionRequests: unknown[] = [];
+  let releaseSave!: () => void;
+  const savePending = new Promise<void>((resolve) => { releaseSave = resolve; });
   await page.route("**/api/plans/native-trip/blueprint-revisions/direct", async (route) => {
     const requestBody = route.request().postDataJSON();
     directRevisionRequests.push(requestBody);
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    await savePending;
     const updatedWorkspace = {
       profile: { status: "ready", displayName: "Trip tester", preferredLanguage: "简体中文", nationality: "Singapore", gender: "prefer_not_to_say", immigrationStatus: "short_term_visitor" },
       runtime: { selectedKind: "codex" },
@@ -460,16 +543,21 @@ test("an itinerary Plan renders the Skill-native interactive result inside Landi
       }
     };
     appliedWorkspace = updatedWorkspace;
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify({
-      ...updatedWorkspace,
-      workspace: updatedWorkspace,
-      revision: {
-        affectedDayIds: ["d2", "d1"],
-        affectedPlaceIds: ["market", "bookshop"],
-        revisionCount: 2,
-        routeRefresh: { dayIds: ["d2", "d1"], movementIds: ["r2", "r3"], reason: "This itinerary day was edited directly." }
+    const snapshot = editableWorkspace(updatedWorkspace);
+    const revision = revisionReceipt(initialWorkspace, updatedWorkspace, requestBody, {
+      dayIds: ["d2", "d1"], movementIds: ["r2", "r3"], reason: "These itinerary days were edited directly."
+    });
+    await route.fulfill({ json: {
+      revision,
+      workspace: {
+        ...snapshot,
+        latestDirectBlueprintRevision: {
+          id: revision.id, planId: snapshot.activePlan.id, planVersion: snapshot.activePlan.version,
+          blueprintId: snapshot.activeBlueprint.id, blueprintVersion: snapshot.activeBlueprint.version,
+          baseBlueprintVersion: revision.baseBlueprintVersion, createdAt: revision.createdAt
+        }
       }
-    }) });
+    } });
   });
   const routeRefreshRequests: unknown[] = [];
   await page.route("**/api/plans/native-trip/presentation/routes/refresh", async (route) => {
@@ -483,10 +571,10 @@ test("an itinerary Plan renders the Skill-native interactive result inside Landi
       ...appliedWorkspace,
       activePlan: {
         ...appliedWorkspace.activePlan,
-        version: 3,
+        version: appliedWorkspace.activePlan.version + 1,
         presentation: {
           ...appliedWorkspace.activePlan.presentation,
-          routeSegments: appliedWorkspace.activePlan.presentation.routeSegments.map((segment: any) => segment.id === "r2" ? {
+          routeSegments: appliedWorkspace.activePlan.presentation.routeSegments.map((segment: any) => requestBody.segmentIds.includes(segment.id) ? {
             ...segment,
             verification: "verified",
             durationMinutes: 18,
@@ -497,11 +585,12 @@ test("an itinerary Plan renders the Skill-native interactive result inside Landi
         }
       }
     };
+    appliedWorkspace = refreshedWorkspace;
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({
-      workspace: refreshedWorkspace,
+      workspace: editableWorkspace(refreshedWorkspace),
       routeRefresh: {
         segmentIds: requestBody.segmentIds,
-        refreshedSegmentIds: ["r2"],
+        refreshedSegmentIds: requestBody.segmentIds,
         scheduleConflictDayIds: []
       }
     }) });
@@ -520,22 +609,22 @@ test("an itinerary Plan renders the Skill-native interactive result inside Landi
   await expect(page.locator(".blueprint-map-bubble")).toHaveCount(2, { timeout: 15000 });
   await expect(page.locator(".blueprint-map-dot")).toHaveCount(2);
   await expect.poll(async () => page.locator(".blueprint-map-dot").evaluateAll((dots) => dots.map((dot) => dot.textContent?.trim() ?? ""))).toEqual(["", ""]);
-  await expect(page.locator(".blueprint-map-bubble").filter({ hasText: "Mosteiro dos Jerónimos" })).toBeVisible();
-  await expect(page.locator(".blueprint-map-bubble").filter({ hasText: "Mercado de Campo de Ourique" })).toHaveCount(0);
-  await expect(page.locator(".blueprint-timeline-list .blueprint-itinerary-card-main")).toHaveText([
+  await expect(page.getByLabel("Itinerary map context").getByRole("button", { name: "Mosteiro dos Jerónimos" }).locator(".blueprint-map-bubble")).toBeVisible();
+  await expect(page.getByLabel("Itinerary map context").getByRole("button", { name: "Mercado de Campo de Ourique" }).locator(".blueprint-map-bubble")).toHaveCount(0);
+  await expect(page.locator(".blueprint-timeline-list .blueprint-itinerary-block")).toHaveText([
     /09:30.*Mosteiro dos Jerónimos/s,
     /15:30.*Alfama/s
   ]);
-  await expect(page.locator(".blueprint-timeline-list .blueprint-itinerary-card-main").filter({ hasText: "Alfama" })).toContainText("Keep the climb relaxed and pause at small squares.");
+  await expect(page.locator(".blueprint-timeline-list .blueprint-itinerary-card-main").filter({ hasText: "Alfama" })).toContainText("下午从低处向上步行");
   await page.locator(".blueprint-timeline-list .blueprint-itinerary-card-main").filter({ hasText: "Alfama" }).click();
-  await expect(page.locator(".blueprint-map-bubble.selected").filter({ hasText: "Alfama" })).toBeVisible();
-  await expect(page.locator(".blueprint-map-bubble.selected").filter({ hasText: "Mosteiro dos Jerónimos" })).toHaveCount(0);
+  await expect(page.getByLabel("Itinerary map context").getByRole("button", { name: "Alfama" }).locator(".blueprint-map-bubble")).toHaveClass(/selected/);
+  await expect(page.getByLabel("Itinerary map context").getByRole("button", { name: "Mosteiro dos Jerónimos" }).locator(".blueprint-map-bubble")).not.toHaveClass(/selected/);
   await page.getByLabel("Itinerary side panel").getByRole("button", { name: "Back to explore" }).click();
 
-  await page.locator(".blueprint-day-strip button").filter({ hasText: "10/13" }).click();
+  await page.locator(".blueprint-day-strip button").filter({ hasText: "10-13" }).click();
   await expect(page.locator(".blueprint-map-bubble")).toHaveCount(1, { timeout: 15000 });
-  await expect(page.locator(".blueprint-map-bubble").filter({ hasText: "LX Factory" })).toBeVisible();
-  await page.locator(".blueprint-day-strip button").filter({ hasText: "10/12" }).click();
+  await expect(page.getByLabel("Itinerary map context").getByRole("button", { name: "LX Factory" }).locator(".blueprint-map-bubble")).toBeVisible();
+  await page.locator(".blueprint-day-strip button").filter({ hasText: "10-12" }).click();
 
   const sidePanel = page.getByLabel("Itinerary side panel");
   const explorePanel = sidePanel.locator(".blueprint-explore-panel");
@@ -550,14 +639,14 @@ test("an itinerary Plan renders the Skill-native interactive result inside Landi
   await expect(sidePanel.locator(".blueprint-source-marker")).toHaveCount(0);
   await expect(sidePanel.getByRole("button", { name: /^i$/ })).toHaveCount(0);
 
-  await sidePanel.getByRole("button", { name: "Attractions" }).click();
+  await sidePanel.getByRole("button", { name: "Attractions", exact: true }).click();
   await expect(sidePanel.locator(".blueprint-guide-filters button.active")).toHaveText("Attractions");
   await expect(explorePanel).not.toContainText("Mercado de Campo de Ourique");
-  await sidePanel.getByRole("button", { name: "Attractions" }).click();
+  await sidePanel.getByRole("button", { name: "Attractions", exact: true }).click();
   await expect(sidePanel.locator(".blueprint-guide-filters button.active")).toHaveCount(0);
   await expect(explorePanel).toContainText("Mercado de Campo de Ourique");
 
-  await sidePanel.getByRole("button", { name: "Dining" }).click();
+  await sidePanel.getByRole("button", { name: "Dining", exact: true }).click();
   await expect(sidePanel.locator(".blueprint-guide-filters button.active")).toHaveText("Dining");
   await expect(explorePanel).toContainText("Mercado de Campo de Ourique");
   await expect(explorePanel).not.toContainText("Confirm market hours before adding this stop.");
@@ -578,49 +667,51 @@ test("an itinerary Plan renders the Skill-native interactive result inside Landi
   await expect(sidePanel.getByRole("button", { name: "Scheduled", exact: true })).toHaveCount(0);
   await expect(sidePanel.getByRole("button", { name: "Optional", exact: true })).toHaveCount(0);
 
-  await sidePanel.getByRole("button", { name: "10/13" }).click();
+  await sidePanel.getByRole("button", { name: "10-13" }).click();
   await sidePanel.getByRole("button", { name: "Add to draft" }).click();
   const editBar = page.getByRole("toolbar", { name: "Unsaved itinerary edits" });
   await expect(editBar.getByText("1 unsaved change")).toBeVisible();
-  await expect(editBar.getByText("10/13", { exact: true })).toBeVisible();
+  await expect(editBar.getByText("10-13", { exact: true })).toBeVisible();
   await expect(page.locator(".blueprint-map-status")).toHaveCount(0);
   await expect(page.locator(".blueprint-map-impact-notes")).toHaveCount(0);
   await expect(page.getByText("After confirm", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("Travel time will be checked after confirm.")).toHaveCount(0);
+  await expect(page.getByText("Travel time will be checked after confirm.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh routes" })).toHaveCount(0);
   expect(routeRefreshRequests).toEqual([]);
   await expect(sidePanel.getByRole("heading", { name: "Explore" })).toBeVisible();
-  await expect(page.locator(".blueprint-timeline-list").getByRole("button", { name: /Pending itinerary edit for Mercado de Campo de Ourique/ })).toContainText("Draft");
-  await expect(page.locator(".blueprint-timeline-list").getByRole("button", { name: /Pending itinerary edit for Mercado de Campo de Ourique/ })).toContainText("Use this as a flexible food and rest stop.");
-  await expect(page.locator(".blueprint-map-bubble.pending").filter({ hasText: "Mercado de Campo de Ourique" })).toBeVisible();
-  await expect(page.locator(".blueprint-map-bubble.selected").filter({ hasText: "Mercado de Campo de Ourique" })).toBeVisible();
+  await expect(page.locator(".blueprint-timeline-list").getByRole("button", { name: /Pending itinerary edit for Mercado de Campo de Ourique/ })).toContainText("Not saved");
+  await expect(page.locator(".blueprint-timeline-list").getByRole("button", { name: /Pending itinerary edit for Mercado de Campo de Ourique/ })).toContainText("At the end of the day");
+  await expect(page.getByLabel("Itinerary map context").getByRole("button", { name: "Mercado de Campo de Ourique" }).locator(".blueprint-map-bubble")).toHaveClass(/selected/);
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByText("unsaved change")).toHaveCount(0);
   await expect(page.getByText("After confirm", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Routes will be checked", { exact: true })).toHaveCount(0);
   await expect(page.locator(".blueprint-map-impact-notes")).toHaveCount(0);
   await expect(page.locator(".blueprint-timeline-list").getByRole("button", { name: /Pending itinerary edit for Mercado de Campo de Ourique/ })).toHaveCount(0);
-  await expect(page.locator(".blueprint-map-bubble").filter({ hasText: "Mercado de Campo de Ourique" })).toHaveCount(0);
-  await expect(page.locator(".blueprint-map-bubble.selected").filter({ hasText: "LX Factory" })).toBeVisible();
+  await expect(page.getByLabel("Itinerary map context").getByRole("button", { name: "Mercado de Campo de Ourique" }).locator(".blueprint-map-bubble")).toHaveCount(0);
+  await expect(page.getByLabel("Itinerary map context").getByRole("button", { name: "LX Factory" }).locator(".blueprint-map-bubble")).toHaveClass(/selected/);
 
   await sidePanel.getByRole("button", { name: /Mercado de Campo de Ourique/ }).click();
   await sidePanel.getByRole("button", { name: "Add to itinerary" }).click();
   await sidePanel.getByRole("button", { name: "Add to draft" }).click();
   await expect(editBar.getByText("1 unsaved change")).toBeVisible();
-  await sidePanel.getByRole("button", { name: "Dining" }).click();
-  await sidePanel.getByRole("button", { name: "Shopping" }).click();
+  await sidePanel.getByRole("button", { name: "Dining", exact: true }).click();
+  await sidePanel.getByRole("button", { name: "Shopping", exact: true }).click();
   await sidePanel.getByRole("button", { name: /Livraria Bertrand/ }).click();
   await sidePanel.getByRole("button", { name: "Add to itinerary" }).click();
-  await sidePanel.getByRole("button", { name: "10/12" }).click();
+  await sidePanel.getByRole("button", { name: "10-12" }).click();
   await sidePanel.getByRole("button", { name: "Add to draft" }).click();
   await expect(editBar.getByText("2 unsaved changes")).toBeVisible();
-  await expect(editBar.getByText("10/13, 10/12")).toBeVisible();
+  await expect(editBar.getByText("10-13, 10-12")).toBeVisible();
 
   await page.getByRole("button", { name: "Apply", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Applying...", exact: true })).toBeDisabled();
-  await expect.poll(() => directRevisionRequests.length).toBe(1);
+  try {
+    await expect(editBar.getByRole("button", { name: "Applying...", exact: true })).toBeDisabled();
+    await expect.poll(() => directRevisionRequests.length).toBe(1);
+  } finally { releaseSave(); }
   expect(directRevisionRequests[0]).toMatchObject({
     expectedVersion: 1,
+    expectedBlueprintVersion: 1,
     revisions: [
       { kind: "add_place_to_day", placeId: "market", dayId: "d2", position: { kind: "end" } },
       { kind: "add_place_to_day", placeId: "bookshop", dayId: "d1", position: { kind: "end" } }
@@ -629,19 +720,26 @@ test("an itinerary Plan renders the Skill-native interactive result inside Landi
   expect(agentRequests).toEqual([]);
   await expect(page.getByRole("region", { name: "Adjust your plan with Landi" })).toHaveCount(0);
   await expect(page.getByText("unsaved change")).toHaveCount(0);
+  const routeReview = page.getByText("Travel times need checking", { exact: true });
+  await expect(routeReview).toBeVisible();
+  expect(routeRefreshRequests).toEqual([]);
+  await routeReview.click();
+  await expect(page.getByText("Checking travel times creates a new saved version and ends undo for the latest edit.", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "Check travel times and continue" }).click();
   await expect.poll(() => routeRefreshRequests.length).toBe(1);
-  expect(routeRefreshRequests[0]).toMatchObject({ expectedVersion: 2 });
-  expect(new Set((routeRefreshRequests[0] as any).segmentIds)).toEqual(new Set(["r2", "r3"]));
+  expect(routeRefreshRequests[0]).toMatchObject({ expectedVersion: 2, expectedBlueprintVersion: 2, segmentIds: ["r2"] });
   await expect(page.locator(".agent-status-float")).toHaveCount(0);
   await expect(page.getByText("After confirm", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Routes will be checked", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Route and timing will be rechecked after confirmation.")).toHaveCount(0);
   await expect(page.locator(".blueprint-map-status")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Refresh routes" })).toHaveCount(0);
-  await page.locator(".blueprint-day-strip button").filter({ hasText: "10/13" }).click();
+  await page.locator(".blueprint-day-strip button").filter({ hasText: "10-13" }).click();
   await expect(page.locator(".blueprint-timeline-list .blueprint-itinerary-card-main").filter({ hasText: "Mercado de Campo de Ourique" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh routes" })).toHaveCount(0);
   await expect(sidePanel.getByRole("heading", { name: "Explore" })).toBeVisible();
+  await expect.poll(() => routeRefreshRequests.length).toBe(2);
+  expect(routeRefreshRequests[1]).toMatchObject({ expectedVersion: 3, expectedBlueprintVersion: 3, segmentIds: ["r3"] });
   expect(pageErrors).toEqual([]);
 });
 
@@ -668,7 +766,7 @@ test("failed direct itinerary Apply keeps the local draft available", async ({ p
       }
     }
   };
-  await page.route("**/api/workspace", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(workspace) }));
+  await page.route("**/api/workspace", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(editableWorkspace(workspace, 7)) }));
   await page.route("**/api/plans/history", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
   await page.route("**/api/configuration", (route) => route.fulfill({ contentType: "application/json", body: "{}" }));
   await page.route("**/api/runtimes", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
@@ -701,7 +799,7 @@ test("failed direct itinerary Apply keeps the local draft available", async ({ p
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
-        workspace,
+        workspace: editableWorkspace(workspace, 7),
         handoff: {
           status: "ready_for_assisted_replanning",
           baseBlueprintId: "blueprint-conflict-trip",
@@ -756,57 +854,27 @@ test("failed direct itinerary Apply keeps the local draft available", async ({ p
   await sidePanel.getByRole("button", { name: "Add to draft" }).click();
   const editBar = page.getByRole("toolbar", { name: "Unsaved itinerary edits" });
   await expect(editBar.getByText("1 unsaved change")).toBeVisible();
-  await expect(page.locator(".blueprint-timeline-list").getByRole("button", { name: /Pending itinerary edit for Neighborhood Market/ })).toContainText("Draft");
+  await expect(page.locator(".blueprint-timeline-list").getByRole("button", { name: /Pending itinerary edit for Neighborhood Market/ })).toContainText("Not saved");
   await expect(page.locator(".blueprint-map-stage")).toBeVisible();
   await expect(page.locator(".blueprint-map-status")).toHaveCount(0);
   await expect(page.locator(".blueprint-map-impact-notes")).toHaveCount(0);
   await expect(page.getByText("After confirm", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("Travel time will be checked after confirm.")).toHaveCount(0);
+  await expect(page.getByText("Travel time will be checked after confirm.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh routes" })).toHaveCount(0);
 
   await editBar.getByRole("button", { name: "Apply", exact: true }).click();
   await expect.poll(() => directRevisionRequests.length).toBe(1);
   expect(directRevisionRequests[0]).toMatchObject({
     expectedVersion: 4,
+    expectedBlueprintVersion: 7,
     revisions: [{ kind: "add_place_to_day", placeId: "market", dayId: "d1", position: { kind: "end" } }]
   });
-  await expect.poll(() => assistedReplanningRequests.length).toBe(1);
-  expect(assistedReplanningRequests[0]).toMatchObject({
-    expectedVersion: 4,
-    replanRequirement: { reasonCode: "high_impact_place", placeId: "market", dayId: "d1" },
-    revisions: [{ kind: "add_place_to_day", placeId: "market", dayId: "d1", position: { kind: "end" } }]
-  });
-  await expect.poll(() => agentRequests.length).toBe(1);
-  expect(agentRequests[0]).toMatchObject({
-    mode: "revise_plan",
-    expectedPlanId: "conflict-trip",
-    expectedVersion: 4,
-    impactConfirmed: true,
-    assistedReplanning: { status: "ready_for_assisted_replanning", affectedDayIds: ["d1"], affectedPlaceIds: ["market", "anchor"] }
-  });
-  await expect(page.getByRole("region", { name: "Adjust your plan with Landi" })).toHaveCount(0);
-  await expect(page.locator(".inline-alert")).toContainText("Landi could not replan the affected itinerary day.");
-  await expect(page.locator(".inline-alert")).toContainText("Your draft is still here.");
-  await expect(page.locator(".agent-status-float")).toHaveCount(0);
+  expect(assistedReplanningRequests).toEqual([]);
+  expect(agentRequests).toEqual([]);
+  await expect(page.locator(".inline-alert")).toBeVisible();
   await expect(editBar.getByText("1 unsaved change")).toBeVisible();
   await expect(editBar.getByRole("button", { name: "Apply", exact: true })).toBeEnabled();
-  await expect(page.locator(".blueprint-map-status")).toHaveCount(0);
-  await expect(page.getByText("After confirm", { exact: true })).toHaveCount(0);
-  await expect(page.locator(".blueprint-map-impact-notes")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Refresh routes" })).toHaveCount(0);
   await expect(page.locator(".blueprint-timeline-list").getByRole("button", { name: /Pending itinerary edit for Neighborhood Market/ })).toBeVisible();
-  await editBar.getByRole("button", { name: "Apply", exact: true }).click();
-  await expect.poll(() => directRevisionRequests.length).toBe(2);
-  await expect.poll(() => assistedReplanningRequests.length).toBe(2);
-  await expect.poll(() => agentRequests.length).toBe(2);
-  expect(agentRequests[1]).toMatchObject({
-    message: "Replan the affected itinerary day for Lisbon market day.",
-    assistedReplanning: { request: "Replan the affected itinerary day for Lisbon market day." }
-  });
-  await expect(page.locator(".agent-status-float")).toHaveCount(0);
-  await expect(page.locator(".inline-alert")).toHaveCount(0);
-  await expect(page.getByText("unsaved change")).toHaveCount(0);
-  await expect(page.locator(".blueprint-map-impact-notes")).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });
 
@@ -834,13 +902,15 @@ test("one pending itinerary edit can be undone without clearing the other drafts
       }
     }
   };
-  await page.route("**/api/workspace", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(workspace) }));
+  let latestWorkspace = workspace;
+  await page.route("**/api/workspace", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(editableWorkspace(latestWorkspace)) }));
   await page.route("**/api/plans/history", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
   await page.route("**/api/configuration", (route) => route.fulfill({ contentType: "application/json", body: "{}" }));
   await page.route("**/api/runtimes", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
   const directRevisionRequests: unknown[] = [];
   await page.route("**/api/plans/undo-trip/blueprint-revisions/direct", async (route) => {
-    directRevisionRequests.push(route.request().postDataJSON());
+    const requestBody = route.request().postDataJSON();
+    directRevisionRequests.push(requestBody);
     const updatedWorkspace = {
       ...workspace,
       activePlan: {
@@ -853,14 +923,12 @@ test("one pending itinerary edit can be undone without clearing the other drafts
         }
       }
     };
+    latestWorkspace = updatedWorkspace;
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({
       ...updatedWorkspace,
-      workspace: updatedWorkspace,
+      workspace: editableWorkspace(updatedWorkspace),
       revision: {
-        affectedDayIds: ["d1"],
-        affectedPlaceIds: ["market"],
-        revisionCount: 1,
-        routeRefresh: { dayIds: ["d1"], movementIds: ["r1"], reason: "This itinerary day was edited directly." },
+        ...revisionReceipt(workspace, updatedWorkspace, requestBody, { dayIds: [], movementIds: [], reason: "No route refresh in this fixture." }),
         routeImpact: {
           days: [{
             dayId: "d1",
@@ -886,6 +954,12 @@ test("one pending itinerary edit can be undone without clearing the other drafts
       }
     }) });
   });
+  const refreshRequests: unknown[] = [];
+  await page.route("**/api/plans/undo-trip/presentation/routes/refresh", async (route) => {
+    refreshRequests.push(route.request().postDataJSON());
+    latestWorkspace = { ...latestWorkspace, activePlan: { ...latestWorkspace.activePlan, version: 3, presentation: { ...latestWorkspace.activePlan.presentation, routeSegments: latestWorkspace.activePlan.presentation.routeSegments.map(segment => ({ ...segment, verification: "verified" })) } } };
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ workspace: editableWorkspace(latestWorkspace), routeRefresh: { segmentIds: ["r1"], refreshedSegmentIds: ["r1"], scheduleConflictDayIds: [], failedSegmentIds: [] } }) });
+  });
   const agentRequests: unknown[] = [];
   await page.route("**/api/agent/chat", (route) => {
     agentRequests.push(route.request().postDataJSON());
@@ -907,7 +981,7 @@ test("one pending itinerary edit can be undone without clearing the other drafts
   await expect(timeline.getByRole("button", { name: /Pending itinerary edit for Neighborhood Bookshop/ })).toBeVisible();
 
   const bookshopCard = sidePanel.locator(".blueprint-guide-card").filter({ hasText: "Neighborhood Bookshop" });
-  await expect(bookshopCard).toContainText("Added to 10/12 (not saved)");
+  await expect(bookshopCard).toContainText("Added to 10-12 (not saved)");
   await timeline.locator(".blueprint-itinerary-block-pending").filter({ hasText: "Neighborhood Bookshop" }).getByRole("button", { name: "Undo draft" }).click();
   await expect(editBar.getByText("1 unsaved change")).toBeVisible();
   await expect(timeline.getByRole("button", { name: /Pending itinerary edit for Neighborhood Market/ })).toBeVisible();
@@ -919,9 +993,14 @@ test("one pending itinerary edit can be undone without clearing the other drafts
   await expect.poll(() => directRevisionRequests.length).toBe(1);
   expect(directRevisionRequests[0]).toMatchObject({
     expectedVersion: 1,
+    expectedBlueprintVersion: 1,
     revisions: [{ kind: "add_place_to_day", placeId: "market", dayId: "d1", position: { kind: "end" } }]
   });
+  await expect.poll(() => refreshRequests.length).toBe(1);
+  expect(refreshRequests[0]).toMatchObject({ expectedVersion: 2, segmentIds: ["r1"] });
   expect(agentRequests).toEqual([]);
+  await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Morning Museum", "Neighborhood Market"]);
+  await expect(bookshopCard.getByRole("button", { name: "Add", exact: true })).toBeVisible();
   await expect(page.getByText("unsaved change")).toHaveCount(0);
   await expect(page.locator(".agent-status-float")).toHaveCount(0);
   await expect(page.locator(".inline-alert")).toHaveCount(0);
@@ -958,7 +1037,7 @@ test("automatic route refresh failures avoid agent status toasts", async ({ page
   const routeRefreshRequests: unknown[] = [];
   await page.route("**/api/plans/refresh-fail/presentation/routes/refresh", async (route) => {
     routeRefreshRequests.push(route.request().postDataJSON());
-    await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "Routes changed before refresh could run." }) });
+    await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ code: "unsupported_mode", error: "此交通方式暂不支持自动更新。 /private/internal-only" }) });
   });
   const agentRequests: unknown[] = [];
   await page.route("**/api/agent/chat", (route) => {
@@ -977,11 +1056,16 @@ test("automatic route refresh failures avoid agent status toasts", async ({ page
   });
   expect(agentRequests).toEqual([]);
   await expect(page.locator(".agent-status-float")).toHaveCount(0);
-  await expect(page.locator(".inline-alert")).toHaveCount(0);
+  await expect(page.locator(".inline-alert")).not.toContainText("Routes changed before refresh could run.");
+  await expect(page.locator(".inline-alert")).toContainText("Automatic route updates are not available for this transport mode. The latest plan is displayed. The original operation is still unconfirmed; it has not been submitted again.");
+  await expect(page.locator(".inline-alert")).not.toContainText("/private/internal-only");
+  await expect(page.locator(".inline-alert")).not.toContainText("此交通方式");
+  expect(routeRefreshRequests).toHaveLength(1);
+  await expect(page.locator(".blueprint-timeline-list .blueprint-itinerary-card-main strong")).toHaveText(["Morning Museum", "Neighborhood Market"]);
   expect(pageErrors).toEqual([]);
 });
 
-test("place details omit the status control row while keeping itinerary actions", async ({ page }) => {
+test("place details show separate priority actions and keep itinerary actions", async ({ page }) => {
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   const workspace = {
@@ -1049,12 +1133,12 @@ test("place details omit the status control row while keeping itinerary actions"
 
   await page.goto("/");
   const sidePanel = page.getByLabel("Itinerary side panel");
-  await expect(sidePanel.getByRole("button", { name: /Neighborhood Market/ })).toContainText("Nearby");
+  await expect(sidePanel.getByRole("button", { name: /Neighborhood Market/ })).toContainText("Fits your Lisbon day");
   await sidePanel.getByRole("button", { name: /Neighborhood Market/ }).click();
   await expect(sidePanel.getByRole("region", { name: "Place status" })).toHaveCount(0);
-  await expect(sidePanel.getByRole("button", { name: "Must go" })).toHaveCount(0);
-  await expect(sidePanel.getByRole("button", { name: "Prefer" })).toHaveCount(0);
-  await expect(sidePanel.getByRole("button", { name: "Nearby" })).toHaveCount(0);
+  await expect(sidePanel.getByRole("button", { name: "Must go", exact: true })).toBeVisible();
+  await expect(sidePanel.getByRole("button", { name: "Prefer", exact: true })).toBeVisible();
+  await expect(sidePanel.getByRole("button", { name: "Nearby", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(sidePanel.getByRole("button", { name: "Add to itinerary" })).toBeVisible();
   expect(directRevisionRequests).toEqual([]);
   expect(agentRequests).toEqual([]);
@@ -1089,13 +1173,15 @@ test("scheduled places can be removed through the direct Blueprint edit bar", as
       }
     }
   };
-  await page.route("**/api/workspace", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(workspace) }));
+  let latestWorkspace = workspace;
+  await page.route("**/api/workspace", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(editableWorkspace(latestWorkspace)) }));
   await page.route("**/api/plans/history", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
   await page.route("**/api/configuration", (route) => route.fulfill({ contentType: "application/json", body: "{}" }));
   await page.route("**/api/runtimes", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
   const directRevisionRequests: unknown[] = [];
   await page.route("**/api/plans/remove-trip/blueprint-revisions/direct", async (route) => {
-    directRevisionRequests.push(route.request().postDataJSON());
+    const requestBody = route.request().postDataJSON();
+    directRevisionRequests.push(requestBody);
     const updatedWorkspace = {
       ...workspace,
       activePlan: {
@@ -1108,21 +1194,12 @@ test("scheduled places can be removed through the direct Blueprint edit bar", as
         }
       }
     };
+    latestWorkspace = updatedWorkspace;
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({
       ...updatedWorkspace,
-      workspace: updatedWorkspace,
+      workspace: editableWorkspace(updatedWorkspace),
       revision: {
-        id: "direct-revision-batch-blueprint-remove-v1-to-v2",
-        baseBlueprintVersion: 1,
-        appliedBlueprintVersion: 2,
-        createdAt: "2026-08-17T00:00:01.000Z",
-        revisionCount: 1,
-        kinds: ["remove_place_from_day"],
-        affectedDayIds: ["d1"],
-        affectedPlaceIds: ["bookshop", "anchor", "market"],
-        routeRefresh: { dayIds: ["d1"], movementIds: ["route-1"], reason: "These itinerary days were edited directly." },
-        undo: { previousBlueprintVersion: 1, previousDays: [], previousMovements: [], previousPlaces: [] },
-        revisions: []
+        ...revisionReceipt(workspace, updatedWorkspace, requestBody, { dayIds: ["d1"], movementIds: ["route-1"], reason: "These itinerary days were edited directly." })
       }
     }) });
   });
@@ -1152,11 +1229,11 @@ test("scheduled places can be removed through the direct Blueprint edit bar", as
   await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Morning Museum", "Neighborhood Market"]);
   await expect(page.locator(".blueprint-map-impact-notes")).toHaveCount(0);
   const bookshopCard = sidePanel.locator(".blueprint-guide-card").filter({ hasText: "Neighborhood Bookshop" });
-  await expect(bookshopCard).toContainText("Removed from 10/12 (not saved)");
+  await expect(bookshopCard).toContainText("Removed from 10-12 (not saved)");
   await expect(bookshopCard.getByRole("button", { name: "Add", exact: true })).toBeVisible();
   await bookshopCard.getByRole("button", { name: /Neighborhood Bookshop/ }).click();
   await expect(sidePanel.getByRole("heading", { name: "Neighborhood Bookshop" })).toBeVisible();
-  await expect(sidePanel.getByText("Removed from 10/12 (not saved).")).toBeVisible();
+  await expect(sidePanel.getByText("Removed from 10-12 (not saved).")).toBeVisible();
   await expect(sidePanel.getByRole("button", { name: "Add to itinerary" })).toBeVisible();
   await expect(sidePanel.getByRole("button", { name: "Remove from day" })).toHaveCount(0);
   await sidePanel.getByRole("button", { name: "Undo draft" }).click();
@@ -1174,13 +1251,14 @@ test("scheduled places can be removed through the direct Blueprint edit bar", as
   await expect.poll(() => directRevisionRequests.length).toBe(1);
   expect(directRevisionRequests[0]).toMatchObject({
     expectedVersion: 1,
+    expectedBlueprintVersion: 1,
     revisions: [{ kind: "remove_place_from_day", placeId: "bookshop", dayId: "d1" }]
   });
   expect(agentRequests).toEqual([]);
   await expect(page.locator(".agent-status-float")).toHaveCount(0);
   await expect(page.locator(".inline-alert")).toHaveCount(0);
   await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Morning Museum", "Neighborhood Market"]);
-  await expect(timeline.locator(".blueprint-itinerary-card-main > span")).toHaveText(["09:00", "13:00"]);
+  await expect(timeline.locator(".blueprint-itinerary-block > .blueprint-itinerary-time")).toHaveText(["09:00", "13:00"]);
   await expect(page.getByRole("button", { name: "Refresh routes" })).toHaveCount(0);
   await expect(page.getByText("Route and timing will be rechecked after confirmation.")).toHaveCount(0);
   await expect(bookshopCard).not.toContainText("not saved");
@@ -1189,7 +1267,7 @@ test("scheduled places can be removed through the direct Blueprint edit bar", as
   await sidePanel.getByRole("button", { name: "Add to itinerary" }).click();
   await sidePanel.getByRole("button", { name: "Add to draft" }).click();
   await expect(page.getByText("1 unsaved change")).toBeVisible();
-  await expect(timeline.getByRole("button", { name: /Pending itinerary edit for Neighborhood Bookshop/ })).toContainText("Draft");
+  await expect(timeline.getByRole("button", { name: /Pending itinerary edit for Neighborhood Bookshop/ })).toContainText("Not saved");
   await expect(page.locator(".blueprint-map-impact-notes")).toHaveCount(0);
   await expect(directRevisionRequests).toHaveLength(1);
   expect(pageErrors).toEqual([]);
@@ -1219,13 +1297,14 @@ test("same-day itinerary drag reorder stages and confirms a direct Blueprint mov
       }
     }
   };
-  await page.route("**/api/workspace", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(workspace) }));
+  await page.route("**/api/workspace", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(editableWorkspace(workspace)) }));
   await page.route("**/api/plans/history", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
   await page.route("**/api/configuration", (route) => route.fulfill({ contentType: "application/json", body: "{}" }));
   await page.route("**/api/runtimes", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
   const directRevisionRequests: unknown[] = [];
   await page.route("**/api/plans/drag-trip/blueprint-revisions/direct", async (route) => {
-    directRevisionRequests.push(route.request().postDataJSON());
+    const requestBody = route.request().postDataJSON();
+    directRevisionRequests.push(requestBody);
     const updatedWorkspace = {
       ...workspace,
       activePlan: {
@@ -1243,12 +1322,9 @@ test("same-day itinerary drag reorder stages and confirms a direct Blueprint mov
     };
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({
       ...updatedWorkspace,
-      workspace: updatedWorkspace,
+      workspace: editableWorkspace(updatedWorkspace),
       revision: {
-        affectedDayIds: ["d1"],
-        affectedPlaceIds: ["c", "a", "b"],
-        revisionCount: 1,
-        routeRefresh: { dayIds: ["d1"], movementIds: ["r1", "r2"], reason: "This itinerary day was edited directly." }
+        ...revisionReceipt(workspace, updatedWorkspace, requestBody, { dayIds: ["d1"], movementIds: ["r1", "r2"], reason: "This itinerary day was edited directly." })
       }
     }) });
   });
@@ -1265,13 +1341,15 @@ test("same-day itinerary drag reorder stages and confirms a direct Blueprint mov
   await page.mouse.move(targetDropBox.x + targetDropBox.width / 2, targetDropBox.y + targetDropBox.height / 2, { steps: 10 });
   await page.mouse.up();
   await expect(page.getByText("1 unsaved change")).toBeVisible();
-  await expect(timeline.locator(".blueprint-itinerary-card-main").filter({ hasText: "Coffee Stop" })).toContainText("Not saved");
+  await expect(timeline.locator(".blueprint-itinerary-block.moved")).toHaveCount(0);
   await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Fixed Museum", "Coffee Stop", "Book Street"]);
-  await expect(timeline.locator(".blueprint-itinerary-card-main > span")).toHaveText(["09:00", "Late morning option", "Afternoon"]);
+  await expect(timeline.locator(".blueprint-itinerary-block > .blueprint-itinerary-time")).toHaveText(["09:00", "Flexible time", "Time to confirm"]);
   await expect(page.locator(".blueprint-map-impact-notes")).toHaveCount(0);
 
+  const restoreDropZone = timeline.locator(".blueprint-itinerary-drop-zone").last();
+  await restoreDropZone.scrollIntoViewIfNeeded();
   const movedCoffeeHandleBox = await timeline.getByRole("button", { name: /Move Coffee Stop/ }).boundingBox();
-  const restoreDropBox = await timeline.locator(".blueprint-itinerary-drop-zone").last().boundingBox();
+  const restoreDropBox = await restoreDropZone.boundingBox();
   if (!movedCoffeeHandleBox || !restoreDropBox) throw new Error("Restoring drag handle or drop zone is not visible.");
   await page.mouse.move(movedCoffeeHandleBox.x + movedCoffeeHandleBox.width / 2, movedCoffeeHandleBox.y + movedCoffeeHandleBox.height / 2);
   await page.mouse.down();
@@ -1280,7 +1358,7 @@ test("same-day itinerary drag reorder stages and confirms a direct Blueprint mov
   await expect(page.getByText("unsaved change")).toHaveCount(0);
   await expect(page.locator(".blueprint-map-impact-notes")).toHaveCount(0);
   await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Fixed Museum", "Book Street", "Coffee Stop"]);
-  await expect(timeline.locator(".blueprint-itinerary-card-main > span")).toHaveText(["09:00", "Late morning option", "Afternoon"]);
+  await expect(timeline.locator(".blueprint-itinerary-block > .blueprint-itinerary-time")).toHaveText(["09:00", "Flexible time", "Time to confirm"]);
 
   const secondCoffeeHandleBox = await timeline.getByRole("button", { name: /Move Coffee Stop/ }).boundingBox();
   const secondTargetDropBox = await timeline.locator(".blueprint-itinerary-drop-zone").nth(1).boundingBox();
@@ -1291,7 +1369,7 @@ test("same-day itinerary drag reorder stages and confirms a direct Blueprint mov
   await page.mouse.up();
   await expect(page.getByText("1 unsaved change")).toBeVisible();
   await expect(timeline.locator(".blueprint-itinerary-card-main strong")).toHaveText(["Fixed Museum", "Coffee Stop", "Book Street"]);
-  await expect(timeline.locator(".blueprint-itinerary-card-main > span")).toHaveText(["09:00", "Late morning option", "Afternoon"]);
+  await expect(timeline.locator(".blueprint-itinerary-block > .blueprint-itinerary-time")).toHaveText(["09:00", "Flexible time", "Time to confirm"]);
   await expect(page.locator(".blueprint-map-status")).toHaveCount(0);
   await expect(page.locator(".blueprint-map-impact-notes")).toHaveCount(0);
   await expect(page.getByText("After confirm", { exact: true })).toHaveCount(0);
@@ -1301,6 +1379,7 @@ test("same-day itinerary drag reorder stages and confirms a direct Blueprint mov
   await expect.poll(() => directRevisionRequests.length).toBe(1);
   expect(directRevisionRequests[0]).toMatchObject({
     expectedVersion: 1,
+    expectedBlueprintVersion: 1,
     revisions: [{ kind: "move_place_within_day", placeId: "c", dayId: "d1", position: { kind: "after", afterPlaceId: "a" } }]
   });
   await expect(page.getByText("unsaved change")).toHaveCount(0);

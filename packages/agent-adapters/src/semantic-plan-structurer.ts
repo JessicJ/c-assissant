@@ -116,13 +116,14 @@ export function structureSemanticTravelPlan(plan: SemanticTravelPlan, research: 
   };
   const preservedBookingConstraints = preservedBookingConstraintsForPlan(semanticPlan, options.bookingConstraints ?? []);
   for (const commitment of semanticPlan.fixedCommitments) {
-    const preserved = preservedBookingConstraints.some((constraint) => constraint.id === commitment.bookingConstraintId && constraint.segments.some((segment) => segment.id === commitment.segmentId));
+    const preserved = preservedBookingConstraints.some((constraint) => constraint.id === commitment.bookingConstraintId && constraint.segments.some((segment) => segment.id === commitment.segmentId && fixedCommitmentMatches(commitment,constraint,segment)));
     fidelity.push({
       subject: `fixed commitment ${commitment.commitmentId}`,
       classification: preserved ? "PRESERVED" : "DROPPED",
       detail: preserved ? "Stable booking and segment identity carried into the structured booking constraint." : "The Semantic commitment did not exactly match an authoritative booking constraint and was not reinserted."
     });
   }
+  if(semanticPlan.bookingRelationshipAssessment) artifact.bookingRelationshipAssessment={...structuredClone(semanticPlan.bookingRelationshipAssessment),status:"candidate"};
   fidelity.push(...assessSemanticPlanFidelity(semanticPlan, artifact, research));
   const importedBlueprint = options.importBlueprint
     ? importSkillItinerary(research, artifact, {
@@ -137,15 +138,9 @@ export function structureSemanticTravelPlan(plan: SemanticTravelPlan, research: 
   return { semanticPlan, artifact, preservedBookingConstraints, ...(importedBlueprint ? { importedBlueprint } : {}), fidelity, representationGaps };
 }
 
-function preservedBookingConstraintsForPlan(plan: SemanticTravelPlan, authoritative: BlueprintBookingConstraint[]): BlueprintBookingConstraint[] {
-  const byIdentity = new Map(plan.fixedCommitments.map((commitment) => [commitment.commitmentId, commitment] as const));
-  return authoritative.flatMap((constraint) => {
-    const segments = constraint.segments.filter((segment) => {
-      const commitment = byIdentity.get(`${constraint.id}:${segment.id}`);
-      return commitment ? fixedCommitmentMatches(commitment, constraint, segment) : false;
-    });
-    return segments.length ? [{ ...structuredClone(constraint), segments: structuredClone(segments) }] : [];
-  });
+function preservedBookingConstraintsForPlan(_plan: SemanticTravelPlan, authoritative: BlueprintBookingConstraint[]): BlueprintBookingConstraint[] {
+  // 真实源单元完整保留；是否准确保留固定承诺另行校验，不以生成遗漏删除来源。
+  return structuredClone(authoritative);
 }
 
 function fixedCommitmentMatches(commitment: SemanticFixedCommitment, constraint: BlueprintBookingConstraint, segment: BlueprintBookingConstraint["segments"][number]): boolean {

@@ -6,7 +6,9 @@ import { join } from "node:path";
 import Fastify from "fastify";
 import { SqliteWorkspaceStore } from "@c-assistant/storage";
 import type { ConnectorBundle } from "./connector-bundle.js";
-import { createActivePlanMonitoringService } from "./active-plan-monitoring.js";
+import { createEmailPlanMonitoringService } from "./email-plan-monitoring.js";
+import { createRuntimeServices } from "./runtime-services.js";
+import { emailTimingFixture, verifiedEmailFixture } from "./email.fixture.test.js";
 import { startServerLifecycle } from "./server-lifecycle.js";
 
 class ControlledScheduler {
@@ -53,28 +55,24 @@ function createReminderFixture(path: string): void {
       routeSegments: [{ id: "route-1", dayId: "day-1", originPlaceId: "cafe", destinationPlaceId: "museum", mode: "walking", durationMinutes: 20, verification: "verified", label: "Walk 20 min", detail: "Verified fixture route.", sourceRefs: [] }]
     }, stages: []
   });
-  store.createTelegramPairingRequest({ code: "lifecycle-pair", expiresAt: "2027-01-01T00:00:00.000Z" });
-  store.claimTelegramPairing({ code: "lifecycle-pair", chatId: "capture-chat", userId: "capture-user", firstName: "Capture" });
+  verifiedEmailFixture(store);
   store.confirmPlan(workspace.activePlan.id);
   store.close();
 }
 
 function capturedMonitoring(store: SqliteWorkspaceStore, captures: Array<Record<string, unknown>>) {
   const connectors = {
-    maps: { geocodeAddress: async ({ address }: { address: string }) => ({ status: "available", provider: "google_maps", observedAt: new Date().toISOString(), data: { provider: "google_maps", formattedAddress: address, location: "2.34,48.86", city: "Paris", country: "France", district: "" } }) },
-    googleWeather: { weather: async ({ locationName }: { locationName: string }) => ({ status: "available", provider: "google_weather", observedAt: new Date().toISOString(), data: { provider: "google_weather", location: { id: locationName, name: locationName, latitude: 48.86, longitude: 2.34, timezone: "Europe/Paris" }, current: { observedAt: new Date().toISOString(), temperatureC: 18, apparentTemperatureC: 18, condition: "Clear", conditionCode: "clear", precipitationMm: 0, windSpeedKph: 5 }, daily: [] } }) },
-    telegram: { sendMessage: async (input: Record<string, unknown>) => { captures.push(structuredClone(input)); return { status: "available", provider: "telegram", observedAt: new Date().toISOString(), data: { chatId: String(input.chatId), messageId: captures.length } }; } }
+    maps: { searchPlaces: async ({query}: {query:string}) => ({status:"available",provider:"google_maps",observedAt:new Date().toISOString(),data:[{id:query,name:query,city:"Paris",location:"2.34,48.86",businessStatus:"operational"}]}), geocodeAddress: async ({ address }: { address: string }) => ({ status: "available", provider: "google_maps", observedAt: new Date().toISOString(), data: { provider: "google_maps", formattedAddress: address, location: "2.34,48.86", city: "Paris", country: "France", district: "" } }) },
+    googleWeather: { weather: async ({ locationName }: { locationName: string }) => ({ status: "available", provider: "google_weather", observedAt: new Date().toISOString(), data: { provider: "google_weather", location: { id: locationName, name: locationName, latitude: 48.86, longitude: 2.34, timezone: "Europe/Paris" }, current: { observedAt: new Date().toISOString(), temperatureC: 18, apparentTemperatureC: 18, condition: "Clear", conditionCode: "clear", precipitationMm: 0, windSpeedKph: 5 }, daily: [] } }) }
   } as unknown as ConnectorBundle;
-  const actual = createActivePlanMonitoringService({
+  const actual = createEmailPlanMonitoringService({
     store,
     getConnectors: () => connectors,
-    telegramLocationActions: {
-      rememberMovementGoLocationSession() {}, async requestArrivalLocation() {}, async requestFoodLocation() {}, async requestMovementGoLocation() {}, async sendArrivalRouteFromSharedLocation() {}, async sendMovementGoFromSharedLocation() {}, async sendNearbyFoodFromSharedLocation() {}, async sendUberTestFromSharedLocation() {}
-    },
+    getEmailTransport: () => ({ configured: () => true, verify: async () => ({ ready: true }), send: async message => { captures.push({ ...message }); return { status: "accepted", messageId: message.messageId }; } }),
+    emailTiming: async request=>emailTimingFixture(request),
     logWarning: () => {}
   });
-  const noOp = async () => {};
-  return { ...actual, runArrivalLocationPrompt: noOp, runArrivalReminder: noOp, runPlanVenueMonitor: noOp, runPlanWeatherMonitor: noOp, runRouteHandoffGuidance: noOp, runTaskReminders: noOp };
+  return actual;
 }
 
 async function runLifecycle(path: string, now: string, captures: Array<Record<string, unknown>>, fireDueTimer: boolean) {
@@ -82,33 +80,68 @@ async function runLifecycle(path: string, now: string, captures: Array<Record<st
     const store = new SqliteWorkspaceStore(path);
     const scheduler = new ControlledScheduler();
     const server = Fastify({ logger: false });
+    const actual = capturedMonitoring(store, captures);
+    const pending: Promise<void>[] = [];
+    const tracked = (operation: () => Promise<void>) => () => {
+      const result = operation();pending.push(result);return result;
+    };
     const lifecycle = await startServerLifecycle({
-      server, store, port: 0, host: "127.0.0.1", pollTelegram: async () => {}, activePlanMonitoring: capturedMonitoring(store, captures), abortGenerationJobs: () => {}, scheduler, installSignalHandlers: false
+      server, store, port: 0, host: "127.0.0.1", activePlanMonitoring: {
+        ...actual,
+        runItineraryDepartureReminders: tracked(actual.runItineraryDepartureReminders),
+        runPlanWeatherMonitor: tracked(actual.runPlanWeatherMonitor),
+        runPlanVenueMonitor: tracked(actual.runPlanVenueMonitor)
+      }, abortGenerationJobs: () => {}, scheduler, installSignalHandlers: false
     });
+    // 真实计时器在启动检查结束后触发；等待原服务，避免把同一微任务中的 busy 跳过当成下一轮。
+    await Promise.all(pending);
     if (fireDueTimer) {
       scheduler.fire(60_000);
+      await Promise.all(pending);
       scheduler.fire(60_000);
+      await Promise.all(pending);
     }
     await lifecycle.stop();
     assert.equal(scheduler.activeCount(), 0);
   });
 }
 
-test("server lifecycle captures due itinerary reminders once and preserves dedupe across restart", async () => {
+function readLifecycleState(path: string) {
+  const store = new SqliteWorkspaceStore(path);
+  try {
+    const plan = store.getExecutionPlan()!;
+    return {jobs: store.email.list(), observations: store.listTravelAdjustmentObservations(plan.id, plan.version)};
+  } finally {store.close();}
+}
+
+test("未决来源不阻断常规定时邮件，服务器重启保持投递去重", async () => {
   const directory = mkdtempSync(join(tmpdir(), "c-assistant-lifecycle-"));
   const path = join(directory, "workspace.sqlite");
   const captures: Array<Record<string, unknown>> = [];
   try {
     createReminderFixture(path);
-    await runLifecycle(path, "2026-11-10T08:00:00.000Z", captures, true);
+    await runLifecycle(path, "2026-11-10T06:00:00.000Z", captures, true);
     assert.equal(captures.length, 0);
 
     await runLifecycle(path, "2026-11-10T08:30:00.000Z", captures, true);
-    assert.equal(captures.length, 1);
-    assert.match(String(captures[0]?.text), /Next: Museum at 10:00/);
+    assert.equal(captures.length, 2);
+    const saved = readLifecycleState(path);
+    assert.deepEqual(saved.jobs.map(job=>job.kind).sort(),["morning","transfer","transfer"]);
+    assert.equal(saved.jobs.filter(job=>job.status==="accepted").length,2);
+    assert.ok(saved.observations.some(item=>item.observation.candidate?.kind==="weather_current"&&item.observation.status==="unknown"));
+    assert.ok(saved.observations.some(item=>item.observation.candidate?.kind==="venue"&&item.observation.status==="unknown"));
+    assert.ok(saved.observations.every(item=>item.lastReliable===null));
+    const candidates=saved.observations.filter(item=>item.observation.candidate?.kind==="weather_current" || item.observation.candidate?.kind==="venue");
+    assert.ok(candidates.length>0);
+    assert.ok(candidates.every(item=>item.observation.status==="unknown" && item.lastReliable===null));
+    assert.match(String(captures[1]?.html), /Museum/);
+    assert.match(String(captures[1]?.html), /10:00/);
 
     await runLifecycle(path, "2026-11-10T08:30:00.000Z", captures, true);
-    assert.equal(captures.length, 1);
+    assert.equal(captures.length, 2);
+    const restarted = readLifecycleState(path);
+    assert.deepEqual(restarted.jobs,saved.jobs);
+    assert.deepEqual(restarted.observations,saved.observations);
 
     const reopened = new SqliteWorkspaceStore(path);
     assert.equal(reopened.getExecutionPlan()?.status, "active");
@@ -116,4 +149,20 @@ test("server lifecycle captures due itinerary reminders once and preserves dedup
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("shutdown cancels background photos for a ready plan without treating the plan as failed", () => {
+  const store = new SqliteWorkspaceStore(":memory:");
+  try {
+    const runtime = createRuntimeServices({ store, semanticShadow: { enabled: false, sampleRate: 0, timeoutMs: 1 }, semanticDraftCanary: { enabled: false, localEnvironment: false, allowedSessionIds: [] }, logGenerationFailure: () => {} });
+    for (const id of ["running", "photos", "finished"]) {
+      runtime.planningGeneration.jobs.set(id, { runId: id, sessionId: id, generationKey: id, strategy: "legacy", stage: "ready", status: id === "running" ? "running" : "succeeded", startedAt: "2026-10-10T00:00:00Z", updatedAt: "2026-10-10T00:00:00Z", controller: new AbortController() });
+    }
+    runtime.planningGeneration.imageContinuations!.set("photos", new Promise(() => {}));
+    runtime.abortGenerationJobs();
+    assert.equal(runtime.planningGeneration.jobs.get("running")!.controller.signal.aborted, true);
+    assert.equal(runtime.planningGeneration.jobs.get("photos")!.controller.signal.aborted, true);
+    assert.equal(runtime.planningGeneration.jobs.get("photos")!.status, "succeeded");
+    assert.equal(runtime.planningGeneration.jobs.get("finished")!.controller.signal.aborted, false);
+  } finally { store.close(); }
 });

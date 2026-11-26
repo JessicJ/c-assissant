@@ -56,3 +56,15 @@ test("visible recommendation copy uses route facts without exposing internal rul
   assert.match(result.primary.visibleRationale, /15 min by car/);
   assert.match(result.primary.visibleRationale, /80 min walking/);
 });
+
+test('own-car preference stays driving even at night with unknown luggage', () => {
+ const result=recommendLocalTransport({routeFacts:[],preference:'driving',localTime:'23:00'});
+ assert.equal(result.primary.option,'driving');
+ assert.equal(result.primary.routeMode,'driving');
+});
+
+test('verified public transport preference uses the transit route', () => {
+ const result=recommendLocalTransport({routeFacts:[{provider:'google_maps',mode:'transit',strategy:'google_maps_recommended',origin:'0,0',destination:'1,1',distanceMeters:2000,durationSeconds:900}],preference:'public_transit',localTime:'12:00'});
+ assert.equal(result.primary.option,'public_transit');
+ assert.equal(result.primary.routeMode,'transit');
+});

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "license": "Apache-2.0",
   "private": true,
-  "description": "Country-neutral regional assistant Core with China and Japan Country Packs.",
+  "description": "Personal travel assistant with a Web workspace, email assistance, and MAH integration.",
   "type": "module",
   "packageManager": "pnpm@11.20.0",
   "engines": {
@@ -11,24 +11,28 @@
   },
   "workspaces": [
     "apps/*",
-    "packages/*",
-    "country-packs/*"
+    "packages/*"
   ],
   "scripts": {
-    "dev": "pnpm --filter @c-assistant/core build && pnpm --filter @c-assistant/agent-adapters build && pnpm --filter @c-assistant/connectors build && pnpm --filter @c-assistant/skill-runtime build && pnpm --filter @c-assistant/china-country-pack build && pnpm --filter @c-assistant/japan-country-pack build && pnpm --filter @c-assistant/storage build && C_ASSISTANT_PORT=8877 concurrently -n server,web -c cyan,magenta \"pnpm --filter @c-assistant/server dev\" \"pnpm --filter @c-assistant/web dev\"",
+    "dev": "pnpm --filter @c-assistant/core build && pnpm --filter @c-assistant/agent-adapters build && pnpm --filter @c-assistant/connectors build && pnpm --filter @c-assistant/travel-support build && pnpm --filter @c-assistant/storage build && C_ASSISTANT_PORT=8877 concurrently -n server,web -c cyan,magenta \"pnpm --filter @c-assistant/server dev\" \"pnpm --filter @c-assistant/web dev\"",
     "start": "pnpm --filter @c-assistant/server start",
-    "service:install:macos": "pnpm build && node scripts/macos-service.mjs install",
-    "service:remove:macos": "node scripts/macos-service.mjs uninstall",
-    "service:preview:macos": "node scripts/macos-service.mjs install --dry-run",
     "check:workspace": "node scripts/check-workspace.mjs",
+    "check:mah-integration": "node scripts/inspect-mah-integration.mjs",
+    "test:mah-inspection": "node --test scripts/inspect-mah-integration.test.mjs",
     "configure:google": "node scripts/configure-google.mjs",
-    "configure:whatsapp": "node scripts/configure-whatsapp.mjs",
-    "build": "pnpm --filter @c-assistant/core build && pnpm --filter @c-assistant/agent-adapters build && pnpm --filter @c-assistant/connectors build && pnpm --filter @c-assistant/skill-runtime build && pnpm --filter @c-assistant/china-country-pack build && pnpm --filter @c-assistant/japan-country-pack build && pnpm --filter @c-assistant/storage build && pnpm --filter @c-assistant/server build && pnpm --filter @c-assistant/web build",
-    "typecheck": "pnpm --filter @c-assistant/core typecheck && pnpm --filter @c-assistant/agent-adapters typecheck && pnpm --filter @c-assistant/connectors typecheck && pnpm --filter @c-assistant/skill-runtime typecheck && pnpm --filter @c-assistant/china-country-pack typecheck && pnpm --filter @c-assistant/japan-country-pack typecheck && pnpm --filter @c-assistant/storage typecheck && pnpm --filter @c-assistant/server typecheck && pnpm --filter @c-assistant/web typecheck",
-    "test": "pnpm --filter @c-assistant/core test && pnpm --filter @c-assistant/agent-adapters test && pnpm --filter @c-assistant/connectors test && pnpm --filter @c-assistant/skill-runtime test && pnpm --filter @c-assistant/china-country-pack test && pnpm --filter @c-assistant/japan-country-pack test && pnpm --filter @c-assistant/storage test && pnpm --filter @c-assistant/server test && pnpm --filter @c-assistant/server exec tsx --test ../../scripts/semantic-plan-structurer.test.ts && node --test scripts/macos-service.test.mjs scripts/configure-google.test.mjs scripts/configure-whatsapp.test.mjs scripts/check-workspace.test.mjs",
+    "build": "pnpm --filter @c-assistant/core build && pnpm --filter @c-assistant/agent-adapters build && pnpm --filter @c-assistant/connectors build && pnpm --filter @c-assistant/travel-support build && pnpm --filter @c-assistant/storage build && pnpm --filter @c-assistant/server build && pnpm --filter @c-assistant/web build",
+    "typecheck": "pnpm --filter @c-assistant/core typecheck && pnpm --filter @c-assistant/agent-adapters typecheck && pnpm --filter @c-assistant/connectors typecheck && pnpm --filter @c-assistant/travel-support typecheck && pnpm --filter @c-assistant/storage typecheck && pnpm --filter @c-assistant/server typecheck && pnpm --filter @c-assistant/web typecheck",
+    "test": "pnpm --filter @c-assistant/core test && pnpm --filter @c-assistant/agent-adapters test && pnpm --filter @c-assistant/connectors test && pnpm --filter @c-assistant/travel-support test && pnpm --filter @c-assistant/storage test && pnpm --filter @c-assistant/server test && pnpm test:mah-carrier && pnpm --filter @c-assistant/server exec tsx --test ../../apps/web/src/*.test.ts && pnpm --filter @c-assistant/server exec tsx --test ../../scripts/semantic-plan-structurer.test.ts && node --test scripts/local-launcher.test.mjs scripts/configure-google.test.mjs scripts/check-workspace.test.mjs scripts/prune-server-build.test.mjs scripts/travel-catalog-retirement.test.mjs scripts/email-review-entry-retirement.test.mjs",
+    "test:mah-carrier": "pnpm --filter @c-assistant/storage build && pnpm --filter @c-assistant/server build:mah-stage-validation && pnpm --filter @c-assistant/server exec tsx --test src/mah-adaptive-stage-witness.test.ts src/mah-generation-runtime.test.ts src/mah-startup-recovery.test.ts src/isolated-generation-composition.test.ts ../../tests/mah-generation-integration.test.ts ../../tests/mah-stage-identity-integration.test.ts",
     "test:browser": "pnpm build && playwright test",
-    "test:browser:ci": "playwright test",
-    "release:check": "node scripts/release-check.mjs && pnpm build && pnpm typecheck && pnpm test"
+    "test:browser:ci": "playwright test && pnpm test:browser:isolated",
+    "test:browser:isolated": "node scripts/run-isolated-browser.mjs",
+    "test:local-launch": "node --test scripts/local-launcher.test.mjs && pnpm --filter @c-assistant/server exec tsx --test src/server-config.test.ts src/local-web-routes.test.ts src/server-lifecycle.test.ts",
+    "package:macos": "node scripts/package-macos.mjs",
+    "verify:local-launch-package": "node scripts/verify-local-launch-package.mjs",
+    "release:check": "node scripts/release-check.mjs && pnpm build && pnpm typecheck && pnpm test && pnpm test:supplemental && pnpm test:guarded-contracts",
+    "test:supplemental": "pnpm --filter @c-assistant/server test:supplemental && node --test scripts/browser-test-isolation.test.mjs scripts/isolated-browser-owner.test.mjs scripts/inspect-mah-integration.test.mjs scripts/mah-scheduling-contract.test.mjs scripts/travel-types-retirement.test.mjs scripts/readonly-mechanism.test.mjs && node --test tests/browser/*.test.mjs && node --test scripts/travel-adjustment-contract.test.mjs",
+    "test:guarded-contracts": "python3 scripts/test-guarded-contracts.py"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

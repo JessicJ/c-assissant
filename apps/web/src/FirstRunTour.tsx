@@ -1,6 +1,8 @@
+import { safePlanError } from "./api-client.js";
 import { type ReactNode, useState } from "react";
 import { CalendarDays, CarFront, Utensils } from "lucide-react";
-import type { ImmigrationStatus, Profile, WorkspaceSnapshot } from "@c-assistant/core";
+import type { ImmigrationStatus, ProfileGender, Profile, WorkspaceSnapshot } from "@c-assistant/core";
+import { PersonalityPicker } from "./PersonalityPicker.js";
 import { saveProfile } from "./api-client.js";
 import flightDelayPlaneUrl from "./assets/onboarding/flight-delay-plane.png";
 import asakusaLunchUrl from "./assets/onboarding/asakusa-lunch.png";
@@ -24,11 +26,13 @@ import "./first-run-tour.css";
 export const FIRST_RUN_TOUR_COMPLETE_KEY = "landi:first-run-tour:v1";
 const FIRST_RUN_TOUR_PROGRESS_KEY = "landi:first-run-tour:progress:v1";
 const PROFILE_PAGE = 2;
-const LAST_PAGE = 4;
+const PERSONALITY_PAGE = 3;
+const LAST_PAGE = 5;
 const STEP_LABELS = [
   "Tell me where you want to go",
   "Fine-tune it your way",
   "Tell me once, and that’s enough",
+  "Choose your travel company",
   "Stay ahead of every change",
   "A personal assistant for your entire journey"
 ] as const;
@@ -43,15 +47,18 @@ export function shouldShowFirstRunTour(profile: Profile, forcePreview = false): 
   return localStorage.getItem(FIRST_RUN_TOUR_PROGRESS_KEY) !== null;
 }
 
-function initialPage(): number {
+function initialPage(profile: Profile): number {
   if (typeof localStorage === "undefined") return 0;
   const saved = Number(localStorage.getItem(FIRST_RUN_TOUR_PROGRESS_KEY));
+  if (profile.status !== "ready" && saved >= PERSONALITY_PAGE) return PROFILE_PAGE;
   return Number.isInteger(saved) && saved >= 0 && saved <= LAST_PAGE ? saved : 0;
 }
 
 function editableProfile(profile: Profile): Profile {
   return {
     ...profile,
+    preferredLanguage: "English",
+    assistantPersonality: profile.assistantPersonality ?? "local_insider",
     displayName: profile.displayName === "New explorer" ? "" : profile.displayName
   };
 }
@@ -62,13 +69,12 @@ export function FirstRunTour({ profile: initial, onProfileSaved, onComplete, onE
   onComplete: () => void;
   onError: (message: string) => void;
 }) {
-  const [page, setPage] = useState(initialPage);
+  const [page, setPage] = useState(() => initialPage(initial));
   const [profile, setProfile] = useState<Profile>(() => editableProfile(initial));
   const [saving, setSaving] = useState(false);
   const profileValid = Boolean(
     profile.displayName.trim()
     && profile.preferredLanguage.trim()
-    && profile.immigrationStatus !== "unknown"
   );
 
   function advance() {
@@ -78,23 +84,28 @@ export function FirstRunTour({ profile: initial, onProfileSaved, onComplete, onE
   }
 
   function goToPage(nextPage: number) {
-    const lastUnlockedPage = initial.status === "ready" ? LAST_PAGE : PROFILE_PAGE;
-    if (nextPage > lastUnlockedPage || nextPage === page) return;
+    const lastUnlockedPage = initial.status === "ready" ? LAST_PAGE : PERSONALITY_PAGE;
+    if (saving || nextPage > lastUnlockedPage || nextPage === page) return;
     localStorage.setItem(FIRST_RUN_TOUR_PROGRESS_KEY, String(nextPage));
     setPage(nextPage);
   }
 
   async function next() {
     if (page === PROFILE_PAGE) {
+      if (profileValid) advance();
+      return;
+    }
+    if (page === PERSONALITY_PAGE) {
       if (!profileValid || saving) return;
       setSaving(true);
       try {
         const workspace = await saveProfile(profile);
-        if (workspace.profile.status !== "ready") throw new Error("Complete all required profile details.");
+        if (workspace.profile.status !== "ready") { onError("Complete all required profile details."); return; }
+        localStorage.removeItem(FIRST_RUN_TOUR_COMPLETE_KEY);
         onProfileSaved(workspace);
         advance();
       } catch (caught) {
-        onError(caught instanceof Error ? caught.message : "Unable to save profile details.");
+        onError(safePlanError(caught, "Unable to save profile details."));
       } finally {
         setSaving(false);
       }
@@ -110,31 +121,32 @@ export function FirstRunTour({ profile: initial, onProfileSaved, onComplete, onE
   }
 
   return <div className="first-run-tour-backdrop">
-    <section className="first-run-tour" role="dialog" aria-modal="true" aria-labelledby={`first-run-title-${page + 1}`}>
+    <section className={`first-run-tour${page === PERSONALITY_PAGE ? " first-run-tour-personality" : ""}`} role="dialog" aria-modal="true" aria-labelledby={`first-run-title-${page + 1}`}>
       <div className="first-run-stage">
         {page === 0 ? <IntroPage /> : null}
         {page === 1 ? <PlanPage /> : null}
         {page === PROFILE_PAGE ? <ProfilePage profile={profile} onChange={setProfile} /> : null}
-        {page === 3 ? <ChangePage /> : null}
+        {page === PERSONALITY_PAGE ? <article className="first-run-page personality-page"><h1 id="first-run-title-4">Choose your travel company.</h1><PersonalityPicker variant="onboarding" value={profile.assistantPersonality} onChange={(assistantPersonality) => setProfile({ ...profile, assistantPersonality })} /></article> : null}
+        {page === 4 ? <ChangePage /> : null}
         {page === LAST_PAGE ? <JourneyPage /> : null}
       </div>
       <footer className="first-run-controls">
-        <nav className="first-run-dots" aria-label={`Tour steps. Step ${page + 1} of 5`}>
+        <nav className="first-run-dots" aria-label={`Tour steps. Step ${page + 1} of 6`}>
           {STEP_LABELS.map((label, index) => {
-            const disabled = initial.status !== "ready" && index > PROFILE_PAGE;
+            const disabled = initial.status !== "ready" && index > PERSONALITY_PAGE;
             return <button
               aria-current={index === page ? "step" : undefined}
               aria-label={`Go to step ${index + 1}: ${label}`}
               className={index === page ? "active" : index < page ? "complete" : ""}
-              disabled={disabled}
+              disabled={disabled || saving}
               key={label}
               onClick={() => goToPage(index)}
               type="button"
             />;
           })}
         </nav>
-        <button className="first-run-next" type="button" onClick={() => void next()} disabled={saving || (page === PROFILE_PAGE && !profileValid)}>
-          {saving ? "Saving…" : page === LAST_PAGE ? "Create My First Plan" : "Next"}
+        <button className="first-run-next" type="button" onClick={() => void next()} disabled={saving || ((page === PROFILE_PAGE || page === PERSONALITY_PAGE) && !profileValid)}>
+          {saving ? "Saving…" : page === LAST_PAGE ? "Start planning" : "Next"}
         </button>
       </footer>
     </section>
@@ -153,7 +165,7 @@ function IntroPage() {
       <span className="tour-arrow" aria-hidden="true">➜</span>
       <section className="tour-trip-card">
         <img src={fujiUrl} alt="Mount Fuji" />
-        <div><h2>Japan Trip</h2><p>⌖ Tokyo, Osaka</p><p>▣ Apr 5 – Apr 14, 2025</p></div>
+        <div><h2>Example: Japan Trip</h2><p>⌖ Tokyo, Osaka</p><p>▣ Apr 5 – Apr 14</p></div>
       </section>
     </div>
   </article>;
@@ -189,14 +201,14 @@ function ProfilePage({ profile, onChange }: { profile: Profile; onChange: (profi
           <img src={landiIconUrl} alt="Landi" />
           <input aria-label="Name" placeholder="New explorer" value={profile.displayName} onChange={(event) => onChange({ ...profile, displayName: event.target.value })} />
         </label>
-        <ProfileInput label="Language" placeholder="e.g. English" value={profile.preferredLanguage} onChange={(value) => onChange({ ...profile, preferredLanguage: value })} />
+        <label className="tour-profile-field"><span>Gender (optional)</span><select aria-label="Gender" value={profile.gender} onChange={(event) => onChange({ ...profile, gender: event.target.value as ProfileGender })}>{profile.gender === "not_specified" || profile.gender === "nonbinary" ? <option value={profile.gender} disabled hidden>Select gender</option> : null}<option value="man">Man</option><option value="woman">Woman</option><option value="prefer_not_to_say">Prefer not to say</option></select></label>
         <ProfileInput label="Travel preferences" placeholder="Food, culture, nature" value={profile.travelPreferences ?? ""} onChange={(value) => onChange({ ...profile, travelPreferences: value })} />
-        <label className="tour-profile-field visa"><span>Destination visa or residence status</span><select aria-label="Destination visa or residence status" value={profile.immigrationStatus} onChange={(event) => onChange({ ...profile, immigrationStatus: event.target.value as ImmigrationStatus })}><option value="unknown" disabled>Select</option><option value="no_visa">No visa or residence permit yet</option><option value="short_term_visitor">Short-term visitor</option><option value="tourist_visa">Tourist visa</option><option value="student_visa">Student visa</option><option value="work_visa">Work visa</option><option value="residence_permit">Residence permit</option><option value="other">Other</option></select></label>
+        <label className="tour-profile-field visa"><span>Destination visa or residence status (optional)</span><select aria-label="Destination visa or residence status" value={profile.immigrationStatus} onChange={(event) => onChange({ ...profile, immigrationStatus: event.target.value as ImmigrationStatus })}><option value="unknown">Not sure yet</option><option value="no_visa">No visa or residence permit yet</option><option value="short_term_visitor">Short-term visitor</option><option value="tourist_visa">Tourist visa</option><option value="student_visa">Student visa</option><option value="work_visa">Work visa</option><option value="residence_permit">Residence permit</option><option value="other">Other</option></select></label>
       </section>
       <div className="tour-destinations" aria-label="Personalized destinations">
-        <DestinationCard className="japan" image={destinationJapanUrl} title="Japan" date="Oct 2025" />
-        <DestinationCard className="london" image={destinationLondonUrl} title="London" date="Apr 2026" />
-        <DestinationCard className="singapore" image={singaporeUrl} title="Singapore" date="Aug 2026" />
+        <DestinationCard className="japan" image={destinationJapanUrl} title="Japan example" date="Culture route" />
+        <DestinationCard className="london" image={destinationLondonUrl} title="London example" date="City route" />
+        <DestinationCard className="singapore" image={singaporeUrl} title="Singapore example" date="Family route" />
       </div>
     </div>
   </article>;
@@ -218,7 +230,7 @@ function ChangePage() {
     ["17:00", uenoParkUrl, "Ueno Park (National Museum)"]
   ];
   return <article className="first-run-page change-page">
-    <h1 id="first-run-title-4">Stay ahead of every change.</h1>
+    <h1 id="first-run-title-5">Stay ahead of every change.</h1>
     <div className="change-page-layout">
       <div className="change-summary">
         <section className="tour-flight"><img src={flightDelayPlaneUrl} alt="Airplane" /><div><strong>JL 708</strong><span>HND → ITM</span><small>Oct 12, 10:20</small></div><p><b>Flight delayed</b><span>Now departs 11:50</span></p></section>
@@ -232,7 +244,7 @@ function ChangePage() {
 
 function JourneyPage() {
   return <article className="first-run-page journey-page">
-    <h1 id="first-run-title-5">A personal assistant for your entire journey.</h1>
+    <h1 id="first-run-title-6">A personal assistant for your entire journey.</h1>
     <div className="journey-page-layout">
       <div className="tour-services">
         <Service icon={<CalendarDays aria-hidden="true" />} title="Plan the day" copy="Keep your trip organized." />

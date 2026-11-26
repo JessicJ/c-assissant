@@ -23,21 +23,18 @@ importers:
       '@c-assistant/agent-adapters':
         specifier: workspace:*
         version: link:../../packages/agent-adapters
-      '@c-assistant/china-country-pack':
-        specifier: workspace:*
-        version: link:../../country-packs/china
       '@c-assistant/connectors':
         specifier: workspace:*
         version: link:../../packages/connectors
       '@c-assistant/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@c-assistant/japan-country-pack':
-        specifier: workspace:*
-        version: link:../../country-packs/japan
       '@c-assistant/storage':
         specifier: workspace:*
         version: link:../../packages/storage
+      '@c-assistant/travel-support':
+        specifier: workspace:*
+        version: link:../../packages/travel-support
       '@fastify/cors':
         specifier: ^10.0.1
         version: 10.1.0
@@ -51,6 +48,15 @@ importers:
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.1
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
+      ajv-formats:
+        specifier: 3.0.1
+        version: 3.0.1(ajv@8.20.0)
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
       tsx:
         specifier: ^4.19.2
         version: 4.23.7
@@ -60,9 +66,6 @@ importers:
       '@c-assistant/agent-adapters':
         specifier: workspace:*
         version: link:../../packages/agent-adapters
-      '@c-assistant/china-country-pack':
-        specifier: workspace:*
-        version: link:../../country-packs/china
       '@c-assistant/connectors':
         specifier: workspace:*
         version: link:../../packages/connectors
@@ -98,38 +101,6 @@ importers:
         specifier: ^19.0.2
         version: 19.2.4(@types/react@19.2.18)
 
-  country-packs/china:
-    dependencies:
-      '@c-assistant/core':
-        specifier: workspace:*
-        version: link:../../packages/core
-      '@c-assistant/skill-runtime':
-        specifier: workspace:*
-        version: link:../../packages/skill-runtime
-    devDependencies:
-      '@types/node':
-        specifier: ^22.10.2
-        version: 22.20.1
-      tsx:
-        specifier: ^4.19.2
-        version: 4.23.7
-
-  country-packs/japan:
-    dependencies:
-      '@c-assistant/core':
-        specifier: workspace:*
-        version: link:../../packages/core
-      '@c-assistant/skill-runtime':
-        specifier: workspace:*
-        version: link:../../packages/skill-runtime
-    devDependencies:
-      '@types/node':
-        specifier: ^22.10.2
-        version: 22.20.1
-      tsx:
-        specifier: ^4.19.2
-        version: 4.23.7
-
   packages/agent-adapters:
     dependencies:
       '@c-assistant/core':
@@ -144,10 +115,20 @@ importers:
         version: 4.23.7
 
   packages/connectors:
+    dependencies:
+      '@c-assistant/core':
+        specifier: workspace:*
+        version: link:../core
+      nodemailer:
+        specifier: ^10.1.0
+        version: 10.1.0
     devDependencies:
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.1
+      '@types/nodemailer':
+        specifier: ^8.0.2
+        version: 8.0.2
       tsx:
         specifier: ^4.19.2
         version: 4.23.7
@@ -161,7 +142,11 @@ importers:
         specifier: ^4.19.2
         version: 4.23.7
 
-  packages/skill-runtime:
+  packages/storage:
+    dependencies:
+      '@c-assistant/core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
       '@types/node':
         specifier: ^22.10.2
@@ -170,7 +155,7 @@ importers:
         specifier: ^4.19.2
         version: 4.23.7
 
-  packages/storage:
+  packages/travel-support:
     dependencies:
       '@c-assistant/core':
         specifier: workspace:*
@@ -810,6 +795,9 @@ packages:
   '@types/node@22.20.1':
     resolution: {integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==}
 
+  '@types/nodemailer@8.0.2':
+    resolution: {integrity: sha512-c7M5ox8p0nEOfbJ2E9Qcmt8/QCu/VzsiAhzBiZbvky2PhKZDHpKB3sQHBM5MEZNkCfBOaS6S9//AGPRTNB7IaA==}
+
   '@types/react-dom@19.2.4':
     resolution: {integrity: sha512-Bsc+QHgp+P/F02XDzNCY9jnZNCUuLki36KT7VKrTXXLdHf+vHMNZnW1rVu5DNW/rCK+fya3DATySbLM4yhtKUw==}
     peerDependencies:
@@ -1096,6 +1084,10 @@ packages:
   node-releases@2.0.52:
     resolution: {integrity: sha512-MRlTqhAfoMx/4mhEbPo3Hi02g9LJZaJkka69V6h67Cb1gjrAG0jsTE4CZX1eptNx+VCAwJmfpnDIF4P0Nh1A7A==}
     engines: {node: '>=18'}
+
+  nodemailer@10.1.0:
+    resolution: {integrity: sha512-fXW8AulB25aOTuwfRYV6lqHyfz2VM4rr4SGXH03mE7x5znEUpzL5mu6anARUpZN7744Ziwkmr4AxSLPJsBQspg==}
+    engines: {node: '>=20.0.0'}
 
   obliterator@2.0.5:
     resolution: {integrity: sha512-42CPE9AhahZRsMNslczq0ctAEtqk8Eka26QofnqC346BZdHDySk3LWka23LI7ULIw11NmltpiLagIq8gBozxTw==}
@@ -1818,6 +1810,10 @@ snapshots:
     dependencies:
       undici-types: 6.21.0
 
+  '@types/nodemailer@8.0.2':
+    dependencies:
+      '@types/node': 22.20.1
+
   '@types/react-dom@19.2.4(@types/react@19.2.18)':
     dependencies:
       '@types/react': 19.2.18
@@ -2128,6 +2124,8 @@ snapshots:
   nanoid@3.3.17: {}
 
   node-releases@2.0.52: {}
+
+  nodemailer@10.1.0: {}
 
   obliterator@2.0.5: {}
 

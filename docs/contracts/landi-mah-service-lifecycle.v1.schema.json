@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://landi.local/contracts/landi-mah-service-lifecycle.v1.schema.json",
+  "description": "Landi proposed lifecycle contract; NOT a supported public MAH command. A receipt must be read from an authenticated public source and correlated to the existing background projection.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "kind",
+        "requestId",
+        "serviceId",
+        "projectRoot",
+        "componentId",
+        "launcherContractVersion",
+        "action",
+        "expectedRevision",
+        "desiredState"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "landi_mah_service_action"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "serviceId": {
+          "const": "landi"
+        },
+        "projectRoot": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "componentId": {
+          "const": "c-assissant"
+        },
+        "launcherContractVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "action": {
+          "enum": [
+            "register",
+            "start",
+            "stop",
+            "reconcile",
+            "unregister"
+          ]
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "desiredState": {
+          "enum": [
+            "running",
+            "stopped"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "stop",
+                  "unregister"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "desiredState": {
+                "const": "stopped"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "start"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "desiredState": {
+                "const": "running"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "kind",
+        "requestId",
+        "requestSha256",
+        "transitionId",
+        "revision",
+        "status",
+        "beforeState",
+        "desiredState",
+        "ownership",
+        "projectionSha256",
+        "observedAt"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "landi_mah_service_receipt"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "requestSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "transitionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "enum": [
+            "accepted",
+            "completed",
+            "rejected",
+            "unknown"
+          ]
+        },
+        "beforeState": {
+          "enum": [
+            "running",
+            "stopped",
+            "unregistered"
+          ]
+        },
+        "desiredState": {
+          "enum": [
+            "running",
+            "stopped"
+          ]
+        },
+        "ownership": {
+          "enum": [
+            "verified",
+            "conflict",
+            "unknown"
+          ]
+        },
+        "projectionSha256": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "completed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ownership": {
+                "const": "verified"
+              },
+              "projectionSha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

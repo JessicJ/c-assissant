@@ -1,0 +1,357 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://landi.local/contracts/landi-mah-stage-result.schema.json",
+  "title": "Landi MAH 有界生成阶段结果",
+  "description": "MAH Task 在 artifacts/landi-stage-result.json 写出的成功候选外层，独立使用 Landi 结果 Schema 1，不是 MAH CLI 投影版本。provenance 为候选自述，不能证明 Scheduler 物化或 provider 路由；必须与公开读回和主 Storage 身份交叉核对，再校验 payload 的业务 Schema 和领域完整性。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "requestId",
+    "carrierTaskId",
+    "generationKey",
+    "proposalRef",
+    "skillLineage",
+    "operation",
+    "attempt",
+    "inputSha256",
+    "outcome",
+    "businessContract",
+    "payload",
+    "diagnostics",
+    "provenance"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "kind": {
+      "const": "landi_generation_stage_result"
+    },
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "carrierTaskId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "generationKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "proposalRef": {
+      "$ref": "#/$defs/proposalRef"
+    },
+    "skillLineage": {
+      "$ref": "#/$defs/skillLineage"
+    },
+    "operation": {
+      "$ref": "#/$defs/operation"
+    },
+    "batchId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "inputSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "outcome": {
+      "const": "succeeded"
+    },
+    "businessContract": {
+      "type": "string",
+      "enum": [
+        "landi.skill-research-batch.v1",
+        "landi.skill-itinerary.v1",
+        "landi.skill-itinerary-review.v1",
+        "landi.planned-place-image-enrichment.v1",
+        "landi.semantic-plan.v1",
+        "landi.semantic-validation.v1",
+        "landi.semantic-repair.v1"
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "minProperties": 1
+    },
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1200
+          }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "carrier",
+        "taskId",
+        "agentId",
+        "startedAt",
+        "completedAt"
+      ],
+      "properties": {
+        "carrier": {
+          "const": "mah_task"
+        },
+        "taskId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "agentId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "modelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "description": "候选工件的来源声明，须将 taskId 与 carrierTaskId、持久映射和公开 Task 投影逐字段核对；Agent 自述不能替代公开证据。"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "research_batch"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "required": [
+          "batchId"
+        ],
+        "properties": {
+          "batchId": {
+            "$ref": "#/properties/batchId"
+          },
+          "businessContract": {
+            "const": "landi.skill-research-batch.v1"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "enum": [
+              "itinerary_draft",
+              "itinerary_repair"
+            ]
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "businessContract": {
+            "const": "landi.skill-itinerary.v1"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "itinerary_review"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "businessContract": {
+            "const": "landi.skill-itinerary-review.v1"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "planned_place_image_enrichment"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "businessContract": {
+            "const": "landi.planned-place-image-enrichment.v1"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "semantic_plan"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "businessContract": {
+            "const": "landi.semantic-plan.v1"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "semantic_validation"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "businessContract": {
+            "const": "landi.semantic-validation.v1"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "semantic_repair"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "businessContract": {
+            "const": "landi.semantic-repair.v1"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "proposalRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionId",
+        "proposalVersion"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "proposalVersion": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "skillLineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "skillId",
+        "skillVersion"
+      ],
+      "properties": {
+        "skillId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "skillVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        }
+      }
+    },
+    "operation": {
+      "type": "string",
+      "enum": [
+        "research_batch",
+        "itinerary_draft",
+        "itinerary_review",
+        "itinerary_repair",
+        "planned_place_image_enrichment",
+        "semantic_plan",
+        "semantic_validation",
+        "semantic_repair"
+      ]
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

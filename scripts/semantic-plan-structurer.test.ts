@@ -145,7 +145,14 @@ test("S1.2 maps preparation and tips to native structures", () => {
   const { artifact, importedBlueprint } = structureSemanticTravelPlan(semanticPlan, research, { hardenContract: false, importBlueprint: true, createdAt: "2026-09-14T00:00:00.000Z" });
   assert.equal(artifact.preparationChecklist?.length, 2);
   assert.equal(artifact.travelTips?.length, 2);
-  assert.equal(importedBlueprint?.preparationChecklist?.length, 2);
+  assert.equal(importedBlueprint?.preparationChecklist?.length, 3);
+  assert.deepEqual(importedBlueprint?.preparationChecklist?.slice(0, 2), artifact.preparationChecklist);
+  const pendingPolicy = importedBlueprint?.preparationChecklist?.[2];
+  assert.equal(pendingPolicy?.id, "policy-review-research-test-daz92f");
+  assert.equal(pendingPolicy?.group, "documents");
+  assert.equal(pendingPolicy?.title, "Check entry and transit requirements");
+  assert.equal(pendingPolicy?.description, "Entry and transit requirements have not been assessed for this trip.");
+  assert.deepEqual(pendingPolicy?.evidence, []);
   assert.equal(importedBlueprint?.travelTips?.length, 2);
 });
 

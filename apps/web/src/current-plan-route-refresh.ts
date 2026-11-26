@@ -17,6 +17,7 @@ export type AutomaticRouteRefreshGateInput = {
   pendingEditCount: number;
   routeRefreshBusy: boolean;
   canRequest: boolean;
+  savedEditUndoAvailable?: boolean;
 };
 
 export type AutomaticRouteRefreshGateResult = {
@@ -30,6 +31,7 @@ export type MapRouteRefreshHeaderText = {
 };
 
 export function automaticRouteRefreshRequestForRevision(workspace: WorkspaceSnapshot, revision: DirectBlueprintRevisionBatchMetadata): AutomaticRouteRefreshRequest | undefined {
+  if (workspace.latestDirectBlueprintRevision?.planId === workspace.activePlan.id && workspace.latestDirectBlueprintRevision.planVersion === workspace.activePlan.version) return undefined;
   const presentation = workspace.activePlan.presentation;
   if (!presentation || presentation.kind !== "itinerary") return undefined;
   const requestedIds = [...new Set(revision.routeRefresh.movementIds)].filter(Boolean);
@@ -59,7 +61,7 @@ export function automaticRouteRefreshKey(planId: string, planVersion: number, da
 
 export function automaticRouteRefreshGate(input: AutomaticRouteRefreshGateInput, attemptedKeys: ReadonlySet<string>): AutomaticRouteRefreshGateResult | undefined {
   const refresh = input.routeRefresh;
-  if (!refresh || refresh.actionable === false || !refresh.segmentIds.length || input.pendingEditCount || input.routeRefreshBusy || !input.canRequest) return undefined;
+  if (input.savedEditUndoAvailable || !refresh || refresh.actionable === false || !refresh.segmentIds.length || input.pendingEditCount || input.routeRefreshBusy || !input.canRequest) return undefined;
   const key = automaticRouteRefreshKey(input.planId, input.planVersion, input.dayId, refresh.segmentIds);
   if (attemptedKeys.has(key)) return undefined;
   return { key, refresh };

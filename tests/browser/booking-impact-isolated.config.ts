@@ -1,0 +1,10 @@
+import { defineConfig, devices } from '@playwright/test';
+import { isAbsolute } from 'node:path';
+const baseURL = process.env.LANDI_WORKSPACE_BASE_URL;
+if (process.env.LANDI_BOOKING_IMPACT_E2E !== '1') throw new Error('须显式启用预订关系专项');
+if (!baseURL) throw new Error('须指定自有隔离实例地址');
+const url = new URL(baseURL);
+if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.username || url.password) throw new Error('仅允许无凭据本机回环地址');
+const outputDir = process.env.LANDI_BROWSER_OUTPUT_DIR;
+if (!outputDir || !isAbsolute(outputDir)) throw new Error('须指定绝对证据目录');
+export default defineConfig({ testDir: '.', testMatch: 'booking-impact-isolated.spec.ts', outputDir, workers: 1, retries: 0, reporter: 'list', use: { baseURL, headless: process.env.LANDI_BROWSER_HEADFUL !== '1', trace: 'retain-on-failure', screenshot: 'only-on-failure', video: 'retain-on-failure' }, projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }] });

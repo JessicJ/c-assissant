@@ -7,6 +7,14 @@
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
   "exports": {
+    "./blueprint-impact-projection": {
+      "types": "./lib/blueprint-impact-projection.d.ts",
+      "default": "./lib/blueprint-impact-projection.js"
+    },
+    "./workspace-mutation-error": {
+      "types": "./lib/workspace-mutation-error.d.ts",
+      "default": "./lib/workspace-mutation-error.js"
+    },
     ".": {
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
@@ -18,12 +26,28 @@
     "./current-destination": {
       "types": "./lib/current-destination.d.ts",
       "default": "./lib/current-destination.js"
+    },
+    "./assistant-personality": {
+      "types": "./lib/assistant-personality.d.ts",
+      "default": "./lib/assistant-personality.js"
+    },
+    "./planning-budget": {
+      "types": "./lib/planning-budget.d.ts",
+      "default": "./lib/planning-budget.js"
+    },
+    "./booking-relationship": {
+      "types": "./lib/booking-relationship.d.ts",
+      "default": "./lib/booking-relationship.js"
+    },
+    "./booking-source-selection": {
+      "types": "./lib/booking-source-selection.d.ts",
+      "default": "./lib/booking-source-selection.js"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/*.test.ts"
+    "test": "tsx --test src/*.test.ts src/planning-budget.test.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

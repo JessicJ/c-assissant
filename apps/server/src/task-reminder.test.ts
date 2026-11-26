@@ -58,7 +58,7 @@ test("Task reminder copy reads the current Task and preserves external-action bo
   const message = formatTaskReminder(plan, task);
   assert.match(message, /Check essential items/);
   assert.match(message, /Check passport, travel documents/);
-  assert.match(message, /No booking, payment, ride, or external action has been started/);
+  assert.doesNotMatch(message, /Current status|Why now|No booking/);
 });
 
 test("Task reminder copy identifies fresh weather facts and their source", () => {
@@ -68,7 +68,7 @@ test("Task reminder copy identifies fresh weather facts and their source", () =>
     retrievedAt: "2026-09-01T00:00:01Z",
     attributionUrl: "https://www.qweather.com/weather/shanghai.html"
   });
-  assert.match(message, /Latest destination weather/);
-  assert.match(message, /Retrieved: 2026-09-01T00:00:01Z/);
-  assert.match(message, /Source: QWeather — https:\/\/www\.qweather\.com/);
+  assert.match(message, /Weather to keep in mind/);
+  assert.doesNotMatch(message, /Retrieved:|Source:/);
+  assert.match(message, /https:\/\/www\.qweather\.com/);
 });

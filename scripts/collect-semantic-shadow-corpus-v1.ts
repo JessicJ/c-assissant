@@ -494,6 +494,15 @@ const cases: CorpusCase[] = [
     request: "Plan a relaxed Seoul trip focused on neighborhoods, design shops, cafes, and palaces. No accommodation has been chosen.",
     facts: { destination: "Seoul", purpose: "neighborhoods, design shops, cafes, palaces", travel_dates: "2026-10-20 to 2026-10-23", arrival: "Arrive Incheon at 09:20 on 2026-10-20", departure: "Depart Incheon at 19:15 on 2026-10-23", party_size: "2", transport_preference: "公共交通" },
     proposal: { title: "Relaxed Seoul neighborhoods", objective: "Seoul design, cafes, and palaces", theme: "Neighborhoods, design, cafes, palaces", segments: ["Seoul"], skeleton: ["Arrival", "Palaces and hanok area", "Design shops and cafes", "Departure"], tradeoffs: ["Keep routing simple without a hotel base"], assumptions: ["Accommodation not chosen"], decisionPoints: [] }
+  },
+  {
+    id: "multi-base-japan-unbooked-hotels",
+    categories: ["multi-base", "long-trip", "no-accommodation-yet", "intercity-rail"],
+    destination: "Japan",
+    duration: "2026-11-05 to 2026-11-16",
+    request: "Plan a 12-day first visit to Japan for two adults from 2026-11-05 to 2026-11-16. Arrive at Tokyo Haneda at 10:30 on 5 November and depart Osaka Kansai at 17:30 on 16 November. We want Tokyo, Kanazawa, and Kyoto, with a final night convenient for Kansai airport. We prefer trains and moderate daily pacing. No hotels or activities are booked; recommend suitable hotels and make each day's departure and overnight base clear.",
+    facts: { destination: "Tokyo, Kanazawa, Kyoto and Osaka, Japan", purpose: "first visit, culture, food, gardens, and rail travel", travel_dates: "2026-11-05 to 2026-11-16", arrival: "Arrive Tokyo Haneda at 10:30 on 2026-11-05", departure: "Depart Osaka Kansai at 17:30 on 2026-11-16", party_size: "2", transport_preference: "rail and local public transport", accommodation: "No hotels booked; recommend suitable bases" },
+    proposal: { title: "Japan by rail: Tokyo, Kanazawa and Kyoto", objective: "A feasible first Japan trip with clear daily bases", theme: "Culture, food, gardens, and intercity rail", segments: ["Tokyo", "Kanazawa", "Kyoto", "Kansai airport area"], skeleton: ["2026-11-05 arrival and Tokyo base", "Tokyo sightseeing", "Train to Kanazawa", "Kanazawa sightseeing", "Train to Kyoto", "Kyoto sightseeing", "Final night convenient for Kansai airport", "2026-11-16 departure"], tradeoffs: ["Use a practical number of hotel changes", "Do not assume any train or hotel is already booked", "Leave sufficient time for the departure airport"], assumptions: ["Hotels and activities are not booked"], decisionPoints: [] }
   }
 ];
 

@@ -39,6 +39,24 @@ test("coverage audits only planned concrete Timeline places and skips enrichment
   assert.equal(missingPlannedPlaceImages(blueprint, research).some((place) => place.id === ids["Optional Gallery"]), false);
 });
 
+test("legacy Timeline blocks without a plan role still receive image coverage", () => {
+  const { research, blueprint, ids } = fixture();
+  delete blueprint.days[0]!.blocks![0]!.planRole;
+  delete blueprint.days[0]!.blocks![1]!.planRole;
+  assert.deepEqual(plannedConcretePlaceIds(blueprint), [ids.Museum, ids["Exact Restaurant"]]);
+  assert.deepEqual(missingPlannedPlaceImages(blueprint, research).map((place) => place.name), ["Exact Restaurant"]);
+});
+
+test("place-backed lodging and transport cards are included in image coverage", () => {
+  const { research, blueprint, ids } = fixture();
+  blueprint.days[0]!.blocks![0]!.kind = "transfer";
+  blueprint.days[0]!.blocks![1]!.kind = "lodging";
+  blueprint.days[0]!.blocks![1]!.placeId = ids["Exact Restaurant"]!;
+  research.places.find((place) => place.id === ids["Exact Restaurant"])!.accommodation = { state: "recommended" };
+  assert.deepEqual(plannedConcretePlaceIds(blueprint), [ids.Museum, ids["Exact Restaurant"]]);
+  assert.deepEqual(missingPlannedPlaceImages(blueprint, research).map((place) => place.name), ["Exact Restaurant"]);
+});
+
 test("image-only merge preserves existing images, sanitizes source bindings, dedupes URLs, and leaves itinerary semantics unchanged", () => {
   const { research, blueprint, ids } = fixture();
   const enrichment: SkillImageEnrichmentArtifact = {

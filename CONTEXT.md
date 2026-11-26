@@ -36,8 +36,20 @@ _Avoid_: Planning Assumption, reminder, reservation card
 A privacy-minimized Booking Constraint recorded in a Trip Blueprint to explain itinerary structure. It preserves the time, location, role, and constraint strength needed for travel meaning without carrying protected attachment content.
 _Avoid_: Plan booking, raw confirmation, execution reminder
 
+**Booking Itinerary Assessment**:
+随 Trip Blueprint Version 保留、经负责旅行者或 Agent 判断的预订与行程关系评估，区分已知影响、已知无关和未知。它包含对直接与间接依赖的审阅覆盖，完整语义由预订设计拥有。
+_Avoid_: 预订列表, 名称匹配, 独立可编辑关系表
+
+**Itinerary Occurrence**:
+某个地点在行程中的一次具体物理出现；同日酒店重访与跨日同地点访问是不同出现。它区别于表示同一地点本身的 Place Identity。
+_Avoid_: 地点名称, 全局地点, 可变排序位置
+
+**Booking Relationship Review**:
+旅行者对预订行程关系及其覆盖的明确接受或更正。它独立于 Blueprint 生成批准与 Execution Plan 激活。
+_Avoid_: 导入成功, 生成批准, 执行批准
+
 **Plan-linked Booking**:
-A booking record attached to a Draft Plan or Execution Plan for execution reference, reminders, handoffs, protected attachments, and user review. It may contain execution details that do not belong in the Trip Blueprint, such as confirmation codes, supplier links, notes, and attachment metadata.
+通过明确来源与 Draft Plan 或 Execution Plan 逻辑关联的真实预订记录，原始所有者与身份不变。它保留确认码、附件等执行资料，区别于该版本批准的隐私最小化结构快照。
 _Avoid_: Trip Blueprint constraint, itinerary structure, Planning Assumption
 
 **Downgraded Booking Constraint**:
@@ -120,6 +132,26 @@ _Avoid_: Research Set, audit history, application log
 The stable identity of Blueprint Generation authorized by one exact Planning Proposal version. Repeated generation requests attach to or resume the same operation rather than starting concurrent work.
 _Avoid_: Run ID, retry ID, Compilation Key
 
+**MAH Stage Carrier Task**:
+由随机 Task UUID 标识、只执行一次有界 Agent 工作的 MAH 调度载体。一个研究批次、行程初稿、审阅或修复各自使用独立载体；它不是 Blueprint Generation、Generation Key、业务阶段检查点或 Trip Blueprint 版本。
+_Avoid_: Blueprint Generation, Generation Key, Research Set
+
+**Generation Carrier Mapping**:
+Landi 持久化的业务关联记录，把精确 Generation Key、operation、可选 batch、attempt、请求摘要和预期工件子路径绑定到一个 MAH Stage Carrier Task。它是重复提交、取消和重启恢复的入口，MAH 不替 Landi 拥有该映射。
+_Avoid_: MAH Task metadata, Agent session, inferred task list
+
+**Stage Result Artifact**:
+MAH Stage Carrier Task 写入声明子路径、由 Landi 通过公开 Task context 读取的结构化业务候选。只有传输 Schema、关联身份、摘要、对应业务 Schema、Importer 和领域完整性检查全部通过后，它才可形成 Research Set 或 Trip Blueprint 检查点；Agent final response、summary、日志和 replay 文本不是该工件。
+_Avoid_: Agent summary, audit log, unvalidated JSON
+
+**MAH Background Service Registration**:
+未来 MAH 公开服务合同中，以稳定 `serviceId=landi` 绑定规范 Project、Landi 组件与唯一规范启动器的外围监督声明。它只拥有本地进程的期望状态、reconcile 与崩溃监督，不拥有 Landi Scheduler、Reminder、Execution Plan、Blueprint Generation 或任何业务状态。Project 注册、Project Entry、Schedule 和 MAH Task 都不是该注册。
+_Avoid_: Project runtime registration, scheduled Task, LaunchAgent
+
+**Landi Runtime Projection**:
+由 MAH 公开读回、符合 `landi-mah-background-runtime.schema.json` 的非秘密服务状态，包含期望/观察状态、supervisor、实例所有权摘要、就绪子检查、重启与恢复事实。端口、PID 或通用健康响应单独都不是该投影；健康令牌、凭据、日志和私有 IPC 不得进入投影。
+_Avoid_: Process list, health token, runtime log
+
 **Superseded Generation**:
 A Blueprint Generation whose Planning Proposal is no longer the traveler's current confirmed direction. Its checkpoints remain attributable to the old proposal but its result cannot become the current Draft Plan.
 _Avoid_: Failed generation, cancelled retry
@@ -145,7 +177,7 @@ A traveler-requested change to the Place Catalog or day-by-day itinerary that pr
 _Avoid_: Direct Plan edit, display preference
 
 **Direct Blueprint Revision**:
-A precise traveler edit whose complete effect is already known, such as changing a place priority, day assignment, or order. Landi applies it deterministically without asking the Skill to reinterpret the trip.
+旅行者明确选择且影响可确定的编辑，包括地点优先级、位置、顺序、Tip 状态及准备项状态。确认批次与其保存后撤销均由 Core 确定性产生新 Blueprint 版本，并由 Storage 原子保存草稿及审计；完整状态、精确版本、来源和撤销边界统一见 `docs/blueprint-workspace-generation-requirements.md` 的 Editing and Impact Rules 与 Data Requirements。
 _Avoid_: Replanning request, direct Plan edit
 
 **Assisted Replanning**:
@@ -265,7 +297,7 @@ A possible explanation of why Landi placed one scheduled Itinerary Block at a sp
 _Avoid_: Itinerary Block status, Source Marker, Guide Relevance Order, Execution Action Card rationale
 
 **Timeline-linked Guide Detail**:
-The shared detail state opened when a scheduled Guide Card or timeline block is selected. It locates the corresponding timeline block and shows the Guide Item's image or text content, Source Marker, related guide material, and relevant alternatives in the same detail panel. Relevant alternatives are revealed here, not on timeline blocks by default.
+选择已排程 Guide Card 或日程块后打开的共享详情状态，关联对应日程块，并在同一面板呈现图文、来源上下文、相关材料和替代选项；替代选项在此展开，不默认显示在日程块上。图片来源标记的含义遵循下文 Source Marker 定义。
 _Avoid_: Separate article page, map-only selection, jump without context
 
 **Guide Detail Template**:
@@ -309,7 +341,7 @@ The rule that a Preparation Checklist item must materially affect the trip's rea
 _Avoid_: Generic to-do, lifestyle advice, vague reminder, filler checklist item
 
 **Travel Tip Card**:
-The compact text-first Web presentation of a Travel Tip. It may show a Source Marker when a custom, safety, payment, transport, or other change-sensitive claim needs provenance, but it does not require images.
+Travel Tip 的紧凑文本呈现；习俗、安全、支付、交通等易变声明的来源及新鲜度以轻量文字或链接披露，不使用独立图片来源标记，也不要求图片。具体呈现要求以[工作区需求的 Travel Tips](docs/blueprint-workspace-generation-requirements.md#3-travel-tips)为准。
 _Avoid_: Image-led guide card, execution task, generic FAQ
 
 **Canonical Tip**:
@@ -329,7 +361,7 @@ A capability-driven source selection model that chooses inspiration, maps, dinin
 _Avoid_: Fixed regional strategy, Xiaohongshu-only source, single global platform
 
 **Source Marker**:
-A small unobtrusive indicator on a guide card, image, tip, or itinerary detail that reveals inspiration and evidence references on hover, focus, or tap. It preserves source transparency without making source lists part of the default reading layout. Itinerary Timeline blocks do not show Source Markers by default; they use short status text for schedule-critical facts that need attention.
+真实图片上的轻量来源指示，可通过悬停、聚焦或点击披露灵感与证据引用；文本卡、Tips、详情正文及 Sources 使用来源文字或链接，日程块默认不显示此标记。具体呈现边界以[ADR-0170](docs/adr/0170-refine-blueprint-workspace-chrome.md)及其对应工作区需求为准。
 _Avoid_: Visible citation block, hidden provenance, card footer clutter, timeline block default badge
 
 **Local Product**:
@@ -469,15 +501,15 @@ Ephemeral, route-scoped choices controlling how a Plan Workspace is viewed, such
 _Avoid_: Blueprint Revision, traveler preference
 
 **Execution Plan**:
-The traveler-approved Plan that currently authorizes reminders, monitoring, and other execution work.
+当前合法执行的 Plan，授权对应版本的提醒、监测及其他执行工作。首次激活仍须旅行者批准；后续替代的确认／应用遵循 [email-execution.md 的旅行阶段与原子版本交接](docs/email-execution.md#旅行阶段与原子版本交接)。
 _Avoid_: Draft Plan, active draft
 
 **Replacement Draft**:
-A Draft Plan proposed to supersede an existing Execution Plan. It remains isolated from execution until traveler approval atomically replaces the execution pointer.
+拟替代现有 Execution Plan 的 Draft Plan；在阶段合同要求的出发前精确确认或行中可靠客观变化校验应用完成前，与执行隔离。确认／应用的依据及门禁由 `docs/email-execution.md` 拥有。
 _Avoid_: Execution Plan update, active replacement
 
 **Execution Switch**:
-The atomic approval transition that replaces the current Execution Plan, cancels obsolete future work from the previous Plan, and activates eligible work in the replacement.
+原子切换当前 Execution Plan、使旧版过时工作失效并启用新版合格工作的事务。出发前精确确认与行中客观变化应用分别留证，具体阶段及交接合同由 `docs/email-execution.md` 拥有。
 _Avoid_: Draft publication, gradual reminder migration
 
 **Stage**:
@@ -485,7 +517,7 @@ A grouping of related execution Tasks within a Plan, present only when the trip 
 _Avoid_: Trip Blueprint section, mandatory module
 
 **Action Requirement**:
-A structured need proposed by travel-planning expertise or a Country Pack that has an accountable party and a completion condition or relevant execution time. It is eligible for deterministic classification and compilation into a Plan Task or Reminder; descriptive travel advice is not.
+A structured need proposed by travel-planning expertise and sourced destination research that has an accountable party and a completion condition or relevant execution time. It is eligible for deterministic classification and compilation into a Plan Task or Reminder; descriptive travel advice is not.
 _Avoid_: Tip, place description, general caution
 
 **Requirement Identity**:
@@ -493,7 +525,7 @@ The stable identity of one Action Requirement across Blueprint Versions while it
 _Avoid_: Task ID, task title
 
 **Dormant Reminder**:
-A Reminder visible in a Draft Plan that describes future recheck or notification work but cannot run until the traveler approves that Plan for execution.
+Draft Plan 中可见的未来复核或通知工作；仅在该 Plan 按现行阶段合同合法激活后才可执行。
 _Avoid_: Scheduled notification, active monitoring
 
 **External Action**:
@@ -549,7 +581,7 @@ A provider-neutral Explicit Execution Intent that asks Landi how to get to the N
 _Avoid_: Uber command, provider test, free navigation command
 
 **/go**:
-The first Movement Intent Command. It asks Landi to produce a Movement Action Card for the Next Planned Stop using a One-time Location Share when current position is required.
+Historical retired chat command for a Movement Action Card and one-time location input. It is retained only to interpret old records; it is not a current Landi entrypoint.
 _Avoid_: /uber, /next, /move
 
 **Execution-only Command**:
@@ -577,7 +609,7 @@ A destination-neutral food execution capability that uses a One-time Location Sh
 _Avoid_: Country Pack food skill, local cuisine guide, restaurant transaction
 
 **/food**:
-The food command that returns a Nearby Food Action Card when enough Plan or current-area context exists and otherwise degrades to a one-time nearby food search from the traveler's shared location.
+Historical retired chat command for nearby-food assistance. Existing records remain readable; current travel food research and email guidance do not expose or restore this command.
 _Avoid_: Country Pack food command, food delivery command, Plan revision command
 
 **Ephemeral Nearby Choice**:
@@ -593,7 +625,7 @@ A read-only report of current or near-term weather facts for the relevant Plan o
 _Avoid_: Weather impact, execution adjustment, replanning trigger
 
 **/weather**:
-The weather command that returns a Weather Impact Action Card when enough Plan or current-action context exists and otherwise degrades to Weather Lookup.
+Historical retired chat command for weather assistance. Weather research remains a shared travel capability; the old command does not define a current channel or UI requirement.
 _Avoid_: /impact, automatic replanning command, weather-only command
 
 **Execution Adjustment**:
@@ -601,7 +633,7 @@ A temporary recommendation that changes how the traveler should act now without 
 _Avoid_: Automatic replanning, silent Plan mutation, replacement draft
 
 **Execution Channel**:
-The surface through which Landi delivers and receives on-trip execution assistance. For the first Travel Execution Capability slice, Telegram is the Execution Channel while Web keeps its existing planning, Plan display, and configuration role without new execution surfaces.
+The authorized surface for on-trip assistance. Email is the only proactive traveler channel; Web owns planning, management and explicit review/confirmation. Telegram and WhatsApp are retired. Historical bindings do not authorize email or reactivate chat delivery; see `docs/product-scope.md`.
 _Avoid_: Planning surface, provider app, channel-neutral requirement
 
 **One-time Location Share**:
@@ -661,7 +693,7 @@ An External Action Handoff that gives the traveler enough information to continu
 _Avoid_: Failed integration, completed action, provider confirmation
 
 **Copy Handoff**:
-A Manual Handoff that exposes pickup or destination details in a copyable form for the traveler to paste into another service. In Telegram, long-press-copyable message text is sufficient for the first slice even if the button itself cannot write to the clipboard.
+A Manual Handoff that exposes pickup or destination details in copyable form for the traveler to paste into another service. Web and email presentation must preserve the manual-confirmation boundary; historical chat controls are not a current implementation requirement.
 _Avoid_: One-click clipboard guarantee, provider prefill, completed external action
 
 **Service Capability Resolution**:
@@ -697,7 +729,9 @@ The deterministic, meaning-preserving boundary that converts a Trip Blueprint in
 _Avoid_: AI repair, Plan adapter
 
 **Compilation Lineage**:
-The immutable association from a Draft Plan to its source Trip Blueprint identity and version and the Plan Compiler version that produced it.
+编译来源关联记录当前 Plan 的 Blueprint 身份、版本和编译器版本。该行可因同一 Plan 的合法路线刷新或执行修复推进，不能将最新投影误认为不可变的出生证明。Plan 创建时的不可变来源由正规编辑、预订更正或撤销回执及其 before/after Blueprint 快照证明；当前关联只用于核对当前作用域及版本上界。
+
+新回执在原 result_json 顶层保存服务端事务内捕获的 beforeIdentity（planId、planVersion、blueprintId、blueprintVersion），与原请求及 before 快照交叉核验；该字段不是客户端可写的工作区内容。整个字段缺失的旧回执按历史已提交 CAS 见证及版本边界读取，字段存在但损坏不能回退为旧格式。不能声称能够检测旧回执合法版本区间内任意单字段改写。
 _Avoid_: Generation log, Plan history
 
 **Skill Lineage**:
@@ -750,8 +784,8 @@ _Avoid_: Run ID, retry ID
 
 ## Current implementation boundary
 
-New Web planning-session generations use the repository-owned `landi-trip-blueprint@1.0.0` policy, persist geographic Research Set checkpoints and Generation Events, publish a Trip Blueprint, and use the deterministic Plan Compiler. Existing generations retain their original policy, including supported `interactive-trip-planner@0.2.0` checkpoint continuation. The current Plan Workspace reads its travel content from the linked Trip Blueprint through a read-only view adapter, including block evidence, guide catalog relationships, informational guide items, and privacy-minimized booking constraints. Existing execution, Country Pack, reminder, and Connector capabilities remain in place. Current-policy live acceptance has not yet produced a completed pass and is tracked separately from the historical run below.
+New Web planning-session generations use the repository-owned `landi-trip-blueprint@1.0.0` policy, persist geographic Research Set checkpoints and Generation Events, publish a Trip Blueprint, and use the deterministic Plan Compiler. Existing generations retain their original policy, including supported `interactive-trip-planner@0.2.0` checkpoint continuation. The current Plan Workspace reads its travel content from the linked Trip Blueprint through a read-only view adapter, including block evidence, guide catalog relationships, informational guide items, and privacy-minimized booking constraints. Current product scope is owned by `docs/product-scope.md`: destination facts and shared travel-support remain, while Country Pack products, regional assistants, Telegram and WhatsApp are retired. Existing database records and compilation provenance remain historical facts, not active channel capabilities. MAH integration and current-policy live acceptance remain pending their own evidence; the historical run below does not establish current readiness.
 
-No new Plan path can invoke the legacy monolithic generator: Web generation uses Blueprint Generation, while Telegram and WhatsApp direct users to the Web workbench instead of creating a one-shot Plan or local-template fallback. Legacy monolithic generation remains temporarily available only for revisions of Plans that have no Blueprint Lineage. Blueprint-backed workspace edits use version-aware Direct Blueprint Revisions and the existing Assisted Replanning path when required.
+Web planning uses Blueprint Generation and preserves requirements when MAH execution is unavailable. Retired chat handlers must not create Plans, redirect through an active chat integration or provide a local-template fallback. Legacy Plan records remain readable without inventing Blueprint or MAH lineage; unavailable AI work stays explicitly blocked. Blueprint-backed workspace edits retain version-aware Direct Blueprint Revisions and Assisted Replanning boundaries.
 
 Live Skill acceptance completed on 2026-08-26 with `interactive-trip-planner@0.2.0`: 19 Research Set places, 20 sources, one complete Itinerary Day, six Movement Plans, and six Action Requirements imported into a Trip Blueprint with the exact Place Identity set preserved. The deterministic Plan Compiler produced five Stages, confirming that Stage count is derived from work rather than fixed at six.

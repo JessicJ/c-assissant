@@ -1,4 +1,8 @@
+> Historical retired Telegram first-slice plan. Current product scope is [product-scope.md](product-scope.md); email behavior follows [email-execution.md](email-execution.md). The commands, handlers and chat UI below are retained as historical design evidence, not obligations to restore a channel. Planned time and delivery never prove actual completion.
+
 # On-trip Execution Assistance implementation plan
+
+> Historical first-slice scope. The confirmed-plan personal assistant implementation in [private-assistant-execution.md](private-assistant-execution.md) supersedes the restrictions on proactive movement assistance, stop-completion state and execution-state schema changes below.
 
 This document translates the agreed Travel Execution Capability scope into implementation work. It is a planning artifact, not executable behavior. The first validation scenario is Bali, but the capability must remain destination-neutral.
 

@@ -1,0 +1,45 @@
+/* Hallmark · component: persona selection · reference: landi_persona_simple.html
+ * pre-emit critique: P5 H5 E5 S5 R5 V4 */
+.first-run-tour.first-run-tour-personality {
+  --persona-ink: #152136;
+  --persona-secondary: #5d6b82;
+  --persona-blue: #247dff;
+  --persona-hover: #f7faff;
+  --persona-halo: rgba(36,125,255,.095);
+  --persona-white: #fff;
+  --persona-green: #e2f0e8;
+  --persona-pink: #ffebe7;
+  --persona-lavender: #e5eafa;
+  color: var(--persona-ink);
+}
+.first-run-tour-personality .first-run-page.personality-page { display: grid; grid-template-rows: auto minmax(0,1fr); }
+.onboarding-people { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); column-gap: 20px; width: 100%; max-width: 580px; justify-self: center; align-self: center; margin: 0; }
+.onboarding-person { width: 100%; appearance: none; border: 0; background: transparent; padding: 8px 1px 12px; border-radius: 20px; display: flex; flex-direction: column; align-items: center; color: inherit; font: inherit; cursor: pointer; transition: background-color .18s ease; }
+.onboarding-person:hover { background: var(--persona-hover); }
+.onboarding-person:focus-visible { outline: 3px solid var(--persona-blue); outline-offset: 4px; }
+.onboarding-person:active .onboarding-avatar-ring { transform: scale(.97); }
+.onboarding-avatar-ring { width: 144px; height: 144px; box-sizing: border-box; flex: none; border: 3px solid transparent; border-radius: 50%; padding: 5px; position: relative; transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease; }
+.onboarding-person:hover .onboarding-avatar-ring { transform: translateY(-3px); }
+.onboarding-person[aria-pressed="true"] .onboarding-avatar-ring { border-color: var(--persona-blue); box-shadow: 0 0 0 4px var(--persona-halo); }
+.onboarding-avatar { display: block; width: 100%; height: 100%; border-radius: 50%; }
+.onboarding-avatar.local_insider { background: var(--persona-green); }
+.onboarding-avatar.travel_buddy { background: var(--persona-pink); }
+.onboarding-avatar.miles { background: var(--persona-lavender); }
+.onboarding-selected-check { display: none; position: absolute; right: -1px; bottom: 4px; width: 26px; height: 26px; background: var(--persona-blue); color: var(--persona-white); border: 3px solid var(--persona-white); border-radius: 50%; align-items: center; justify-content: center; box-sizing: content-box; }
+.onboarding-person[aria-pressed="true"] .onboarding-selected-check { display: flex; }
+.onboarding-person-name { font-weight: 750; font-size: 20px; line-height: 1.3; margin-top: 18px; letter-spacing: -.3px; }
+.onboarding-person-description { max-width: 162px; margin-top: 8px; color: var(--persona-secondary); font-size: 14px; line-height: 1.5; min-height: 42px; text-wrap: balance; }
+@media (max-width: 640px) {
+  .onboarding-people { gap: 3px; }
+  .onboarding-person { padding: 5px 1px 7px; border-radius: 12px; }
+  .onboarding-avatar-ring { width: 91px; height: 91px; border-width: 2.5px; padding: 3px; }
+  .onboarding-selected-check { width: 19px; height: 19px; border-width: 2px; right: -2px; bottom: 0; }
+  .onboarding-selected-check svg { width: 10px; height: 10px; }
+  .onboarding-person-name { font-size: 16px; margin-top: 12px; }
+  .onboarding-person-description { font-size: 12px; line-height: 1.45; margin-top: 6px; max-width: 100px; min-height: 53px; }
+}
+@media (max-width: 355px) {
+  .onboarding-avatar-ring { width: 80px; height: 80px; }
+  .onboarding-person-description { max-width: 88px; }
+}
+@media (prefers-reduced-motion: reduce) { .onboarding-person, .onboarding-avatar-ring { transition: none; } }

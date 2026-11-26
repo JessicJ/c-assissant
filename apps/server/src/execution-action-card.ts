@@ -2,7 +2,7 @@ import type { LuggageLevel, TransportPreference } from "@c-assistant/core";
 import type { RouteFact } from "@c-assistant/connectors";
 
 export type ExecutionActionCardKind = "movement" | "nearby_food" | "weather_impact";
-export type LocalTransportOption = "walking" | "ride_hail_car" | "ride_hail_motorbike" | "private_driver" | "scooter_rental";
+export type LocalTransportOption = "public_transit" | "driving" | "walking" | "ride_hail_car" | "ride_hail_motorbike" | "private_driver" | "scooter_rental";
 export type ExecutionHandoffKind = "map_link" | "prefill_capable" | "manual" | "copy";
 export type MovementWeatherImpact = "clear" | "rain" | "severe" | "heat" | "unknown";
 
@@ -25,6 +25,7 @@ export interface ExecutionHandoff {
   label: string;
   url?: string;
   serviceName?: string;
+  coverageStatus?: "supported" | "check_in_app";
   copyText?: string;
   instructions?: string;
 }
@@ -52,6 +53,7 @@ export interface MovementActionCard {
   destinationName?: string;
   destinationAddress?: string;
   primaryRecommendation?: RecommendedMovementAction;
+  serviceAvailabilityNote?: string;
   alternatives: RecommendedMovementAction[];
   recommendationContext?: RecommendationContext;
   degradedReasons: string[];

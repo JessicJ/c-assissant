@@ -14,6 +14,6 @@ export function createConnectorServices() {
   return {
     getConnectors,
     replaceConnectors,
-    getLocalConfiguration: () => createLocalConfigurationSnapshot(connectors.whatsapp)
+    getLocalConfiguration: () => createLocalConfigurationSnapshot()
   };
 }

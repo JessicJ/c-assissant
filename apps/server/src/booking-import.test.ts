@@ -112,11 +112,14 @@ test("accepted booking normalization downgrades hard constraints without anchors
   assert.deepEqual(booking.segments[0]?.needsReviewReasons, ["Hard constraints need a usable time and location."]);
 });
 
-test("booking constraints omit cancelled bookings and preserve segment review state", () => {
+test("预订约束保留已取消与忽略的来源身份及安全分段审阅状态", () => {
   const confirmed = bookingFixture({
     id: "booking-active",
     title: "Kyoto hotel",
     status: "confirmed",
+    sourceHash: "fictional-private-source-hash",
+    providerName: "虚构私密服务商",
+    notes: "虚构确认码 PRIVATE-123",
     segments: [{
       id: "stay-1",
       segmentType: "hotel_stay",
@@ -130,15 +133,22 @@ test("booking constraints omit cancelled bookings and preserve segment review st
       needsReviewReasons: ["Checkout date needs review."]
     }]
   });
-  const constraints = blueprintBookingConstraintsFromTravelBookings([
-    confirmed,
-    bookingFixture({ id: "booking-cancelled", status: "cancelled" })
-  ]);
+  const cancelled = bookingFixture({ id: "booking-cancelled", status: "cancelled", segments: [
+    { ...confirmed.segments[0]!, id: "cancelled-stay", status: "cancelled", constraintStrength: "hard", fixedCommitment: true },
+    { ...confirmed.segments[0]!, id: "ignored-stay", status: "confirmed", constraintStrength: "ignored" }
+  ] });
+  const constraints = blueprintBookingConstraintsFromTravelBookings([confirmed, cancelled]);
 
-  assert.equal(constraints.length, 1);
-  assert.equal(constraints[0]?.id, "booking-booking-active");
-  assert.equal(constraints[0]?.segments[0]?.id, "segment-stay-1");
-  assert.deepEqual(constraints[0]?.segments[0]?.needsReviewReasons, ["Checkout date needs review."]);
+  assert.deepEqual(constraints, [
+    { id: "booking-booking-active", sourceBookingId: "booking-active", type: "accommodation", title: "Kyoto hotel", status: "confirmed", sourceLabel: "booking.txt", importedAt: "2026-08-07T00:00:00.000Z", constraintStrength: "hard", segments: [
+      { id: "segment-stay-1", sourceSegmentId: "stay-1", segmentType: "hotel_stay", title: "Hotel stay", status: "needs_review", startAtLocal: "2026-10-05", endAtLocal: "2026-10-07", location: "Kyoto Station", constraintStrength: "soft", fixedCommitment: false, needsReviewReasons: ["Checkout date needs review."] }
+    ] },
+    { id: "booking-booking-cancelled", sourceBookingId: "booking-cancelled", type: "accommodation", title: "Booking", status: "cancelled", sourceLabel: "booking.txt", importedAt: "2026-08-07T00:00:00.000Z", constraintStrength: "hard", segments: [
+      { id: "segment-cancelled-stay", sourceSegmentId: "cancelled-stay", segmentType: "hotel_stay", title: "Hotel stay", status: "cancelled", startAtLocal: "2026-10-05", endAtLocal: "2026-10-07", location: "Kyoto Station", constraintStrength: "hard", fixedCommitment: true, needsReviewReasons: ["Checkout date needs review."] },
+      { id: "segment-ignored-stay", sourceSegmentId: "ignored-stay", segmentType: "hotel_stay", title: "Hotel stay", status: "confirmed", startAtLocal: "2026-10-05", endAtLocal: "2026-10-07", location: "Kyoto Station", constraintStrength: "ignored", fixedCommitment: false, needsReviewReasons: ["Checkout date needs review."] }
+    ] }
+  ]);
+  assert.doesNotMatch(JSON.stringify(constraints), /fictional-private-source-hash|虚构私密服务商|PRIVATE-123/);
 });
 
 test("planning facts from booking use active transport legs for arrival and departure", () => {

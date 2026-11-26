@@ -1,15 +1,18 @@
+import type { AssistantPersonalityId } from "@c-assistant/core/assistant-personality";
 import type { Plan } from "@c-assistant/core";
 
 export function isStarterPlan(plan: Plan): boolean {
   return plan.title === "Attend an exhibition in Shanghai" && plan.version === 1;
 }
 
-export function refinementIntro(plan: Plan | null): string {
+export function refinementIntro(plan: Plan | null, personality: AssistantPersonalityId = "local_insider"): string {
   if (!plan) return "There is no plan to refine yet. Start with the destination, dates, and the goal that matters most.";
   const question = planRefinementQuestion(plan);
+  if (personality === "travel_buddy") return question ? `One little detail to figure out (˶ᵔᵕᵔ˶) ${question}\nYou can answer it or review the plan as it is; the remaining details will stay marked for confirmation.` : 'Want to switch something up? Tell me what you have in mind (˶ᵔᵕᵔ˶) Or review and confirm the plan when you’re ready.';
+  if (personality === "miles") return question ? `Alright, one thing to figure out: ${question}\nAnswer it or review the draft now. Anything still unknown will stay marked for confirmation.` : 'Alright, what are we switching up? Tell me what you want to change, or review and confirm the plan.';
   return question
-    ? `One key question is recommended: ${question}\nAnswer it or finish refining now. Other unknowns will remain as items to confirm.`
-    : "There are no required follow-up questions. Review and confirm the plan, or tell me exactly what to change.";
+    ? `One detail worth settling: ${question}\nYou can answer it or review the draft now. Anything still unknown stays marked for confirmation.`
+    : "The draft is ready to review. If something doesn’t suit you, tell me what you’d like to change; otherwise, confirm it when you’re ready.";
 }
 
 export function planRefinementQuestion(plan: Pick<Plan, "title" | "location" | "dates" | "assumptions" | "nextAction"> & Partial<Pick<Plan, "knownInformation" | "sources">>): string | null {

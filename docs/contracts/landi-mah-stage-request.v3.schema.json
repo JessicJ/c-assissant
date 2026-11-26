@@ -1,0 +1,849 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://landi.local/contracts/landi-mah-stage-request.v3.schema.json",
+  "title": "Landi MAH 普通队列阶段请求",
+  "description": "显式普通队列协议；实际请求字节冻结于主 Storage，旧请求 Schema 保持原语义。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "requestId",
+    "carrierTaskId",
+    "generationKey",
+    "proposalRef",
+    "skillLineage",
+    "operation",
+    "attempt",
+    "parentCheckpoint",
+    "input",
+    "output",
+    "execution",
+    "createdAt",
+    "protocol",
+    "projectRoot"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 3
+    },
+    "kind": {
+      "const": "landi_generation_stage_request"
+    },
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "carrierTaskId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "generationKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "proposalRef": {
+      "$ref": "#/$defs/proposalRef"
+    },
+    "skillLineage": {
+      "$ref": "#/$defs/skillLineage"
+    },
+    "operation": {
+      "$ref": "#/$defs/operation"
+    },
+    "batchId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "parentCheckpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "artifactSha256"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "researchSetId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "blueprintId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "blueprintVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "artifactSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "businessContract",
+        "sha256",
+        "businessInput"
+      ],
+      "properties": {
+        "businessContract": {
+          "type": "string",
+          "enum": [
+            "landi.skill-research-batch-input.v1",
+            "landi.skill-itinerary-input.v1",
+            "landi.skill-itinerary-review-input.v1",
+            "landi.skill-itinerary-repair-input.v1",
+            "landi.planned-place-image-enrichment-input.v1",
+            "landi.semantic-plan-input.v1",
+            "landi.semantic-validation-input.v1",
+            "landi.semantic-repair-input.v1"
+          ]
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "businessInput": {
+          "type": "object",
+          "minProperties": 1,
+          "properties": {
+            "stageIdentity": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "version",
+                "phase",
+                "scope",
+                "round"
+              ],
+              "properties": {
+                "version": {
+                  "const": 2
+                },
+                "phase": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "scope": {
+                  "type": "string",
+                  "maxLength": 160
+                },
+                "round": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                }
+              }
+            },
+            "parserContext": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "placeIds": {
+                  "type": "array",
+                  "maxItems": 50000,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160
+                  }
+                },
+                "sourceIds": {
+                  "type": "array",
+                  "maxItems": 50000,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160
+                  }
+                },
+                "eventIds": {
+                  "type": "array",
+                  "maxItems": 50000,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160
+                  }
+                },
+                "dates": {
+                  "type": "array",
+                  "maxItems": 50000,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160
+                  }
+                },
+                "completedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "researchBatch": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "scopeLabel"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 160
+                    },
+                    "scopeLabel": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 1000
+                    }
+                  }
+                },
+                "dayPatch": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "dates",
+                    "dayIds"
+                  ],
+                  "properties": {
+                    "dates": {
+                      "type": "array",
+                      "maxItems": 50000,
+                      "uniqueItems": true,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 160
+                      },
+                      "minItems": 1
+                    },
+                    "dayIds": {
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 50000,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "date",
+                          "id"
+                        ],
+                        "properties": {
+                          "date": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 160
+                          },
+                          "id": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 160
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "qualityRepair": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "affectedDates",
+                    "allowRegionalReroute",
+                    "preserveTripMetadata",
+                    "findings"
+                  ],
+                  "properties": {
+                    "affectedDates": {
+                      "type": "array",
+                      "maxItems": 50000,
+                      "uniqueItems": true,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 160
+                      }
+                    },
+                    "allowRegionalReroute": {
+                      "type": "boolean"
+                    },
+                    "preserveTripMetadata": {
+                      "type": "boolean"
+                    },
+                    "findings": {
+                      "type": "array",
+                      "maxItems": 1000,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "code"
+                        ],
+                        "properties": {
+                          "code": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 160
+                          },
+                          "date": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 160
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subpath",
+        "envelopeContract"
+      ],
+      "properties": {
+        "subpath": {
+          "const": "artifacts/landi-stage-result.json"
+        },
+        "envelopeContract": {
+          "const": "landi.mah-generation-stage-result.v2"
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preferredLanguage",
+        "webSearch",
+        "maxRuntimeSeconds",
+        "capabilityRequirements"
+      ],
+      "properties": {
+        "preferredLanguage": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 40
+        },
+        "webSearch": {
+          "type": "boolean"
+        },
+        "maxRuntimeSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 7200,
+          "description": "执行时限从持久化的公开 running_at 起算。Adaptive 在声明 adaptiveProducerClockV1 时以公开 replay 核实的生产 Attempt 实际执行时间计算。排队与该 Adaptive 策略的验收等待独立计时。"
+        },
+        "adaptiveProducerClockV1": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["validatorNodePath"],
+          "properties": {
+            "validatorNodePath": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 4096,
+              "pattern": "^/",
+              "description": "提交时冻结的可信 Node 绝对路径，恢复时用于核对同一校验命令。"
+            },
+            "artifactValidation": {
+              "const": "worktree_then_published_v1",
+              "description": "生产校验工作区工件，独立验收校验发布工件，两次校验绑定同一摘要。"
+            }
+          }
+        },
+        "capabilityRequirements": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "enum": [
+              "structured_output",
+              "native_schema_constrained_generation",
+              "external_current_research",
+              "filesystem_write"
+            ]
+          }
+        }
+      }
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "protocol": {
+      "const": "mah_task_queue_v1"
+    },
+    "projectRoot": {
+      "type": "string",
+      "pattern": "^/",
+      "maxLength": 4096
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "research_batch"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "required": [
+          "batchId"
+        ],
+        "properties": {
+          "batchId": {
+            "$ref": "#/properties/batchId"
+          },
+          "input": {
+            "type": "object",
+            "properties": {
+              "businessContract": {
+                "const": "landi.skill-research-batch-input.v1"
+              }
+            }
+          },
+          "execution": {
+            "type": "object",
+            "properties": {
+              "webSearch": {
+                "const": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "itinerary_draft"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "type": "object",
+            "properties": {
+              "businessContract": {
+                "const": "landi.skill-itinerary-input.v1"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "itinerary_review"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "type": "object",
+            "properties": {
+              "businessContract": {
+                "const": "landi.skill-itinerary-review-input.v1"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "itinerary_repair"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "type": "object",
+            "properties": {
+              "businessContract": {
+                "const": "landi.skill-itinerary-repair-input.v1"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "planned_place_image_enrichment"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "type": "object",
+            "properties": {
+              "businessContract": {
+                "const": "landi.planned-place-image-enrichment-input.v1"
+              }
+            }
+          },
+          "execution": {
+            "type": "object",
+            "properties": {
+              "webSearch": {
+                "const": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "semantic_plan"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "type": "object",
+            "properties": {
+              "businessContract": {
+                "const": "landi.semantic-plan-input.v1"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "semantic_validation"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "type": "object",
+            "properties": {
+              "businessContract": {
+                "const": "landi.semantic-validation-input.v1"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "semantic_repair"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "type": "object",
+            "properties": {
+              "businessContract": {
+                "const": "landi.semantic-repair-input.v1"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "enum": [
+              "research_batch"
+            ]
+          },
+          "input": {
+            "properties": {
+              "businessInput": {
+                "required": [
+                  "stageIdentity"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "properties": {
+              "businessInput": {
+                "required": [
+                  "parserContext"
+                ],
+                "properties": {
+                  "parserContext": {
+                    "required": [
+                      "researchBatch"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "enum": [
+              "itinerary_draft",
+              "itinerary_repair"
+            ]
+          },
+          "input": {
+            "properties": {
+              "businessInput": {
+                "required": [
+                  "stageIdentity"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "properties": {
+              "businessInput": {
+                "required": [
+                  "parserContext"
+                ],
+                "properties": {
+                  "parserContext": {
+                    "required": [
+                      "placeIds",
+                      "sourceIds",
+                      "eventIds"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "enum": [
+              "itinerary_review"
+            ]
+          },
+          "input": {
+            "properties": {
+              "businessInput": {
+                "required": [
+                  "stageIdentity"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "properties": {
+              "businessInput": {
+                "required": [
+                  "parserContext"
+                ],
+                "properties": {
+                  "parserContext": {
+                    "required": [
+                      "dates"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "enum": [
+              "planned_place_image_enrichment"
+            ]
+          },
+          "input": {
+            "properties": {
+              "businessInput": {
+                "required": [
+                  "stageIdentity"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "properties": {
+              "businessInput": {
+                "required": [
+                  "parserContext"
+                ],
+                "properties": {
+                  "parserContext": {
+                    "required": [
+                      "placeIds"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "proposalRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionId",
+        "proposalVersion"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "proposalVersion": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "skillLineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "skillId",
+        "skillVersion"
+      ],
+      "properties": {
+        "skillId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "skillVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        }
+      }
+    },
+    "operation": {
+      "type": "string",
+      "enum": [
+        "research_batch",
+        "itinerary_draft",
+        "itinerary_review",
+        "itinerary_repair",
+        "planned_place_image_enrichment",
+        "semantic_plan",
+        "semantic_validation",
+        "semantic_repair"
+      ]
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

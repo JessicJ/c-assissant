@@ -1,0 +1,91 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { randomBytes } from "node:crypto";
+import Fastify from "fastify";
+import { SqliteWorkspaceStore } from "@c-assistant/storage";
+import type { EmailMessage } from "@c-assistant/connectors";
+import { emailPlanFixture,verifiedEmailFixture,emailReplacementFixture } from "./email-test-fixture.js";
+import { planDraftForRevision } from "./plan-revision.js";
+import { pendingEmailReview,enqueuePendingReview,materializeEmailReview } from "./email-plan-review.js";
+import { issueReviewCapability,readReviewCapability,EMAIL_REVIEW_LINK,publicReviewOrigin,type EmailReviewConfiguration } from "./email-review-capability.js";
+import { registerEmailReviewRoutes } from "./email-review-routes.js";
+import { registerLocalWebRoutes } from "./local-web-routes.js";
+import { createEmailExecutionWorker } from "./email-execution-worker.js";
+
+
+const fixtureNow=()=>new Date("2026-11-10T08:40:00Z");
+const config=():EmailReviewConfiguration=>({baseUrl:"https://review.example.org",signingKey:randomBytes(32).toString("hex")});
+const body=(scope:NonNullable<ReturnType<typeof pendingEmailReview>>)=>({confirmed:true,expectedPlanId:scope.draftPlanId,expectedVersion:scope.draftVersion,expectedBasePlanId:scope.basePlanId,expectedBaseVersion:scope.baseVersion,...(scope.blueprintVersion!==undefined?{expectedBlueprintVersion:scope.blueprintVersion}:{})});
+
+test("review capabilities reject wrong purpose, signatures, expiry and unsupported public URLs",()=>{
+  const scope={basePlanId:"base",baseVersion:1,draftPlanId:"draft",draftVersion:1,recipientRevision:1};const configuration=config();
+  const token=issueReviewCapability(scope,configuration,fixtureNow().getTime()+3600_000);
+  assert.ok(readReviewCapability(token,configuration,fixtureNow()));
+  assert.ok(!readReviewCapability(token,config(),fixtureNow()));
+  assert.ok(!readReviewCapability(token,configuration,new Date("2026-11-10T09:41:00Z")));
+  assert.ok(!readReviewCapability(token.slice(0,-3),configuration,fixtureNow()));
+  for(const value of ["http://example.org","https://localhost","https://127.0.0.1","https://example.org/path","https://name:password@example.org","https://example.org?key=value"])assert.equal(publicReviewOrigin(value),undefined);
+});
+
+test("GET and review read are inert; explicit versioned confirmation switches once and preserves receipts",async()=>{
+  const store=new SqliteWorkspaceStore(":memory:");const server=Fastify();const configuration=config();let activations=0;
+  try{
+    const {base,draft}=emailReplacementFixture(store);const scope=pendingEmailReview(store)!;
+    const token=issueReviewCapability(scope,configuration,fixtureNow().getTime()+3600_000);const headers={authorization:`Bearer ${token}`};
+    registerEmailReviewRoutes(server,{store,getConfiguration:()=>configuration,now:fixtureNow,startActivePlanMonitoring:()=>{activations++;}});
+    const before=JSON.stringify(store.getWorkspace());assert.equal((await server.inject({method:"GET",url:"/email-review"})).statusCode,200);
+    const view=await server.inject({method:"POST",url:"/api/email-review/view",headers,payload:{}});assert.equal(view.statusCode,200);assert.equal(view.json().status,"proposed");
+    const lunch=view.json().proposed.days[0].activities[1];
+    assert.equal(lunch.title,"Lunch");assert.equal(lunch.placeName,"Restaurant");assert.equal(lunch.locationLabel,"Paris");
+    assert.ok(!view.body.includes('"preparation"'));
+    assert.equal(JSON.stringify(store.getWorkspace()),before);assert.equal(store.getExecutionPlan()?.id,base.id);
+    assert.ok(!view.body.includes('"profile"'));assert.ok(!view.body.includes('"inbox"'));assert.ok(!view.body.includes('"settings"'));
+    assert.equal((await server.inject({method:"POST",url:"/api/email-review/confirm",headers,payload:{...body(scope),expectedVersion:scope.draftVersion+1}})).statusCode,409);
+    assert.equal(store.getExecutionPlan()?.id,base.id);
+    const accepted=await server.inject({method:"POST",url:"/api/email-review/confirm",headers,payload:body(scope)});assert.equal(accepted.statusCode,200);
+    assert.equal(store.getExecutionPlan()?.id,draft.id);assert.equal(activations,1);assert.equal(store.email.planConfirmation(draft.id,draft.version)?.basePlanId,base.id);
+    const repeat=await server.inject({method:"POST",url:"/api/email-review/confirm",headers,payload:body(scope)});assert.equal(repeat.statusCode,200);assert.equal(activations,1);assert.equal(repeat.json().confirmedAt,accepted.json().confirmedAt);
+    assert.equal(store.email.list().filter(job=>job.kind==="change").length,1);assert.ok(store.email.list()[0]!.content!.html.includes("new arrangement is confirmed"));
+  }finally{await server.close();store.close();}
+});
+
+test("changed recipient, paused emails, modified draft and modified base all invalidate old review",async()=>{
+  for(const scenario of ["recipient","paused","draft","base"] as const){
+    const store=new SqliteWorkspaceStore(":memory:");const server=Fastify();const configuration=config();
+    try{
+      const {base}=emailReplacementFixture(store);const scope=pendingEmailReview(store)!;const token=issueReviewCapability(scope,configuration,fixtureNow().getTime()+3600_000);
+      registerEmailReviewRoutes(server,{store,getConfiguration:()=>configuration,now:fixtureNow});
+      if(scenario==="recipient")store.email.updateSettings({...store.email.settings(),recipient:"changed@example.test"});
+      if(scenario==="paused")store.email.setEnabled(false);
+      if(scenario==="draft"){const current=store.getWorkspace().activePlan;store.reviseGeneratedPlan({draft:planDraftForRevision(current),expectedPlanId:current.id,expectedVersion:current.version});}
+      if(scenario==="base")emailPlanFixture(store,"Another approved plan");
+      const currentExecutingId=store.getExecutionPlan()?.id;
+      const result=await server.inject({method:"POST",url:"/api/email-review/confirm",headers:{authorization:`Bearer ${token}`},payload:body(scope)});assert.equal(result.statusCode,409);
+      assert.equal(store.getExecutionPlan()?.id,currentExecutingId);
+    }finally{await server.close();store.close();}
+  }
+});
+
+test("raw review capabilities only enter transient delivery; persisted outbox contains scope and placeholders",async()=>{
+  const store=new SqliteWorkspaceStore(":memory:");const configuration=config();const captures:EmailMessage[]=[];
+  try{
+    emailReplacementFixture(store);enqueuePendingReview(store,configuration,fixtureNow());
+    const persisted=store.email.list().find(job=>job.content?.review)!;assert.ok(persisted.content!.html.includes(EMAIL_REVIEW_LINK));assert.ok(!persisted.content!.html.includes("#token="));
+    const worker=createEmailExecutionWorker({store,now:fixtureNow,getTransport:()=>({configured:()=>true,verify:async()=>({ready:true}),send:async message=>{captures.push(message);return{status:"accepted",messageId:message.messageId};}}),render:async()=>({subject:"Planned day",html:"<p>Day</p>",text:"Day"}),prepareDelivery:(job,content,now)=>materializeEmailReview(store,job,content,configuration,now)});
+    await worker.tick(new Map([["paris","UTC"]]));assert.ok(captures.some(message=>message.html.includes("#token=")));assert.ok(store.email.list().every(job=>!job.content?.html.includes("#token=")));
+  }finally{store.close();}
+});
+
+test("public review origin never exposes workspace or configuration routes",async()=>{
+  const store=new SqliteWorkspaceStore(":memory:");const server=Fastify();
+  try{
+    await registerLocalWebRoutes(server,{store,webAssetsPath:"/no-assets",webTripMapPath:"/no-map",webIndexPath:"/no-index",emailReviewOrigin:()=>"https://review.example.org"});
+    registerEmailReviewRoutes(server,{store,getConfiguration:config,now:fixtureNow});
+    const headers={host:"review.example.org",origin:"https://review.example.org"};
+    assert.equal((await server.inject({method:"GET",url:"/email-review",headers})).statusCode,200);
+    assert.equal((await server.inject({method:"GET",url:"/api/workspace",headers})).statusCode,403);
+    assert.equal((await server.inject({method:"GET",url:"/api/workspace",headers:{host:"review.example.org"}})).statusCode,403);
+    assert.equal((await server.inject({method:"POST",url:"/api/email-review/view",headers,payload:{}})).statusCode,409);
+    assert.equal((await server.inject({method:"POST",url:"/api/email-review/view",headers:{...headers,origin:"https://other.example.org"},payload:{}})).statusCode,403);
+  }finally{await server.close();store.close();}
+});

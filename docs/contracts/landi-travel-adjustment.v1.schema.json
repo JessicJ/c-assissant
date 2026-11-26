@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "landi.travel-adjustment.v1",
+  "description": "Landi 本地设计交换合同，由 email-execution.md 拥有；根格式不是实际持久 API。$defs/emailConsumption 是待实现的 Storage 只读邮件消费投影，须单独显式校验；结构通过不证明跨记录关联、来源可靠、执行核验、事务或运行就绪。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "eventId", "episode", "idempotencyKey", "base", "context", "phase", "observations", "decision", "result"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "eventId": {"$ref": "#/$defs/text"},
+    "episode": {"type": "integer", "minimum": 1},
+    "idempotencyKey": {"$ref": "#/$defs/text"},
+    "base": {"$ref": "#/$defs/versions"},
+    "context": {
+      "type": "object", "additionalProperties": false,
+      "required": ["draft", "draftBlueprint", "sourceSetDigest", "observationSetDigest", "recipientRevision", "authorizationDigest"],
+      "properties": {
+        "draft": {"oneOf": [{"$ref": "#/$defs/version"}, {"type": "null"}]},
+        "sourceSetDigest": {"$ref": "#/$defs/digest"},
+        "recipientRevision": {"type": "integer", "minimum": 0},
+        "authorizationDigest": {"$ref": "#/$defs/digest"},
+        "observationSetDigest": {"$ref": "#/$defs/digest"},
+        "draftBlueprint": {"oneOf": [{"$ref": "#/$defs/version"}, {"type": "null"}]}
+      }
+    },
+    "phase": {
+      "type": "object", "additionalProperties": false,
+      "required": ["value", "revision", "basis", "recordedAt", "evidenceRefs"],
+      "properties": {
+        "value": {"enum": ["pre_departure", "on_trip", "ended", "unknown"]},
+        "revision": {"type": "integer", "minimum": 0},
+        "basis": {"enum": ["traveler_statement", "verified_actual_fact", "unresolved"]},
+        "recordedAt": {"$ref": "#/$defs/instant"},
+        "evidenceRefs": {"$ref": "#/$defs/texts"}
+      },
+      "allOf": [{
+        "if": {"properties": {"value": {"const": "unknown"}}},
+        "then": {"properties": {"basis": {"const": "unresolved"}}},
+        "else": {"properties": {"basis": {"enum": ["traveler_statement", "verified_actual_fact"]}, "evidenceRefs": {"minItems": 1}}}
+      }]
+    },
+    "observations": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/observation"}},
+    "decision": {"$ref": "#/$defs/decision"},
+    "result": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["status", "reason", "unresolved", "evidenceRefs"],
+          "properties": {
+            "status": {"enum": ["unchanged", "pending_confirmation", "unresolved", "rejected"]},
+            "reason": {"$ref": "#/$defs/text"},
+            "unresolved": {"$ref": "#/$defs/texts"},
+            "evidenceRefs": {"$ref": "#/$defs/texts"}
+          }
+        },
+        {"$ref": "#/$defs/applied"}
+      ]
+    }
+  },
+  "allOf": [{
+    "if": {"properties": {"result": {"properties": {"status": {"const": "applied"}}, "required": ["status"]}}},
+    "then": {
+      "properties": {"decision": {"properties": {"verdict": {"const": "eligible"}}}},
+      "oneOf": [
+        {"properties": {"phase": {"properties": {"value": {"const": "pre_departure"}}}, "result": {"properties": {"basis": {"const": "user_confirmation"}}, "required": ["confirmationRef"]}}},
+        {"properties": {"observations": {"contains": {"properties": {"status": {"const": "changed"}}, "required": ["status"]}}, "phase": {"properties": {"value": {"const": "on_trip"}}}, "decision": {"properties": {"changeKind": {"const": "objective_disruption"}}}, "result": {"properties": {"basis": {"const": "objective_change"}}}}}
+      ]
+    }
+  }],
+  "$defs": {
+    "emailConsumption": {"type":"object","additionalProperties":false,"required":["schemaVersion","requestId","intentId","receiptRef","base","replacement","context","phase","basis","reason","appliedAt","proposalDigest","arrangementRef","arrangement","events","observations","decision","effects"],"properties":{"schemaVersion":{"const":1},"requestId":{"$ref":"#/$defs/text"},"intentId":{"$ref":"#/$defs/text"},"receiptRef":{"$ref":"#/$defs/text"},"base":{"$ref":"#/$defs/versions"},"replacement":{"$ref":"#/$defs/versions"},"context":{"$ref":"#/properties/context"},"phase":{"$ref":"#/properties/phase"},"basis":{"enum":["objective_change","user_confirmation"]},"reason":{"$ref":"#/$defs/text"},"appliedAt":{"$ref":"#/$defs/instant"},"proposalDigest":{"$ref":"#/$defs/digest"},"arrangementRef":{"$ref":"#/$defs/text"},"arrangement":{"type":"object","additionalProperties":false,"required":["planRef","blueprintRef","snapshotDigest"],"properties":{"planRef":{"$ref":"#/$defs/version"},"blueprintRef":{"$ref":"#/$defs/version"},"snapshotDigest":{"$ref":"#/$defs/digest"}},"description":"引用同一持久 handoff 的完整 Plan/Blueprint 快照；Storage 须解析并校验内容和精确 lineage，引用本身不证明完整安排。"},"events":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["eventId","episode","status"],"properties":{"eventId":{"$ref":"#/$defs/text"},"episode":{"type":"integer","minimum":1},"status":{"const":"open"}}}},"observations":{"type":"array","items":{"$ref":"#/$defs/observation"}},"decision":{"oneOf":[{"$ref":"#/$defs/decision"},{"type":"null"}]},"applicationKey":{"$ref":"#/$defs/digest"},"executionVerificationRef":{"$ref":"#/$defs/text"},"confirmationRef":{"$ref":"#/$defs/text"},"effects":{"type":"object","additionalProperties":false,"required":["notification","oldPending","futureWork"],"properties":{"notification":{"type":"object","additionalProperties":false,"required":["status","ref"],"properties":{"status":{"enum":["pending","enqueued"]},"ref":{"$ref":"#/$defs/text"}}},"oldPending":{"type":"object","additionalProperties":false,"required":["status","ref"],"properties":{"status":{"enum":["pending","invalidated"]},"ref":{"$ref":"#/$defs/text"}}},"futureWork":{"type":"object","additionalProperties":false,"required":["status","ref"],"properties":{"status":{"enum":["pending","scheduled"]},"ref":{"$ref":"#/$defs/text"}}}},"description":"分别读回通知、旧工作失效及新版安排。pending 引用持久恢复记录；通知 outbox ACK 不证明另外两项完成。"}},"description":"目标消费投影，尚未实现或接线；只由 Storage 从同一已提交请求、完整快照及规范效果入口组装，不接受邮件或 Agent 自报。人工确认不伪造 Agent/事件。","allOf":[{"if":{"properties":{"basis":{"const":"objective_change"}}},"then":{"required":["applicationKey","executionVerificationRef"],"not":{"required":["confirmationRef"]},"properties":{"phase":{"properties":{"value":{"const":"on_trip"}}},"events":{"minItems":1},"observations":{"minItems":1,"items":{"allOf":[{"$ref":"#/$defs/observation"},{"properties":{"status":{"enum":["changed","unchanged"]}}}]},"contains":{"properties":{"status":{"const":"changed"}},"required":["status"]}},"decision":{"allOf":[{"$ref":"#/$defs/decision"},{"properties":{"verdict":{"const":"eligible"},"changeKind":{"const":"objective_disruption"},"obligations":{"minItems":1}}}]}}}},{"if":{"properties":{"basis":{"const":"user_confirmation"}}},"then":{"required":["confirmationRef"],"not":{"anyOf":[{"required":["applicationKey"]},{"required":["executionVerificationRef"]}]},"properties":{"phase":{"properties":{"value":{"const":"pre_departure"}}},"events":{"maxItems":0},"observations":{"type":"array","maxItems":0},"decision":{"type":"null"}}}},{"if":{"properties":{"effects":{"properties":{"notification":{"properties":{"status":{"const":"enqueued"}}}}}}},"then":{"properties":{"effects":{"properties":{"notification":{"properties":{"ref":{"type":"string","minLength":1}}}}}}}},{"if":{"properties":{"effects":{"properties":{"oldPending":{"properties":{"status":{"const":"invalidated"}}}}}}},"then":{"properties":{"effects":{"properties":{"oldPending":{"properties":{"ref":{"type":"string","minLength":1}}}}}}}}]},
+    "text": {"type": "string", "minLength": 1},
+    "texts": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/text"}},
+    "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "instant": {"type": "string", "format": "date-time"},
+    "version": {
+      "type": "object", "additionalProperties": false, "required": ["id", "version"],
+      "properties": {"id": {"$ref": "#/$defs/text"}, "version": {"type": "integer", "minimum": 1}}
+    },
+    "versions": {
+      "type": "object", "additionalProperties": false, "required": ["plan", "blueprint"],
+      "properties": {"plan": {"$ref": "#/$defs/version"}, "blueprint": {"$ref": "#/$defs/version"}}
+    },
+    "candidate": {"oneOf":[{"type":"object","additionalProperties":false,"required":["kind","name","city","matches","queryObservedAt"],"properties":{"kind":{"const":"venue"},"name":{"type":"string","minLength":1,"maxLength":240},"city":{"type":"string","minLength":1,"maxLength":120},"latitude":{"type":"number","minimum":-90,"maximum":90},"longitude":{"type":"number","minimum":-180,"maximum":180},"matches":{"type":"array","maxItems":8,"items":{"type":"object","additionalProperties":false,"required":["name","city","status"],"properties":{"placeId":{"type":"string","minLength":1,"maxLength":160},"name":{"type":"string","minLength":1,"maxLength":240},"city":{"type":"string","minLength":1,"maxLength":120},"latitude":{"type":"number","minimum":-90,"maximum":90},"longitude":{"type":"number","minimum":-180,"maximum":180},"status":{"enum":["operational","temporarily_closed","permanently_closed","unknown"]}}}},"queryObservedAt":{"oneOf":[{"$ref":"#/$defs/instant"},{"type":"null"}]}}},{"type":"object","additionalProperties":false,"required":["kind","locationName","condition","observedAt"],"properties":{"kind":{"const":"weather_current"},"locationName":{"type":"string","minLength":1,"maxLength":240},"latitude":{"type":"number","minimum":-90,"maximum":90},"longitude":{"type":"number","minimum":-180,"maximum":180},"condition":{"type":"string","minLength":1,"maxLength":240},"conditionCode":{"type":"string","minLength":1,"maxLength":80},"observedAt":{"oneOf":[{"$ref":"#/$defs/instant"},{"type":"null"}]},"temperatureC":{"type":"number"},"feelsLikeC":{"type":"number"},"humidityPercent":{"type":"number","minimum":0,"maximum":100},"windDirection":{"type":"string","minLength":1,"maxLength":80},"windScale":{"type":"string","minLength":1,"maxLength":80},"precipitationMm":{"type":"number","minimum":0}}},{"type":"object","additionalProperties":false,"required":["kind","locationName","date","conditionDay","conditionNight"],"properties":{"kind":{"const":"weather_forecast"},"locationName":{"type":"string","minLength":1,"maxLength":240},"latitude":{"type":"number","minimum":-90,"maximum":90},"longitude":{"type":"number","minimum":-180,"maximum":180},"date":{"type":"string","format":"date"},"conditionDay":{"type":"string","minLength":1,"maxLength":240},"conditionNight":{"type":"string","minLength":1,"maxLength":240},"highC":{"type":"number"},"lowC":{"type":"number"},"precipitationMm":{"type":"number","minimum":0},"uvIndex":{"type":"number","minimum":0}}},{"type":"object","additionalProperties":false,"required":["kind","bookingId","segmentId","status","segmentStatus","bookingConstraintStrength","segmentConstraintStrength","fixedCommitment"],"properties":{"kind":{"const":"saved_booking"},"bookingId":{"type":"string","minLength":1,"maxLength":160},"segmentId":{"type":"string","minLength":1,"maxLength":160},"status":{"type":"string","minLength":1,"maxLength":80},"segmentStatus":{"type":"string","minLength":1,"maxLength":80},"startAtLocal":{"type":"string","minLength":1,"maxLength":80},"startTimeZone":{"type":"string","minLength":1,"maxLength":80},"endAtLocal":{"type":"string","minLength":1,"maxLength":80},"endTimeZone":{"type":"string","minLength":1,"maxLength":80},"bookingConstraintStrength":{"enum":["hard","soft","ignored"]},"segmentConstraintStrength":{"enum":["hard","soft","ignored"]},"fixedCommitment":{"type":"boolean"}}}]},
+    "observation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["objectRef", "sourceKind", "provider", "targetDate", "timeZone", "factObservedAt", "retrievedAt", "validUntil", "status", "reason", "evidenceRefs"],
+      "properties": {
+        "objectRef": {"$ref": "#/$defs/text"},
+        "sourceKind": {"enum": ["venue", "weather_current", "weather_forecast", "saved_booking"]},
+        "provider": {"$ref": "#/$defs/text"},
+        "targetDate": {"type": ["string", "null"], "format": "date"},
+        "timeZone": {"type": ["string", "null"], "minLength": 1},
+        "factObservedAt": {"oneOf": [{"$ref": "#/$defs/instant"}, {"type": "null"}]},
+        "retrievedAt": {"$ref": "#/$defs/instant"},
+        "validUntil": {"oneOf": [{"$ref": "#/$defs/instant"}, {"type": "null"}]},
+        "sourceRevision": {"$ref": "#/$defs/text"},
+        "candidate": {"$ref": "#/$defs/candidate"},
+        "status": {"enum": ["changed", "unchanged", "unknown", "failed", "expired", "ambiguous", "uncovered"]},
+        "reason": {"$ref": "#/$defs/text"},
+        "evidenceRefs": {"$ref": "#/$defs/texts"}
+      },
+      "allOf": [
+        {"if":{"properties":{"sourceKind":{"const":"venue"}}},"then":{"properties":{"candidate":{"type":"object","additionalProperties":false,"required":["kind","name","city","matches","queryObservedAt"],"properties":{"kind":{"const":"venue"},"name":{"type":"string","minLength":1,"maxLength":240},"city":{"type":"string","minLength":1,"maxLength":120},"latitude":{"type":"number","minimum":-90,"maximum":90},"longitude":{"type":"number","minimum":-180,"maximum":180},"matches":{"type":"array","maxItems":8,"items":{"type":"object","additionalProperties":false,"required":["name","city","status"],"properties":{"placeId":{"type":"string","minLength":1,"maxLength":160},"name":{"type":"string","minLength":1,"maxLength":240},"city":{"type":"string","minLength":1,"maxLength":120},"latitude":{"type":"number","minimum":-90,"maximum":90},"longitude":{"type":"number","minimum":-180,"maximum":180},"status":{"enum":["operational","temporarily_closed","permanently_closed","unknown"]}}}},"queryObservedAt":{"oneOf":[{"$ref":"#/$defs/instant"},{"type":"null"}]}}}}}},
+        {"if":{"properties":{"sourceKind":{"const":"weather_current"}}},"then":{"properties":{"candidate":{"type":"object","additionalProperties":false,"required":["kind","locationName","condition","observedAt"],"properties":{"kind":{"const":"weather_current"},"locationName":{"type":"string","minLength":1,"maxLength":240},"latitude":{"type":"number","minimum":-90,"maximum":90},"longitude":{"type":"number","minimum":-180,"maximum":180},"condition":{"type":"string","minLength":1,"maxLength":240},"conditionCode":{"type":"string","minLength":1,"maxLength":80},"observedAt":{"oneOf":[{"$ref":"#/$defs/instant"},{"type":"null"}]},"temperatureC":{"type":"number"},"feelsLikeC":{"type":"number"},"humidityPercent":{"type":"number","minimum":0,"maximum":100},"windDirection":{"type":"string","minLength":1,"maxLength":80},"windScale":{"type":"string","minLength":1,"maxLength":80},"precipitationMm":{"type":"number","minimum":0}}}}}},
+        {"if":{"properties":{"sourceKind":{"const":"weather_forecast"}}},"then":{"properties":{"candidate":{"type":"object","additionalProperties":false,"required":["kind","locationName","date","conditionDay","conditionNight"],"properties":{"kind":{"const":"weather_forecast"},"locationName":{"type":"string","minLength":1,"maxLength":240},"latitude":{"type":"number","minimum":-90,"maximum":90},"longitude":{"type":"number","minimum":-180,"maximum":180},"date":{"type":"string","format":"date"},"conditionDay":{"type":"string","minLength":1,"maxLength":240},"conditionNight":{"type":"string","minLength":1,"maxLength":240},"highC":{"type":"number"},"lowC":{"type":"number"},"precipitationMm":{"type":"number","minimum":0},"uvIndex":{"type":"number","minimum":0}}}}}},
+        {"if":{"properties":{"sourceKind":{"const":"saved_booking"}}},"then":{"properties":{"candidate":{"type":"object","additionalProperties":false,"required":["kind","bookingId","segmentId","status","segmentStatus","bookingConstraintStrength","segmentConstraintStrength","fixedCommitment"],"properties":{"kind":{"const":"saved_booking"},"bookingId":{"type":"string","minLength":1,"maxLength":160},"segmentId":{"type":"string","minLength":1,"maxLength":160},"status":{"type":"string","minLength":1,"maxLength":80},"segmentStatus":{"type":"string","minLength":1,"maxLength":80},"startAtLocal":{"type":"string","minLength":1,"maxLength":80},"startTimeZone":{"type":"string","minLength":1,"maxLength":80},"endAtLocal":{"type":"string","minLength":1,"maxLength":80},"endTimeZone":{"type":"string","minLength":1,"maxLength":80},"bookingConstraintStrength":{"enum":["hard","soft","ignored"]},"segmentConstraintStrength":{"enum":["hard","soft","ignored"]},"fixedCommitment":{"type":"boolean"}}}}}},
+        {"if": {"properties": {"sourceKind": {"const": "saved_booking"}}}, "then": {"required": ["sourceRevision"]}},
+        {"if": {"properties": {"status": {"enum": ["changed", "unchanged"]}}}, "then": {"properties": {"targetDate": {"type": "string"}, "timeZone": {"type": "string"}, "factObservedAt": {"type": "string"}, "validUntil": {"type": "string"}, "evidenceRefs": {"minItems": 1}}}}
+      ]
+    },
+    "decision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["verdict", "changeKind", "agentId", "modelId", "executionRef", "rationale", "obligations", "evidenceRefs"],
+      "properties": {
+        "verdict": {"enum": ["eligible", "ineligible", "unresolved"]},
+        "changeKind": {"enum": ["objective_disruption", "subjective_preference", "none", "unknown"]},
+        "agentId": {"type": ["string", "null"], "minLength": 1},
+        "modelId": {"type": ["string", "null"], "minLength": 1},
+        "executionRef": {"type": ["string", "null"], "minLength": 1},
+        "rationale": {"$ref": "#/$defs/text"},
+        "obligations": {"$ref": "#/$defs/texts"},
+        "evidenceRefs": {"$ref": "#/$defs/texts"}
+      },
+      "allOf": [{"if": {"properties": {"verdict": {"const": "eligible"}}}, "then": {"properties": {"agentId": {"type": "string"}, "modelId": {"type": "string"}, "executionRef": {"type": "string"}, "evidenceRefs": {"minItems": 1}}}}]
+    },
+    "applied": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "basis", "replacement", "proposalDigest", "validationRef", "appliedAt", "receiptRef", "handoff"],
+      "properties": {
+        "status": {"const": "applied"},
+        "basis": {"enum": ["user_confirmation", "objective_change"]},
+        "confirmationRef": {"$ref": "#/$defs/text"},
+        "replacement": {"$ref": "#/$defs/versions"},
+        "proposalDigest": {"$ref": "#/$defs/digest"},
+        "validationRef": {"$ref": "#/$defs/text"},
+        "appliedAt": {"$ref": "#/$defs/instant"},
+        "receiptRef": {"$ref": "#/$defs/text"},
+        "handoff": {
+          "type": "object", "additionalProperties": false,
+          "required": ["intentId", "status", "reason", "arrangementRef", "invalidateOldPending", "updateFutureWork", "readbackRef"],
+          "properties": {
+            "intentId": {"$ref": "#/$defs/text"},
+            "status": {"enum": ["pending", "acknowledged"]},
+            "reason": {"$ref": "#/$defs/text"},
+            "arrangementRef": {"$ref": "#/$defs/text"},
+            "invalidateOldPending": {"const": true},
+            "updateFutureWork": {"const": true},
+            "readbackRef": {"type": ["string", "null"], "minLength": 1}
+          },
+          "allOf": [{"if": {"properties": {"status": {"const": "acknowledged"}}}, "then": {"properties": {"readbackRef": {"type": "string"}}}}]
+        }
+      },
+      "allOf": [{"if": {"properties": {"basis": {"const": "objective_change"}}}, "then": {"not": {"required": ["confirmationRef"]}}}]
+    }
+  }
+}

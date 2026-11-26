@@ -1,7 +1,8 @@
 import { createGoogleMapsNavigationHandoff, createUberRideHandoff, type PlaceFact, type RouteFact } from "@c-assistant/connectors";
-import { runTransportPlannerSkill } from "@c-assistant/china-country-pack";
+import { runTransportPlannerSkill } from "@c-assistant/travel-support";
 import type { TransportMode, TransportPreference } from "@c-assistant/core";
 import type { Plan } from "@c-assistant/core";
+import { resolveServiceCapabilities, type DestinationExecutionContext } from "./execution-service-catalog.js";
 
 export function arrivalRouteDestination(plan: Plan): PlaceFact | undefined {
   const accommodation = plan.configuration.accommodation;
@@ -23,19 +24,21 @@ export function selectArrivalTransport(plan: Plan, routeFacts: RouteFact[], pref
   return result.recommendations[0]?.mode ?? fallback;
 }
 
-export function formatArrivalRoute(input: { origin: PlaceFact; destination: PlaceFact; transport: TransportMode; route?: RouteFact; taxiRequested?: boolean; uberPickup?: { latitude: number; longitude: number }; uberClientId?: string | undefined }): { text: string; handoffUrl: string; handoffLabel: string } {
-  const useUber = input.taxiRequested && input.uberPickup !== undefined;
+export function formatArrivalRoute(input: { origin: PlaceFact; destination: PlaceFact; transport: TransportMode; route?: RouteFact; taxiRequested?: boolean; uberPickup?: { latitude: number; longitude: number }; uberClientId?: string | undefined; destinationContext?: DestinationExecutionContext }): { text: string; handoffUrl: string; handoffLabel: string } {
+  const pickupContext: DestinationExecutionContext = { country: input.origin.country ?? "", city: input.origin.city, area: input.origin.district };
+  const service = input.taxiRequested ? resolveServiceCapabilities({ destination: pickupContext, option: "ride_hail_car" }).find(service => service.serviceName === "Uber" || service.serviceName === "Grab") : undefined;
+  const useUber = service?.serviceId === "uber" && input.taxiRequested && input.uberPickup !== undefined;
   const handoff = useUber
     ? createUberRideHandoff({ pickup: input.uberPickup!, destination: input.destination, ...(input.uberClientId ? { clientId: input.uberClientId } : {}) })
     : createGoogleMapsNavigationHandoff({ origin: input.origin, destination: input.destination, transport: input.transport });
-  const transportLabel = input.taxiRequested ? "Taxi estimate (using Google Maps driving facts)" : input.transport === "driving" ? "Driving" : input.transport === "walking" ? "Walking" : "Public transit";
-  const routeFact = input.route ? `\nRoute fact: ${formatDistance(input.route.distanceMeters)}${input.route.durationSeconds === undefined ? "" : ` · about ${formatDuration(input.route.durationSeconds)}`}${input.route.transitCostYuan === undefined ? "" : ` · estimated transit fare ¥${input.route.transitCostYuan}`}.` : "\nOpen Google Maps to get the current live route.";
-  const taxiBoundary = input.taxiRequested ? "\n\nContinue in Uber:\n1. Tap Open Uber below.\n2. Check the pickup point and destination; correct either one if Uber could not resolve it accurately.\n3. Review availability, vehicle type, live fare, and payment method in Uber.\n4. Confirm the ride in Uber only when you are ready." : "";
-  const automaticFollowUp = input.route?.durationSeconds === undefined ? "" : "\n\nAfter this handoff, Landi will use conservative route timing to send the next arrival guidance automatically. You do not need to confirm boarding or arrival. If you are delayed, tap I haven't arrived on that next message.";
+  const transportLabel = input.transport === "driving" ? "go by car" : input.transport === "walking" ? "walk" : "take public transit";
+  const routeFact = input.route ? `\n${formatDistance(input.route.distanceMeters)}${input.route.durationSeconds === undefined ? "" : ` · about ${formatDuration(input.route.durationSeconds)}`}${input.route.transitCostYuan === undefined ? "" : ` · estimated transit fare ¥${input.route.transitCostYuan}`}.` : "\nOpen the map below to check the current route.";
+  const taxiBoundary = service ? `\n\nOpen ${service.serviceName} below, check your pickup and destination, then review the car size and live fare. Confirm the ride only when you're ready.` : input.taxiRequested ? "\n\nYour hotel can help arrange a local taxi. Confirm the pickup and price before setting off." : "";
+  const automaticFollowUp = input.route?.durationSeconds === undefined ? "" : "\n\nI'll check in around your expected arrival. If you're delayed, tap I haven't arrived to give yourself more time.";
   return {
-    text: `Arrival route ready\nTo: ${input.destination.name}\nChosen route mode: ${transportLabel}.${routeFact}${taxiBoundary}${automaticFollowUp}\n\nLandi has not hailed a ride, made a booking, or started payment.`,
-    handoffUrl: handoff.url,
-    handoffLabel: input.taxiRequested ? "Open Uber" : "Open route in Google Maps"
+    text: `Let's get you to ${input.destination.name}.\nI'd suggest you ${transportLabel}.${routeFact}${taxiBoundary}${automaticFollowUp}`,
+    handoffUrl: service?.serviceName === "Grab" && service.url ? service.url : service?.serviceName === "Uber" && !useUber ? "https://m.uber.com/" : handoff.url,
+    handoffLabel: service?.serviceName === "Uber" ? "Open Uber" : service?.serviceName === "Grab" ? "Open Grab" : "Open route in Google Maps"
   };
 }
 

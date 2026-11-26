@@ -56,7 +56,10 @@ export function recommendLocalTransport(input: LocalTransportRecommendationInput
 
   let primaryOption = "ride_hail_car" as LocalTransportOption;
   const rationaleCodes: string[] = [];
-  if (input.preference === "taxi") {
+  if (input.preference === "driving") {
+    primaryOption = "driving";
+    rationaleCodes.push("own_car_preference");
+  } else if (input.preference === "taxi") {
     primaryOption = "ride_hail_car";
     rationaleCodes.push("taxi_preference_maps_to_ride_hail_car");
   } else if (input.preference === "walking") {
@@ -68,8 +71,8 @@ export function recommendLocalTransport(input: LocalTransportRecommendationInput
       rationaleCodes.push("walking_preference_overridden_by_safety_context");
     }
   } else if (input.preference === "public_transit") {
-    primaryOption = "ride_hail_car";
-    rationaleCodes.push(transitRoute ? "public_transit_preference_treated_as_weak" : "public_transit_facts_unavailable_use_safer_local_option");
+    primaryOption = transitRoute ? "public_transit" : "ride_hail_car";
+    rationaleCodes.push(transitRoute ? "public_transit_preference_kept" : "public_transit_facts_unavailable_use_safer_local_option");
   } else if (walkingFriendly && !badWeather && !isNight) {
     primaryOption = "walking";
     rationaleCodes.push("short_daytime_good_weather_walk");
@@ -114,7 +117,7 @@ export function isNightLocalTime(localTime: string): boolean {
 }
 
 function movementAction(option: LocalTransportOption, routeFacts: RouteFact[], rationaleCodes: string[]): Omit<RecommendedMovementAction, "handoffs"> {
-  const routeMode = option === "walking" ? "walking" : "driving";
+  const routeMode = option === "walking" ? "walking" : option === "public_transit" ? "transit" : "driving";
   const route = bestRoute(routeFacts, routeMode);
   return {
     id: option,
@@ -129,6 +132,8 @@ function movementAction(option: LocalTransportOption, routeFacts: RouteFact[], r
 
 function visibleRationale(option: LocalTransportOption, codes: string[], routeFacts: RouteFact[], route: RouteFact | undefined): string {
   const carComparison = routeComparison(routeFacts, route);
+  if (option === "public_transit") return "Use the public transport route and check departure times before setting off.";
+  if (option === "driving") return "Use your car and check the driving route before setting off.";
   if (codes.includes("walking_preference_overridden_by_safety_context")) return carComparison ? `${carComparison} That makes the car handoff the clearer option for this stop.` : "Walking looks less suitable right now, so use a car handoff and confirm the pickup details before you go.";
   if (codes.includes("taxi_preference_maps_to_ride_hail_car")) return carComparison ? `${carComparison} Choose the local ride app yourself and confirm the pickup details there.` : "This keeps your taxi-style preference while letting you choose the local ride app yourself.";
   if (codes.includes("public_transit_facts_unavailable_use_safer_local_option")) return carComparison ? `${carComparison} I could not verify a usable transit route, so confirm a local car pickup instead.` : "I could not verify a usable transit route for this stop, so use a local car option and confirm the details in the app.";
@@ -164,6 +169,8 @@ function formatRationaleDuration(durationSeconds: number): string {
 }
 
 function transportOptionTitle(option: LocalTransportOption): string {
+  if (option === "public_transit") return "Public transport";
+  if (option === "driving") return "Drive your car";
   if (option === "ride_hail_car") return "Ride-hail car";
   if (option === "ride_hail_motorbike") return "Ride-hail motorbike";
   if (option === "private_driver") return "Private driver";

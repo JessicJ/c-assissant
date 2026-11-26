@@ -1,7 +1,7 @@
 import type { RuntimeCheck, RuntimeKind } from "@c-assistant/agent-adapters";
 import { runtimeName } from "./runtime-display.js";
 
-export type SetupReadinessItemId = "profile" | "runtime" | "google" | "telegram";
+export type SetupReadinessItemId = "profile" | "runtime" | "google" | "email";
 
 export interface SetupReadinessItem {
   id: SetupReadinessItemId;
@@ -23,8 +23,8 @@ export function assessSetupReadiness(input: {
   selectedRuntime: RuntimeKind;
   runtimeChecks: RuntimeCheck[];
   googleConfigured: boolean;
-  telegramConfigured: boolean;
-  telegramPaired: boolean;
+  emailConfigured: boolean;
+  emailVerified: boolean;
 }): SetupReadiness {
   const selectedRuntime = input.runtimeChecks.find((runtime) => runtime.kind === input.selectedRuntime);
   const selectedRuntimeName = runtimeName(input.selectedRuntime);
@@ -53,14 +53,14 @@ export function assessSetupReadiness(input: {
       detail: input.googleConfigured ? "Global place and route facts are configured; weather is available where Google Weather has coverage." : "Add a restricted Google Maps Platform key with Places, Routes, and Weather APIs enabled."
     },
     {
-      id: "telegram",
-      label: "Telegram",
-      status: input.telegramConfigured && input.telegramPaired ? "ready" : "needs_attention",
-      detail: !input.telegramConfigured
-        ? "Add your Telegram bot token."
-        : input.telegramPaired
-          ? "Your private Telegram account is paired."
-          : "The bot is configured; pair your private Telegram account."
+      id: "email",
+      label: "Travel email",
+      status: input.emailConfigured && input.emailVerified ? "ready" : "needs_attention",
+      detail: !input.emailConfigured
+        ? "Configure the sender in Travel emails. The sender and recipient can use the same address."
+        : input.emailVerified
+          ? "The sender is configured and your recipient address is verified. Enable travel emails when ready."
+          : "Save and verify your recipient address in Travel emails."
     }
   ];
 

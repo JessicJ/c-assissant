@@ -1,3 +1,4 @@
+import { safePlanError } from "./api-client.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import L from "leaflet";
@@ -52,7 +53,7 @@ export function PlanMapWorkspace({ planId, planVersion, presentation, partySize,
     setResolving(true);
     void resolveMissingCoordinates(presentation, { searchMapPlaces })
       .then((next) => { if (!cancelled) setResolved(next); })
-      .catch((caught) => { if (!cancelled) { callbacksRef.current.onError(caught instanceof Error ? caught.message : "Unable to locate places on the map."); setResolved(presentation); } })
+      .catch((caught) => { if (!cancelled) { callbacksRef.current.onError(safePlanError(caught, "Unable to locate places on the map.")); setResolved(presentation); } })
       .finally(() => { if (!cancelled) setResolving(false); });
     return () => { cancelled = true; };
   }, [planId, planVersion, presentation]);
@@ -83,7 +84,7 @@ export function PlanMapWorkspace({ planId, planVersion, presentation, partySize,
           callbacksRef.current.onStatus("Map changes were saved directly to the plan. Affected routes were refreshed or marked for review.");
           window.setTimeout(() => setProgress((current) => current?.tone === "success" ? null : current), 2600);
         } catch (caught) {
-          const message = caught instanceof Error ? caught.message : "The map changes could not be saved to the plan.";
+          const message = safePlanError(caught, "The map changes could not be saved to the plan.");
           setProgress({ tone: "error", step: 1, text: message });
           callbacksRef.current.onError(message);
         } finally {

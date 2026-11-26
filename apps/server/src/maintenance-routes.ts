@@ -8,7 +8,7 @@ export function registerMaintenanceRoutes(server: FastifyInstance, dependencies:
   server.get("/api/runs", async () => store.listRecentAgentRuns());
   server.get("/api/runs/task-reminders", async () => store.listRecentTaskReminderRuns());
   server.get("/api/runs/plan-compilations", async () => store.listRecentPlanCompilationRuns());
-  server.get("/api/runs/country-pack-skills", async () => store.listRecentCountryPackSkillRuns());
+  server.get("/api/runs/preparation-evidence", async () => store.listRecentPreparationEvidenceRuns());
   server.get("/api/maintenance", async () => store.getDatabaseMaintenanceStatus());
   server.post("/api/backups", async (_request, reply) => {
     if (creatingBackup) return reply.code(409).send({ error: "A local backup is already being created." });

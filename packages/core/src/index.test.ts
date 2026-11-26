@@ -257,6 +257,11 @@ test("formal itinerary integrity checks that visits and movement fit between sta
   assert.equal(issues.some((issue) => /does not leave enough time/.test(issue)), true);
   presentation.days[0]!.stops![1]!.time = "11:10";
   assert.equal(planPresentationIntegrityIssues(presentation).some((issue) => /does not leave enough time/.test(issue)), false);
+  presentation.places[0]!.category = "motor lodge";
+  delete presentation.places[0]!.durationMinutes;
+  presentation.days[0]!.stops![1]!.time = "10:25";
+  assert.equal(planPresentationIntegrityIssues(presentation).some((issue) => /does not leave enough time/.test(issue)), false);
+  assert.equal(planPresentationIntegrityIssues(presentation).some((issue) => /realistic visit duration/.test(issue)), false);
 });
 
 test("current destination stays on the first city before a multi-city trip", () => {

@@ -17,6 +17,8 @@ export function displayPlanTitle(plan: TitledPlan): string {
 }
 
 export function displayTripTitle(presentation: PlanPresentation, fallbackTitle = ""): string {
+  const authoredTitle = cleanStoredTitle(fallbackTitle);
+  if (authoredTitle && !/^landi\s+plan:|^(?:trip|travel|itinerary|plan)(?:\s+plan)?$/iu.test(fallbackTitle.trim())) return authoredTitle;
   const dayCount = tripDayCount(presentation);
   const cities = cityNames(presentation);
   const themes = tripThemes(presentation, fallbackTitle);

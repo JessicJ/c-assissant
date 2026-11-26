@@ -32,7 +32,7 @@ export function recommendPlanTransport(input: { preference: TransportPreference;
   const limitations = [input.weather ? "Weather is a short forecast matched to the expected arrival date; check it again before departure." : "No weather fact matched the expected arrival date, so weather is not considered in this preliminary choice.", "Service disruptions and exact device location are not considered in this preliminary choice."];
   if (!input.routeFacts.length) return { reasons: ["Compare at least one available route before choosing transport."], limitations };
 
-  const preferredMode = input.preference === "taxi" ? "driving" : input.preference === "public_transit" ? "transit" : input.preference === "walking" ? "walking" : undefined;
+  const preferredMode = (input.preference === "taxi" || input.preference === "driving") ? "driving" : input.preference === "public_transit" ? "transit" : input.preference === "walking" ? "walking" : undefined;
   if (preferredMode) {
     if (byMode.has(preferredMode)) return { mode: preferredMode, reasons: [`This Plan explicitly prefers ${transportModeLabel(preferredMode)}.`, ...(rainExpected && preferredMode === "walking" ? ["Rain or snow is forecast for the expected arrival date, but the explicit Plan preference is retained."] : [])], limitations };
     return { reasons: [`This Plan prefers ${transportModeLabel(preferredMode)}, but no usable route fact was returned for it.`], limitations };

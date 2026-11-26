@@ -1,3 +1,4 @@
+import {bookingRelationshipSourceUnits} from "@c-assistant/core";
 import {
   RuntimeAdapterError,
   runSemanticPlanRepairOnce,
@@ -61,6 +62,7 @@ export async function generateSemanticDraft(input: {
     request: input.request,
     research: input.research,
     fixedCommitments,
+    bookingRelationshipSourceUnits:bookingRelationshipSourceUnits(input.bookingConstraints),
     profile: input.profile,
     signal: input.signal
   });
@@ -322,7 +324,7 @@ function assertSemanticPublicationGate(
   if (lossy.length) throw new RuntimeAdapterError("invalid_output", `Semantic Structurer changed or dropped travel decisions: ${lossy[0]!.subject}.`);
   const expectedCommitmentIds = bookingConstraints
     .filter((constraint) => constraint.status === "confirmed" && constraint.constraintStrength === "hard")
-    .flatMap((constraint) => constraint.segments.filter((segment) => segment.fixedCommitment && segment.constraintStrength === "hard").map((segment) => `${constraint.id}:${segment.id}`));
+    .flatMap((constraint) => constraint.segments.filter((segment) => segment.status !== "cancelled" && segment.fixedCommitment && segment.constraintStrength === "hard").map((segment) => `${constraint.id}:${segment.id}`));
   const preservedCommitmentIds = new Set(structured.preservedBookingConstraints.flatMap((constraint) => constraint.segments.map((segment) => `${constraint.id}:${segment.id}`)));
   const missing = expectedCommitmentIds.filter((id) => !preservedCommitmentIds.has(id));
   if (missing.length) throw new RuntimeAdapterError("invalid_output", `Semantic Structurer did not preserve confirmed hard commitment ${missing[0]}.`);

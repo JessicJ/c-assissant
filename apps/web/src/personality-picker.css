@@ -1,0 +1,18 @@
+.personality-picker { display: grid; gap: 12px; text-align: left; }
+.personality-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.personality-option { display: flex; align-items: center; gap: 12px; padding: 14px 12px; border: 1px solid #dce2ea; border-radius: 12px; background: #fff; text-align: left; color: #18283d; cursor: pointer; }
+.personality-avatar { width: 48px; height: 48px; flex: none; border-radius: 50%; }
+.personality-option-copy { min-width: 0; }
+.personality-option strong, .personality-option span { display: block; }
+.personality-option strong { font-size: 14px; margin-bottom: 6px; }
+.personality-option span { font-size: 12px; line-height: 1.5; color: #526178; }
+.personality-option.selected { background: #eef5ff; border-color: #147bff; box-shadow: inset 0 0 0 1px #147bff; }
+.personality-option:hover { border-color: #147bff; }
+.personality-picker button:focus-visible { outline: 3px solid #82b7ff; outline-offset: 3px; }
+.first-run-page.profile-page { overflow-y: auto; padding-bottom: 20px; box-sizing: border-box; }
+@media (max-width: 520px) { .personality-options { grid-template-columns: 1fr; } .personality-option { padding: 10px 12px; } }
+
+.first-run-page.personality-page { box-sizing: border-box; }
+
+.empty-home-settings { position: absolute; top: 24px; right: 28px; z-index: 2; border: 1px solid #dce2ea; border-radius: 10px; padding: 10px 16px; background: #fff; color: #18283d; font: inherit; cursor: pointer; }
+.empty-home-settings:focus-visible { outline: 3px solid #82b7ff; outline-offset: 3px; }

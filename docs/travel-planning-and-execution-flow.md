@@ -1,8 +1,10 @@
+> Email execution follows [email-execution.md](email-execution.md). The Telegram-specific arrival/feedback and mobile channel descriptions below are historical until this migration is verified; they are not the target email interaction contract.
+
 # Travel Planning and Execution Flow
 
 ## Purpose
 
-This document describes the complete Landi product flow for one travel objective. It connects planning, Plan activation, long-running monitoring, user-approved adjustment, mobile assistance, and trip completion.
+This document describes the complete Landi product flow for one travel objective. It connects planning, Plan activation, long-running monitoring, 分阶段调整、邮件协助, and trip completion.
 
 The authoritative result is always structured, versioned Plan data stored by Landi. Conversation, maps, notifications, and external handoffs are ways to work with that Plan; none of them replaces it.
 
@@ -180,11 +182,11 @@ The preview explains:
 - what remains unaffected;
 - one or more practical alternatives.
 
-Material changes require traveler approval. The first complete target scenario is a must-see venue closing and Landi offering a replacement for the affected day without rebuilding the rest of the trip.
+重大变化按 email-execution.md 的阶段合同处理：出发前明确确认具体方案及当前 Plan／Blueprint／执行版本；行中可靠客观变化须先核来源适用性、影响及完整替代安排，再由 Landi 应用。阶段或事实未知时保留旧执行与未决事实。
 
 ## 10. Create and activate a replacement Plan
 
-After approval to replan, Landi creates a reviewable replacement draft.
+Landi 生成完整、版本绑定的替代候选；出发前供桌面审阅确认，行中客观变化按权威合同校验应用。
 
 The replacement process must:
 
@@ -194,9 +196,9 @@ The replacement process must:
 - retain an audit linking the source Plan and replacement Plan;
 - reject the result if the current Plan changed during generation.
 
-The active execution pointer changes only after the traveler confirms the complete replacement. Future Reminders and monitoring then switch to the new version, while obsolete work from the old version is cancelled.
+执行指针、应用依据和可恢复交接须按 email-execution.md 原子提交；旧版未发送提醒失效，后续工作绑定新版，通知失败不回滚已应用版本。自动应用不能记作用户确认。
 
-## 11. Assist during the trip
+## 11. 历史手机协助流程（已退役）
 
 Telegram is the primary mobile assistance surface after activation.
 
@@ -232,7 +234,7 @@ Trip-scoped dates, lodging, party composition, and temporary preferences remain 
 - review material impact and replacement drafts;
 - manage Plan history and settings.
 
-### Telegram
+### Telegram（历史，不再适用）
 
 - deliver time-sensitive assistance;
 - receive contextual natural-language requests;

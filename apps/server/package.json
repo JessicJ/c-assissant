@@ -5,25 +5,31 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "dev": "pnpm build:mah-stage-validation && tsx watch src/index.ts",
+    "build": "node ../../scripts/prune-server-build.mjs && tsc -p tsconfig.json && pnpm build:mah-stage-validation",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/telegram-commands.test.ts src/telegram-profile.test.ts src/telegram-weather.test.ts src/telegram-food.test.ts src/next-planned-stop.test.ts src/execution-service-catalog.test.ts src/local-transport-recommendation.test.ts src/movement-action-card.test.ts src/telegram-movement-card.test.ts src/arrival-reminder.test.ts src/arrival-route.test.ts src/route-handoff.test.ts src/itinerary-departure-reminder.test.ts src/server-lifecycle.test.ts src/telegram-plan.test.ts src/telegram-plan-change-handler.test.ts src/plan-refinement.test.ts src/plan-change-impact.test.ts src/plan-route-refresh.test.ts src/plan-management-routes.test.ts src/plan-presentation-routes.test.ts src/plan-arrival-timezone.test.ts src/accommodation-departure.test.ts src/plan-weather-monitor.test.ts src/plan-venue-monitor.test.ts src/official-sources.test.ts src/task-reminder.test.ts src/task-reminder-weather.test.ts src/web-agent.test.ts src/planning-session.test.ts src/china-plan-compilation.test.ts src/china-arrival-facts.test.ts src/china-source-preparation.test.ts src/china-plan-workflow.test.ts src/china-plan-presentation.test.ts src/china-v1-e2e.test.ts src/country-pack-resolver.test.ts src/japan-v1-e2e.test.ts src/setup-readiness.test.ts src/user-weather.test.ts src/whatsapp-channel.test.ts src/connector-services.test.ts src/telegram-poller.test.ts src/local-web-routes.test.ts src/booking-import.test.ts src/planning-generation-state.test.ts src/day-completion.test.ts src/explore-supply.test.ts src/semantic-shadow.test.ts src/planning-generation.test.ts src/messaging-command-copy.test.ts src/connector-bundle.test.ts src/connector-configuration.test.ts src/runtime-display.test.ts src/geo-coordinates.test.ts src/map-connector-routes.test.ts",
-    "start": "node lib/index.js"
+    "test": "tsx --test src/public-media-fetch.test.ts src/restaurant-menu.test.ts src/outbound-departure.test.ts src/assistant-copy.test.ts src/next-planned-stop.test.ts src/execution-service-catalog.test.ts src/local-transport-recommendation.test.ts src/arrival-reminder.test.ts src/arrival-route.test.ts src/route-handoff.test.ts src/itinerary-departure-reminder.test.ts src/server-lifecycle.test.ts src/plan-refinement.test.ts src/plan-change-impact.test.ts src/plan-route-refresh.test.ts src/plan-management-routes.test.ts src/plan-presentation-routes.test.ts src/plan-arrival-timezone.test.ts src/accommodation-departure.test.ts src/plan-weather-monitor.test.ts src/plan-venue-monitor.test.ts src/official-sources.test.ts src/task-reminder.test.ts src/task-reminder-weather.test.ts src/web-agent.test.ts src/planning-session.test.ts src/setup-readiness.test.ts src/user-weather.test.ts src/connector-services.test.ts src/local-web-routes.test.ts src/booking-import.test.ts src/planning-generation-state.test.ts src/itinerary-timing-quality.test.ts src/itinerary-quality-review.test.ts src/itinerary-publication-review.test.ts src/flight-origin-completion.test.ts src/gateway-node-completion.test.ts src/proposed-departure-times.test.ts src/accommodation-anchor-materialization.test.ts src/day-completion.test.ts src/explore-supply.test.ts src/semantic-shadow.test.ts src/planning-generation.test.ts src/connector-bundle.test.ts src/connector-configuration.test.ts src/runtime-display.test.ts src/geo-coordinates.test.ts src/map-connector-routes.test.ts src/itinerary-content-audit.test.ts src/itinerary-content-review.test.ts src/planned-place-image-coverage.test.ts src/planned-place-image-pipeline.test.ts src/planned-place-image-continuation.test.ts src/wikipedia-place-images.test.ts src/official-place-images.test.ts src/departure-endpoint-completion.test.ts src/booking-routes.test.ts src/semantic-draft-canary.test.ts src/web-agent-routes.test.ts src/email-execution.test.ts src/email-photo.test.ts src/email-ride.test.ts src/email-execution-routes.test.ts src/email-templates/templates.test.ts src/email-templates/important-update.test.ts src/email-templates/important-update-heroes.test.ts src/email-attention-monitor.test.ts src/email-agent-timing.test.ts src/email-review-retirement.test.ts src/product-scope-retirement.test.ts src/internal-dependency-cleanup.test.ts src/local-agent-work-migration.test.ts src/travel-adjustment-application.test.ts src/email-plan-review-projection.test.ts src/email-adjustment-handoff.test.ts src/review-source-facts.test.ts src/travel-adjustment-development-fixture.test.ts",
+    "start": "node lib/index.js",
+    "test:local-agent-work": "node --import tsx --test src/local-agent-work-migration.test.ts ../web/src/planning-message-identity.test.ts",
+    "test:supplemental": "pnpm build:mah-stage-validation && tsx --test src/destination-research-startup.test.ts src/email-review.test.ts src/generated-plan-evidence-decoupling.test.ts src/mah-business-contract.test.ts src/mah-business-gateway.test.ts src/mah-business-journal.test.ts src/mah-business-public-receipt.test.ts src/mah-business-public-result.test.ts src/mah-business-runtime.test.ts src/mah-cli-binding.test.ts src/mah-generation-runtime.test.ts src/mah-materialization-contract.test.ts src/mah-planning-conversation.test.ts src/mah-preflight.test.ts src/mah-readiness-report.test.ts src/mah-readiness.test.ts src/mah-readonly-snapshots.test.ts src/mah-startup-recovery.test.ts src/maintenance-bootstrap.test.ts src/maintenance-control.test.ts src/plan-confirmation-isolation.test.ts src/planning-work-status.test.ts src/server-config.test.ts",
+    "test:readonly-mechanism": "node --test ../../scripts/readonly-mechanism.test.mjs",
+    "build:mah-stage-validation": "node scripts/build-mah-stage-validation.cjs"
   },
   "dependencies": {
     "@c-assistant/agent-adapters": "workspace:*",
-    "@c-assistant/china-country-pack": "workspace:*",
-    "@c-assistant/japan-country-pack": "workspace:*",
     "@c-assistant/connectors": "workspace:*",
     "@c-assistant/core": "workspace:*",
     "@c-assistant/storage": "workspace:*",
     "@fastify/cors": "^10.0.1",
     "@fastify/static": "^10.1.3",
-    "fastify": "^5.2.1"
+    "fastify": "^5.2.1",
+    "@c-assistant/travel-support": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
-    "tsx": "^4.19.2"
+    "tsx": "^4.19.2",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "esbuild": "0.28.1"
   }
 }

@@ -182,7 +182,7 @@ test("semantic shadow repairs exactly once for repair_required findings", async 
   assert.equal(report.readinessTrace.occurrences.some((item: any) => item.experienceName === "Fixture Place"), false);
 });
 
-test("readiness trace records specific confirmed booking support without requiring duplicate operational facts", async () => {
+test("readiness不以名称日期或独立承诺推断日程关联，缺关系保持未确定", async () => {
   const booking = eventBookingConstraint();
   const report = await shadowReport(plan({
     title: "Theatre ticket",
@@ -192,10 +192,9 @@ test("readiness trace records specific confirmed booking support without requiri
   const occurrence = report.readinessTrace.occurrences[0];
   assert.equal(report.readinessTrace.counts.plannedExperienceCount, 1);
   assert.equal(report.readinessTrace.counts.traceEntryCount, 1);
-  assert.equal(occurrence.bookingSupport.length, 1);
-  assert.equal(occurrence.bookingSupport[0].commitmentId, "booking-event:segment-event");
-  assert.equal(occurrence.bookingSupport[0].conditionSupported, "confirmed_fixed_commitment");
-  assert.equal(occurrence.bookingSupport[0].auditLabel, "C");
+  assert.equal(occurrence.bookingSupport.length, 0);
+  assert.equal(occurrence.bookingRelationshipCheck.status, "unknown");
+  assert.equal(occurrence.auditLabels.includes("C"), false);
 });
 
 test("readiness trace does not present evidence outside the travel date as applicable", () => {

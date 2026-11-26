@@ -9,20 +9,14 @@ test("connector services return the current bundle after replacement", () => {
     process.env.WHATSAPP_ALLOWED_USER_NUMBER = "+14155552671";
     const services = createConnectorServices();
     const initial = services.getConnectors();
-    const replacement = {
-      ...initial,
-      whatsapp: {
-        configurationStatus: () => ({ status: "available", data: { state: "verified" } })
-      }
-    } as unknown as ConnectorBundle;
+    const replacement = { ...initial } as ConnectorBundle;
 
     services.replaceConnectors(replacement);
 
     assert.equal(services.getConnectors(), replacement);
     const snapshot = services.getLocalConfiguration();
-    assert.equal(snapshot.whatsapp.configured, true);
-    assert.equal(snapshot.whatsapp.state, "verified");
-    assert.equal(snapshot.whatsapp.paired, true);
+    assert.equal("whatsapp" in snapshot, false);
+    assert.equal("telegram" in snapshot, false);
   } finally {
     if (previousAllowedNumber === undefined) {
       delete process.env.WHATSAPP_ALLOWED_USER_NUMBER;

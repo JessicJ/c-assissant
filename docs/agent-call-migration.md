@@ -1,0 +1,27 @@
+# Local preparation for MAH call migration
+
+Owner-authorized implementation scope (2026-10-21): business interfaces, durable request identity, local persistence, compatibility and fail-closed boundaries. This does not implement MAH public APIs, background admission or hosting. No MAH task/Evolution write, historical-suite rerun, live data migration, service restart or deployment is part of this work. The accepted first-run tour remains byte-identical.
+
+## Ownership and interfaces
+
+Server business callers use explicit planning, blueprint and email interfaces. MAH blueprint execution uses composition, never inheritance from a local process adapter. Local Codex/Claude installation/login checks remain diagnostics only. Unavailable conversation, legacy draft and unattended email execution return a typed public-contract blocker without invoking a local Agent. Existing blueprint generation mappings remain authoritative and are not copied into the new work store. Existing generation transport is retained pending verified public APIs; no new command or slot semantics are invented.
+
+## Request identity and compatibility
+
+New non-generation work uses a versioned discriminated scope: conversation session/message/revision; revision base Plan/Blueprint and request; image continuation version and target digest; email research event/targets/validity; email timing opportunities/time-zone/settings/window. Prepare persists work/request/carrier UUIDs and canonical input digests before any submission. Duplicate logical work reuses identity; changed input conflicts. Unknown versions, invalid scope, conflicting results and illegal state changes fail closed. Cancellation and supersession reject late results. Application and its marker share one SQLite transaction; the caller must check current business state inside it.
+
+Additive Schema 27 introduces generic work records, session revision and message receipt tables. It does not rebuild or rewrite generation carriers, historical JSON, old channel records or email delivery tables. Existing sessions receive a deterministic revision baseline based on message count, not invented confirmations. Persisted user messages are canonical in planning_sessions; receipts carry only IDs/digests/revisions. Server message saving is independent of MAH and uses session/revision/message identities. Stale submissions conflict; retries with the same identity and content reuse their receipt. New requirements invalidate an old proposal approval; an active generation cannot be edited implicitly. Legacy Plan reads remain available; AI revision without a Blueprint is blocked rather than converted with fabricated provenance.
+
+Email ownership remains unchanged: existing verified/enabled recipient, recipient revision, Plan version, lease, outbox deduplication and uncertain SMTP state continue to govern sending. New AI records do not authorize sending or reset old deliveries. Historical timing/research results are not relabelled as MAH output. Background AI calls remain blocked until an appropriate public admission/recovery contract exists; no interactive-slot substitution.
+
+## Local acceptance
+
+Only new focused checks cover discriminated identities, idempotency/conflicts, reopen recovery, immutable results, transactional rollback/application, cancellation and late result rejection, additive old-data preservation, concurrent message saving, and absence of local-process fallbacks. In-memory/temporary databases and fake executors only. Typechecks establish local structural compatibility, not MAH readiness. Existing runtime/generation tests remain historical evidence and are not rerun. Real transmission, provider route, materialization, cancellation and background hosting acceptance remain gated on official MAH public contracts and same-task delivery recovery.
+
+## Implemented local boundary
+
+`POST /api/agent/chat` new-plan saving requires a client message ID, expected requirements revision and optional session ID. It persists the user message without semantic inference and records a blocked conversation work item; the response distinguishes saved data from unavailable Agent processing. A revision read endpoint supports concurrency checks. Browser pending receipts survive ambiguous responses, while explicit stale-write rejection releases the old receipt only for a user-reviewed retry. Existing session updates to messages/facts/proposals also advance revision under a savepoint.
+
+Production readiness is a conservative local gate, not a simulated MAH probe: generation, revision, unattended email and hosting remain blocked. Existing generation mappings are retained and automatic MAH recovery does not run until a verified public gate exists. Local diagnostic responses cannot produce an affirmative production readiness result. No MAH command or environment toggle was added to pretend this gate is satisfied. Generic work has one persisted attempt in this phase; explicit remote retry/admission remains unimplemented pending the public execution contract.
+
+Focused command: `pnpm --filter @c-assistant/server test:local-agent-work`. Existing test dependency fixtures and latest-schema assertions are aligned for future runs but historical suites were not executed. The additive compatibility fixture starts at Schema 26 with populated legacy generation and uncertain-email records; existing pre-26/sidecar migrations retain their original implementation and were not reverified.

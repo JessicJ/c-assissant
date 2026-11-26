@@ -1,0 +1,25 @@
+import { readFileSync } from "node:fs";
+import type { Plan } from "@c-assistant/core";
+
+/** Local acceptance manifest, scoped to one exact test Plan; never a global GPS override. */
+export function executionTestSimulation(plan: Plan): { latitude: number; longitude: number } | undefined {
+  try {
+    const manifest = JSON.parse(readFileSync(new URL("../../../data/reminder-acceptance/device-session.json", import.meta.url), "utf8"));
+    const origin = manifest.simulation?.origin;
+    if (!plan.title.startsWith("TEST — ") || manifest.testPlanId !== plan.id || manifest.testVersion !== plan.version || manifest.simulation?.enabled !== true) return undefined;
+    if (!Number.isFinite(origin?.latitude) || !Number.isFinite(origin?.longitude) || Math.abs(origin.latitude) > 90 || Math.abs(origin.longitude) > 180) return undefined;
+    return { latitude: origin.latitude, longitude: origin.longitude };
+  } catch { return undefined; }
+}
+
+/** Pin only the explicitly designated one-day simulation; progress timers still use real elapsed time. */
+export function executionTestLocalDate(plan: Plan, timeZone: string): string | undefined {
+  if (!executionTestSimulation(plan)) return undefined;
+  try {
+    const manifest = JSON.parse(readFileSync(new URL("../../../data/reminder-acceptance/device-session.json", import.meta.url), "utf8"));
+    const date = manifest.localDate;
+    if (manifest.simulation?.pinLocalDate !== true || manifest.timeZone !== timeZone || typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return undefined;
+    if (plan.presentation?.startDate !== date || plan.presentation?.endDate !== date || !plan.presentation.days.every(day => day.date === date)) return undefined;
+    return date;
+  } catch { return undefined; }
+}

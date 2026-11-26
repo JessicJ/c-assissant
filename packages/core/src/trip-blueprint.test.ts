@@ -340,7 +340,7 @@ test("Trip Blueprint validates Guide Catalog themes against concrete places", ()
   const issues = tripBlueprintIntegrityIssues(value);
   assert.ok(issues.some((issue) => issue.includes("local food food-soba references unknown dining place missing")));
   assert.ok(issues.some((issue) => issue.includes("local food food-soba contains duplicate dining places")));
-  assert.ok(issues.some((issue) => issue.includes("local product product-paper needs at least one purchase place")));
+  assert.ok(!issues.some((issue) => issue.includes("local product product-paper needs at least one purchase place")));
   assert.ok(issues.some((issue) => issue.includes("experience theme experience-tea references unknown offering place missing-offering")));
 });
 

@@ -29,7 +29,7 @@ test("arrival route copy makes the Google Maps handoff and its boundary explicit
   const destination = { id: "stay-1", name: "Riverside Hotel", address: "1 River Road", location: "121.456,31.250", type: "Accommodation", city: "Shanghai", district: "Jing'an" };
   const result = formatArrivalRoute({ origin, destination, transport: "driving", route: { mode: "driving", origin: origin.location, destination: destination.location, distanceMeters: 2_400, durationSeconds: 720, taxiCostYuan: 18, strategy: "amap_recommended" } });
   assert.match(result.text, /2\.4 km/);
-  assert.match(result.text, /not hailed a ride/i);
+  assert.doesNotMatch(result.text, /Route fact|Chosen route mode/);
   assert.equal(result.handoffLabel, "Open route in Google Maps");
   assert.match(result.handoffUrl, /^https:\/\/www\.google\.com\/maps\/dir/);
 });
@@ -37,12 +37,12 @@ test("arrival route copy makes the Google Maps handoff and its boundary explicit
 test("a taxi request hands off to Uber while keeping Amap route facts separate", () => {
   const origin = { id: "", name: "Shared current location", address: "", location: "121.455,31.249", type: "Temporary location", city: "", district: "" };
   const destination = { id: "stay-1", name: "Riverside Hotel", address: "1 River Road", location: "121.456,31.250", type: "Accommodation", city: "Shanghai", district: "Jing'an" };
-  const result = formatArrivalRoute({ origin, destination, transport: "driving", taxiRequested: true, uberPickup: { latitude: 31.249, longitude: 121.455 }, route: { mode: "driving", origin: origin.location, destination: destination.location, distanceMeters: 2_400, durationSeconds: 720, taxiCostYuan: 18, strategy: "amap_recommended" } });
-  assert.match(result.text, /Continue in Uber/i);
+  const result = formatArrivalRoute({ origin, destination, transport: "driving", taxiRequested: true, destinationContext: { country: "United States", city: "Los Angeles" }, uberPickup: { latitude: 31.249, longitude: 121.455 }, route: { mode: "driving", origin: origin.location, destination: destination.location, distanceMeters: 2_400, durationSeconds: 720, taxiCostYuan: 18, strategy: "amap_recommended" } });
+  assert.match(result.text, /Open Uber below/i);
   assert.match(result.text, /live fare/i);
-  assert.match(result.text, /Confirm the ride in Uber/i);
-  assert.match(result.text, /only when you are ready/i);
-  assert.match(result.text, /do not need to confirm boarding or arrival/i);
+  assert.match(result.text, /Confirm the ride/i);
+  assert.match(result.text, /only when you're ready/i);
+  assert.match(result.text, /check in around your expected arrival/i);
   assert.match(result.text, /I haven't arrived/i);
   assert.equal(result.handoffLabel, "Open Uber");
   assert.match(result.handoffUrl, /^https:\/\/m\.uber\.com\/looking/);
@@ -54,4 +54,21 @@ test("arrival route copy includes a public-transit fare when Amap provides one",
   const destination = { id: "stay-1", name: "Riverside Hotel", address: "1 River Road", location: "121.456,31.250", type: "Accommodation", city: "Shanghai", district: "Jing'an" };
   const result = formatArrivalRoute({ origin, destination, transport: "transit", route: { mode: "transit", origin: origin.location, destination: destination.location, distanceMeters: 2_400, durationSeconds: 1_020, transitCostYuan: 4, strategy: "public_transit_recommended" } });
   assert.match(result.text, /estimated transit fare ¥4/);
+});
+
+test("arrival transport retains an app check when coverage data is missing", () => {
+  const origin = { id: "", name: "Pickup", address: "", location: "121.455,31.249", type: "Temporary location", city: "Shanghai", district: "" };
+  const result = formatArrivalRoute({ origin, destination: { ...origin, name: "Hotel" }, transport: "driving", taxiRequested: true, uberPickup: { latitude: 31.249, longitude: 121.455 }, destinationContext: { country: "China", city: "Shanghai" } });
+  assert.equal(result.handoffLabel, "Open Uber");
+  assert.match(result.text, /Open Uber/);
+  assert.doesNotMatch(result.text, /not confirm|unavailable/);
+});
+
+
+test("arrival ride app follows pickup country, including Grab's regional handoff", () => {
+  const origin = { id: "", name: "Bali pickup", address: "", location: "115.2,-8.7", type: "Temporary location", city: "Bali", country: "Indonesia", district: "Ubud" };
+  const result = formatArrivalRoute({ origin, destination: { ...origin, name: "Hotel" }, transport: "driving", taxiRequested: true, uberPickup: { latitude: -8.7, longitude: 115.2 }, destinationContext: { country: "New Zealand", city: "Auckland" } });
+  assert.equal(result.handoffLabel, "Open Grab");
+  assert.match(result.handoffUrl, /grab.com/);
+  assert.doesNotMatch(result.text, /Open Uber/);
 });

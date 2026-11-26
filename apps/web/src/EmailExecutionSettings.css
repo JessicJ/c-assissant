@@ -1,0 +1,8 @@
+.email-execution-settings .settings-description { margin: 8px 0 18px; line-height: 1.65; }
+.email-execution-settings h3 { margin: 24px 0 10px; }
+.email-execution-settings .save-button { min-height: 44px; margin: 8px 0; }
+.email-execution-settings .text-action { display: block; min-height: 44px; margin: 4px 0 12px; padding: 10px 0; font-size: 12px; text-align: left; }
+.email-execution-settings input, .email-execution-settings select { min-height: 44px; }
+.email-execution-settings [role="status"] { line-height: 1.6; }
+
+.email-execution-settings .email-sender-status { padding: 12px 14px; border-radius: 8px; background: #eef2ed; color: #293d34; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }

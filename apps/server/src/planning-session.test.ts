@@ -3,10 +3,72 @@ import test from "node:test";
 import type { TravelBooking } from "@c-assistant/core";
 import { applyAgentPlanningTurn, applyPlanningTurn, createPlanningSession, prepareConfirmedPlanningSession } from "./planning-session.js";
 import { applyExternalPlanningFacts } from "./planning-session-external-facts.js";
-import { missingGenerationQuestions, planningTravelDateRange } from "./planning-session-facts.js";
+import { missingGenerationQuestions, planningTravelDateRange, partySizeNumber } from "./planning-session-facts.js";
 import { planningAccommodationDestinationConflicts, planningArrivalLocalDateTime, planningGenerationReuse, planningPartySize, planningRequestForGeneration, planningRequestForGenerationWithBookings, planningResearchScopes, planningTransportPreference } from "./planning-session-generation.js";
 
 const now = "2026-09-18T00:00:00.000Z";
+
+test("a stated travel budget needs airfare coverage before generation", () => {
+  const facts = [
+    ["destination", "New Zealand, with Wellington as the arrival and departure city; other cities may be included"],
+    ["purpose", "Representative scenery and culture"],
+    ["travel_dates", "2026-12-12 to 2026-12-25"],
+    ["arrival", "Shanghai to WLG at 15:00"],
+    ["departure", "WLG at 18:00"],
+    ["party_size", "2"],
+    ["transport_preference", "Landi推荐"],
+    ["constraints", "Total budget around RMB 10,000"]
+  ].map(([key, value]) => ({ key: key!, value: value!, source: "user" as const, confirmed: true, updatedAt: now }));
+  assert.deepEqual(missingGenerationQuestions(facts).map((question) => question.key), ["budget_scope"]);
+  const answered = applyPlanningTurn({ ...createPlanningSession(), facts }, "不包含国际机票").session;
+  assert.equal(answered.facts.find((fact) => fact.key === "budget_scope")?.value, "excludes international flights");
+  assert.equal(missingGenerationQuestions(answered.facts).length, 0);
+  assert.deepEqual(planningResearchScopes({ facts }), [
+    "New Zealand: signature travel regions and route options (entry/exit Wellington)",
+    "New Zealand: representative regions beyond Wellington (candidate overnight bases)"
+  ]);
+
+  const awaitingScope = { ...createPlanningSession(), status: "proposal_confirmed" as const, facts, unresolved: missingGenerationQuestions(facts) };
+  const shortAnswer = applyPlanningTurn(awaitingScope, "不包含").session;
+  assert.equal(shortAnswer.facts.find((item) => item.key === "budget_scope")?.value, "excludes international flights");
+  assert.equal(shortAnswer.unresolved.length, 0);
+  const agentAnswer = applyAgentPlanningTurn(awaitingScope, "包含", {
+    reply: "Please clarify the budget coverage.", facts: [],
+    clarification: { key: "budget_scope", question: "Does it include flights?" }
+  }).session;
+  assert.equal(agentAnswer.facts.find((item) => item.key === "budget_scope")?.value, "includes international flights");
+  assert.equal(agentAnswer.unresolved.length, 0);
+
+  const budgetAddedAfterOtherAnswers = applyPlanningTurn({ ...createPlanningSession(), facts: facts.filter((item) => item.key !== "constraints") }, "预算约1万元人民币").session;
+  assert.equal(budgetAddedAfterOtherAnswers.status, "proposal_ready");
+  assert.deepEqual(budgetAddedAfterOtherAnswers.unresolved.map((item) => item.key), ["budget_scope"]);
+});
+
+test("Agent omissions cannot make a user-stated budget look complete", () => {
+  const originalMessage = "我们两个人2026年12月12日至12月25日去新西兰；不想频繁换酒店，总预算约1万元人民币。";
+  const turn = applyAgentPlanningTurn(createPlanningSession(), originalMessage, {
+    reply: "I have the route preferences.",
+    facts: [
+      { key: "destination", value: "New Zealand" }, { key: "purpose", value: "Holiday" },
+      { key: "travel_dates", value: "2026-12-12 to 2026-12-25" },
+      { key: "arrival", value: "Shanghai to Wellington Airport at 15:00" },
+      { key: "departure", value: "Wellington Airport at 18:00" },
+      { key: "party_size", value: "2 people" }, { key: "transport_preference", value: "public transport" },
+      { key: "constraints", value: "Avoid frequent hotel changes" }
+    ]
+  });
+  assert.equal(turn.session.status, "proposal_ready");
+  assert.match(turn.session.facts.find((item) => item.key === "constraints")?.value ?? "", /1万元人民币/);
+  assert.deepEqual(turn.session.unresolved.map((item) => item.key), ["budget_scope"]);
+
+  const stale = { ...turn.session, facts: turn.session.facts.map((item) => item.key === "constraints" ? { ...item, value: "Avoid frequent hotel changes" } : item), unresolved: [] };
+  assert.deepEqual(missingGenerationQuestions(stale.facts, stale.messages).map((item) => item.key), ["budget_scope"]);
+  const answered = applyAgentPlanningTurn(stale, "不包含", { reply: "Understood.", facts: [] }).session;
+  assert.equal(answered.facts.find((item) => item.key === "budget_scope")?.value, "excludes international flights");
+  assert.match(answered.facts.find((item) => item.key === "constraints")?.value ?? "", /1万元人民币/);
+  assert.match(answered.facts.find((item) => item.key === "constraints")?.value ?? "", /Avoid frequent hotel changes/);
+  assert.equal(answered.unresolved.length, 0);
+});
 
 test("planning turns collect facts before producing a proposal", () => {
   const first = applyPlanningTurn(createPlanningSession(new Date("2026-08-17T00:00:00.000Z")), "我想去葡萄牙");
@@ -109,7 +171,9 @@ test("accepted accommodation bookings add overnight departure continuity to gene
   };
   const request = planningRequestForGenerationWithBookings(confirmed, [booking]);
   assert.match(request, /Accommodation continuity rule/i);
-  assert.match(request, /each morning's route should depart from the hotel or lodging where the traveler slept the previous night/i);
+  assert.match(request, /each destination night needs an overnight base, and the next morning starts there/i);
+  assert.match(request, /Preserve any accepted hotel booking/i);
+  assert.match(request, /Destination strategy rule: first identify the destination's defining travel experiences/i);
   assert.match(request, /HARD accommodation: Hotel A/);
   assert.match(request, /hotel_stay|Hotel A stay|1 Rue Example, Paris/i);
 });
@@ -153,8 +217,29 @@ test("confirmed Chinese party counts become structured Plan context", () => {
 });
 
 test("a full date range is retained as one timing fact", () => {
-  const result = applyPlanningTurn(createPlanningSession(), "我想去巴黎旅行，10月6日至10月16日，主要看艺术和建筑");
+  const at = new Date("2026-09-28T10:00:00");
+  const result = applyPlanningTurn(createPlanningSession(at), "我想去巴黎旅行，10月6日至10月16日，主要看艺术和建筑", at);
   assert.equal(result.session.facts.find((fact) => fact.key === "timing")?.value, "10月6日至10月16日");
+  assert.equal(result.session.facts.find((fact) => fact.key === "travel_dates")?.value, "2026年10月6日至10月16日");
+  assert.equal(result.session.facts.find((fact) => fact.key === "travel_year"), undefined);
+});
+
+test("yearless date ranges use the current year, while an explicit year wins", () => {
+  const at = new Date("2026-09-28T10:00:00");
+  for (const [message, expected] of [
+    ["October 6–16", "October 6–16, 2026"],
+    ["10/6 to 10/16", "2026-10-06 to 2026-10-16"],
+    ["明年10月6日至10月16日", "2027年10月6日至10月16日"],
+    ["2027年10月6日至10月16日", "2027年10月6日至10月16日"]
+  ] as Array<[string, string]>) {
+    const result = applyPlanningTurn(createPlanningSession(at), message, at);
+    assert.equal(result.session.facts.find((fact) => fact.key === "travel_dates")?.value, expected, message);
+  }
+  const selectedYear = applyPlanningTurn(createPlanningSession(at), "2027年", at);
+  const laterDates = applyPlanningTurn(selectedYear.session, "10月6日至10月16日", at);
+  assert.equal(laterDates.session.facts.find((fact) => fact.key === "travel_dates")?.value, "2027年10月6日至10月16日");
+  const correctedYear = applyPlanningTurn(applyPlanningTurn(createPlanningSession(at), "10月6日至10月16日", at).session, "改成2027年", at);
+  assert.equal(correctedYear.session.facts.find((fact) => fact.key === "travel_dates")?.value, "2027-10-06 to 2027-10-16");
 });
 
 test("an arrival date does not replace the stated trip duration", () => {
@@ -169,11 +254,11 @@ test("proposal confirmation collects generation-critical facts while accommodati
   assert.equal(typeof proposalVersion, "number");
   const confirmed = { ...proposed.session, status: "proposal_confirmed" as const, ...(proposalVersion === undefined ? {} : { confirmedProposalVersion: proposalVersion }) };
   const prepared = prepareConfirmedPlanningSession(confirmed);
-  assert.match(prepared.reply, /including the year/i);
+  assert.match(prepared.reply, /use this year/i);
 
   const notBooked = applyPlanningTurn(prepared.session, "2026年10月6日至10月16日，我还没订机票");
   assert.equal(notBooked.session.status, "proposal_confirmed");
-  assert.match(notBooked.reply, /After booking/i);
+  assert.match(notBooked.reply, /time can stay unconfirmed until you book/i);
 
   const ready = applyPlanningTurn(notBooked.session, "3个人出行，交通倾向于打车；从上海出发，抵达戴高乐机场，预计14:30到达；返程从戴高乐机场预计18:20离开");
   assert.equal(ready.session.status, "proposal_confirmed");
@@ -266,10 +351,121 @@ test("Agent-led planning turns persist structured facts while showing the Agent'
   assert.equal(first.session.unresolved[0]?.key, "timing");
   const ready = applyAgentPlanningTurn(first.session, "大约10天", { reply: "明白，我会按10天的节奏整理提案。", facts: [{ key: "timing", value: "10天" }] });
   assert.equal(ready.session.status, "proposal_ready");
-  assert.equal(ready.reply, "明白，我会按10天的节奏整理提案。");
+  assert.match(ready.reply, /Before I can generate the plan: Share the departure and return month\/day/);
   assert.equal(ready.session.proposal?.objective.includes("10天"), true);
-  assert.equal(ready.session.unresolved.length, 0);
+  assert.equal(ready.session.unresolved[0]?.key, "travel_dates");
   assert.equal(ready.session.confirmedProposalVersion, undefined);
+});
+
+test("an Agent follow-up does not duplicate the deterministic generation question", () => {
+  const first = applyAgentPlanningTurn(createPlanningSession(), "我想去杭州玩三天", {
+    reply: "杭州很适合慢慢逛。你打算几个人去？",
+    facts: [{ key: "destination", value: "杭州" }, { key: "purpose", value: "游览西湖" }, { key: "timing", value: "三天" }]
+  });
+  assert.equal(first.reply, first.session.unresolved[0]?.question);
+  assert.doesNotMatch(first.reply, /你打算几个人去/);
+});
+
+test("unbooked rail travel preserves the user's route without requiring invented station times", () => {
+  const message = "我们两个人10月10日至12日从上海坐高铁去杭州玩，车票和酒店都没订，想看西湖和园林，12号返回上海。";
+  const turn = applyAgentPlanningTurn(createPlanningSession(), message, {
+    reply: "你到杭州东站的准确时间是几点？",
+    facts: [
+      { key: "destination", value: "杭州" }, { key: "purpose", value: "看西湖和园林" },
+      { key: "transport_preference", value: "公共交通" },
+      { key: "arrival", value: "Hangzhou East Station at 09:00" },
+      { key: "departure", value: "Hangzhou East Station at 17:00" }
+    ],
+    clarification: { key: "arrival", question: "Which exact station and time?" }
+  }, new Date("2026-10-04T00:00:00.000Z"));
+  assert.equal(turn.session.facts.find((fact) => fact.key === "arrival_status")?.value, "not_booked");
+  assert.equal(turn.session.facts.find((fact) => fact.key === "arrival_origin")?.value, "上海");
+  assert.equal(turn.session.facts.find((fact) => fact.key === "departure_destination")?.value, "上海");
+  assert.equal(turn.session.facts.find((fact) => fact.key === "party_size")?.value, "两人");
+  assert.equal(turn.session.facts.some((fact) => fact.key === "arrival" || fact.key === "departure"), false);
+  assert.deepEqual(missingGenerationQuestions(turn.session.facts, turn.session.messages).map((item) => item.key), []);
+});
+
+test("Agent-led planning grounds yearless dates in the user's message and current year", () => {
+  const at = new Date("2026-09-28T10:00:00");
+  const session = createPlanningSession(at);
+  const inferred = applyAgentPlanningTurn(session, "October 6–16", {
+    reply: "I noted your dates.",
+    facts: [{ key: "travel_dates", value: "October 6–16, 2027" }, { key: "travel_year", value: "2027" }]
+  }, at);
+  assert.equal(inferred.session.facts.find((item) => item.key === "travel_dates")?.value, "October 6–16, 2026");
+  assert.equal(inferred.session.facts.find((item) => item.key === "travel_year"), undefined);
+
+  const explicit = applyAgentPlanningTurn(inferred.session, "明年10月6日至10月16日", {
+    reply: "Updated.",
+    facts: [{ key: "travel_dates", value: "October 6–16, 2026" }]
+  }, at);
+  assert.equal(explicit.session.facts.find((item) => item.key === "travel_dates")?.value, "2027年10月6日至10月16日");
+  assert.equal(explicit.session.facts.find((item) => item.key === "travel_year")?.value, "2027");
+
+  const omitted = applyAgentPlanningTurn(session, "10月6日至10月16日", { reply: "I noted your dates.", facts: [] }, at);
+  assert.equal(omitted.session.facts.find((item) => item.key === "travel_dates")?.value, "2026年10月6日至10月16日");
+  const correctedYear = applyAgentPlanningTurn(omitted.session, "改成2027年", { reply: "Updated.", facts: [{ key: "travel_year", value: "2027" }] }, at);
+  assert.equal(correctedYear.session.facts.find((item) => item.key === "travel_dates")?.value, "2027-10-06 to 2027-10-16");
+});
+
+test("Agent-led planning asks for correction of impossible dates before generation", () => {
+  const session = applyAgentPlanningTurn(createPlanningSession(), "Tokyo for museums in October", {
+    reply: "I can help plan Tokyo.",
+    facts: [{ key: "destination", value: "Tokyo" }, { key: "purpose", value: "Visit museums" }, { key: "timing", value: "October" }]
+  }).session;
+  const invalid = applyAgentPlanningTurn(session, "October 16 to October 6, 2026", {
+    reply: "I noted the dates.", facts: [{ key: "travel_dates", value: "October 16 to October 6, 2026" }]
+  });
+  assert.match(invalid.reply, /could not reconcile those travel dates/i);
+  assert.equal(invalid.session.facts.some((item) => item.key === "travel_dates"), false);
+  assert.equal(invalid.session.unresolved[0]?.key, "travel_dates");
+  const corrected = applyAgentPlanningTurn(invalid.session, "October 6 to October 16, 2026", {
+    reply: "The corrected dates are clear.", facts: [{ key: "travel_dates", value: "October 6 to October 16, 2026" }]
+  });
+  assert.equal(corrected.session.facts.find((item) => item.key === "travel_dates")?.value, "October 6 to October 16, 2026");
+  assert.equal(corrected.session.status, "proposal_ready");
+});
+
+test("an uncertain correction clears an earlier confirmed fact until the user resolves it", () => {
+  const ready = applyAgentPlanningTurn(createPlanningSession(), "Tokyo museums, October 6–16, 2026, two travelers", {
+    reply: "Review the trip details.",
+    facts: [
+      { key: "destination", value: "Tokyo" }, { key: "purpose", value: "Visit museums" },
+      { key: "travel_dates", value: "2026-10-06 to 2026-10-16" },
+      { key: "arrival", value: "Depart SFO, arrive HND at 14:30" },
+      { key: "departure", value: "Depart HND at 18:00" },
+      { key: "party_size", value: "2" }, { key: "transport_preference", value: "walking" }
+    ]
+  });
+  assert.equal(ready.session.unresolved.length, 0);
+  const uncertain = applyAgentPlanningTurn(ready.session, "The return airport may have changed; I am not sure", {
+    reply: "Which airport will you depart from for the return trip?", facts: [],
+    clarification: { key: "departure", question: "Which airport will you depart from for the return trip?" }
+  });
+  assert.equal(uncertain.session.facts.some((item) => item.key === "departure"), false);
+  assert.equal(uncertain.session.unresolved[0]?.key, "departure");
+  assert.match(uncertain.reply, /Which airport/);
+  const corrected = applyAgentPlanningTurn(uncertain.session, "Depart NRT at 19:00", {
+    reply: "The return airport is now clear.", facts: [{ key: "departure", value: "Depart NRT at 19:00" }]
+  });
+  assert.equal(corrected.session.unresolved.length, 0);
+  assert.equal(corrected.session.facts.find((item) => item.key === "departure")?.value, "Depart NRT at 19:00");
+});
+
+test("clarifying a destination preserves the proposal version boundary", () => {
+  const proposed = applyAgentPlanningTurn(createPlanningSession(), "Tokyo museums in October", {
+    reply: "Tell me the exact dates.", facts: [{ key: "destination", value: "Tokyo" }, { key: "purpose", value: "Visit museums" }, { key: "timing", value: "October" }, { key: "arrival", value: "Arrive at HND at 14:30" }]
+  });
+  assert.equal(proposed.session.proposal?.version, 1);
+  const uncertain = applyAgentPlanningTurn(proposed.session, "It may be Kyoto instead", {
+    reply: "Should I plan Tokyo or Kyoto?", facts: [], clarification: { key: "destination", question: "Should I plan Tokyo or Kyoto?" }
+  });
+  assert.equal(uncertain.session.facts.some((item) => item.key === "destination" || item.key === "arrival"), false);
+  assert.equal(uncertain.session.unresolved[0]?.key, "destination");
+  const corrected = applyAgentPlanningTurn(uncertain.session, "Kyoto", { reply: "Kyoto it is.", facts: [{ key: "destination", value: "Kyoto" }] });
+  assert.equal(corrected.session.proposal?.version, 2);
+  assert.match(corrected.session.proposal?.title ?? "", /^Kyoto/);
 });
 
 test("complete travel dates satisfy the earlier broad timing question", () => {
@@ -337,6 +533,42 @@ test("generation request is blocked until the proposal is confirmed", () => {
   const request = planningRequestForGeneration(completed.session);
   assert.match(request, /user-approved planning proposal/);
   assert.match(request, /葡萄牙/);
+  assert.equal(planningRequestForGeneration({ ...completed.session, status: "generating" }), request, "已确认同版本的恢复请求必须保持相同内容。");
+  const { confirmedProposalVersion: _confirmed, ...unconfirmed } = completed.session;
+  const { proposal: _proposal, ...withoutProposal } = completed.session;
+  assert.throws(() => planningRequestForGeneration(unconfirmed), /confirmed planning proposal/i);
+  assert.throws(() => planningRequestForGeneration(withoutProposal), /confirmed planning proposal/i);
+  for (const invalidVersion of [0, -1, 1.5, completed.session.proposal!.version + 1]) {
+    for (const status of ["proposal_confirmed", "generating"] as const) assert.throws(() => planningRequestForGeneration({
+      ...completed.session, status, confirmedProposalVersion: invalidVersion
+    }), /confirmed planning proposal/i);
+  }
+  for (const status of ["collecting", "proposal_ready", "draft_ready", "abandoned"] as const) {
+    assert.throws(() => planningRequestForGeneration({ ...completed.session, status }), /confirmed planning proposal/i);
+  }
+});
+
+test("arrival configuration uses the stated arrival date after an overnight outbound journey", () => {
+  const session = createPlanningSession();
+  session.facts = [
+    { key: "travel_dates", value: "October 3–12, 2026", source: "user", confirmed: true, updatedAt: "2026-09-28T00:00:00.000Z" },
+    { key: "arrival", value: "From LAX via Singapore, arriving at Bali Denpasar Airport (DPS) on October 5, 2026 at 10:35 local time", source: "user", confirmed: true, updatedAt: "2026-09-28T00:00:00.000Z" }
+  ];
+  assert.equal(planningArrivalLocalDateTime(session), "2026-10-05T10:35");
+  session.facts[1] = {
+    ...session.facts[1]!,
+    value: "Depart Los Angeles on October 3, 2026 at 16:30 via Singapore, arriving at Bali Denpasar Airport (DPS) on October 5, 2026 at 10:35 local time"
+  };
+  assert.equal(planningArrivalLocalDateTime(session), "2026-10-05T10:35");
+});
+
+test("arrival configuration retains an explicit time before the arrival verb without reusing an outbound time", () => {
+  const session = createPlanningSession();
+  const fact = (key: string, value: string) => ({ key, value, source: "user" as const, confirmed: true, updatedAt: "2026-10-10T00:00:00.000Z" });
+  session.facts = [fact("travel_dates", "2026-11-10 to 2026-11-19"), fact("arrival", "2026-11-10 09:00 抵达东京羽田机场，时间为日本当地时间")];
+  assert.equal(planningArrivalLocalDateTime(session), "2026-11-10T09:00");
+  session.facts[1] = fact("arrival", "Depart Los Angeles on 2026-11-10 at 16:30, arriving at Haneda Airport; arrival time not provided");
+  assert.equal(planningArrivalLocalDateTime(session), undefined);
 });
 
 test("changing the destination after proposal confirmation requires a new proposal confirmation", () => {
@@ -364,6 +596,32 @@ test("research scopes preserve city-country names while splitting explicit multi
   assert.deepEqual(planningResearchScopes({ ...base, facts: [{ key: "destination", value: "东京、京都和大阪", source: "user", confirmed: true, updatedAt: "2026-08-26T00:00:00.000Z" }] }), ["东京", "京都", "大阪"]);
   assert.deepEqual(planningResearchScopes({ ...base, facts: [{ key: "destination", value: "Praca da Batalha, Porto, Portugal", source: "user", confirmed: true, updatedAt: now }] }), ["Praca da Batalha, Porto, Portugal"]);
   assert.deepEqual(planningResearchScopes({ ...base, facts: [{ key: "destination", value: "Lisbon + Porto", source: "user", confirmed: true, updatedAt: now }] }), ["Lisbon", "Porto"]);
+  assert.deepEqual(planningResearchScopes({ ...base, facts: [{ key: "destination", value: "New Zealand, with Wellington as the entry and exit city", source: "user", confirmed: true, updatedAt: now }] }), [
+    "New Zealand: signature travel regions and route options (entry/exit Wellington)",
+    "New Zealand: representative regions beyond Wellington (candidate overnight bases)"
+  ]);
+  assert.deepEqual(planningResearchScopes({ ...base, facts: [
+    { key: "destination", value: "New Zealand", source: "user", confirmed: true, updatedAt: now },
+    { key: "arrival_node", value: "Auckland Airport (AKL)", source: "user", confirmed: true, updatedAt: now },
+    { key: "departure", value: "Auckland Airport (AKL), 3:00 PM on November 17", source: "user", confirmed: true, updatedAt: now },
+    { key: "travel_dates", value: "November 2–17, 2026", source: "user", confirmed: true, updatedAt: now }
+  ] }), [
+    "New Zealand: signature travel regions and route options (entry/exit Auckland)",
+    "New Zealand: representative regions beyond Auckland (candidate overnight bases)"
+  ]);
+  assert.deepEqual(planningResearchScopes({ ...base, facts: [
+    { key: "destination", value: "Tokyo", source: "user", confirmed: true, updatedAt: now },
+    { key: "arrival_node", value: "Tokyo International Airport", source: "user", confirmed: true, updatedAt: now },
+    { key: "departure", value: "Tokyo International Airport", source: "user", confirmed: true, updatedAt: now }
+  ] }), ["Tokyo"]);
+  assert.deepEqual(planningResearchScopes({ ...base, facts: [{ key: "destination", value: "新西兰，惠灵顿进出", source: "user", confirmed: true, updatedAt: now }] }), [
+    "新西兰: signature travel regions and route options (entry/exit 惠灵顿)",
+    "新西兰: representative regions beyond 惠灵顿 (candidate overnight bases)"
+  ]);
+  assert.deepEqual(planningResearchScopes({ ...base, facts: [
+    { key: "destination", value: "New Zealand, with Wellington as the entry and exit city", source: "user", confirmed: true, updatedAt: now },
+    { key: "constraints", value: "Only Wellington; no intercity travel", source: "user", confirmed: true, updatedAt: now }
+  ] }), ["Wellington"]);
 });
 
 test("accommodation destination conflicts retain matching multi-base stays and flag genuine mismatches", () => {
@@ -377,4 +635,30 @@ test("accommodation destination conflicts retain matching multi-base stays and f
   });
   assert.deepEqual(planningAccommodationDestinationConflicts(session, [stay("lisbon", "Rua Example, Lisbon, Portugal"), stay("porto", "Praca Example, Porto, Portugal")]), []);
   assert.deepEqual(planningAccommodationDestinationConflicts(session, [stay("madrid", "Calle Example, Madrid, Spain")]), ["Calle Example, Madrid, Spain"]);
+});
+
+
+test("unlimited budget does not treat dates and party size elsewhere as an amount", () => {
+  const messages = [{ id: "m", role: "user" as const, text: "2026-10-20到22日，2个人去杭州。不设固定预算，优先舒适和性价比。", createdAt: now }];
+  assert.equal(missingGenerationQuestions([], messages).some((item) => item.key === "budget_scope"), false);
+  messages[0]!.text = "Two people in Hangzhou from 2026-10-20 to 22, no fixed budget.";
+  assert.equal(missingGenerationQuestions([], messages).some((item) => item.key === "budget_scope"), false);
+  messages[0]!.text = "2026-10-20 两个人去杭州，预算还没确定。";
+  assert.equal(missingGenerationQuestions([], messages).some((item) => item.key === "budget_scope"), false);
+  messages[0]!.text = "A budget for 2 adults has not been decided.";
+  assert.equal(missingGenerationQuestions([], messages).some((item) => item.key === "budget_scope"), false);
+  messages[0]!.text = "两个人10月20到22日去杭州，预算约1万元人民币。";
+  assert.equal(missingGenerationQuestions([], messages).some((item) => item.key === "budget_scope"), true);
+});
+
+
+test('English traveller counts are accepted and passed into generation without another question', () => {
+ for (const value of ['Two adults', '2 people', 'two travelers', '两人']) assert.equal(partySizeNumber(value), 2);
+ for (const value of ['0 adults', '-2', '2026', 'two adults and one child', 'unknown']) assert.equal(partySizeNumber(value), undefined);
+ const turn = applyAgentPlanningTurn(createPlanningSession(), 'Two adults will travel.', {reply:'Thanks.',facts:[{key:'party_size',value:'Two adults'}]}, new Date(now));
+ assert.equal(turn.session.facts.find(f => f.key === 'party_size')?.value, '2');
+ assert.equal(turn.session.unresolved.some(f => f.key === 'party_size'), false);
+ assert.equal(planningPartySize(turn.session), 2);
+ const legacy = {...turn.session, facts:[{key:'party_size',value:'2 people',confirmed:true,source:'user' as const,updatedAt:now}]};
+ assert.equal(planningPartySize(legacy), 2);
 });

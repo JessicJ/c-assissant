@@ -1,6 +1,7 @@
-import type { PlanningFact, PlanningUnknown } from "@c-assistant/core";
+import { hasStatedBudgetAmount } from "@c-assistant/core";
+import type { PlanningFact, PlanningMessage, PlanningUnknown } from "@c-assistant/core";
 
-export function extractFacts(message: string, existing: PlanningFact[], updatedAt: string): PlanningFact[] {
+export function extractFacts(message: string, existing: PlanningFact[], updatedAt: string, currentYear = new Date(updatedAt).getFullYear()): PlanningFact[] {
   const facts: PlanningFact[] = [];
   const hasExisting = (key: string) => existing.some((item) => item.key === key);
   const destinationMatch = firstMatch(message, [
@@ -12,7 +13,7 @@ export function extractFacts(message: string, existing: PlanningFact[], updatedA
   if (destination) facts.push(fact("destination", destination, updatedAt));
 
   const timing = firstMatch(message, [
-    /((?:20\d{2}[年\/-])?\d{1,2}月\d{1,2}[日号]?(?:到|至|-|—)(?:20\d{2}[年\/-])?(?:\d{1,2}月)?\d{1,2}[日号]?)/,
+    /((?:20\d{2}[年\/-])?\d{1,2}月\d{1,2}[日号]?(?:到|至|-|–|—)(?:20\d{2}[年\/-])?(?:\d{1,2}月)?\d{1,2}[日号]?)/,
     /((?:大约|差不多|计划)?\s*(?:\d+|[一二三四五六七八九十两]+)\s*(?:天|晚|周|个月))/i,
     /((?:周末|下周|本周|暑假|国庆|春节)[^，。；;,!！?？\n]{0,12})/,
     /((?:20\d{2}[年\/-])?\d{1,2}月\d{1,2}[日号]?)/,
@@ -20,15 +21,21 @@ export function extractFacts(message: string, existing: PlanningFact[], updatedA
   ]);
   if (timing) facts.push(fact("timing", timing, updatedAt));
   const travelDates = firstMatch(message, [
-    /((?:20\d{2})年\s*\d{1,2}月\d{1,2}[日号]?(?:到|至|-|—)(?:(?:20\d{2})年\s*)?(?:\d{1,2}月)?\d{1,2}[日号]?)/,
-    /((?:20\d{2})[-/]\d{1,2}[-/]\d{1,2}\s*(?:到|至|to|-|—)\s*(?:20\d{2})[-/]\d{1,2}[-/]\d{1,2})/i,
-    /((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}\s*(?:to|-|—)\s*(?:(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+)?\d{1,2},?\s+20\d{2})/i
+    /((?:20\d{2})年\s*\d{1,2}月\d{1,2}[日号]?(?:到|至|-|–|—)(?:(?:20\d{2})年\s*)?(?:\d{1,2}月)?\d{1,2}[日号]?)/,
+    /((?:20\d{2})[-/]\d{1,2}[-/]\d{1,2}\s*(?:到|至|to|-|–|—)\s*(?:20\d{2})[-/]\d{1,2}[-/]\d{1,2})/i,
+    /((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}\s*(?:to|-|–|—)\s*(?:(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+)?\d{1,2},?\s+20\d{2})/i
   ]);
-  const year = extractTravelYear(message);
+  const year = extractTravelYear(message, currentYear);
   if (year) facts.push(fact("travel_year", year, updatedAt));
-  const partialDateRange = firstMatch(message, [/(\d{1,2}月\d{1,2}[日号]?(?:到|至|-|—)(?:\d{1,2}月)?\d{1,2}[日号]?)/]);
-  const knownYear = year ?? valueOf(existing, "travel_year");
-  const completedTravelDates = travelDates ?? (partialDateRange && knownYear ? `${knownYear}年${partialDateRange}` : undefined);
+  const partialDateRange = firstMatch(message, [
+    /(\d{1,2}月\d{1,2}[日号]?(?:到|至|-|–|—)(?:\d{1,2}月)?\d{1,2}[日号]?)/,
+    /((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?\s*(?:to|-|–|—)\s*(?:(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+)?\d{1,2}(?:st|nd|rd|th)?)/i,
+    /(\d{1,2}[/-]\d{1,2}\s*(?:to|到|至|-|–|—)\s*\d{1,2}[/-]\d{1,2})/i
+  ]);
+  const knownYear = year ?? valueOf(existing, "travel_year") ?? String(currentYear);
+  const completedTravelDates = travelDates
+    ?? (partialDateRange ? completeTravelDates(partialDateRange, knownYear) : undefined)
+    ?? (year ? moveExistingTravelDatesToYear(valueOf(existing, "travel_dates"), year) : undefined);
   if (completedTravelDates) facts.push(fact("travel_dates", completedTravelDates, updatedAt));
 
   const explicitPurpose = firstMatch(message, [/(?:目的(?!地)|目标|主要想|最想|这次想)(?:改成|改为|换成|是|为|：|:)?\s*([^，。；;,!！?？\n]{2,80})/u]);
@@ -43,24 +50,35 @@ export function extractFacts(message: string, existing: PlanningFact[], updatedA
   if (interests) facts.push(fact("interests", interests, updatedAt));
   const constraints = firstMatch(message, [/(?:不吃|不想|不要|避免|预算|限制|行李|带着孩子|带娃)[^。；;,!！?？\n]{0,40}/u]);
   if (constraints) facts.push(fact("constraints", constraints, updatedAt));
+  const budgetScope = explicitInternationalFlightBudgetScope(message);
+  if (budgetScope) facts.push(fact("budget_scope", budgetScope, updatedAt));
 
   const transport = firstMatch(message, [/(?:交通(?:方式|偏好|倾向)?|出行(?:方式|偏好)?|更想|优先|倾向于?|主要)\s*(?:是|为|用|选择|坐|乘|：|:)?\s*(打车|出租车|网约车|地铁|公交|公共交通|步行|骑行|自驾|(?:交给\s*)?Landi\s*推荐)/iu]);
   if (transport) facts.push(fact("transport_preference", normalizeTransport(transport), updatedAt));
 
   const party = firstMatch(message, [/(\d+|[一二三四五六七八九十两]+)\s*(?:个人|人)(?:出行|旅行|同行)?/u]);
   if (party) facts.push(fact("party_size", `${party}人`, updatedAt));
+  else {
+    const counts = [...message.matchAll(/\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s+(?:adults?|people|persons?|travell?ers?|children|kids?)\b/gi)];
+    if (counts.length === 1) {
+      const count = partySizeNumber(counts[0]![0]);
+      if (count) facts.push(fact("party_size", String(count), updatedAt));
+    }
+  }
 
   const accommodation = firstMatch(message, [/(?:住宿|酒店|民宿)[^。；;,!！?？\n]{0,40}/u]);
   if (accommodation) facts.push(fact("accommodation", accommodation, updatedAt));
 
-  const arrivalOrigin = firstMatch(message, [/(?:从|由)\s*([^，。；;,!！?？\n]{1,50}?)(?:出发|启程)/u, /(?:departing|leaving|flying|travelling|traveling)\s+from\s+([^,.!?;\n]{1,50})/i]);
+  const arrivalOrigin = firstMatch(message, [/(?:从|由)\s*([^，。；;,!！?？\n]{1,50}?)(?:出发|启程)/u, /(?:从|由)\s*([\p{Script=Han}A-Za-z]{2,24})\s*(?:坐|乘|搭)(?:高铁|火车|动车|飞机|航班)/u, /(?:departing|leaving|flying|travelling|traveling)\s+from\s+([^,.!?;\n]{1,50})/i]);
   const arrivalNode = firstMatch(message, [/(?:抵达|到达|落地|降落(?:在|于)?)\s*([^，。；;,!！?？\n]{0,32}?(?:机场|航站楼|火车站|高铁站|车站|港口|码头))/u, /(?:arriv(?:e|ing|al)(?:\s+at|\s+in)?)\s+([^,.!?;\n]{1,50}?(?:airport|terminal|railway station|train station|port))/i, ...((hasExisting("arrival_origin") || hasExisting("arrival_time")) ? [/^\s*([^，。；;,!！?？\n]{1,32}?(?:机场|航站楼|火车站|高铁站|车站|港口|码头))\s*$/u] : [])]);
   const arrivalTime = firstMatch(message, [/(?:抵达|到达|落地|降落)[^，。；;,!！?？\n]{0,50}?(?:预计|大约|约)?\s*((?:[01]?\d|2[0-3])[:：][0-5]\d|(?:上午|下午|晚上|凌晨)?\s*\d{1,2}\s*[点時时](?:\s*\d{1,2}\s*分)?)/u, /(?:预计|大约|约)\s*((?:[01]?\d|2[0-3])[:：][0-5]\d|(?:上午|下午|晚上|凌晨)?\s*\d{1,2}\s*[点時时](?:\s*\d{1,2}\s*分)?)\s*(?:钟|鐘)?\s*(?:抵达|到达|落地|降落)/u]);
   if (arrivalOrigin) facts.push(fact("arrival_origin", arrivalOrigin, updatedAt));
+  const departureDestination = firstMatch(message, [/(?:返程|返回|回程|回到|回)\s*([\p{Script=Han}A-Za-z]{2,24})(?:[，。；;,!！?？\s]|$)/u, /(?:return(?:ing)?\s+to)\s+([A-Za-z ]{2,35})(?:[,.!?;]|$)/iu]);
+  if (departureDestination) facts.push(fact("departure_destination", departureDestination, updatedAt));
   if (arrivalNode) facts.push(fact("arrival_node", arrivalNode, updatedAt));
   if (arrivalTime) facts.push(fact("arrival_time", arrivalTime.replace(/\s+/g, ""), updatedAt));
 
-  if (/(?:还没|尚未|暂未|没有).{0,8}(?:订票|订航班|订机票|订火车票)|(?:flight|train).{0,12}(?:not booked|not decided)|haven't booked/i.test(message)) {
+  if (/(?:还没|尚未|暂未|没有|没).{0,8}(?:订票|订航班|订机票|订火车票)|(?:车票|机票|票)[^。；;,!！?？\n]{0,12}(?:没订|未订|还没买)|(?:flight|train).{0,12}(?:not booked|not decided)|haven't booked/i.test(message)) {
     facts.push(fact("arrival_status", "not_booked", updatedAt));
   } else if (hasArrivalOrigin(message) && hasArrivalNode(message) && hasArrivalTime(message)) {
     facts.push(fact("arrival", message.slice(0, 240), updatedAt));
@@ -82,19 +100,36 @@ export function missingQuestions(facts: PlanningFact[]): PlanningUnknown[] {
   return questions;
 }
 
-export function missingGenerationQuestions(facts: PlanningFact[]): PlanningUnknown[] {
+export function missingGenerationQuestions(facts: PlanningFact[], messages: PlanningMessage[] = []): PlanningUnknown[] {
   const known = new Set(facts.map((fact) => fact.key));
+  const provisionalTransport = valueOf(facts, "arrival_status") === "not_booked";
   const questions: PlanningUnknown[] = [];
   const travelDates = facts.find((fact) => fact.key === "travel_dates" && fact.confirmed)?.value;
   if (!travelDates || !planningTravelDateRange(travelDates)) {
     const year = valueOf(facts, "travel_year");
-    questions.push({ key: "travel_dates", question: year ? `I have the year ${year}. What are the exact departure and return dates? For example, October 6–16.` : "Share the exact departure and return dates, including the year. For example, October 6–16, 2026.", impact: "high", status: "open" });
+    questions.push({ key: "travel_dates", question: year ? `I have the year ${year}. What are the exact departure and return dates? For example, October 6–16.` : "Share the departure and return month/day. I’ll use this year unless you specify another year.", impact: "high", status: "open" });
   }
-  if (!known.has("arrival")) questions.push({ key: "arrival", question: arrivalFollowUpQuestion(facts), impact: "high", status: "open" });
-  if (!known.has("departure")) questions.push({ key: "departure", question: "Which airport or station will you use for the return trip, and at about what time?", impact: "high", status: "open" });
-  if (!known.has("party_size")) questions.push({ key: "party_size", question: "How many people are travelling?", impact: "high", status: "open" });
+  if (!known.has("arrival") && !(provisionalTransport && valueOf(facts, "arrival_origin") && known.has("destination"))) questions.push({ key: "arrival", question: arrivalFollowUpQuestion(facts), impact: "high", status: "open" });
+  if (!known.has("departure") && !(provisionalTransport && valueOf(facts, "departure_destination"))) questions.push({ key: "departure", question: provisionalTransport
+    ? "Where will you travel to after this trip? The exact station and departure time can stay unconfirmed until you book."
+    : "Which airport or station will you use for the return trip, and at about what time?", impact: "high", status: "open" });
+  if (!validPartySize(valueOf(facts, "party_size"))) questions.push({ key: "party_size", question: "How many people are travelling? Please give a positive number.", impact: "high", status: "open" });
   if (!known.has("transport_preference")) questions.push({ key: "transport_preference", question: "Do you prefer rides, public transport, walking, or Landi's route-based recommendation?", impact: "high", status: "open" });
+  const statedBudget = facts.some((item) => item.confirmed && hasStatedBudgetAmount(item.value, item.key === "budget"))
+    || messages.some((item) => item.role === "user" && hasStatedBudgetAmount(item.text));
+  const explicitScope = facts.some((item) => item.confirmed && ((item.key === "budget_scope" && validBudgetScope(item.value)) || explicitInternationalFlightBudgetScope(item.value)));
+  if (statedBudget && !explicitScope) questions.push({ key: "budget_scope", question: "Does your total budget include the international round-trip flights?", impact: "high", status: "open" });
   return questions;
+}
+
+export function explicitInternationalFlightBudgetScope(message: string): string | undefined {
+  if (/(?:不含|不包括|不包含|除去|不算)[^。；;,!！?？\n]{0,25}(?:机票|航班)|(?:excluding?|without)[^.!,;?\n]{0,25}(?:flights?|airfare)/iu.test(message)) return "excludes international flights";
+  if (/(?:包含|包括|算上|含)[^。；;,!！?？\n]{0,25}(?:机票|航班)|(?:including?|with)[^.!,;?\n]{0,25}(?:flights?|airfare)/iu.test(message)) return "includes international flights";
+  return undefined;
+}
+
+export function validBudgetScope(value: string): boolean {
+  return value === "includes international flights" || value === "excludes international flights";
 }
 
 export function summarizeFacts(facts: PlanningFact[]): string {
@@ -107,6 +142,7 @@ export function summarizeFacts(facts: PlanningFact[]): string {
     purpose: "Trip goal",
     interests: "Preferences",
     constraints: "Constraints",
+    budget_scope: "Budget coverage",
     transport_preference: "Local transport",
     party_size: "Travelers",
     accommodation: "Accommodation",
@@ -115,6 +151,7 @@ export function summarizeFacts(facts: PlanningFact[]): string {
     arrival_time: "Expected arrival",
     arrival: "Arrival plan",
     departure: "Return plan",
+    departure_destination: "Return destination",
     arrival_status: "Transport booking"
   };
   return facts
@@ -142,6 +179,15 @@ export function upsertFact(facts: PlanningFact[], next: PlanningFact): PlanningF
 }
 
 export function valueOf(facts: PlanningFact[], key: string): string | undefined { return facts.find((fact) => fact.key === key)?.value; }
+
+export function partySizeNumber(value: string | undefined): number | undefined {
+  const count = value?.trim().toLowerCase().match(/^(\d{1,2}|[一二三四五六七八九十两]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s*(?:个人|人|位|adults?|people|persons?|travell?ers?|children|kids?)?$/iu)?.[1];
+  if (!count) return undefined;
+  const words = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'];
+  const number = /^\d+$/.test(count) ? Number(count) : words.includes(count) ? words.indexOf(count) + 1 : chinesePartyNumber(count);
+  return Number.isInteger(number) && number > 0 && number <= 99 ? number : undefined;
+}
+export function validPartySize(value: string | undefined): boolean { return partySizeNumber(value) !== undefined; }
 
 export function firstMatch(value: string, patterns: RegExp[]): string | undefined {
   for (const pattern of patterns) {
@@ -183,7 +229,40 @@ export function planningTravelDateRange(value: string): PlanningTravelDateRange 
   return checkedDateRange([english[5]!, String(startMonth), english[2]!], [english[5]!, String(endMonth), english[4]!]);
 }
 
-function planningSingleDate(value: string): string | undefined {
+export function completeTravelDates(value: string, year: string): string | undefined {
+  const normalized = value.trim();
+  if (planningTravelDateRange(normalized)) return normalized;
+  if (!/^20\d{2}$/.test(year)) return undefined;
+  const chinese = /^(\d{1,2})月\s*(\d{1,2})[日号]?\s*(?:到|至|-|–|—)\s*(?:(\d{1,2})月\s*)?(\d{1,2})[日号]?$/u.exec(normalized);
+  if (chinese) {
+    const completed = `${year}年${normalized}`;
+    return planningTravelDateRange(completed) ? completed : undefined;
+  }
+  const english = /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?\s*(?:to|-|–|—)\s*(?:(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+)?\d{1,2}(?:st|nd|rd|th)?$/iu.exec(normalized);
+  if (english) {
+    const completed = `${normalized}, ${year}`;
+    return planningTravelDateRange(completed) ? completed : undefined;
+  }
+  const numeric = /^(\d{1,2})[/-](\d{1,2})\s*(?:to|到|至|-|–|—)\s*(\d{1,2})[/-](\d{1,2})$/iu.exec(normalized);
+  if (!numeric) return undefined;
+  const range = checkedDateRange([year, numeric[1]!, numeric[2]!], [year, numeric[3]!, numeric[4]!]);
+  return range ? `${range.startDate} to ${range.endDate}` : undefined;
+}
+
+function moveExistingTravelDatesToYear(value: string | undefined, year: string): string | undefined {
+  const range = value && planningTravelDateRange(value);
+  if (!range) return undefined;
+  const originalYear = Number(range.startDate.slice(0, 4));
+  const difference = Number(year) - originalYear;
+  const endYear = Number(range.endDate.slice(0, 4)) + difference;
+  const shifted = checkedDateRange(
+    [year, range.startDate.slice(5, 7), range.startDate.slice(8, 10)],
+    [String(endYear), range.endDate.slice(5, 7), range.endDate.slice(8, 10)]
+  );
+  return shifted ? `${shifted.startDate} to ${shifted.endDate}` : undefined;
+}
+
+export function planningSingleDate(value: string): string | undefined {
   const iso = /\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/.exec(value);
   if (iso) return checkedDate(iso[1]!, iso[2]!, iso[3]!);
   const chinese = /(20\d{2})年\s*(\d{1,2})月\s*(\d{1,2})[日号]?/.exec(value);
@@ -214,17 +293,21 @@ function checkedDate(yearValue: string, monthValue: string, dayValue: string): s
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-function extractTravelYear(message: string): string | undefined {
-  const full = /(?:^|[^\d])(20\d{2})\s*年/u.exec(message)?.[1];
+export function extractTravelYear(message: string, currentYear: number): string | undefined {
+  const full = /(?:^|[^\d])(20\d{2})(?:\s*年|\b)/u.exec(message)?.[1];
   if (full) return full;
   const short = /(?:^|[^\d])(\d{2})\s*年/u.exec(message)?.[1];
-  if (!short) return undefined;
-  const numeric = Number(short);
-  return numeric >= 20 && numeric <= 99 ? `20${short}` : undefined;
+  if (short) {
+    const numeric = Number(short);
+    if (numeric >= 20 && numeric <= 99) return `20${short}`;
+  }
+  if (/明年|next\s+year/iu.test(message)) return String(currentYear + 1);
+  if (/今年|this\s+year/iu.test(message)) return String(currentYear);
+  return undefined;
 }
 
 function arrivalFollowUpQuestion(facts: PlanningFact[]): string {
-  if (valueOf(facts, "arrival_status") === "not_booked") return "After booking, share the departure point, arrival airport or station, and expected arrival time.";
+  if (valueOf(facts, "arrival_status") === "not_booked") return "Where will you travel from? The exact arrival station and time can stay unconfirmed until you book.";
   const origin = valueOf(facts, "arrival_origin");
   const node = valueOf(facts, "arrival_node");
   const time = valueOf(facts, "arrival_time");

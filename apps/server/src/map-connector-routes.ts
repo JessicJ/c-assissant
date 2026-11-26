@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { runHousingAreaRecommendationSkill } from "@c-assistant/china-country-pack";
+import { runHousingAreaRecommendationSkill } from "@c-assistant/travel-support";
 import { connectorResponseStatus, type ConnectorBundle } from "./connector-bundle.js";
 
 export function registerMapConnectorRoutes(server: FastifyInstance, getConnectors: () => ConnectorBundle): void {

@@ -24,4 +24,5 @@ test("Web summarizes itinerary titles from duration, destinations, and trip them
   };
 
   assert.equal(displayTripTitle(presentation, "Landi Plan: Tokyo and Kyoto Neighborhoods, Culture, Cafes, and Bathing"), "8-Day Tokyo-Kyoto Culture, Cafes, and Bathing");
+  assert.equal(displayTripTitle(presentation, "杭州三日西湖、园林与杭味之旅"), "杭州三日西湖、园林与杭味之旅");
 });

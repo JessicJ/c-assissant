@@ -31,6 +31,26 @@ test("Skill Importer performs safe normalization and only merges confirmed ident
   assert.equal(research.guideRelationships?.[0]?.toPlaceId, research.places[1]?.id);
 });
 
+test("lodges and motels can be recommended stays while attractions cannot", () => {
+  for (const category of ["motel", "motor lodge", "boutique hotel", "guesthouse"]) {
+    const value = batch();
+    value.relationships = [];
+    value.places = [{ id: "stay-picton-aldan", name: "Picton stay", locationLabel: "Picton", category, whyWorthIt: "An overnight base.", plan: "Stay here.", accommodation: { state: "recommended", baseLabel: "Picton" } }];
+    const research = importSkillResearchBatches([value], {
+      researchSetId: `research-${category}`, generationKey: `generation-${category}`, proposalRef: { sessionId: "session", proposalVersion: 1 },
+      skillLineage: { skillId: "landi-trip-blueprint", skillVersion: "1.0.0" }, createdAt: "2026-08-26T00:00:00.000Z", updatedAt: "2026-08-26T00:00:00.000Z"
+    });
+    assert.equal(research.places[0]?.accommodation?.state, "recommended", category);
+  }
+  const invalid = batch();
+  invalid.relationships = [];
+  invalid.places = [{ id: "museum", name: "Museum", locationLabel: "Picton", category: "museum", whyWorthIt: "Visit", plan: "Explore", accommodation: { state: "recommended" } }];
+  assert.throws(() => importSkillResearchBatches([invalid], {
+    researchSetId: "research-invalid-stay", generationKey: "generation-invalid-stay", proposalRef: { sessionId: "session", proposalVersion: 1 },
+    skillLineage: { skillId: "landi-trip-blueprint", skillVersion: "1.0.0" }, createdAt: "2026-08-26T00:00:00.000Z", updatedAt: "2026-08-26T00:00:00.000Z"
+  }), /accommodation state requires a lodging place/);
+});
+
 test("Skill Importer normalizes reversed coordinates before Research Set integrity checks", () => {
   const value = batch();
   value.relationships = [];
@@ -187,7 +207,57 @@ test("Skill Importer preserves explicit empty day blocks through compilation and
   assert.deepEqual(presentation.days[0]?.stops?.map((stop) => stop.placeId), [a!]);
 });
 
-test("Skill Importer adds a reasonableness pass for candidates and unverified movements", () => {
+test("Skill Importer retains a stop time by promoting it to its unscheduled block", () => {
+  const research = importSkillResearchBatches([{ ...batch(), places: batch().places.slice(0, 2) }], {
+    researchSetId: "research-stop-times", generationKey: "generation-stop-times", proposalRef: { sessionId: "session-stop-times", proposalVersion: 1 },
+    skillLineage: { skillId: "landi-trip-blueprint", skillVersion: "1.0.0" }, createdAt: "2026-08-26T00:00:00.000Z", updatedAt: "2026-08-26T00:00:00.000Z"
+  });
+  const [airport, attraction] = research.places.map((place) => place.id);
+  const blueprint = importSkillItinerary(research, {
+    title: "Tokyo", summary: "Tokyo", language: "en", destinations: ["Tokyo"], startDate: "2026-09-01", endDate: "2026-09-01",
+    days: [{
+      id: "d1", date: "2026-09-01", kind: "scheduled", city: "Tokyo", title: "Day", summary: "Flow",
+      stops: [{ placeId: airport!, order: 1, time: "17:10" }, { placeId: attraction!, order: 2, time: "18:00" }],
+      blocks: [
+        { id: "airport-block", kind: "stop", order: 1, placeId: airport!, startTime: "around 17:10", summary: "Approximate local arrival time.", evidence: [] },
+        { id: "attraction-block", kind: "stop", order: 2, placeId: attraction!, startTime: "18:00", evidence: [] }
+      ],
+      candidatePlaceIds: []
+    }],
+    movements: []
+  }, { blueprintId: "blueprint-stop-times", blueprintVersion: 1, createdAt: "2026-08-26T01:00:00.000Z" });
+
+  assert.equal(blueprint.days[0]?.stops[0]?.time, "17:10");
+  assert.equal(blueprint.days[0]?.blocks?.[0]?.startTime, "17:10");
+  assert.equal(blueprint.days[0]?.blocks?.[0]?.display?.timingStatus, "estimated");
+  assert.equal(blueprint.days[0]?.stops[1]?.time, "18:00");
+});
+
+test("departure flight time remains the airport block end rather than becoming an invented start", () => {
+  const research = importSkillResearchBatches([{ ...batch(), places: batch().places.slice(0, 2) }], {
+    researchSetId: "research-departure-time", generationKey: "generation-departure-time", proposalRef: { sessionId: "session-departure-time", proposalVersion: 1 },
+    skillLineage: { skillId: "landi-trip-blueprint", skillVersion: "1.0.0" }, createdAt: "2026-08-26T00:00:00.000Z", updatedAt: "2026-08-26T00:00:00.000Z"
+  });
+  const airport = research.places[0]!.id;
+  const blueprint = importSkillItinerary(research, {
+    title: "Departure", summary: "Wellington departure", language: "en", destinations: ["Wellington"], startDate: "2026-12-24", endDate: "2026-12-24",
+    days: [{
+      id: "day-2026-12-24", date: "2026-12-24", kind: "scheduled", city: "Wellington", title: "Departure day", summary: "International flight at about 18:00.",
+      stops: [{ placeId: airport, order: 1, time: "18:00", role: "confirmed departure anchor" }],
+      blocks: [
+        { id: "block-2026-12-24-airport-transfer", kind: "transfer", order: 1, placeId: airport, title: "To the airport", evidence: [] },
+        { id: "block-2026-12-24-airport", kind: "stop", order: 2, placeId: airport, endTime: "18:00", title: "Airport departure", evidence: [] }
+      ],
+      candidatePlaceIds: []
+    }],
+    movements: []
+  }, { blueprintId: "blueprint-departure-time", blueprintVersion: 1, createdAt: "2026-08-26T01:00:00.000Z" });
+  assert.equal(blueprint.days[0]?.stops[0]?.time, undefined);
+  assert.equal(blueprint.days[0]?.blocks?.[1]?.startTime, undefined);
+  assert.equal(blueprint.days[0]?.blocks?.[1]?.endTime, "18:00");
+});
+
+test("Skill Importer adds candidates and locally unverified movements without inventing road times", () => {
   const value = batch();
   value.places = [
     { id: "a", name: "Museum A", locationLabel: "Tokyo", city: "Tokyo", category: "museum", coordinates: [35.6812, 139.7671], whyWorthIt: "A strong anchor", plan: "Visit the main collection" },
@@ -205,11 +275,24 @@ test("Skill Importer adds a reasonableness pass for candidates and unverified mo
     movements: []
   }, { blueprintId: "blueprint-1", blueprintVersion: 1, createdAt: "2026-08-26T01:00:00.000Z" });
   assert.equal(blueprint.days[0]?.candidatePlaceIds.includes(c!), true);
-  assert.match(blueprint.days[0]?.summary ?? "", /meal, café, rainy-day, or low-energy swaps/);
+  assert.match(blueprint.days[0]?.summary ?? "", /nearby café or indoor visit/);
   assert.equal(blueprint.movements.length, 1);
   assert.equal(blueprint.movements[0]?.status, "recheck");
-  assert.equal(typeof blueprint.movements[0]?.durationMinutes, "number");
-  assert.match(blueprint.movements[0]?.detail ?? "", /conservative planning estimate/);
+  assert.equal(blueprint.movements[0]?.durationMinutes, undefined);
+  assert.match(blueprint.movements[0]?.detail ?? "", /This is an estimate; check the current/);
+  const reimported = importSkillItinerary(research, { title: blueprint.title, summary: blueprint.summary, language: blueprint.language, destinations: blueprint.destinations,
+    startDate: blueprint.startDate, endDate: blueprint.endDate, days: blueprint.days,
+    movements: blueprint.movements.map((movement) => ({ ...movement, mode: "driving", durationMinutes: 75, evidence: [], detail: "Allow about 75 minutes. This is a conservative planning estimate; refresh live routing before execution." }))
+  }, { blueprintId: blueprint.id, blueprintVersion: 2, createdAt: "2026-08-26T02:00:00.000Z" });
+  assert.equal(reimported.movements[0]?.durationMinutes, undefined, "A previous synthesized estimate must not reappear after correction.");
+  assert.doesNotMatch(reimported.movements[0]?.detail ?? "", /75 minutes/);
+  assert.equal(reimported.days[0]?.summary, blueprint.days[0]?.summary);
+  const naturalReimport = importSkillItinerary(research, {
+    title: blueprint.title, summary: blueprint.summary, language: blueprint.language, destinations: blueprint.destinations,
+    startDate: blueprint.startDate, endDate: blueprint.endDate, days: blueprint.days,
+    movements: blueprint.movements.map(movement=>({...movement,mode:'driving',durationMinutes:75,evidence:[],detail:'Allow about 75 minutes. This is an estimate; check the current routing before setting off.'}))
+  }, {blueprintId:blueprint.id,blueprintVersion:3,createdAt:'2026-08-26T03:00:00.000Z'});
+  assert.equal(naturalReimport.movements[0]?.durationMinutes,undefined,'Friendlier wording must not turn an unverified estimate into a route fact');
   assert.deepEqual(blueprint.movements[0]?.display, {
     routeLabel: "Walk to Garden B",
     refreshReason: "Refresh this route leg after itinerary verification.",
@@ -217,6 +300,29 @@ test("Skill Importer adds a reasonableness pass for candidates and unverified mo
     showAsFormalRoute: true,
     mapLineState: "needs_refresh"
   });
+});
+
+test("Skill Importer does not count hotel to airport transfers as flights", () => {
+  const value = batch();
+  value.relationships = [];
+  value.places = [
+    { id: "hotel", name: "City Hotel", city: "Auckland", locationLabel: "Auckland", category: "hotel", whyWorthIt: "Overnight base", plan: "Stay" },
+    { id: "airport", name: "Auckland Airport", city: "Auckland", locationLabel: "Auckland", category: "airport", whyWorthIt: "Departure node", plan: "Depart" }
+  ];
+  const research = importSkillResearchBatches([value], {
+    researchSetId: "airport-transfer-research", generationKey: "airport-transfer-generation", proposalRef: { sessionId: "session", proposalVersion: 1 },
+    skillLineage: { skillId: "landi-trip-blueprint", skillVersion: "1.0.0" }, createdAt: "2026-08-26T00:00:00.000Z", updatedAt: "2026-08-26T00:00:00.000Z"
+  });
+  const [hotelId, airportId] = research.places.map((place) => place.id);
+  const blueprint = importSkillItinerary(research, {
+    title: "Auckland", summary: "Airport transfer", language: "en", destinations: ["Auckland"], startDate: "2026-09-01", endDate: "2026-09-01",
+    days: [{ id: "d1", date: "2026-09-01", kind: "transit", city: "Auckland", title: "Airport day", summary: "Depart", stops: [{ placeId: airportId!, order: 1 }], candidatePlaceIds: [], blocks: [
+      { id: "hotel-block", kind: "lodging", order: 1, placeId: hotelId!, evidence: [] },
+      { id: "airport-block", kind: "stop", order: 2, placeId: airportId!, evidence: [] }
+    ] }], movements: []
+  }, { blueprintId: "airport-transfer-blueprint", blueprintVersion: 1, createdAt: "2026-08-26T01:00:00.000Z" });
+  assert.equal(blueprint.movements[0]?.mode, "unknown");
+  assert.equal(blueprint.movements[0]?.durationMinutes, undefined);
 });
 
 test("Skill Importer preserves movement display intent into the Trip Blueprint", () => {
@@ -305,7 +411,19 @@ test("Skill Importer keeps an orphan HTTPS source reference as a local recheck g
   assert.equal(research.places[0]?.evidence.some((item) => item.sourceId === source?.id), true);
 });
 
-test("Skill Importer keeps explicit empty Blueprint guidance authoritative", () => {
+test("Skill Importer retains relationship-only source references for review", () => {
+  const value = batch();
+  value.relationships![0]!.sourceUrls = ["https://www.wellingtonnz.com/visit/see-and-do/what-to-do-on-a-rainy-day"];
+  const research = importSkillResearchBatches([value], {
+    researchSetId: "research-1", generationKey: "generation-1", proposalRef: { sessionId: "session-1", proposalVersion: 1 },
+    skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" }, createdAt: "2026-08-26T00:00:00.000Z", updatedAt: "2026-08-26T00:00:00.000Z"
+  });
+  const source = research.sources.find((item) => item.url === "https://www.wellingtonnz.com/visit/see-and-do/what-to-do-on-a-rainy-day");
+  assert.equal(source?.status, "recheck");
+  assert.equal(research.guideRelationships?.[0]?.evidence[0]?.sourceId, source?.id);
+});
+
+test("Skill Importer preserves empty ordinary guidance and adds only the pending policy review", () => {
   const value = batch();
   value.places = [
     { id: "a", name: "A", locationLabel: "Tokyo", city: "Tokyo", category: "sight", whyWorthIt: "A matters", plan: "Visit A", tip: "Temple etiquette: keep voices low near worship halls." }
@@ -334,7 +452,17 @@ test("Skill Importer keeps explicit empty Blueprint guidance authoritative", () 
     movements: []
   }, { blueprintId: "blueprint-1", blueprintVersion: 1, createdAt: "2026-08-26T01:00:00.000Z" });
   assert.deepEqual(blueprint.travelTips, []);
-  assert.deepEqual(blueprint.preparationChecklist, []);
+  assert.equal(blueprint.preparationChecklist?.length, 1);
+  assert.deepEqual(blueprint.preparationChecklist?.[0], {
+    id: "policy-review-research-1-8qoaw6",
+    title: "Check entry and transit requirements",
+    description: "Entry and transit requirements have not been assessed for this trip.",
+    group: "documents",
+    completionCondition: "Review the applicable official requirements for your travel documents, route and dates. Confirm any necessary actions separately.",
+    evidence: []
+  });
+  assert.deepEqual(value.preparationChecklist, []);
+  assert.deepEqual(research.preparationChecklist, []);
 });
 
 test("Skill Importer keeps canonical guidance source-backed and remaps checklist requirements", () => {
@@ -944,3 +1072,20 @@ test("Skill Importer refuses to keep a verified movement when route evidence is 
   assert.equal(blueprint.movements[0]?.status, "recheck");
   assert.deepEqual(blueprint.movements[0]?.evidence, [{ sourceId: research.sources[0]!.id, status: "stale", supports: ["route duration"] }]);
 });
+
+test("空主题保持可读且保留明确来源用途和提示状态", () => {
+  const value=batch();
+  value.sources[0]!.purpose="inspiration";
+  value.localFoods=[{id:"food",title:"当地饮食",description:"了解饮食文化",context:"灵感",diningPlaceIds:[]}];
+  value.localProducts=[{id:"product",title:"当地工艺",description:"了解工艺",context:"灵感",purchasePlaceIds:[]}];
+  value.experienceThemes=[{id:"experience",title:"文化体验",description:"了解文化",context:"灵感",offeringPlaceIds:[]}];
+  value.travelTips=[{id:"tip",title:"支付",body:"准备当地可用的支付方式。",context:"支付",theme:"payment",pinned:true,hidden:false}];
+  const research=importSkillResearchBatches([value],{researchSetId:"r-empty-theme",generationKey:"g-empty-theme",proposalRef:{sessionId:"s",proposalVersion:1},skillLineage:{skillId:"landi-trip-blueprint",skillVersion:"1.0.0"},createdAt:"2026-08-26T00:00:00Z",updatedAt:"2026-08-26T00:00:00Z"});
+  assert.deepEqual(research.localFoods![0]!.diningPlaceIds,[]);
+  assert.deepEqual(research.localProducts![0]!.purchasePlaceIds,[]);
+  assert.deepEqual(research.experienceThemes![0]!.offeringPlaceIds,[]);
+  assert.equal(research.sources[0]!.purpose,"inspiration");
+  assert.equal(research.travelTips![0]!.pinned,true);
+});
+
+test("Importer保留预订关系候选但不接受其自称reviewed或派生proof，缺失仍unknown",async()=>{const {bookingRelationshipReviewContext,bookingRelationshipImpact}=await import("./booking-relationship.js");const research=importSkillResearchBatches([batch()],{researchSetId:"关系研究",generationKey:"关系生成",proposalRef:{sessionId:"关系会话",proposalVersion:1},skillLineage:{skillId:"landi",skillVersion:"1.0.0"},createdAt:"2026-11-16T00:00:00Z",updatedAt:"2026-11-16T00:00:00Z"});const artifact={title:"关系测试",summary:"合成行程",language:"zh",destinations:["Tokyo"],startDate:"2026-12-01",endDate:"2026-12-01",days:[{id:"d1",date:"2026-12-01",kind:"scheduled" as const,city:"Tokyo",title:"行程",summary:"合成",stops:[{placeId:research.places[0]!.id,order:1}],candidatePlaceIds:[research.places[1]!.id]}],movements:[]};const input={blueprintId:"关系蓝图",blueprintVersion:1,createdAt:"2026-11-16T00:00:00Z",bookingConstraints:[{id:"预订",sourceBookingId:"真实源",type:"ticket" as const,title:"合成预订",status:"pending" as const,sourceLabel:"旅行者声明",importedAt:"2026-11-16T00:00:00Z",constraintStrength:"soft" as const,segments:[]}]};const missing=importSkillItinerary(research,artifact,input);assert.equal(bookingRelationshipImpact(missing,[{kind:"remove_place_from_day",dayId:"d1",placeId:research.places[0]!.id}]).unknown.length,1);const context=bookingRelationshipReviewContext(missing);const candidate={schemaVersion:1 as const,blueprintId:context.blueprintId,blueprintVersion:1,universeDigest:context.universeDigest,status:"reviewed" as const,reviewedTargetDigests:{"伪造":"不可信"},decision:{source:"agent" as const,actorId:"合成候选生产者",model:"合成测试模型",decidedAt:"2026-11-16T00:00:00Z",rationale:"仅候选未接受",evidenceRefs:["traveler-declaration:合成审阅"],obligations:["旅行者审阅"]},units:context.units.map(unit=>({...unit,coverage:"complete" as const,relations:[],rationale:"候选无关联",evidenceRefs:["traveler-declaration:合成审阅"]}))};const result=importSkillItinerary(research,{...artifact,bookingRelationshipAssessment:candidate},input);assert.equal(result.bookingRelationshipAssessment?.status,"candidate");assert.equal(result.bookingRelationshipAssessment?.reviewedTargetDigests,undefined);assert.equal(result.bookingRelationshipAssessment?.decision.model,undefined);assert.equal(result.bookingRelationshipAssessment?.producerVerification,"unverified");const verified=importSkillItinerary(research,{...artifact,bookingRelationshipAssessment:candidate},{...input,bookingRelationshipProducer:{actorId:"真实受信执行者",model:"真实受信模型",taskId:"受信任务",decidedAt:"2026-11-16T00:00:01Z"}});assert.equal(verified.bookingRelationshipAssessment?.decision.actorId,"真实受信执行者");assert.equal(verified.bookingRelationshipAssessment?.decision.model,"真实受信模型");assert.equal(verified.bookingRelationshipAssessment?.producerTaskId,"受信任务");assert.equal(verified.bookingRelationshipAssessment?.status,"candidate");const persisted=JSON.parse(JSON.stringify(verified)) as typeof verified;const recovered=importSkillItinerary(research,artifact,{...input,blueprintVersion:2,bookingRelationshipAssessment:persisted.bookingRelationshipAssessment!});assert.equal(recovered.bookingRelationshipAssessment?.decision.actorId,"真实受信执行者");assert.equal(recovered.bookingRelationshipAssessment?.producerVerification,"verified");assert.equal(recovered.bookingRelationshipAssessment?.producerTaskId,"受信任务");assert.equal(recovered.bookingRelationshipAssessment?.blueprintVersion,1);assert.equal(recovered.bookingRelationshipAssessment?.status,"candidate");assert.throws(()=>importSkillItinerary(research,artifact,{...input,blueprintId:"另一蓝图",blueprintVersion:2,bookingRelationshipAssessment:persisted.bookingRelationshipAssessment!}),/评估基准/);const rebound=importSkillItinerary(research,{...artifact,bookingRelationshipAssessment:{...candidate,blueprintId:"模型临时蓝图"}},input);assert.equal(rebound.bookingRelationshipAssessment?.blueprintId,input.blueprintId);assert.equal(rebound.bookingRelationshipAssessment?.status,"candidate");assert.equal(rebound.bookingRelationshipAssessment?.producerVerification,"unverified");assert.equal(bookingRelationshipImpact(result,[{kind:"remove_place_from_day",dayId:"d1",placeId:research.places[0]!.id}]).canConfirm,false);});

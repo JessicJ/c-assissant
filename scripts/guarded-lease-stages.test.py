@@ -1,0 +1,103 @@
+"""New two-stage fictional evidence checks; no historical test execution."""
+import builtins,copy,hashlib,importlib.util,json,os,sys,tempfile
+from pathlib import Path
+from guarded_test_fixtures import resource_fixture, lease_fixture, trust as resource_trust, runtime as fixture_runtime
+ROOT=Path(__file__).resolve().parents[1];ENTRY=ROOT/'scripts/guarded-lease-stages.py'
+spec=importlib.util.spec_from_file_location('lease_stages',ENTRY);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+OUT=Path(tempfile.mkdtemp(prefix='landi-lease-stages-check-',dir=None)).resolve();os.chmod(OUT,0o700);checks=[]
+def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+def save(name,v):
+ p=OUT/name
+ with p.open('x') as f:json.dump(v,f,indent=2);f.write('\n');f.flush();os.fsync(f.fileno())
+ os.chmod(p,0o600)
+def fixture(sub):
+ s=copy.deepcopy(sub);s['resourceSubjectSha256']=hashlib.sha256(__import__('json').dumps(sub,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest();s.update(deploymentId='candidate',entryFile=s.pop('entries')[0],manifestSha256='b'*64,challenge='c'*64,channelId='d'*64)
+ s.pop('deploymentIds');s.pop('oldIdentity');s.pop('managerLabel');s.pop('host');s.pop('port');s.pop('projectRoot')
+ lease=dict(leaseId='e'*64,holderIdentity=s['controllerIdentity'],holderIdentityAfter=copy.deepcopy(s['controllerIdentity']),holderFd=8,
+  lockFile=s['lockFile'],workFile=s['workFile'],acquiredNonblocking=True,heldContinuously=True,privateDirectoryVerified=True,
+  capabilityVerified=True,unknowns=[],acquiredAtMs=99000,continuousThroughMs=100200)
+ pre=dict(version=1,policyVersion=m.POLICY,stage='pre_start',productionExecutable=False,compatibilityEnabled=False,
+  startedAtMs=100000,endedAtMs=100200,subject=s,lease=lease,childCreated=False,childIdentity=None,receiverFd=None,inheritance='pending',
+  resourceAssessment=dict(policyVersion='landi-resource-conflicts-v1',subjectSha256=m._s.canonical_sha256(s),outcome='consistent',conflicts=[],unknowns=[],launcherSourcesVerified=True,evidenceSha256='f'*64,observedAtMs=100100))
+ child=dict(pid=222,parentPid=s['controllerIdentity']['pid'],uid=501,realUid=501,startSeconds=100,startMicroseconds=500000)
+ post=dict(version=1,policyVersion=m.POLICY,stage='pre_open',productionExecutable=False,compatibilityEnabled=False,
+  startedAtMs=100400,endedAtMs=100800,subject=copy.deepcopy(s),lease=copy.deepcopy(lease),preStartSha256=m._s.canonical_sha256(pre),
+  child=dict(identityBefore=child,identityAfter=copy.deepcopy(child),executableBefore=s['nodeFile'],executableAfter=copy.deepcopy(s['nodeFile']),entryFile=s['entryFile']),
+  inheritance=dict(holderIdentity=s['controllerIdentity'],receiverIdentity=child,holderFd=8,receiverFd=9,holderLockFile=s['lockFile'],receiverLockFile=copy.deepcopy(s['lockFile']),sameInheritedCapabilityVerified=True),
+  launcherSourceVerified=True,privateChannelVerified=True,
+  barrier=dict(state='waiting_pre_open',deploymentId=s['deploymentId'],channelId=s['channelId'],manifestSha256=s['manifestSha256'],workFile=s['workFile'],childIdentity=child,databaseOpened=False,listenerStarted=False,backgroundStarted=False,continueReceived=False))
+ post['lease']['continuousThroughMs']=post['endedAtMs']
+ return pre,post
+def trust(e):return dict(verified=True,evidenceSha256=m._s.canonical_sha256(e),subjectSha256=m._s.canonical_sha256(e['subject']),verifier=dict(path='/fiction/verifier',device=7,inode=99,sha256='a'*64),verifiedAtMs=100900,expiresAtMs=115000)
+def run(pre,post=None,now=101000):
+ before=copy.deepcopy((pre,post))
+ r=m.evaluate_pre_start(pre,now_ms=now,trust=trust(pre)) if post is None else m.evaluate_pre_open(post,pre_start=pre,now_ms=now,trust=trust(post),pre_trust=trust(pre))
+ assert before==(pre,post) and r['executable'] is False and r['maySpawn'] is False and r['mayOpenDatabase'] is False
+ assert r['productionExecutable'] is False and r['compatibilityEnabled'] is False and r['admissionDecision']=='unchanged'
+ return r
+def reject(name,mutate,stage='post'):
+ pre,post=fixture(SUB);mutate(pre,post)
+ r=run(pre,None if stage=='pre' else post)
+ assert r['status']=='rejected' and r['reasons'] and 'evidenceSha256' not in r,name
+ checks.append(name)
+try:
+ protected={str(ENTRY):sha(ENTRY)}
+ SUB=resource_fixture()["subject"]
+ pre,post=fixture(SUB);assert run(pre)['status']=='consistent_pre_start_not_authorization' and run(pre)['inheritance']=='pending';checks.append('pre_start_consistent_only_inheritance_pending')
+ assert run(pre,post)['status']=='consistent_pre_open_not_authorization';checks.append('post_spawn_inherited_capability_consistent_never_opens_database')
+ assert m.evaluate_pre_start(pre,now_ms=101000)['status']=='rejected';checks.append('pre_missing_trust_rejected')
+ assert m.evaluate_pre_open(post,pre_start=pre,now_ms=101000,trust=trust(post))['status']=='rejected';checks.append('post_cannot_skip_pre_trust')
+ cases=[
+ ('pre_future_inheritance',lambda a,b:a.update(inheritance='verified'),'pre'),
+ ('pre_claims_child_created',lambda a,b:a.update(childCreated=True),'pre'),
+ ('pre_receiver_FD_present',lambda a,b:a.update(receiverFd=9),'pre'),
+ ('pre_missing_lease',lambda a,b:a.pop('lease'),'pre'),
+ ('pre_no_capability_proof',lambda a,b:a['lease'].update(capabilityVerified=False),'pre'),
+ ('pre_lost_continuity',lambda a,b:a['lease'].update(heldContinuously=False),'pre'),
+ ('pre_controller_identity_changed',lambda a,b:a['lease']['holderIdentityAfter'].update(startMicroseconds=999),'pre'),
+ ('pre_resource_unknown',lambda a,b:a['resourceAssessment']['unknowns'].append('EPERM'),'pre'),
+ ('pre_missing_launcher_source',lambda a,b:a['resourceAssessment'].update(launcherSourcesVerified=False),'pre'),
+ ('pre_resource_conflict',lambda a,b:a['resourceAssessment']['conflicts'].append('port'),'pre'),
+ ('pre_unbound_resource_digest',lambda a,b:a['resourceAssessment'].update(subjectSha256='0'*64),'pre'),
+ ('pre_gate_enabled',lambda a,b:a.update(productionExecutable=True),'pre'),
+ ('pre_boolean_FD',lambda a,b:a['lease'].update(holderFd=True),'pre'),
+ ('post_wrong_pre_digest',lambda a,b:b.update(preStartSha256='0'*64),'post'),
+ ('post_different_challenge',lambda a,b:b['subject'].update(challenge='0'*64),'post'),
+ ('post_lease_reacquired',lambda a,b:b['lease'].update(leaseId='0'*64),'post'),
+ ('post_holder_FD_changed',lambda a,b:b['lease'].update(holderFd=10),'post'),
+ ('post_lock_replaced',lambda a,b:b['lease']['lockFile'].update(inode=999),'post'),
+ ('post_parent_wrong',lambda a,b:b['child']['identityAfter'].update(parentPid=999),'post'),
+ ('post_PID_reused',lambda a,b:b['child']['identityAfter'].update(startMicroseconds=999),'post'),
+ ('post_kernel_executable_changed',lambda a,b:b['child']['executableAfter'].update(inode=999),'post'),
+ ('post_inherited_other_file',lambda a,b:b['inheritance']['receiverLockFile'].update(inode=999),'post'),
+ ('post_missing_inheritance_proof',lambda a,b:b['inheritance'].update(sameInheritedCapabilityVerified=False),'post'),
+ ('post_missing_launcher_source',lambda a,b:b.update(launcherSourceVerified=False),'post'),
+ ('post_missing_private_channel',lambda a,b:b.update(privateChannelVerified=False),'post'),
+ ('post_ready_not_preopen_barrier',lambda a,b:b['barrier'].update(state='ready'),'post'),
+ ('post_already_opened_database',lambda a,b:b['barrier'].update(databaseOpened=True),'post'),
+ ('post_listener_started_early',lambda a,b:b['barrier'].update(listenerStarted=True),'post'),
+ ('post_background_started_early',lambda a,b:b['barrier'].update(backgroundStarted=True),'post'),
+ ('post_continue_received_early',lambda a,b:b['barrier'].update(continueReceived=True),'post'),
+ ('post_wrong_manifest',lambda a,b:b['barrier'].update(manifestSha256='0'*64),'post'),
+ ('post_bool_false_not_integer_zero',lambda a,b:b['barrier'].update(databaseOpened=0),'post'),
+ ('post_compatibility_enabled',lambda a,b:b.update(compatibilityEnabled=True),'post'),
+ ('post_future_time',lambda a,b:b.update(endedAtMs=102000),'post')]
+ for name,fn,stage in cases:reject(name,fn,stage)
+ pre,post=fixture(SUB);assert run(pre,post,now=116000)['status']=='rejected';checks.append('expired_pre_cannot_be_reused_post_spawn')
+ t=trust(post);t['evidenceSha256']='0'*64;assert m.evaluate_pre_open(post,pre_start=pre,now_ms=101000,trust=t,pre_trust=trust(pre))['status']=='rejected';checks.append('post_context_tamper_rejected')
+ original=builtins.open
+ def denied(*a,**kw):raise AssertionError('unexpected filesystem access')
+ builtins.open=denied
+ try:assert run(pre,post)['status']=='consistent_pre_open_not_authorization'
+ finally:builtins.open=original
+ checks.append('pure_two_stage_evaluation_no_filesystem_access')
+ for p,h in protected.items():assert sha(p)==h
+ checks.append('existing_collectors_verifier_evaluator_controller_Storage_artifacts_unchanged')
+ save('fictional-example.json',dict(preStart=pre,preOpen=post,preResult=run(pre),postResult=run(pre,post)))
+ save('verification.json',dict(status='passed',newChecks=len(checks),checks=checks,entry=dict(path=str(ENTRY),sha256=sha(ENTRY)),protectedDigests=protected,
+  productionExecutable=False,compatibilityEnabled=False,realSourcesConnected=False,controllerIntegrated=False,storageIntegrated=False,
+  servicesStarted=False,databaseOpened=False,OSQueriesRun=False,mahCommandsRun=False,compiled=False,historicalTestsRun=False))
+ print(json.dumps(dict(status='passed',newChecks=len(checks),evidence=str(OUT))))
+except BaseException as error:
+ save('failure.json',dict(status='failed',passedChecks=checks,errorType=type(error).__name__,error=str(error)))
+ print(json.dumps(dict(status='failed',evidence=str(OUT))));raise

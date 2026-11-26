@@ -1,6 +1,6 @@
 # Skill Contract
 
-> Contributor reference. This contract defines how regional Skills participate in the Landi project. It is not part of the primary product-design reading path.
+> Historical contributor reference for the retired regional Skill/Country Pack architecture. Preserve it to interpret old artifacts and provenance; it is not a contract for creating new country bundles or restoring their runtime. Current scope is [product-scope.md](product-scope.md); destination research uses shared travel-support, Connector facts and the current Blueprint import contracts. Statements below describe the historical architecture, not active product requirements.
 
 ## Definition
 

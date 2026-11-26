@@ -1,0 +1,6 @@
+.booking-import-prompt{justify-self:start;align-self:flex-start;min-height:36px;padding:8px 14px;border:1px solid var(--landi-line);border-radius:999px;background:var(--landi-paper);color:var(--landi-forest-deep);font:500 12px var(--landi-sans);cursor:pointer;}
+.booking-import-prompt:hover{background:var(--landi-paper-deep);}.booking-import-prompt:focus-visible{outline:2px solid var(--landi-forest);outline-offset:3px;}
+
+.chat-bubble.assistant .booking-import-slot{grid-column:2;min-width:0;}.booking-import-slot:empty{display:none;}.booking-import-slot .booking-import-prompt{margin-top:10px;}.booking-import-slot .booking-import-panel.compact{margin-top:10px;}
+
+.chat-bubble.assistant .booking-question-body{grid-column:2;padding:11px 13px;border:1px solid #e0e6e2;border-radius:4px 13px 13px 13px;background:#f8faf9;min-width:0;}.chat-bubble.assistant .booking-question-body>p{border:0;padding:0;background:transparent;}

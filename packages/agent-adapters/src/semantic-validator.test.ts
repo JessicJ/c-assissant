@@ -55,6 +55,33 @@ test("semantic validator flags confirmed booking timing conflicts against verifi
   assert.equal(report.findings.some((finding) => finding.category === "timing_conflict" && finding.requiresPlannerRepair), true);
 });
 
+test("semantic validator sends overlapping planned experiences to the repair pass", () => {
+  const value = plan({ startTime: "09:00", durationMinutes: 180 });
+  value.dailyItinerary[0]!.experiences!.push({ title: "Next museum", planRole: "planned", kind: "experience", summary: "Continue the day.", startTime: "10:00", durationMinutes: 90 });
+  const report = validateSemanticTravelPlan(value, { research: research([place()]) });
+  assert.equal(report.result, "repair_required");
+  assert.equal(report.findings.some((finding) => finding.category === "timing_conflict" && finding.experience === "Next museum" && finding.requiresPlannerRepair), true);
+});
+
+test("confirmed hotel occurrence matches its title even when the booking has a full address", () => {
+  const { origin: _origin, destination: _destination, ...segment } = bookingAt("2026-10-06T15:00").segments[0]!;
+  const booking: BlueprintBookingConstraint = {
+    ...bookingAt("2026-10-06T15:00"),
+    type: "accommodation",
+    title: "Confirmed Porto hotel",
+    segments: [{
+      ...segment,
+      segmentType: "hotel_stay",
+      title: "Confirmed Porto hotel",
+      location: "Praca da Batalha, Porto, Portugal"
+    }]
+  };
+  const value = plan({ fixedCommitments: semanticFixedCommitmentsFromBookingConstraints([booking]) });
+  value.dailyItinerary[0]!.experiences!.push({ title: "Confirmed Porto hotel", planRole: "planned", kind: "lodging", summary: "Check in at the confirmed hotel.", startTime: "15:00", timingStatus: "confirmed" });
+  const report = validateSemanticTravelPlan(value, { research: research([place()]), bookingConstraints: [booking] });
+  assert.equal(report.findings.some((finding) => finding.category === "timing_conflict" && /must appear/.test(finding.explanation)), false);
+});
+
 test("semantic validator rejects a planned experience that overlaps a confirmed flight window", () => {
   const booking = bookingAt("2026-10-06T18:30", "2026-10-06T20:30");
   const report = validateSemanticTravelPlan(plan({

@@ -2,6 +2,8 @@
 
 > Release record. This checklist preserves evidence for the 0.1.0 release process. It is not a current product-design source.
 
+当前启动与发布以 [macOS 启动包设计](macos-local-launch-package.md)为准，使用唯一规范启动器及已有独立打包与 release adapter。以下历史勾选项原样保留；旧 LaunchAgent 安装、预览和卸载入口已退出源码交付，不作为当前发布门禁，也不授权操作现有服务。工作树候选归档与正式 committed source 发布分阶段验收。
+
 This checklist separates reproducible repository evidence from real-account and real-device evidence. A checked automated item does not substitute for a pending manual item.
 
 ## Automated release gate

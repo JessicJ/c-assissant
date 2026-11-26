@@ -1,0 +1,346 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://landi.local/contracts/landi-mah-scheduling.v1.schema.json",
+  "description": "Landi proposed contract only; no public MAH API or production support is claimed. Cross-record identity, digests, time zones, expiry and authority require runtime verification.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/schedule"
+    },
+    {
+      "$ref": "#/$defs/run"
+    }
+  ],
+  "$defs": {
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "planId",
+        "planVersion",
+        "recipientConfigRevision"
+      ],
+      "properties": {
+        "planId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "planVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "recipientConfigRevision": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "schedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "kind",
+        "owner",
+        "scheduleId",
+        "revision",
+        "scope",
+        "operation",
+        "desiredState",
+        "timeZone",
+        "validFrom",
+        "expiresAt",
+        "trigger",
+        "policy",
+        "authority"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "landi_mah_schedule"
+        },
+        "owner": {
+          "const": "mah"
+        },
+        "scheduleId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "operation": {
+          "enum": [
+            "travel_attention",
+            "email_research",
+            "email_timing",
+            "email_delivery"
+          ]
+        },
+        "desiredState": {
+          "enum": [
+            "enabled",
+            "paused",
+            "retired"
+          ]
+        },
+        "timeZone": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "validFrom": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trigger": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "seconds"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "interval"
+                },
+                "seconds": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "expression"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "cron"
+                },
+                "expression": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "at"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "once"
+                },
+                "at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          ]
+        },
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "overlap",
+            "missed",
+            "uncertainDelivery",
+            "scopeChange",
+            "dst"
+          ],
+          "properties": {
+            "overlap": {
+              "const": "forbid"
+            },
+            "missed": {
+              "const": "skip_expired_coalesce_latest"
+            },
+            "uncertainDelivery": {
+              "const": "reconcile_only"
+            },
+            "scopeChange": {
+              "const": "invalidate_before_effect"
+            },
+            "dst": {
+              "const": "skip_gap_run_once_fold"
+            }
+          }
+        },
+        "authority": {
+          "enum": [
+            "artifact_only",
+            "approved_email_delivery"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "email_delivery"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "authority": {
+                "const": "approved_email_delivery"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "authority": {
+                "const": "artifact_only"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "kind",
+        "scheduleId",
+        "scheduleRevision",
+        "occurrenceId",
+        "requestId",
+        "scope",
+        "scheduledFor",
+        "expiresAt",
+        "status",
+        "executionReceipt"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "landi_mah_schedule_run"
+        },
+        "scheduleId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "scheduleRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "occurrenceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "scheduledFor": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "status": {
+          "enum": [
+            "queued",
+            "running",
+            "succeeded",
+            "failed",
+            "skipped",
+            "cancelled",
+            "uncertain"
+          ]
+        },
+        "executionReceipt": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "taskId",
+                "requestSha256",
+                "resultSha256",
+                "receiptRef"
+              ],
+              "properties": {
+                "taskId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "requestSha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "resultSha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "receiptRef": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                }
+              }
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "succeeded"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "executionReceipt": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

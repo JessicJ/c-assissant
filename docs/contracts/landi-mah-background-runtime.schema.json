@@ -1,0 +1,367 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://landi.local/contracts/landi-mah-background-runtime.schema.json",
+  "title": "Landi MAH 隔离后台运行投影",
+  "description": "MAH 未来公开服务接口必须返回的最小非秘密投影。当前 MAH 0.1.1968 尚未提供该合同；此 Schema 是生产实现的前置门禁，不是已实现声明。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "serviceId",
+    "project",
+    "desiredState",
+    "observedState",
+    "supervisor",
+    "instance",
+    "readiness",
+    "persistence",
+    "observedAt"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "kind": {
+      "const": "landi_mah_background_runtime_projection"
+    },
+    "serviceId": {
+      "const": "landi"
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projectRoot",
+        "componentId",
+        "launcherContractVersion"
+      ],
+      "properties": {
+        "projectRoot": {
+          "type": "string",
+          "minLength": 1
+        },
+        "componentId": {
+          "const": "c-assissant"
+        },
+        "launcherContractVersion": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "desiredState": {
+      "type": "string",
+      "enum": [
+        "running",
+        "stopped"
+      ]
+    },
+    "observedState": {
+      "type": "string",
+      "enum": [
+        "starting",
+        "ready",
+        "stopping",
+        "stopped",
+        "crashed",
+        "degraded",
+        "unknown"
+      ]
+    },
+    "supervisor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner",
+        "registrationId",
+        "reconcileGeneration",
+        "restartPolicy",
+        "restartCount"
+      ],
+      "properties": {
+        "owner": {
+          "const": "mah_scheduler"
+        },
+        "registrationId": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "reconcileGeneration": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "restartPolicy": {
+          "type": "string",
+          "enum": [
+            "bounded_backoff",
+            "never"
+          ]
+        },
+        "restartCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "backoffUntil": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "lastExit": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/lastExit"
+            }
+          ]
+        }
+      }
+    },
+    "instance": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/instance"
+        }
+      ]
+    },
+    "readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ownership",
+        "server",
+        "homepage",
+        "workspaceApi"
+      ],
+      "properties": {
+        "ownership": {
+          "type": "boolean"
+        },
+        "server": {
+          "type": "boolean"
+        },
+        "homepage": {
+          "type": "boolean"
+        },
+        "workspaceApi": {
+          "type": "boolean"
+        },
+        "failureCode": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,119}$"
+        }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "desiredStatePersisted",
+        "recoveredAfterMahRestart",
+        "recoveredAfterHostRestart"
+      ],
+      "properties": {
+        "desiredStatePersisted": {
+          "type": "boolean"
+        },
+        "recoveredAfterMahRestart": {
+          "type": "boolean"
+        },
+        "recoveredAfterHostRestart": {
+          "type": "boolean"
+        },
+        "lastRecoveryAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transitionId",
+        "action",
+        "idempotent",
+        "acceptedAt"
+      ],
+      "properties": {
+        "transitionId": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "register",
+            "start",
+            "stop",
+            "reconcile",
+            "status"
+          ]
+        },
+        "idempotent": {
+          "type": "boolean"
+        },
+        "acceptedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "observedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "observedState": {
+            "const": "ready"
+          }
+        },
+        "required": [
+          "observedState"
+        ]
+      },
+      "then": {
+        "properties": {
+          "instance": {
+            "$ref": "#/$defs/instance"
+          },
+          "readiness": {
+            "properties": {
+              "ownership": {
+                "const": true
+              },
+              "server": {
+                "const": true
+              },
+              "homepage": {
+                "const": true
+              },
+              "workspaceApi": {
+                "const": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "desiredState": {
+            "const": "stopped"
+          },
+          "observedState": {
+            "const": "stopped"
+          }
+        },
+        "required": [
+          "desiredState",
+          "observedState"
+        ]
+      },
+      "then": {
+        "properties": {
+          "instance": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "nonEmptyId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "lastExit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observedAt",
+        "classification"
+      ],
+      "properties": {
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "exitCode": {
+          "type": "integer"
+        },
+        "signal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "classification": {
+          "type": "string",
+          "enum": [
+            "clean",
+            "crash",
+            "ownership_conflict",
+            "startup_failure",
+            "unknown"
+          ]
+        }
+      }
+    },
+    "instance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instanceId",
+        "receiptId",
+        "pid",
+        "processStartIdentity",
+        "port",
+        "healthProtocolVersion",
+        "healthProofSha256",
+        "startedAt"
+      ],
+      "properties": {
+        "instanceId": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "receiptId": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "processStartIdentity": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "healthProtocolVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "healthProofSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

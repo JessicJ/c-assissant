@@ -1,0 +1,137 @@
+{
+  "sourceHead": "7bda1fccc6c694215631c9367d5065c2014ebc77",
+  "files": [
+    {
+      "path": "packages/core/src/assistant-personality.ts",
+      "sha256": "fbdc6ffdfb4fc523f9dda7a2fc3f524c9aed3be86aa74794145edb1d59944245"
+    },
+    {
+      "path": "packages/core/src/blueprint-plan-compiler.test.ts",
+      "sha256": "02becb73936140862e10ca534b4f23ee8f976a0b6bf2988a3bc87fddd23c9210"
+    },
+    {
+      "path": "packages/core/src/blueprint-plan-compiler.ts",
+      "sha256": "b14b64c243b43131e7dba5f204225a277c88ed176f25600e07cf57d8cdb39913"
+    },
+    {
+      "path": "packages/core/src/blueprint-revision.test.ts",
+      "sha256": "73d0a3798dba436152dfe2c10a429c7d036d5e6f77b8f31db6746a677dda2519"
+    },
+    {
+      "path": "packages/core/src/blueprint-revision.ts",
+      "sha256": "5619d7d482c3c1b121af5e1a7d6bc29d0dc311b0ff70edde0ccd734016788d61"
+    },
+    {
+      "path": "packages/core/src/current-destination.ts",
+      "sha256": "1b1a342ea763226b5e7b8404164db7f33981b5eaf2a7a7081ad5a6ed35b40058"
+    },
+    {
+      "path": "packages/core/src/email-presentation.ts",
+      "sha256": "9722a275da35344715d9b2ae2dd695a20fa7aad68931b63657c266cfe45805c6"
+    },
+    {
+      "path": "packages/core/src/index.test.ts",
+      "sha256": "d2a946aa2b97749cbe85fa2fa68bb7bfea583b5aa414e0f8f802e27cc071e29b"
+    },
+    {
+      "path": "packages/core/src/index.ts",
+      "sha256": "71b80e424545fc52f8eb53bbb8f3bec3c0a68d75080a37b726a050725e3b497e"
+    },
+    {
+      "path": "packages/core/src/plan-compiler.ts",
+      "sha256": "6f084cc0c7ba0f1997b0e9c6ef0a7e090135f9ad1a2f87b0d0362aa3cad411d0"
+    },
+    {
+      "path": "packages/core/src/planning-budget.test.ts",
+      "sha256": "d7f39c682b89b01e634a93f6801e825c7013ad44b971962d5b7042326507e82f"
+    },
+    {
+      "path": "packages/core/src/planning-budget.ts",
+      "sha256": "582c40f517f02e14fa44c1b260cdf6172b74321407deaf1f9a8f6820f17f9d53"
+    },
+    {
+      "path": "packages/core/src/policy-applicability.ts",
+      "sha256": "cb1e802a1ce167e9940374b74568cf25a1b121c0554e482696805329feee063d"
+    },
+    {
+      "path": "packages/core/src/policy-research.test.ts",
+      "sha256": "41484e4e790ef056285e477bd980a9e6d9131141397235147f0028fa362b8dfb"
+    },
+    {
+      "path": "packages/core/src/policy-research.ts",
+      "sha256": "2d230112304fa268a9a75f29e4181e8b2b0d18b28be62bde54c2c72fb16d72cc"
+    },
+    {
+      "path": "packages/core/src/skill-importer.test.ts",
+      "sha256": "5b4813afd83c6a979d376d40dd2e1f74a8268ff02346c2515b214cf05a37c03a"
+    },
+    {
+      "path": "packages/core/src/skill-importer.ts",
+      "sha256": "56e58e8316b8625ddc5c745b15350f0c7e56e57b8cd42347d528298b492a737d"
+    },
+    {
+      "path": "packages/core/src/transport.ts",
+      "sha256": "21b0dcec2599e0ade853399f523293eb6cb9edaf5b17c184120ccb3f7ecff746"
+    },
+    {
+      "path": "packages/core/src/trip-blueprint.test.ts",
+      "sha256": "cad7711280a7cf4aa73bf504112098f8985f351a0745909edbd4858c9442b75e"
+    },
+    {
+      "path": "packages/core/src/trip-blueprint.ts",
+      "sha256": "9a5de3aca26c2e6790a2e1ce6437cc01f2f8bef48028dafad334fe0966735776"
+    },
+    {
+      "path": "packages/core/src/workspace-mutation-error.test.ts",
+      "sha256": "a2d5ba7a33cb5fd5df9731d18cdb79b7560a47d19909090701e7ce5b68a9facd"
+    },
+    {
+      "path": "packages/core/src/workspace-mutation-error.ts",
+      "sha256": "eb9e65e56f7f7dabca560ce38eaf62db13ba9259d531308827646daadcb74503"
+    },
+    {
+      "path": "packages/storage/src/agent-work-store.ts",
+      "sha256": "3d37f19778c84f1fb2db235bcf81a451fbe413600b1bb941259a55fc824d03e0"
+    },
+    {
+      "path": "packages/storage/src/assistant-personality.test.ts",
+      "sha256": "64a80ed584a45de29b81d5f05bbeeee488101832bc253db940d0f4b14ff61f3c"
+    },
+    {
+      "path": "packages/storage/src/email-store.ts",
+      "sha256": "8a8ee32899e6fdf5c9c6eca2ec57a5222fff879d3d53c9fb1754acc737f91f60"
+    },
+    {
+      "path": "packages/storage/src/generation-carrier-store.test.ts",
+      "sha256": "d929ca1ab709e72419768cddf03c554282ec701cb3e18ac6a753fd0e999bb6d5"
+    },
+    {
+      "path": "packages/storage/src/generation-carrier-store.ts",
+      "sha256": "9388aac9e6284fa4072b966cfb1b67c04c4d33277e2267f59ec6d7f2b58f20af"
+    },
+    {
+      "path": "packages/storage/src/guarded-schema.ts",
+      "sha256": "2f122ec395178bb82fc1b72eb795bdb2419728789adf05a0a727fdc98ba34bd8"
+    },
+    {
+      "path": "packages/storage/src/index.test.ts",
+      "sha256": "fa9ef54443899269ce56ad82fe7c26a48ea803a6794a3c96f896b66a2937a474"
+    },
+    {
+      "path": "packages/storage/src/index.ts",
+      "sha256": "86134967e7a797891dae48923c9fe8d0a1a824c03e5d3501feb73826665af498"
+    },
+    {
+      "path": "packages/storage/src/post-stop-admission.ts",
+      "sha256": "db7d2f8600b6caec9cd53227376494e151f014ba585670eda12b9b8fa3cd2750"
+    },
+    {
+      "path": "packages/storage/src/readonly-planning-store.ts",
+      "sha256": "9a05e2e71ebe65338015f747db0037505968518431b7d08c86b282e0fc2242b2"
+    },
+    {
+      "path": "packages/storage/src/readonly-schema-admission.ts",
+      "sha256": "2eae823e4002a7f9e4f43c616a4ebbc6029f1c6f38ab421b383785fdd105d09a"
+    }
+  ]
+}

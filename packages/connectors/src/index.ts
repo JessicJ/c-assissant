@@ -1,7 +1,8 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+export { SmtpEmailConnector, validEmailAddress } from "./email.js";
+export type { EmailTransport, EmailSendResult, EmailMessage, SmtpConfiguration } from "./email.js";
 
 export type ConnectorStatus = "available" | "degraded" | "not_configured" | "unauthorized" | "rate_limited" | "unavailable" | "unsupported";
-export type ConnectorProvider = "amap" | "qweather" | "google_maps" | "google_weather" | "telegram" | "whatsapp" | "official_source";
+export type ConnectorProvider = "amap" | "qweather" | "google_maps" | "google_weather" | "official_source";
 
 export interface ConnectorResult<T> {
   status: ConnectorStatus;
@@ -15,13 +16,6 @@ export interface ConnectorResult<T> {
   };
 }
 
-export interface MessagingConnector<TConfiguration, TTextInput, TReceipt> {
-  readonly channel: "telegram" | "whatsapp";
-  configurationStatus(): ConnectorResult<TConfiguration>;
-  sendText(input: TTextInput): Promise<ConnectorResult<TReceipt>>;
-}
-
-/** A Country Pack-owned allowlist entry, not a policy assertion. */
 export interface OfficialSourceDefinition {
   id: string;
   authority: string;
@@ -30,7 +24,7 @@ export interface OfficialSourceDefinition {
   allowedDomains: string[];
   topics: string[];
   language: "en" | "zh" | "multilingual";
-  /** Country Pack-declared refresh interval. It is metadata, not a policy conclusion. */
+  /** Source-declared refresh interval. It is metadata, not a policy conclusion. */
   refreshHours?: number;
 }
 
@@ -50,7 +44,7 @@ export interface OfficialSourceConnectorOptions {
 }
 
 /**
- * Fetches evidence only from a Country Pack's approved official-source
+ * Fetches evidence only from the reviewed destination official-source
  * registry. It deliberately returns facts and a bounded excerpt, never an
  * applicability conclusion for a person's visa, residence, or legal status.
  */
@@ -73,7 +67,7 @@ export class OfficialSourceConnector {
 
   async fetchSnapshot(input: { sourceId: string; url?: string | undefined }): Promise<ConnectorResult<OfficialSourceSnapshot>> {
     const source = this.sourceById.get(input.sourceId.trim());
-    if (!source) return this.failure("unsupported", "This source is not in the active Country Pack registry.", "unknown_source", false);
+    if (!source) return this.failure("unsupported", "This source is not in the reviewed destination source catalog.", "unknown_source", false);
 
     const requestedUrl = input.url?.trim() || source.url;
     const requested = parseApprovedUrl(requestedUrl, source.allowedDomains);
@@ -158,13 +152,20 @@ export interface PlaceFact {
   location: string;
   type: string;
   city: string;
-  /** Normalized provider country name. Used for fail-closed Country Pack selection. */
+  /** Normalized provider country name. Used for destination source selection. */
   country?: string;
   /** Provider-specific administrative city code, when a route endpoint requires it. */
   cityCode?: string;
   district: string;
   /** Current provider venue status; ordinary closed hours are intentionally not represented here. */
   businessStatus?: "operational" | "temporarily_closed" | "permanently_closed" | "unknown";
+  dining?: {
+    category?: string;
+    summary?: string;
+    priceLevel?: string;
+    servesVegetarianFood?: boolean;
+    websiteUrl?: string;
+  };
 }
 
 /** A factual POI returned relative to a user-selected centre point. */
@@ -179,6 +180,7 @@ export interface RouteFact {
   destination: string;
   distanceMeters: number;
   durationSeconds?: number;
+  staticDurationSeconds?: number;
   taxiCostYuan?: number;
   transitCostYuan?: number;
   /** GeoJSON coordinate order decoded from the provider route polyline. */
@@ -194,7 +196,7 @@ export interface GeocodedPlaceFact {
   adcode?: string;
   province: string;
   city: string;
-  /** Normalized provider country name. Used for fail-closed Country Pack selection. */
+  /** Normalized provider country name. Used for destination source selection. */
   country?: string;
   district: string;
   level: string;
@@ -205,6 +207,7 @@ export interface ReverseGeocodedPlaceFact {
   provider?: "google_maps" | "amap";
   formattedAddress: string;
   city: string;
+  country?: string;
   cityCode: string;
   adcode?: string;
   district: string;
@@ -232,7 +235,7 @@ export interface AmapPlaceHandoff {
   requiresUserAction: true;
 }
 
-/** A portable H5 route handoff that can be opened from Telegram or the Web workspace. */
+/** A portable H5 route handoff that can be opened from the Web workspace or a travel email. */
 export interface AmapNavigationHandoff {
   provider: "amap";
   action: "route_planning";
@@ -273,6 +276,11 @@ interface GooglePlaceResponse {
     formattedAddress?: string;
     location?: { latitude?: number; longitude?: number };
     primaryType?: string;
+    primaryTypeDisplayName?: { text?: string };
+    editorialSummary?: { text?: string };
+    priceLevel?: string;
+    servesVegetarianFood?: boolean;
+    websiteUri?: string;
     types?: string[];
     addressComponents?: Array<{ longText?: string; types?: string[] }>;
     businessStatus?: "OPERATIONAL" | "CLOSED_TEMPORARILY" | "CLOSED_PERMANENTLY";
@@ -284,6 +292,7 @@ interface GoogleRoutesResponse {
   routes?: Array<{
     distanceMeters?: number;
     duration?: string;
+    staticDuration?: string;
     polyline?: { encodedPolyline?: string };
     travelAdvisory?: { transitFare?: { units?: string; nanos?: number; currencyCode?: string } };
   }>;
@@ -353,13 +362,23 @@ export class GoogleMapsConnector {
 
   async reverseGeocode(input: { location: string }): Promise<ConnectorResult<ReverseGeocodedPlaceFact>> {
     if (!isCoordinate(input.location)) return this.failure("unsupported", "Reverse geocoding needs valid longitude,latitude coordinates.", "invalid_coordinates", false);
-    return { status: "available", provider: "google_maps", observedAt: new Date().toISOString(), data: { provider: "google_maps", formattedAddress: input.location, city: "", cityCode: "google", district: "" } };
+    if (!this.apiKey) return this.failure("not_configured", "Google Maps Platform is not configured on this instance.", "not_configured", false);
+    const [longitude, latitude] = coordinateNumbers(input.location);
+    const parameters = new URLSearchParams({ latlng: `${latitude},${longitude}`, key: this.apiKey, language: "en" });
+    const response = await this.request<{ status: string; results?: { formatted_address?: string; address_components?: { long_name: string; short_name: string; types: string[] }[] }[] }>(`https://maps.googleapis.com/maps/api/geocode/json?${parameters}`, { method: "GET" });
+    if (!response.ok) return response.failure;
+    const place = response.payload.results?.[0];
+    if (response.payload.status !== "OK" || !place) return this.failure("unavailable", "The pickup area could not be checked right now.", "reverse_geocoding_unavailable", response.payload.status === "OVER_QUERY_LIMIT" || response.payload.status === "UNKNOWN_ERROR");
+    const component = (type: string) => place.address_components?.find(item => item.types.includes(type))?.long_name;
+    const city = component("locality") ?? component("postal_town") ?? component("administrative_area_level_2") ?? "";
+    const country = component("country");
+    return { status: "available", provider: "google_maps", observedAt: new Date().toISOString(), data: { provider: "google_maps", formattedAddress: place.formatted_address ?? "", city, cityCode: city, ...(country ? { country } : {}), district: component("sublocality") ?? component("administrative_area_level_1") ?? "" } };
   }
 
   private async nearbyTextSearch(input: { location: string; query: string; type: string; limit?: number | undefined }): Promise<ConnectorResult<NearbyPlaceFact[]>> {
     if (!isCoordinate(input.location)) return this.failure("unsupported", "Nearby search needs valid longitude,latitude coordinates.", "invalid_coordinates", false);
     const [longitude, latitude] = coordinateNumbers(input.location);
-    const result = await this.textSearch({ textQuery: input.query, includedType: input.type, limit: input.limit, locationBias: { latitude, longitude } });
+    const result = await this.textSearch({ textQuery: input.query, includedType: input.type, limit: input.limit, locationBias: { latitude, longitude }, diningDetails: input.type === "restaurant" });
     if (result.status !== "available" || !result.data) return result as ConnectorResult<never>;
     return {
       ...result,
@@ -367,7 +386,7 @@ export class GoogleMapsConnector {
     };
   }
 
-  private async textSearch(input: { textQuery: string; includedType?: string; limit?: number | undefined; locationBias?: { latitude: number; longitude: number } }): Promise<ConnectorResult<PlaceFact[]>> {
+  private async textSearch(input: { textQuery: string; includedType?: string; limit?: number | undefined; locationBias?: { latitude: number; longitude: number }; diningDetails?: boolean }): Promise<ConnectorResult<PlaceFact[]>> {
     if (!this.apiKey) return this.failure("not_configured", "Google Maps Platform is not configured on this instance.", "not_configured", false);
     const body = {
       textQuery: input.textQuery,
@@ -377,7 +396,7 @@ export class GoogleMapsConnector {
     };
     const response = await this.request<GooglePlaceResponse>("https://places.googleapis.com/v1/places:searchText", {
       method: "POST",
-      headers: { "content-type": "application/json", "X-Goog-Api-Key": this.apiKey, "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location,places.primaryType,places.types,places.addressComponents,places.businessStatus" },
+      headers: { "content-type": "application/json", "X-Goog-Api-Key": this.apiKey, "X-Goog-FieldMask": `places.id,places.displayName,places.formattedAddress,places.location,places.primaryType,places.types,places.addressComponents,places.businessStatus${input.diningDetails ? ",places.primaryTypeDisplayName,places.editorialSummary,places.priceLevel,places.servesVegetarianFood,places.websiteUri" : ""}` },
       body: JSON.stringify(body)
     });
     if (!response.ok) return response.failure;
@@ -394,7 +413,7 @@ export class GoogleMapsConnector {
     const travelMode = input.mode === "driving" ? "DRIVE" : input.mode === "walking" ? "WALK" : "TRANSIT";
     const response = await this.request<GoogleRoutesResponse>("https://routes.googleapis.com/directions/v2:computeRoutes", {
       method: "POST",
-      headers: { "content-type": "application/json", "X-Goog-Api-Key": this.apiKey, "X-Goog-FieldMask": "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline,routes.travelAdvisory.transitFare" },
+      headers: { "content-type": "application/json", "X-Goog-Api-Key": this.apiKey, "X-Goog-FieldMask": "routes.distanceMeters,routes.duration,routes.staticDuration,routes.polyline.encodedPolyline,routes.travelAdvisory.transitFare" },
       body: JSON.stringify({ origin: { location: { latLng: origin } }, destination: { location: { latLng: destination } }, travelMode, ...(input.mode === "driving" ? { routingPreference: "TRAFFIC_AWARE" } : {}), languageCode: "en-US", units: "METRIC" })
     });
     if (!response.ok) return response.failure;
@@ -413,6 +432,7 @@ export class GoogleMapsConnector {
         destination: input.destination,
         distanceMeters: route.distanceMeters!,
         ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+        ...(route.staticDuration && /^\d+(?:\.\d+)?s$/.test(route.staticDuration) ? { staticDurationSeconds: Number(route.staticDuration.slice(0, -1)) } : {}),
         ...(route.polyline?.encodedPolyline ? { geometry: decodeGooglePolyline(route.polyline.encodedPolyline) } : {}),
         ...(input.mode === "transit" && transitFare?.currencyCode === "CNY" ? { transitCostYuan: Number(transitFare.units ?? 0) + Number(transitFare.nanos ?? 0) / 1_000_000_000 } : {}),
         strategy: input.mode === "transit" ? "public_transit_recommended" : "google_maps_recommended"
@@ -1018,7 +1038,7 @@ export function createAmapPlaceHandoff(input: { place: AmapPlace }): AmapPlaceHa
 }
 
 /**
- * Creates an HTTPS Amap navigation handoff suitable for Telegram. Coordinates
+ * Creates an HTTPS Amap navigation handoff suitable for a travel handoff. Coordinates
  * passed here must already be in Amap/GCJ-02 form.
  */
 export function createAmapNavigationHandoff(input: { origin: AmapPlace; destination: AmapPlace; transport: AmapNavigationHandoff["transport"] }): AmapNavigationHandoff {
@@ -1059,28 +1079,28 @@ export function createGoogleMapsNavigationHandoff(input: { origin: PlaceFact; de
 }
 
 /**
- * Opens Uber's mobile rider experience with the current GPS point and the
- * destination address prefilled. It does not request, book, or pay for a ride.
+ * Opens Uber's mobile rider experience with an optional device GPS pickup and
+ * the destination address prefilled; absent pickup lets Uber determine location. It does not request, book, or pay for a ride.
  * Pickup coordinates must be the original WGS-84 values supplied by the device,
  * never the GCJ-02 values converted for Amap route calculations.
  */
 export function createUberRideHandoff(input: {
-  pickup: { latitude: number; longitude: number };
+  pickup?: { latitude: number; longitude: number };
   destination: Pick<AmapPlace, "name" | "address">;
   clientId?: string | undefined;
 }): UberRideHandoff {
-  assertLatitudeLongitude(input.pickup);
-  const pickup = {
+  if (input.pickup) assertLatitudeLongitude(input.pickup);
+  const pickup = input.pickup ? JSON.stringify({
     latitude: input.pickup.latitude,
     longitude: input.pickup.longitude,
     addressLine1: "Current location"
-  };
+  }) : "my_location";
   const dropoff = {
     addressLine1: input.destination.name.slice(0, 80),
     addressLine2: input.destination.address.slice(0, 180)
   };
   const parameters = new URLSearchParams({
-    pickup: JSON.stringify(pickup),
+    pickup,
     "drop[0]": JSON.stringify(dropoff)
   });
   if (input.clientId?.trim()) parameters.set("client_id", input.clientId.trim());
@@ -1090,6 +1110,12 @@ export function createUberRideHandoff(input: {
     url: `https://m.uber.com/looking?${parameters.toString()}`,
     requiresUserAction: true
   };
+}
+
+/** Public HTTPS OneLink wraps Grab's published booking screen; destination entry is manual. */
+export function createGrabRideHandoff(): {provider:"grab";url:string;requiresUserAction:true} {
+  const query=new URLSearchParams({pid:"landi_email",af_dp:"grab://open?screenType=BOOKING",af_force_deeplink:"true",af_web_dp:"https://www.grab.com/download/"});
+  return {provider:"grab",url:`https://grab.onelink.me/2695613898?${query}`,requiresUserAction:true};
 }
 
 function isCoordinate(value: string): boolean {
@@ -1126,7 +1152,14 @@ function normalizeGooglePlace(place: NonNullable<GooglePlaceResponse["places"]>[
     city: component("locality") || component("administrative_area_level_2"),
     country: component("country"),
     district: component("sublocality") || component("administrative_area_level_3"),
-    businessStatus: place.businessStatus === "OPERATIONAL" ? "operational" : place.businessStatus === "CLOSED_TEMPORARILY" ? "temporarily_closed" : place.businessStatus === "CLOSED_PERMANENTLY" ? "permanently_closed" : "unknown"
+    businessStatus: place.businessStatus === "OPERATIONAL" ? "operational" : place.businessStatus === "CLOSED_TEMPORARILY" ? "temporarily_closed" : place.businessStatus === "CLOSED_PERMANENTLY" ? "permanently_closed" : "unknown",
+    ...((place.primaryTypeDisplayName?.text || place.editorialSummary?.text || place.priceLevel || place.websiteUri || place.servesVegetarianFood !== undefined) ? { dining: {
+      ...(place.primaryTypeDisplayName?.text ? { category: place.primaryTypeDisplayName.text.trim() } : {}),
+      ...(place.editorialSummary?.text ? { summary: place.editorialSummary.text.trim() } : {}),
+      ...(place.priceLevel ? { priceLevel: place.priceLevel } : {}),
+      ...(typeof place.servesVegetarianFood === "boolean" ? { servesVegetarianFood: place.servesVegetarianFood } : {}),
+      ...(place.websiteUri && /^https?:\/\//i.test(place.websiteUri) ? { websiteUrl: place.websiteUri } : {})
+    } } : {})
   }];
 }
 
@@ -1199,6 +1232,14 @@ export interface DailyWeatherForecast {
   uvIndex: number;
 }
 
+export interface HourlyWeatherForecast {
+  startAt: string;
+  endAt: string;
+  condition: string;
+  precipitationMm: number;
+  precipitationProbability: number;
+}
+
 export interface WeatherSnapshot {
   provider?: "qweather" | "google_weather";
   location: WeatherLocation;
@@ -1253,6 +1294,21 @@ export class GoogleWeatherConnector {
   configurationStatus(): ConnectorResult<undefined> {
     if (!this.apiKey) return this.failure("not_configured", "GOOGLE_MAPS_API_KEY is not configured for Weather API.", "not_configured", false);
     return { status: "available", provider: "google_weather", observedAt: new Date().toISOString() };
+  }
+
+  async hourlyForecast(input: { coordinates: string }): Promise<ConnectorResult<HourlyWeatherForecast[]>> {
+    if (!isCoordinate(input.coordinates)) return this.failure("unsupported", "Hourly weather needs valid coordinates.", "invalid_coordinates", false);
+    if (!this.apiKey) return this.failure("not_configured", "Google Weather is not configured.", "not_configured", false);
+    const [longitude, latitude] = coordinateNumbers(input.coordinates);
+    const response = await this.get<{ forecastHours?: Array<{ interval?: { startTime?: string; endTime?: string }; weatherCondition?: { description?: { text?: string } }; precipitation?: { qpf?: { quantity?: number }; probability?: { percent?: number } } }> }>("https://weather.googleapis.com/v1/forecast/hours:lookup", { key: this.apiKey, "location.latitude": String(latitude), "location.longitude": String(longitude), hours: "6", pageSize: "6", unitsSystem: "METRIC", languageCode: "en" });
+    if (!response.ok) return response.failure;
+    const hours = (response.payload.forecastHours ?? []).flatMap(hour => {
+      const startAt = hour.interval?.startTime, endAt = hour.interval?.endTime;
+      const precipitationMm = hour.precipitation?.qpf?.quantity, precipitationProbability = hour.precipitation?.probability?.percent;
+      if (!startAt || !endAt || !Number.isFinite(Date.parse(startAt)) || Date.parse(endAt) <= Date.parse(startAt) || !Number.isFinite(precipitationMm) || !Number.isFinite(precipitationProbability)) return [];
+      return [{ startAt, endAt, condition: hour.weatherCondition?.description?.text ?? "", precipitationMm: precipitationMm!, precipitationProbability: precipitationProbability! }];
+    });
+    return { status: "available", provider: "google_weather", observedAt: new Date().toISOString(), data: hours };
   }
 
   async weather(input: { coordinates: string; locationName: string; adminArea?: string | undefined; country?: string | undefined; language?: "en" | "zh" | undefined }): Promise<ConnectorResult<QWeatherWeatherSnapshot>> {
@@ -1530,572 +1586,4 @@ function toQWeatherCoordinates(value: string): string {
 function googleDisplayDate(value: { year?: number; month?: number; day?: number } | undefined): string | undefined {
   if (!value || !Number.isInteger(value.year) || !Number.isInteger(value.month) || !Number.isInteger(value.day)) return undefined;
   return `${String(value.year).padStart(4, "0")}-${String(value.month).padStart(2, "0")}-${String(value.day).padStart(2, "0")}`;
-}
-
-export interface TelegramConfiguration {
-  configured: true;
-}
-
-export interface TelegramBotIdentity {
-  id: number;
-  firstName: string;
-  username?: string | undefined;
-  canJoinGroups: boolean;
-  canReadAllGroupMessages: boolean;
-  supportsInlineQueries: boolean;
-}
-
-export interface TelegramMessageReceipt {
-  chatId: string;
-  messageId: number;
-}
-
-export type TelegramReplyMarkup =
-  | { inline_keyboard: Array<Array<{ text: string; callback_data: string } | { text: string; url: string }>> }
-  | { keyboard: Array<Array<{ text: string; request_location: true }>>; resize_keyboard: true; one_time_keyboard: true };
-
-/** A deliberately small, normalized subset of a Telegram update. */
-export interface TelegramIncomingUpdate {
-  updateId: number;
-  kind: "message" | "callback";
-  chatId: string;
-  chatType: string;
-  userId: string;
-  firstName: string;
-  username?: string;
-  text?: string;
-  callbackId?: string;
-  callbackData?: string;
-  location?: { latitude: number; longitude: number };
-}
-
-export interface TelegramUpdateBatch {
-  updates: TelegramIncomingUpdate[];
-  nextOffset?: number;
-}
-
-export interface TelegramConnectorOptions {
-  botToken?: string | undefined;
-  fetcher?: typeof fetch;
-}
-
-interface TelegramApiResponse<T> {
-  ok?: boolean;
-  result?: T;
-  error_code?: number;
-}
-
-interface TelegramBotPayload {
-  id?: number;
-  first_name?: string;
-  username?: string;
-  can_join_groups?: boolean;
-  can_read_all_group_messages?: boolean;
-  supports_inline_queries?: boolean;
-}
-
-interface TelegramMessagePayload {
-  message_id?: number;
-  chat?: { id?: number | string };
-}
-
-interface TelegramUpdatePayload {
-  update_id?: number;
-  message?: {
-    text?: string;
-    location?: { latitude?: number; longitude?: number };
-    chat?: { id?: number | string; type?: string };
-    from?: { id?: number | string; first_name?: string; username?: string };
-  };
-  callback_query?: {
-    id?: string;
-    data?: string;
-    from?: { id?: number | string; first_name?: string; username?: string };
-    message?: { chat?: { id?: number | string; type?: string } };
-  };
-}
-
-/**
- * Telegram is deliberately configured separately from the agent runtime. The
- * token stays in the local server process and never appears in Connector
- * results, the browser API response, or an agent prompt.
- */
-export class TelegramConnector implements MessagingConnector<TelegramConfiguration, { chatId: string; text: string; replyMarkup?: TelegramReplyMarkup }, TelegramMessageReceipt> {
-  readonly channel = "telegram" as const;
-  private readonly botToken: string | undefined;
-  private readonly fetcher: typeof fetch;
-
-  constructor({ botToken, fetcher = fetch }: TelegramConnectorOptions) {
-    this.botToken = botToken?.trim() || undefined;
-    this.fetcher = fetcher;
-  }
-
-  configurationStatus(): ConnectorResult<TelegramConfiguration> {
-    if (!this.botToken) return this.failure("not_configured", "Telegram is not configured on this instance.", "not_configured", false);
-    return {
-      status: "available",
-      provider: "telegram",
-      observedAt: new Date().toISOString(),
-      data: { configured: true }
-    };
-  }
-
-  async getMe(): Promise<ConnectorResult<TelegramBotIdentity>> {
-    if (!this.botToken) return this.failure("not_configured", "Telegram is not configured on this instance.", "not_configured", false);
-    const response = await this.request<TelegramBotPayload>("getMe");
-    if (!response.ok) return response.failure;
-    const bot = response.payload.result;
-    if (!bot || typeof bot.id !== "number" || !bot.first_name) {
-      return this.failure("degraded", "Telegram did not return a usable bot identity.", "invalid_identity", false);
-    }
-    return {
-      status: "available",
-      provider: "telegram",
-      observedAt: new Date().toISOString(),
-      data: {
-        id: bot.id,
-        firstName: bot.first_name,
-        ...(bot.username ? { username: bot.username } : {}),
-        canJoinGroups: Boolean(bot.can_join_groups),
-        canReadAllGroupMessages: Boolean(bot.can_read_all_group_messages),
-        supportsInlineQueries: Boolean(bot.supports_inline_queries)
-      }
-    };
-  }
-
-  async sendMessage(input: { chatId: string; text: string; replyMarkup?: TelegramReplyMarkup }): Promise<ConnectorResult<TelegramMessageReceipt>> {
-    const chatId = input.chatId.trim();
-    const text = input.text.trim();
-    if (!chatId) return this.failure("unsupported", "A Telegram message needs a paired chat.", "missing_chat", false);
-    if (!text || text.length > 4096) return this.failure("unsupported", "A Telegram message must contain 1 to 4096 characters.", "invalid_message", false);
-    if (!this.botToken) return this.failure("not_configured", "Telegram is not configured on this instance.", "not_configured", false);
-
-    const response = await this.request<TelegramMessagePayload>("sendMessage", { chat_id: chatId, text, ...(input.replyMarkup ? { reply_markup: input.replyMarkup } : {}) });
-    if (!response.ok) return response.failure;
-    const message = response.payload.result;
-    if (!message || typeof message.message_id !== "number") {
-      return this.failure("degraded", "Telegram did not return a usable message receipt.", "invalid_receipt", true);
-    }
-    return {
-      status: "available",
-      provider: "telegram",
-      observedAt: new Date().toISOString(),
-      data: { chatId: String(message.chat?.id ?? chatId), messageId: message.message_id }
-    };
-  }
-
-  async sendText(input: { chatId: string; text: string; replyMarkup?: TelegramReplyMarkup }): Promise<ConnectorResult<TelegramMessageReceipt>> {
-    return this.sendMessage(input);
-  }
-
-  async answerCallbackQuery(input: { callbackId: string; text?: string }): Promise<ConnectorResult<true>> {
-    const callbackId = input.callbackId.trim();
-    if (!callbackId) return this.failure("unsupported", "Telegram callback acknowledgement needs an id.", "missing_callback", false);
-    if (!this.botToken) return this.failure("not_configured", "Telegram is not configured on this instance.", "not_configured", false);
-    const response = await this.request<true>("answerCallbackQuery", { callback_query_id: callbackId, ...(input.text?.trim() ? { text: input.text.trim().slice(0, 200) } : {}) });
-    if (!response.ok) return response.failure;
-    return { status: "available", provider: "telegram", observedAt: new Date().toISOString(), data: true };
-  }
-
-  async getUpdates(input: { offset?: number; timeoutSeconds?: number } = {}): Promise<ConnectorResult<TelegramUpdateBatch>> {
-    if (!this.botToken) return this.failure("not_configured", "Telegram is not configured on this instance.", "not_configured", false);
-    if (input.offset !== undefined && (!Number.isInteger(input.offset) || input.offset < 0)) return this.failure("unsupported", "Telegram update offset must be a non-negative whole number.", "invalid_offset", false);
-    const timeoutSeconds = input.timeoutSeconds ?? 0;
-    if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 0 || timeoutSeconds > 8) return this.failure("unsupported", "Telegram update polling timeout must be between 0 and 8 seconds.", "invalid_timeout", false);
-    const response = await this.request<TelegramUpdatePayload[]>("getUpdates", { timeout: timeoutSeconds, ...(input.offset === undefined ? {} : { offset: input.offset }), allowed_updates: ["message", "callback_query"] });
-    if (!response.ok) return response.failure;
-    const rawUpdates = response.payload.result ?? [];
-    const updates = rawUpdates.flatMap((update): TelegramIncomingUpdate[] => {
-      const updateId = update.update_id;
-      const message = update.message;
-      const callback = update.callback_query;
-      if (callback) {
-        const chatId = callback.message?.chat?.id;
-        const chatType = callback.message?.chat?.type?.trim();
-        const from = callback.from;
-        if (typeof updateId !== "number" || !Number.isInteger(updateId) || !callback.id?.trim() || !chatType || chatId === undefined || from?.id === undefined || !from.first_name?.trim()) return [];
-        return [{ updateId, kind: "callback", chatId: String(chatId), chatType, userId: String(from.id), firstName: from.first_name.trim(), callbackId: callback.id.trim(), ...(from.username?.trim() ? { username: from.username.trim() } : {}), ...(callback.data?.trim() ? { callbackData: callback.data.trim() } : {}) }];
-      }
-      const chatId = message?.chat?.id;
-      const from = message?.from;
-      const chatType = message?.chat?.type?.trim();
-      if (typeof updateId !== "number" || !Number.isInteger(updateId) || !chatType || chatId === undefined || from?.id === undefined || !from.first_name?.trim()) return [];
-      return [{
-        updateId,
-        kind: "message",
-        chatId: String(chatId),
-        chatType,
-        userId: String(from.id),
-        firstName: from.first_name.trim(),
-        ...(from.username?.trim() ? { username: from.username.trim() } : {}),
-        ...(message?.text?.trim() ? { text: message.text.trim() } : {}),
-        ...(typeof message?.location?.latitude === "number" && typeof message.location.longitude === "number" ? { location: { latitude: message.location.latitude, longitude: message.location.longitude } } : {})
-      }];
-    });
-    const updateIds = rawUpdates.flatMap((update) => typeof update.update_id === "number" && Number.isInteger(update.update_id) ? [update.update_id] : []);
-    const latestUpdateId = updateIds.length ? Math.max(...updateIds) : undefined;
-    return { status: "available", provider: "telegram", observedAt: new Date().toISOString(), data: { updates, ...(latestUpdateId === undefined ? {} : { nextOffset: latestUpdateId + 1 }) } };
-  }
-
-  private async request<T>(method: "getMe" | "sendMessage" | "getUpdates" | "answerCallbackQuery", body?: Record<string, unknown>): Promise<{ ok: true; payload: TelegramApiResponse<T> } | { ok: false; failure: ConnectorResult<never> }> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000);
-    try {
-      const response = await this.fetcher(`https://api.telegram.org/bot${this.botToken}/${method}`, {
-        method: "POST",
-        ...(body ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}),
-        signal: controller.signal
-      });
-      const payload = await response.json().catch(() => undefined) as TelegramApiResponse<T> | undefined;
-      if (!response.ok) return { ok: false, failure: this.fromTelegramFailure(payload, response.status) };
-      if (!payload || payload.ok !== true) return { ok: false, failure: this.fromTelegramFailure(payload, payload?.error_code) };
-      return { ok: true, payload };
-    } catch (error) {
-      return { ok: false, failure: this.failure("unavailable", "Telegram could not be reached right now.", error instanceof Error && error.name === "AbortError" ? "timeout" : "network_error", true) };
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-
-  private fromTelegramFailure(payload: TelegramApiResponse<unknown> | undefined, httpStatus: number | undefined): ConnectorResult<never> {
-    const code = payload?.error_code ?? httpStatus;
-    const status = code === 401 || code === 403 ? "unauthorized" : code === 429 ? "rate_limited" : code && code >= 500 ? "unavailable" : "degraded";
-    return this.failure(status, status === "unauthorized" ? "Telegram rejected the configured bot token." : "Telegram did not accept the request.", `telegram_${code ?? "error"}`, status === "rate_limited" || status === "unavailable");
-  }
-
-  private failure(status: Exclude<ConnectorStatus, "available">, message: string, code: string, retryable: boolean): ConnectorResult<never> {
-    return { status, provider: "telegram", observedAt: new Date().toISOString(), failure: { code, message, retryable } };
-  }
-}
-
-export type WhatsAppReadinessState = "webhook_pending" | "template_pending" | "available";
-
-export interface WhatsAppConfiguration {
-  state: WhatsAppReadinessState;
-  outboundConfigured: boolean;
-  webhookConfigured: boolean;
-  reminderTemplateConfigured: boolean;
-}
-
-export interface WhatsAppPhoneIdentity {
-  phoneNumberId: string;
-  displayPhoneNumber: string;
-  verifiedName: string;
-  qualityRating?: string;
-}
-
-export interface WhatsAppMessageReceipt {
-  recipientId: string;
-  messageId: string;
-}
-
-export interface WhatsAppTextInput {
-  to: string;
-  text: string;
-  /** Free-form messages are allowed only while the user-opened service window is active. */
-  serviceWindowExpiresAt: string;
-}
-
-export interface WhatsAppTemplateInput {
-  to: string;
-  templateName: string;
-  languageCode: string;
-  bodyParameters?: string[];
-}
-
-export interface WhatsAppIncomingMessage {
-  messageId: string;
-  from: string;
-  profileName?: string;
-  receivedAt: string;
-  serviceWindowExpiresAt: string;
-  kind: "text" | "button" | "list" | "location" | "unsupported";
-  text?: string;
-  actionId?: string;
-  location?: { latitude: number; longitude: number };
-}
-
-export interface WhatsAppDeliveryStatus {
-  messageId: string;
-  recipientId: string;
-  status: "sent" | "delivered" | "read" | "failed" | "unknown";
-  observedAt: string;
-}
-
-export interface WhatsAppWebhookBatch {
-  messages: WhatsAppIncomingMessage[];
-  deliveryStatuses: WhatsAppDeliveryStatus[];
-}
-
-export interface WhatsAppConnectorOptions {
-  accessToken?: string | undefined;
-  phoneNumberId?: string | undefined;
-  businessAccountId?: string | undefined;
-  appSecret?: string | undefined;
-  verifyToken?: string | undefined;
-  reminderTemplateName?: string | undefined;
-  graphApiVersion?: string | undefined;
-  fetcher?: typeof fetch | undefined;
-}
-
-interface WhatsAppApiErrorPayload {
-  error?: { code?: number; message?: string };
-}
-
-interface WhatsAppSendPayload extends WhatsAppApiErrorPayload {
-  contacts?: Array<{ wa_id?: string }>;
-  messages?: Array<{ id?: string }>;
-}
-
-interface WhatsAppPhonePayload extends WhatsAppApiErrorPayload {
-  id?: string;
-  display_phone_number?: string;
-  verified_name?: string;
-  quality_rating?: string;
-}
-
-interface WhatsAppWebhookMessagePayload {
-  id?: string;
-  from?: string;
-  timestamp?: string;
-  type?: string;
-  text?: { body?: string };
-  location?: { latitude?: number; longitude?: number };
-  interactive?: {
-    type?: string;
-    button_reply?: { id?: string; title?: string };
-    list_reply?: { id?: string; title?: string };
-  };
-  button?: { payload?: string; text?: string };
-}
-
-interface WhatsAppWebhookPayload {
-  object?: string;
-  entry?: Array<{
-    changes?: Array<{
-      field?: string;
-      value?: {
-        contacts?: Array<{ wa_id?: string; profile?: { name?: string } }>;
-        messages?: WhatsAppWebhookMessagePayload[];
-        statuses?: Array<{ id?: string; recipient_id?: string; status?: string; timestamp?: string }>;
-      };
-    }>;
-  }>;
-}
-
-/**
- * Optional WhatsApp Business Platform adapter. Credentials stay in the local
- * server process. Free-form outbound text is refused outside a user-opened
- * 24-hour service window; proactive reminders must use an approved template.
- */
-export class WhatsAppConnector implements MessagingConnector<WhatsAppConfiguration, WhatsAppTextInput, WhatsAppMessageReceipt> {
-  readonly channel = "whatsapp" as const;
-  private readonly accessToken: string | undefined;
-  private readonly phoneNumberId: string | undefined;
-  private readonly businessAccountId: string | undefined;
-  private readonly appSecret: string | undefined;
-  private readonly verifyToken: string | undefined;
-  private readonly reminderTemplateName: string | undefined;
-  private readonly graphApiVersion: string;
-  private readonly fetcher: typeof fetch;
-
-  constructor({ accessToken, phoneNumberId, businessAccountId, appSecret, verifyToken, reminderTemplateName, graphApiVersion = "v25.0", fetcher = fetch }: WhatsAppConnectorOptions) {
-    this.accessToken = accessToken?.trim() || undefined;
-    this.phoneNumberId = phoneNumberId?.trim() || undefined;
-    this.businessAccountId = businessAccountId?.trim() || undefined;
-    this.appSecret = appSecret?.trim() || undefined;
-    this.verifyToken = verifyToken?.trim() || undefined;
-    this.reminderTemplateName = reminderTemplateName?.trim() || undefined;
-    this.graphApiVersion = /^v\d+\.\d+$/.test(graphApiVersion.trim()) ? graphApiVersion.trim() : "v25.0";
-    this.fetcher = fetcher;
-  }
-
-  configurationStatus(): ConnectorResult<WhatsAppConfiguration> {
-    const outboundConfigured = Boolean(this.accessToken && this.phoneNumberId);
-    const webhookConfigured = Boolean(this.appSecret && this.verifyToken);
-    const reminderTemplateConfigured = Boolean(this.reminderTemplateName);
-    if (!this.accessToken && !this.phoneNumberId && !this.appSecret && !this.verifyToken && !this.reminderTemplateName) {
-      return this.failure("not_configured", "WhatsApp is not configured on this instance.", "not_configured", false);
-    }
-    if (!outboundConfigured) {
-      return this.failure("degraded", "WhatsApp needs both an access token and phone number ID.", "incomplete_configuration", false);
-    }
-    const state: WhatsAppReadinessState = !webhookConfigured ? "webhook_pending" : !reminderTemplateConfigured ? "template_pending" : "available";
-    return {
-      status: state === "available" ? "available" : "degraded",
-      provider: "whatsapp",
-      observedAt: new Date().toISOString(),
-      data: { state, outboundConfigured, webhookConfigured, reminderTemplateConfigured },
-      ...(state === "available" ? {} : { failure: { code: state, message: state === "webhook_pending" ? "WhatsApp outbound messaging is configured; add webhook verification secrets to receive messages." : "WhatsApp messaging is configured; approve and configure a utility template for proactive reminders.", retryable: false } })
-    };
-  }
-
-  async verifyPhoneNumber(): Promise<ConnectorResult<WhatsAppPhoneIdentity>> {
-    if (!this.accessToken || !this.phoneNumberId) return this.failure("not_configured", "WhatsApp outbound messaging is not configured on this instance.", "not_configured", false);
-    const result = await this.request<WhatsAppPhonePayload>(this.phoneNumberId, { method: "GET", query: { fields: "id,display_phone_number,verified_name,quality_rating" } });
-    if (!result.ok) return result.failure;
-    const payload = result.payload;
-    if (!payload.id || !payload.display_phone_number || !payload.verified_name) return this.failure("degraded", "WhatsApp did not return a usable phone identity.", "invalid_identity", false);
-    return {
-      status: "available",
-      provider: "whatsapp",
-      observedAt: new Date().toISOString(),
-      data: { phoneNumberId: payload.id, displayPhoneNumber: payload.display_phone_number, verifiedName: payload.verified_name, ...(payload.quality_rating ? { qualityRating: payload.quality_rating } : {}) }
-    };
-  }
-
-  async sendText(input: WhatsAppTextInput): Promise<ConnectorResult<WhatsAppMessageReceipt>> {
-    const recipient = normalizeWhatsAppRecipient(input.to);
-    const text = input.text.trim();
-    const expiresAt = Date.parse(input.serviceWindowExpiresAt);
-    if (!recipient) return this.failure("unsupported", "A WhatsApp message needs a valid international recipient number.", "invalid_recipient", false);
-    if (!text || text.length > 4096) return this.failure("unsupported", "A WhatsApp text message must contain 1 to 4096 characters.", "invalid_message", false);
-    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return this.failure("unsupported", "Free-form WhatsApp text requires an active user-opened service window; use an approved template instead.", "template_required", false);
-    return this.sendMessagePayload(recipient, { messaging_product: "whatsapp", recipient_type: "individual", to: recipient, type: "text", text: { preview_url: false, body: text } });
-  }
-
-  async sendTemplate(input: WhatsAppTemplateInput): Promise<ConnectorResult<WhatsAppMessageReceipt>> {
-    const recipient = normalizeWhatsAppRecipient(input.to);
-    const templateName = input.templateName.trim();
-    const languageCode = input.languageCode.trim();
-    if (!recipient) return this.failure("unsupported", "A WhatsApp template needs a valid international recipient number.", "invalid_recipient", false);
-    if (!/^[a-z0-9_]{1,512}$/.test(templateName) || !/^[A-Za-z]{2,3}(?:_[A-Za-z]{2})?$/.test(languageCode)) return this.failure("unsupported", "WhatsApp template name or language code is invalid.", "invalid_template", false);
-    const parameters = (input.bodyParameters ?? []).map((value) => value.trim()).filter(Boolean);
-    if (parameters.some((value) => value.length > 1024)) return this.failure("unsupported", "A WhatsApp template parameter is too long.", "invalid_template_parameter", false);
-    return this.sendMessagePayload(recipient, {
-      messaging_product: "whatsapp",
-      recipient_type: "individual",
-      to: recipient,
-      type: "template",
-      template: {
-        name: templateName,
-        language: { code: languageCode },
-        ...(parameters.length ? { components: [{ type: "body", parameters: parameters.map((text) => ({ type: "text", text })) }] } : {})
-      }
-    });
-  }
-
-  defaultReminderTemplate(): string | undefined {
-    return this.reminderTemplateName;
-  }
-
-  verifyWebhookChallenge(input: { mode?: string | undefined; verifyToken?: string | undefined; challenge?: string | undefined }): ConnectorResult<string> {
-    if (!this.verifyToken) return this.failure("not_configured", "WhatsApp webhook verification is not configured.", "webhook_not_configured", false);
-    if (input.mode !== "subscribe" || input.verifyToken !== this.verifyToken || !input.challenge) return this.failure("unauthorized", "WhatsApp webhook verification failed.", "webhook_verification_failed", false);
-    return { status: "available", provider: "whatsapp", observedAt: new Date().toISOString(), data: input.challenge };
-  }
-
-  receiveWebhook(input: { rawBody: string | Uint8Array; signature?: string | undefined }): ConnectorResult<WhatsAppWebhookBatch> {
-    if (!this.appSecret) return this.failure("not_configured", "WhatsApp webhook signature verification is not configured.", "webhook_not_configured", false);
-    const rawBody = typeof input.rawBody === "string" ? Buffer.from(input.rawBody, "utf8") : Buffer.from(input.rawBody);
-    if (!verifyWhatsAppSignature(rawBody, input.signature, this.appSecret)) return this.failure("unauthorized", "WhatsApp webhook signature verification failed.", "invalid_webhook_signature", false);
-    let payload: WhatsAppWebhookPayload;
-    try {
-      payload = JSON.parse(rawBody.toString("utf8")) as WhatsAppWebhookPayload;
-    } catch {
-      return this.failure("degraded", "WhatsApp sent an unreadable webhook payload.", "invalid_webhook_payload", false);
-    }
-    if (payload.object !== "whatsapp_business_account") return this.failure("unsupported", "The webhook payload is not a WhatsApp Business Account event.", "unsupported_webhook_object", false);
-    const messages: WhatsAppIncomingMessage[] = [];
-    const deliveryStatuses: WhatsAppDeliveryStatus[] = [];
-    for (const entry of payload.entry ?? []) for (const change of entry.changes ?? []) {
-      if (change.field !== "messages") continue;
-      const value = change.value;
-      const profileNames = new Map((value?.contacts ?? []).flatMap((contact) => contact.wa_id ? [[contact.wa_id, contact.profile?.name?.trim()]] : []));
-      for (const message of value?.messages ?? []) {
-        const normalized = normalizeWhatsAppIncoming(message, profileNames.get(message.from ?? ""));
-        if (normalized) messages.push(normalized);
-      }
-      for (const status of value?.statuses ?? []) {
-        if (!status.id || !status.recipient_id) continue;
-        deliveryStatuses.push({ messageId: status.id, recipientId: status.recipient_id, status: normalizeWhatsAppDeliveryStatus(status.status), observedAt: whatsAppTimestamp(status.timestamp) });
-      }
-    }
-    return { status: "available", provider: "whatsapp", observedAt: new Date().toISOString(), data: { messages, deliveryStatuses } };
-  }
-
-  private async sendMessagePayload(recipient: string, payload: Record<string, unknown>): Promise<ConnectorResult<WhatsAppMessageReceipt>> {
-    if (!this.accessToken || !this.phoneNumberId) return this.failure("not_configured", "WhatsApp outbound messaging is not configured on this instance.", "not_configured", false);
-    const result = await this.request<WhatsAppSendPayload>(`${this.phoneNumberId}/messages`, { method: "POST", body: payload });
-    if (!result.ok) return result.failure;
-    const messageId = result.payload.messages?.[0]?.id;
-    if (!messageId) return this.failure("degraded", "WhatsApp did not return a usable message receipt.", "invalid_receipt", true);
-    return { status: "available", provider: "whatsapp", observedAt: new Date().toISOString(), data: { recipientId: result.payload.contacts?.[0]?.wa_id ?? recipient, messageId } };
-  }
-
-  private async request<T extends WhatsAppApiErrorPayload>(path: string, input: { method: "GET" | "POST"; query?: Record<string, string>; body?: Record<string, unknown> }): Promise<{ ok: true; payload: T } | { ok: false; failure: ConnectorResult<never> }> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000);
-    try {
-      const url = new URL(`https://graph.facebook.com/${this.graphApiVersion}/${path}`);
-      for (const [key, value] of Object.entries(input.query ?? {})) url.searchParams.set(key, value);
-      const response = await this.fetcher(url, {
-        method: input.method,
-        headers: { authorization: `Bearer ${this.accessToken}`, ...(input.body ? { "content-type": "application/json" } : {}) },
-        ...(input.body ? { body: JSON.stringify(input.body) } : {}),
-        signal: controller.signal
-      });
-      const payload = await response.json().catch(() => undefined) as T | undefined;
-      if (!response.ok || !payload) return { ok: false, failure: this.fromWhatsAppFailure(payload, response.status) };
-      return { ok: true, payload };
-    } catch (error) {
-      return { ok: false, failure: this.failure("unavailable", "WhatsApp could not be reached right now.", error instanceof Error && error.name === "AbortError" ? "timeout" : "network_error", true) };
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-
-  private fromWhatsAppFailure(payload: WhatsAppApiErrorPayload | undefined, httpStatus: number): ConnectorResult<never> {
-    const code = payload?.error?.code ?? httpStatus;
-    const status: Exclude<ConnectorStatus, "available"> = httpStatus === 401 || httpStatus === 403 || code === 190
-      ? "unauthorized"
-      : httpStatus === 429 || code === 4 || code === 80007
-        ? "rate_limited"
-        : httpStatus >= 500
-          ? "unavailable"
-          : "degraded";
-    const message = status === "unauthorized" ? "WhatsApp rejected the configured access token or permissions." : status === "rate_limited" ? "WhatsApp rate-limited this instance." : "WhatsApp did not accept the request.";
-    return this.failure(status, message, `whatsapp_${code}`, status === "rate_limited" || status === "unavailable");
-  }
-
-  private failure(status: Exclude<ConnectorStatus, "available">, message: string, code: string, retryable: boolean): ConnectorResult<never> {
-    return { status, provider: "whatsapp", observedAt: new Date().toISOString(), failure: { code, message, retryable } };
-  }
-}
-
-function normalizeWhatsAppRecipient(value: string): string | undefined {
-  const normalized = value.trim().replace(/^\+/, "").replace(/[\s()-]/g, "");
-  return /^\d{7,15}$/.test(normalized) ? normalized : undefined;
-}
-
-function verifyWhatsAppSignature(rawBody: Uint8Array, signature: string | undefined, appSecret: string): boolean {
-  if (!signature?.startsWith("sha256=")) return false;
-  const supplied = signature.slice(7);
-  if (!/^[a-f0-9]{64}$/i.test(supplied)) return false;
-  const expected = createHmac("sha256", appSecret).update(rawBody).digest();
-  const actual = Buffer.from(supplied, "hex");
-  return expected.length === actual.length && timingSafeEqual(expected, actual);
-}
-
-function normalizeWhatsAppIncoming(message: WhatsAppWebhookMessagePayload, profileName: string | undefined): WhatsAppIncomingMessage | undefined {
-  if (!message.id || !message.from) return undefined;
-  const receivedAt = whatsAppTimestamp(message.timestamp);
-  const base = { messageId: message.id, from: message.from, ...(profileName ? { profileName } : {}), receivedAt, serviceWindowExpiresAt: new Date(Date.parse(receivedAt) + 24 * 60 * 60_000).toISOString() };
-  if (message.type === "text" && message.text?.body?.trim()) return { ...base, kind: "text", text: message.text.body.trim() };
-  if (message.type === "location" && typeof message.location?.latitude === "number" && typeof message.location.longitude === "number") return { ...base, kind: "location", location: { latitude: message.location.latitude, longitude: message.location.longitude } };
-  const button = message.interactive?.button_reply;
-  if (message.type === "interactive" && button?.id) return { ...base, kind: "button", actionId: button.id, ...(button.title?.trim() ? { text: button.title.trim() } : {}) };
-  const list = message.interactive?.list_reply;
-  if (message.type === "interactive" && list?.id) return { ...base, kind: "list", actionId: list.id, ...(list.title?.trim() ? { text: list.title.trim() } : {}) };
-  if (message.type === "button" && message.button?.payload) return { ...base, kind: "button", actionId: message.button.payload, ...(message.button.text?.trim() ? { text: message.button.text.trim() } : {}) };
-  return { ...base, kind: "unsupported" };
-}
-
-function normalizeWhatsAppDeliveryStatus(value: string | undefined): WhatsAppDeliveryStatus["status"] {
-  return value === "sent" || value === "delivered" || value === "read" || value === "failed" ? value : "unknown";
-}
-
-function whatsAppTimestamp(value: string | undefined): string {
-  const seconds = Number(value);
-  return Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000).toISOString() : new Date().toISOString();
 }

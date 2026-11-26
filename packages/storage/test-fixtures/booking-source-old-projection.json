@@ -1,0 +1,168 @@
+{
+  "provenance": {
+    "sourceHead": "7bda1fccc6c694215631c9367d5065c2014ebc77",
+    "sourcePath": "apps/server/src/booking-plan-sync.ts",
+    "sourceSha256": "c05a18c99ec5ec15e92506931d93a69a2543d8f7e0ce570d56ce1be98d0f1b66",
+    "description": "由精确旧提交的完整公开投影函数实际生成；旧段状态和源映射确实缺失，未使用新投影删字段伪造历史。"
+  },
+  "sources": [
+    {
+      "id": "虚构旧住宿源",
+      "type": "accommodation",
+      "title": "虚构固定住宿",
+      "constraintStrength": "hard",
+      "segments": [
+        {
+          "id": "虚构住宿段",
+          "title": "虚构住宿期间",
+          "segmentType": "hotel_stay",
+          "status": "confirmed",
+          "constraintStrength": "hard",
+          "fixedCommitment": true,
+          "needsReviewReasons": [],
+          "startAtLocal": "2026-12-01T15:00",
+          "startTimeZone": "UTC",
+          "endAtLocal": "2026-12-03T11:00",
+          "endTimeZone": "UTC",
+          "location": "虚构住宿地址"
+        },
+        {
+          "id": "虚构行李段",
+          "title": "虚构行李服务",
+          "segmentType": "event_window",
+          "status": "confirmed",
+          "constraintStrength": "soft",
+          "fixedCommitment": false,
+          "needsReviewReasons": [],
+          "startAtLocal": "2026-12-02T12:00",
+          "startTimeZone": "UTC",
+          "endAtLocal": "2026-12-02T13:00",
+          "endTimeZone": "UTC",
+          "origin": "虚构住宿地址",
+          "destination": "虚构领取处",
+          "location": "虚构服务处"
+        }
+      ],
+      "planningSessionId": "虚构旧会话",
+      "status": "confirmed",
+      "source": "user",
+      "sourceHash": "虚构来源摘要0",
+      "sourceLabel": "旅行者测试声明",
+      "importedAt": "2026-11-01T00:00:00.000Z",
+      "updatedAt": "2026-11-01T00:00:00.000Z"
+    },
+    {
+      "id": "虚构旧车辆源",
+      "type": "rental_car",
+      "title": "虚构固定车辆",
+      "constraintStrength": "soft",
+      "segments": [
+        {
+          "id": "虚构取车段",
+          "title": "虚构取车",
+          "segmentType": "rental_pickup",
+          "status": "confirmed",
+          "constraintStrength": "hard",
+          "fixedCommitment": true,
+          "needsReviewReasons": [],
+          "startAtLocal": "2026-12-01T09:00",
+          "startTimeZone": "UTC",
+          "location": "虚构车辆门店"
+        },
+        {
+          "id": "虚构还车段",
+          "title": "虚构已忽略还车资料",
+          "segmentType": "rental_return",
+          "status": "confirmed",
+          "constraintStrength": "ignored",
+          "fixedCommitment": false,
+          "needsReviewReasons": [],
+          "startAtLocal": "2026-12-03T12:00",
+          "startTimeZone": "UTC",
+          "location": "虚构车辆门店"
+        }
+      ],
+      "planningSessionId": "虚构旧会话",
+      "status": "confirmed",
+      "source": "user",
+      "sourceHash": "虚构来源摘要1",
+      "sourceLabel": "旅行者测试声明",
+      "importedAt": "2026-11-01T00:00:00.000Z",
+      "updatedAt": "2026-11-01T00:00:00.000Z"
+    }
+  ],
+  "constraints": [
+    {
+      "id": "booking-虚构旧住宿源",
+      "type": "accommodation",
+      "title": "虚构固定住宿",
+      "status": "confirmed",
+      "sourceLabel": "旅行者测试声明",
+      "importedAt": "2026-11-01T00:00:00.000Z",
+      "constraintStrength": "hard",
+      "segments": [
+        {
+          "id": "segment-虚构住宿段",
+          "segmentType": "hotel_stay",
+          "title": "虚构住宿期间",
+          "startAtLocal": "2026-12-01T15:00",
+          "startTimeZone": "UTC",
+          "endAtLocal": "2026-12-03T11:00",
+          "endTimeZone": "UTC",
+          "location": "虚构住宿地址",
+          "constraintStrength": "hard",
+          "fixedCommitment": true,
+          "needsReviewReasons": []
+        },
+        {
+          "id": "segment-虚构行李段",
+          "segmentType": "event_window",
+          "title": "虚构行李服务",
+          "startAtLocal": "2026-12-02T12:00",
+          "startTimeZone": "UTC",
+          "endAtLocal": "2026-12-02T13:00",
+          "endTimeZone": "UTC",
+          "origin": "虚构住宿地址",
+          "destination": "虚构领取处",
+          "location": "虚构服务处",
+          "constraintStrength": "soft",
+          "fixedCommitment": false,
+          "needsReviewReasons": []
+        }
+      ]
+    },
+    {
+      "id": "booking-虚构旧车辆源",
+      "type": "rental_car",
+      "title": "虚构固定车辆",
+      "status": "confirmed",
+      "sourceLabel": "旅行者测试声明",
+      "importedAt": "2026-11-01T00:00:00.000Z",
+      "constraintStrength": "soft",
+      "segments": [
+        {
+          "id": "segment-虚构取车段",
+          "segmentType": "rental_pickup",
+          "title": "虚构取车",
+          "startAtLocal": "2026-12-01T09:00",
+          "startTimeZone": "UTC",
+          "location": "虚构车辆门店",
+          "constraintStrength": "hard",
+          "fixedCommitment": true,
+          "needsReviewReasons": []
+        },
+        {
+          "id": "segment-虚构还车段",
+          "segmentType": "rental_return",
+          "title": "虚构已忽略还车资料",
+          "startAtLocal": "2026-12-03T12:00",
+          "startTimeZone": "UTC",
+          "location": "虚构车辆门店",
+          "constraintStrength": "ignored",
+          "fixedCommitment": false,
+          "needsReviewReasons": []
+        }
+      ]
+    }
+  ]
+}

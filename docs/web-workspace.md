@@ -1,6 +1,6 @@
 # Legacy Web Workspace Notes
 
-> Project record. This file preserves detailed interface decisions from an earlier implementation phase. It is not a top-level design source. Current product behavior is defined by `landi-product-baseline.md`, and the complete cross-channel flow is defined by `travel-planning-and-execution-flow.md`.
+> Project record. This file preserves detailed interface decisions from an earlier implementation phase. It is not a top-level design source. 当前产品范围由 `product-scope.md` 拥有，旅行阶段及精确确认／应用由 `email-execution.md` 拥有；下方历史手机、聊天及一律确认描述不构成当前义务。
 
 The Web workspace is Landi's desktop product surface. It replaces a desktop client; it is not an engineering dashboard.
 
@@ -34,7 +34,7 @@ A Plan workspace has five embedded views:
 
 The current Plan screen also shows an **evidence preparation** card. It tells the user which saved facts or approved official snapshot are still needed before a separate policy review can begin. “Ready for review” is never presented as an eligibility or policy conclusion.
 
-Initial generation uses a server-backed conversational Planning Session rather than a questionnaire. Landi collects only route-shaping facts, presents a version-bound proposal, and generates a complete Plan only after explicit proposal confirmation. Refreshing the browser restores the current session.
+Initial generation uses a server-backed conversational Planning Session rather than a questionnaire. Landi collects only route-shaping facts, presents a version-bound proposal, and generates a complete Plan only after explicit proposal confirmation. Refreshing the browser restores the current session. Track the editable draft and each submitted message separately by session and message identity. A draft whose save result is unconfirmed remains unknown after refresh; never call it unsent or saved without matching evidence. An earlier message status must not describe a newer draft. New edits invalidate the old draft notice, and late results must not clear or overwrite a newer draft or another session.
 
 Before activation, the user sees the complete final Plan in normal presentation. One confirmation activates that exact Plan version and its declared automation scope. Later material changes create a new version that must be confirmed when they exceed the existing scope.
 

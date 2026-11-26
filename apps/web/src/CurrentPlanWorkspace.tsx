@@ -1,14 +1,18 @@
-import { useState } from "react";
-import type { DestinationArrivalEvent, DirectBlueprintReplanRequirement, DirectBlueprintRevisionBatchMetadata, Plan, PlanChangeSet, PlanPlacePriority, PlanReplacementAudit, TripBlueprint, WorkspaceSnapshot } from "@c-assistant/core";
-import { abandonActivePlan, ApiRequestError, applyDirectBlueprintRevisionBatch, deletePlan, prepareDirectBlueprintAssistedReplanning, refreshPlanRoutes, sendAgentChat, undoPlanReplacement, type DirectBlueprintRevisionInput } from "./api-client.js";
+import { useEffect, useRef, useState } from "react";
+import type { DestinationArrivalEvent, DirectBlueprintReplanRequirement, DirectBlueprintRevisionBatchMetadata, Plan, PlanChangeSet, PlanReplacementAudit, TripBlueprint, WorkspaceSnapshot } from "@c-assistant/core";
+import { abandonActivePlan, ApiRequestError, isDefiniteMutationRejection, safePlanError, getDirectBlueprintReceipt, applyDirectBlueprintRevisionBatch, deletePlan, getWorkspace, prepareDirectBlueprintAssistedReplanning, refreshPlanRoutes, sendAgentChat, undoDirectBlueprintRevision, undoPlanReplacement, type DirectBlueprintRevisionInput, type DirectBlueprintRevisionBatchRequest } from "./api-client.js";
+import { blueprintOperationDigest, validatePendingBlueprintOperation, acknowledgeBlueprintOperation, clearPendingBlueprintOperation, persistPendingBlueprintOperation, readPendingBlueprintOperation, receiptMatchesOperation, unknownBlueprintOperationMessage, type PendingBlueprintOperation, type SubmittedDraft } from "./direct-blueprint-recovery.js";
+import { reconcilePlanMutationFailure } from "./plan-mutation-recovery.js";
 import { BookingImportPanel } from "./BookingImportPanel.js";
+import { getBookingRelationshipReview } from "./api-client.js";
+import { rebaseReviewedBlueprintDraft, reviewRecoveryBinding } from "./direct-blueprint-recovery.js";
 import { LandiBlueprintWorkspace } from "./LandiBlueprintWorkspace.js";
 import { PlanMapWorkspace } from "./PlanMapWorkspace.js";
 import { PlanChangeNotice, PlanCommandCenter, PlanDecisionBoard, PlanGrounding, PlanReplacementNotice } from "./PlanStatusWidgets.js";
 import { PlanRemindersView, PlanSourcesView, WorkspaceEmpty } from "./PlanSupportingViews.js";
 import { FeaturedChecklist, FeaturedTimeline, PlanContentSection } from "./PlanTaskSections.js";
 import { currentPlanReadModel } from "./current-plan-read-model.js";
-import { automaticRouteRefreshRequestForRevision, routeRefreshCompletedStatus, routeRefreshSavedButUncheckedStatus, routeRefreshUncheckedStatus, routeRefreshWorkingStatus } from "./current-plan-route-refresh.js";
+import { routeRefreshCompletedStatus, routeRefreshUncheckedStatus, routeRefreshWorkingStatus } from "./current-plan-route-refresh.js";
 import { appliedItineraryRevisionSummary, compactPendingItineraryEdits, type ItineraryRouteRefreshDisplay, type PendingItineraryEditDisplay } from "./landi-blueprint-workspace-display.js";
 import { planRefinementQuestion } from "./plan-display.js";
 import { visibleDocumentPolicySources } from "./plan-external-display.js";
@@ -22,24 +26,6 @@ function itineraryRevisionImpactStatus(revision: DirectBlueprintRevisionBatchMet
   return appliedItineraryRevisionSummary(revision, presentation).statusText;
 }
 
-function directReplanRequirementFromError(caught: unknown): DirectBlueprintReplanRequirement | undefined {
-  const payload = caught instanceof ApiRequestError
-    ? caught.payload
-    : caught && typeof caught === "object" && "payload" in caught
-      ? (caught as { payload?: unknown }).payload
-      : undefined;
-  if (!payload || typeof payload !== "object") return undefined;
-  const requirement = (payload as { replanRequirement?: unknown }).replanRequirement;
-  if (!requirement || typeof requirement !== "object") return undefined;
-  const candidate = requirement as Partial<DirectBlueprintReplanRequirement>;
-  if (candidate.status !== "assisted_replanning_required" || typeof candidate.explanation !== "string") return undefined;
-  return candidate as DirectBlueprintReplanRequirement;
-}
-
-function directReplanRequirementStatus(requirement: DirectBlueprintReplanRequirement): string {
-  return `${requirement.explanation} Your draft is still here.`;
-}
-
 function directBlueprintRevisionInputs(edits: PendingItineraryEditDisplay[]): DirectBlueprintRevisionInput[] {
   return edits.map((edit) => edit.kind === "remove_place_from_day"
     ? { kind: edit.kind, placeId: edit.placeId, dayId: edit.dayId }
@@ -51,60 +37,104 @@ function directBlueprintRevisionInputs(edits: PendingItineraryEditDisplay[]): Di
     });
 }
 
-function assistedReplanningPreparedStatus(dayCount: number): string {
-  const dayText = dayCount === 1 ? "the affected day" : `${dayCount} affected days`;
-  return `Landi prepared a replanning request for ${dayText}.`;
-}
-
-function assistedReplanningAppliedStatus(dayCount: number): string {
-  const dayText = dayCount === 1 ? "the affected day" : `${dayCount} affected days`;
-  return `Landi updated ${dayText}. Review the refreshed draft before confirming the plan.`;
-}
-
-function assistedReplanningPreparationFailedStatus(requirement: DirectBlueprintReplanRequirement, caught: unknown): string {
-  const detail = caught instanceof Error ? caught.message : "The preparation step could not start.";
-  return `${requirement.explanation} ${detail} Your draft is still here.`;
-}
-
-export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanChange, latestPlanReplacement, onRevise, onTaskToggle, onTaskReorder, onUndoChange, onConfirm, onWorkspace, onStatus, onError, onOperationBusy, confirming }: { plan: Plan; blueprint?: TripBlueprint | undefined; destinationArrivals: DestinationArrivalEvent[]; latestPlanChange?: PlanChangeSet | undefined; latestPlanReplacement?: PlanReplacementAudit | undefined; onRevise: (message?: string) => void; onTaskToggle: (planId: string, taskId: string, checked: boolean) => Promise<void>; onTaskReorder: (planId: string, taskId: string, direction: "up" | "down") => Promise<void>; onUndoChange: (planId: string, changeId: string) => Promise<void>; onConfirm: (planId: string) => Promise<void>; onWorkspace: (workspace: WorkspaceSnapshot) => Promise<void>; onStatus: (status: AgentStatus) => void; onError: (message: string) => void; onOperationBusy: (busy: boolean) => void; confirming: boolean }) {
+export function CurrentPlan({ plan, blueprint, latestDirectBlueprintRevision, destinationArrivals, latestPlanChange, latestPlanReplacement, onRevise, onTaskToggle, onTaskReorder, onUndoChange, onConfirm, onWorkspace, onStatus, onError, onOperationBusy, confirming }: { plan: Plan; blueprint?: TripBlueprint | undefined; latestDirectBlueprintRevision?: WorkspaceSnapshot["latestDirectBlueprintRevision"] | undefined; destinationArrivals: DestinationArrivalEvent[]; latestPlanChange?: PlanChangeSet | undefined; latestPlanReplacement?: PlanReplacementAudit | undefined; onRevise: (message?: string) => void; onTaskToggle: (planId: string, taskId: string, checked: boolean) => Promise<void>; onTaskReorder: (planId: string, taskId: string, direction: "up" | "down") => Promise<void>; onUndoChange: (planId: string, changeId: string) => Promise<void>; onConfirm: (planId: string) => Promise<void>; onWorkspace: (workspace: WorkspaceSnapshot) => Promise<void>; onStatus: (status: AgentStatus) => void; onError: (message: string) => void; onOperationBusy: (busy: boolean) => void; confirming: boolean }) {
   const planReadModel = currentPlanReadModel(plan, blueprint);
   plan = planReadModel.plan;
   const presentation = planReadModel.presentation;
+  const [restoredOperation] = useState(() => {
+    try { return { pending: readPendingBlueprintOperation(sessionStorage), unreadable: false }; }
+    catch { return { pending: null, unreadable: true }; }
+  });
+  const [pendingOperation, setPendingOperation] = useState<PendingBlueprintOperation | null>(restoredOperation.pending);
+  const recoveryUnreadable = restoredOperation.unreadable;
+  const mutationBlocked = Boolean(pendingOperation) || recoveryUnreadable;
+  const pendingOperationRef = useRef(pendingOperation);
+  const mutationStartingRef = useRef(false);
+  const [acknowledgedDraft, setAcknowledgedDraft] = useState<SubmittedDraft | undefined>();
+  const [rebasedDraft, setRebasedDraft] = useState<SubmittedDraft | undefined>();
+  const [checkingPending, setCheckingPending] = useState(false);
+  function rememberOperation(operation: PendingBlueprintOperation) {
+    const saved = persistPendingBlueprintOperation(sessionStorage, operation);
+    pendingOperationRef.current = saved; setPendingOperation(saved); return saved;
+  }
+  function forgetOperation(operation: PendingBlueprintOperation) {
+    clearPendingBlueprintOperation(sessionStorage, operation);
+    pendingOperationRef.current = null; setPendingOperation(null);
+  }
+  function acknowledgeOperation(operation: PendingBlueprintOperation) {
+    acknowledgeBlueprintOperation(sessionStorage, operation);
+    pendingOperationRef.current = null; setPendingOperation(null);
+    // 原操作已核实，先清除旧未知提示，再保留随后工作区加载的真实错误。
+    onError("");
+    if (operation.draft) setAcknowledgedDraft(operation.draft);
+  }
+  async function publishCommittedWorkspace(workspace: WorkspaceSnapshot) {
+    try { await onWorkspace(workspace); }
+    catch { onError("The operation is confirmed, but the workspace could not be updated. Refresh to see the current plan."); }
+  }
+  async function recoverOperation(operation: PendingBlueprintOperation, onCommitted?: () => void): Promise<boolean> {
+    await validatePendingBlueprintOperation(operation);
+    const receipt = await getDirectBlueprintReceipt(operation.identity);
+    if (!receiptMatchesOperation(receipt, operation) || receipt.status !== "committed") return false;
+    let draftNeedsReview = false;
+    if (operation.reviewRebase && receipt.workspace.activePlan && receipt.workspace.activeBlueprint) {
+      const context = await getBookingRelationshipReview(receipt.workspace.activePlan, receipt.workspace.activeBlueprint);
+      const rebased = rebaseReviewedBlueprintDraft(sessionStorage, operation, receipt, context);
+      if (rebased) setRebasedDraft(rebased);
+      else draftNeedsReview = true;
+    }
+    acknowledgeOperation(operation); onCommitted?.();
+    onStatus({ tone: "success", text: draftNeedsReview ? "The booking link review is saved. Your original edits have been kept. Review them against the current itinerary before previewing again." : operation.identity.operation === "save" ? "Confirmed: your previous changes were saved and the current plan is updated." : "Confirmed: your previous undo completed and the current plan is updated." });
+    await publishCommittedWorkspace(receipt.workspace);
+    return true;
+  }
+  async function checkPendingOperation() {
+    const operation = pendingOperationRef.current;
+    if (!operation || checkingPending) return;
+    setCheckingPending(true);
+    try { if (!await recoverOperation(operation)) onError(unknownBlueprintOperationMessage); }
+    catch { onError(unknownBlueprintOperationMessage); }
+    finally { setCheckingPending(false); }
+  }
+  useEffect(() => {
+    if (pendingOperationRef.current) void checkPendingOperation();
+    else { try { readPendingBlueprintOperation(sessionStorage); } catch { onError("The previous recovery information could not be read. Keep your draft and check the result first."); } }
+  }, []);
   const [workspaceView, setWorkspaceView] = useState<PlanWorkspaceView>("plan");
   const [discarding, setDiscarding] = useState(false);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [applyingItineraryEdits, setApplyingItineraryEdits] = useState(false);
   const [refreshingRoutes, setRefreshingRoutes] = useState(false);
-  const [updatingPlacePriorityId, setUpdatingPlacePriorityId] = useState("");
   const [regenerationStatus, setRegenerationStatus] = useState<string | null>(null);
+  useEffect(() => { onOperationBusy(mutationBlocked || checkingPending || applyingItineraryEdits || refreshingRoutes || regenerating || discarding); }, [mutationBlocked, checkingPending, applyingItineraryEdits, refreshingRoutes, regenerating, discarding, onOperationBusy]);
   async function discardDraft() {
-    if (discarding || plan.status !== "draft") return;
+    if (recoveryUnreadable || mutationStartingRef.current || pendingOperationRef.current || discarding || plan.status !== "draft") return;
     setDiscarding(true);
-    onOperationBusy(true);
+
     try {
       await onWorkspace(await deletePlan(plan.id));
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : "Unable to discard this plan draft.";
+      const message = safePlanError(caught);
       onError(message);
-    } finally { setDiscarding(false); onOperationBusy(false); }
+    } finally { setDiscarding(false); }
   }
   async function abandonActive() {
-    if (discarding || plan.status !== "active") return;
+    if (recoveryUnreadable || mutationStartingRef.current || pendingOperationRef.current || discarding || plan.status !== "active") return;
     setDiscarding(true);
-    onOperationBusy(true);
+
     try {
       await onWorkspace(await abandonActivePlan(plan.id));
       onStatus({ tone: "success", text: "The active Plan was abandoned. Reminders and execution guidance for it no longer run." });
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : "Unable to abandon the active plan.";
+      const message = safePlanError(caught);
       onError(message); onStatus({ tone: "error", text: message });
-    } finally { setDiscarding(false); onOperationBusy(false); }
+    } finally { setDiscarding(false); }
   }
   async function regenerateItinerary() {
-    if (regenerating || plan.status !== "draft") return;
+    if (recoveryUnreadable || mutationStartingRef.current || pendingOperationRef.current || regenerating || plan.status !== "draft") return;
     setRegenerating(true);
-    onOperationBusy(true);
+
     onError("");
     setRegenerationStatus("Reviewing the destination and confirmed trip details…");
     const timers = [
@@ -114,90 +144,83 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
     try {
       const message = "Keep all confirmed trip details, research the destination again, and create a complete mapped itinerary. Include a continuous day-by-day timeline, specific places, map markers, and routes between adjacent stops. Do not return a generic plan without places.";
       const payload = await sendAgentChat({ mode: "revise_plan", message, expectedPlanId: plan.id, expectedVersion: plan.version, impactConfirmed: true });
-      if (!payload.workspace) throw new Error(payload.error ?? "The mapped itinerary was not completed.");
+      if (!payload.workspace) throw new Error("The mapped itinerary was not completed.");
       setRegenerationStatus("Mapped itinerary ready.");
       await onWorkspace(payload.workspace);
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : "The mapped itinerary was not completed.";
+      const message = safePlanError(caught);
       setRegenerationStatus(message);
     } finally {
       timers.forEach((timer) => window.clearTimeout(timer));
       setRegenerating(false);
-      onOperationBusy(false);
+
     }
   }
-  async function applyBlueprintItineraryEdits(edits: PendingItineraryEditDisplay[]) {
-    if (applyingItineraryEdits) return;
-    const compactEdits = compactPendingItineraryEdits(edits);
-    const revisions = directBlueprintRevisionInputs(compactEdits);
-    setApplyingItineraryEdits(true);
-    onOperationBusy(true);
-    onError("");
-    onStatus({ tone: "working", text: "Updating the itinerary…" });
-    try {
-      if (!compactEdits.length) throw new Error("There were no itinerary edits to apply.");
-      const payload = await applyDirectBlueprintRevisionBatch(plan.id, {
-        ...planReadModel.mutationVersion,
-        revisions
-      });
-      const refreshRequest = automaticRouteRefreshRequestForRevision(payload.workspace, payload.revision);
-      if (!refreshRequest) {
-        await onWorkspace(payload.workspace);
-        onStatus({ tone: "success", text: itineraryRevisionImpactStatus(payload.revision, presentation) });
-        return;
-      }
-      setRefreshingRoutes(true);
-      onStatus(routeRefreshWorkingStatus(refreshRequest.dayLabel));
-      try {
-        const refreshed = await refreshPlanRoutes(refreshRequest.planId, refreshRequest.body);
-        await onWorkspace(refreshed.workspace);
-        onStatus(routeRefreshCompletedStatus(refreshRequest.dayLabel, refreshed));
-      } catch {
-        await onWorkspace(payload.workspace);
-        onStatus(routeRefreshSavedButUncheckedStatus(refreshRequest.dayLabel));
-      }
-    } catch (caught) {
-      const replanRequirement = directReplanRequirementFromError(caught);
-      let messageText = replanRequirement
-        ? directReplanRequirementStatus(replanRequirement)
-        : caught instanceof Error ? caught.message : "Landi could not update the itinerary.";
-      if (replanRequirement && revisions.length) {
-        try {
-          const payload = await prepareDirectBlueprintAssistedReplanning(plan.id, {
-            ...planReadModel.mutationVersion,
-            replanRequirement,
-            revisions
-          });
-          onStatus({ tone: "working", text: assistedReplanningPreparedStatus(payload.handoff.affectedDayIds.length) });
-          const replanned = await sendAgentChat({
-            mode: "revise_plan",
-            message: payload.handoff.request,
-            expectedPlanId: plan.id,
-            expectedVersion: plan.version,
-            impactConfirmed: true,
-            assistedReplanning: payload.handoff
-          });
-          if (!replanned.workspace) throw new Error(replanned.error ?? "Landi could not replan the affected itinerary day.");
-          await onWorkspace(replanned.workspace);
-          onStatus({ tone: "success", text: assistedReplanningAppliedStatus(payload.handoff.affectedDayIds.length) });
-          return;
-        } catch (handoffCaught) {
-          messageText = assistedReplanningPreparationFailedStatus(replanRequirement, handoffCaught);
-        }
-      }
-      onError(messageText);
-      onStatus({ tone: "error", text: messageText });
-      throw caught;
-    } finally {
-      setApplyingItineraryEdits(false);
-      setRefreshingRoutes(false);
-      onOperationBusy(false);
+  async function sendPendingOperation(operation: PendingBlueprintOperation, onCommitted?: () => void) {
+    await validatePendingBlueprintOperation(operation);
+    if (operation.identity.operation === "save") {
+      const payload = await applyDirectBlueprintRevisionBatch(operation.identity.expectedPlanId, operation.body as DirectBlueprintRevisionBatchRequest);
+      // 成功响应和丢响应使用同一只读回执边界，绝不以最新 workspace 代替原提交结果。
+      if (operation.reviewRebase) { if (!await recoverOperation(operation, onCommitted)) throw new Error(unknownBlueprintOperationMessage); return; }
+      acknowledgeOperation(operation); onCommitted?.();
+      onStatus({ tone: "success", text: itineraryRevisionImpactStatus(payload.revision, presentation) });
+      await publishCommittedWorkspace(payload.workspace);
+    } else {
+      const payload = await undoDirectBlueprintRevision(operation.identity.expectedPlanId, operation.identity.revisionId!, operation.body as { expectedVersion: number; expectedBlueprintVersion: number; requestId: string });
+      acknowledgeOperation(operation);
+      onStatus({ tone: "success", text: "The saved changes were undone. Review the new draft before approving it." });
+      await publishCommittedWorkspace(payload);
     }
+  }
+  async function handlePendingFailure(caught: unknown, operation: PendingBlueprintOperation, onCommitted?: () => void): Promise<boolean> {
+    if (isDefiniteMutationRejection(caught)) forgetOperation(operation);
+    else {
+      try { if (await recoverOperation(operation, onCommitted)) return true; } catch { /* 保留不可变原请求与草稿，等待明确恢复。 */ }
+    }
+    const message = await reconcilePlanMutationFailure(caught, { read: () => getWorkspace({ cache: "no-store" }), publish: onWorkspace });
+    onError(message); onStatus({ tone: "error", text: message });
+    return false;
+  }
+  async function retryPendingOperation() {
+    const operation = pendingOperationRef.current;
+    if (mutationStartingRef.current || !operation || checkingPending || applyingItineraryEdits) return;
+    setApplyingItineraryEdits(true);
+    try {
+      // 每次明确重试仍先核对只读回执。
+      if (!await recoverOperation(operation)) await sendPendingOperation(operation);
+    } catch (caught) { await handlePendingFailure(caught, operation); }
+    finally { setApplyingItineraryEdits(false); }
+  }
+  async function applyBlueprintItineraryEdits(edits: PendingItineraryEditDisplay[], extra: DirectBlueprintRevisionInput[] = [], highImpactConfirmation?: string, onCommitted?: () => void, draft?: SubmittedDraft) {
+    if (mutationStartingRef.current || applyingItineraryEdits) return;
+    if (recoveryUnreadable || pendingOperationRef.current) { onError(unknownBlueprintOperationMessage); throw new Error(unknownBlueprintOperationMessage); }
+    const revisions = [...directBlueprintRevisionInputs(compactPendingItineraryEdits(edits)), ...extra];
+    if (!revisions.length || planReadModel.mutationVersion.expectedBlueprintVersion === undefined) throw new Error("The current blueprint cannot be edited. Refresh the workspace.");
+    mutationStartingRef.current = true;
+    let operation: PendingBlueprintOperation;
+    try {
+      const body = { ...planReadModel.mutationVersion, expectedBlueprintVersion: planReadModel.mutationVersion.expectedBlueprintVersion, revisions, requestId: crypto.randomUUID(), ...(highImpactConfirmation ? { highImpactConfirmation } : {}) };
+      let reviewRebase: PendingBlueprintOperation["reviewRebase"];
+      if (revisions.length === 1 && revisions[0]?.kind === "review_booking_relationships" && blueprint) {
+        const key = `landi:pending-blueprint:blueprint:${blueprint.id}`;
+        const signature = sessionStorage.getItem(key);
+        if (signature) { const context = await getBookingRelationshipReview(plan, blueprint); reviewRebase = { draft: { key, signature }, blueprintId: blueprint.id, sourceSetDigest: context.sourceSetDigest, targetDigests: context.targetDigests }; }
+      }
+      const boundBody = { ...body, ...(reviewRebase ? { recoveryBinding: await reviewRecoveryBinding(reviewRebase) } : {}) };
+      const requestDigest = await blueprintOperationDigest("save", plan.id, boundBody);
+      operation = rememberOperation({ identity: { operation: "save", requestId: body.requestId, requestDigest, expectedPlanId: plan.id, expectedVersion: body.expectedVersion, expectedBlueprintVersion: body.expectedBlueprintVersion }, body: boundBody, ...(draft ? { draft } : {}), ...(reviewRebase ? { reviewRebase } : {}) });
+    } catch { onError("Recovery information could not be saved, so these changes were not submitted. Keep your draft and try again."); throw new Error("Recovery information could not be saved."); }
+    finally { mutationStartingRef.current = false; }
+    setApplyingItineraryEdits(true); onError("");
+    onStatus({ tone: "working", text: "Saving itinerary changes…" });
+    try { await sendPendingOperation(operation, onCommitted); }
+    catch (caught) { if (!await handlePendingFailure(caught, operation, onCommitted)) throw caught; }
+    finally { setApplyingItineraryEdits(false); }
   }
   async function refreshItineraryRoutes(refresh: ItineraryRouteRefreshDisplay) {
-    if (refreshingRoutes) return;
+    if (recoveryUnreadable || mutationStartingRef.current || pendingOperationRef.current || refreshingRoutes) return;
     setRefreshingRoutes(true);
-    onOperationBusy(true);
+
     onError("");
     onStatus(routeRefreshWorkingStatus(refresh.dayLabel));
     try {
@@ -208,44 +231,47 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
       });
       await onWorkspace(payload.workspace);
       onStatus(routeRefreshCompletedStatus(refresh.dayLabel, payload));
-    } catch {
+    } catch (caught) {
+      onError(await reconcilePlanMutationFailure(caught, { read: () => getWorkspace({ cache: "no-store" }), publish: onWorkspace }));
       onStatus(routeRefreshUncheckedStatus(refresh.dayLabel));
     } finally {
       setRefreshingRoutes(false);
-      onOperationBusy(false);
+
     }
   }
-  async function updateBlueprintPlacePriority(placeId: string, priority: PlanPlacePriority) {
-    if (updatingPlacePriorityId) return;
-    const place = presentation?.places.find((candidate) => candidate.id === placeId);
-    const placeTitle = place?.localizedName ? `${place.name} · ${place.localizedName}` : place?.name ?? "this place";
-    setUpdatingPlacePriorityId(placeId);
-    onOperationBusy(true);
-    onError("");
-    onStatus({ tone: "working", text: `Updating ${placeTitle}...` });
+  async function requestAssistedReplanning(edits: PendingItineraryEditDisplay[], extra: DirectBlueprintRevisionInput[], requirement: DirectBlueprintReplanRequirement) {
+    if (recoveryUnreadable || pendingOperationRef.current) { onError(unknownBlueprintOperationMessage); return; }
     try {
-      const payload = await applyDirectBlueprintRevisionBatch(plan.id, {
-        ...planReadModel.mutationVersion,
-        revisions: [{ kind: "update_place_priority", placeId, priority }]
-      });
-      await onWorkspace(payload.workspace);
-      onStatus({ tone: "success", text: `Updated ${placeTitle}.` });
-    } catch (caught) {
-      const messageText = caught instanceof Error ? caught.message : "Landi could not update this place.";
-      onError(messageText);
-      onStatus({ tone: "error", text: messageText });
-    } finally {
-      setUpdatingPlacePriorityId("");
-      onOperationBusy(false);
-    }
+      const payload = await prepareDirectBlueprintAssistedReplanning(plan.id, { ...planReadModel.mutationVersion, revisions: [...directBlueprintRevisionInputs(edits), ...extra], replanRequirement: requirement });
+      onRevise(payload.handoff.request);
+    } catch (caught) { onError(await reconcilePlanMutationFailure(caught, { read: () => getWorkspace({ cache: "no-store" }), publish: onWorkspace })); throw caught; }
+  }
+  async function undoSavedEdit() {
+    if (mutationStartingRef.current || !latestDirectBlueprintRevision || applyingItineraryEdits) return;
+    if (recoveryUnreadable || pendingOperationRef.current) { onError(unknownBlueprintOperationMessage); return; }
+    const expectedBlueprintVersion = planReadModel.mutationVersion.expectedBlueprintVersion;
+    if (expectedBlueprintVersion === undefined) return;
+    mutationStartingRef.current = true;
+    let operation: PendingBlueprintOperation;
+    try {
+      const body = { ...planReadModel.mutationVersion, expectedBlueprintVersion, requestId: crypto.randomUUID() };
+      const requestDigest = await blueprintOperationDigest("undo", plan.id, { ...body, revisionId: latestDirectBlueprintRevision.id });
+      operation = rememberOperation({ identity: { operation: "undo", requestId: body.requestId, requestDigest, expectedPlanId: plan.id, expectedVersion: body.expectedVersion, expectedBlueprintVersion, revisionId: latestDirectBlueprintRevision.id }, body });
+    } catch { onError("Undo recovery information could not be saved, so the undo was not submitted."); return; }
+    finally { mutationStartingRef.current = false; }
+    setApplyingItineraryEdits(true);
+    try { await sendPendingOperation(operation); }
+    catch (caught) { await handlePendingFailure(caught, operation); }
+    finally { setApplyingItineraryEdits(false); }
   }
   async function undoReplacement() {
+    if (recoveryUnreadable || pendingOperationRef.current) { onError(unknownBlueprintOperationMessage); return; }
     try {
       const payload = await undoPlanReplacement(plan.id, plan.version);
       await onWorkspace(payload);
       onStatus({ tone: "success", text: "The latest replacement was undone and the previous plan is active again." });
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : "Unable to undo the latest plan replacement.";
+      const message = await reconcilePlanMutationFailure(caught, { read: () => getWorkspace({ cache: "no-store" }), publish: onWorkspace });
       onError(message); onStatus({ tone: "error", text: message });
     }
   }
@@ -287,11 +313,11 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
   ];
   const isTravelPlan = plan.stages.some((stage) => stage.presentationKind === "itinerary");
   const discardControl = (disabled = false) => confirmingDiscard
-    ? <><button className="secondary-action" disabled={discarding} onClick={() => setConfirmingDiscard(false)}>Keep plan</button><button className="discard-plan-button confirm" disabled={discarding || disabled} onClick={() => void discardDraft()}>{discarding ? "Discarding…" : "Confirm discard"}</button></>
-    : <button className="discard-plan-button" disabled={discarding || disabled} onClick={() => setConfirmingDiscard(true)}>Discard this plan</button>;
+    ? <><button className="secondary-action" disabled={discarding || mutationBlocked} onClick={() => setConfirmingDiscard(false)}>Keep plan</button><button className="discard-plan-button confirm" disabled={discarding || disabled || mutationBlocked} onClick={() => void discardDraft()}>{discarding ? "Discarding…" : "Confirm discard"}</button></>
+    : <button className="discard-plan-button" disabled={discarding || disabled || mutationBlocked} onClick={() => setConfirmingDiscard(true)}>Discard this plan</button>;
   const abandonControl = (disabled = false) => confirmingDiscard
-    ? <><button className="secondary-action" disabled={discarding} onClick={() => setConfirmingDiscard(false)}>Keep plan</button><button className="discard-plan-button confirm" disabled={discarding || disabled} onClick={() => void abandonActive()}>{discarding ? "Abandoning…" : "Confirm abandon"}</button></>
-    : <button className="discard-plan-button" disabled={discarding || disabled} onClick={() => setConfirmingDiscard(true)}>Abandon plan</button>;
+    ? <><button className="secondary-action" disabled={discarding || mutationBlocked} onClick={() => setConfirmingDiscard(false)}>Keep plan</button><button className="discard-plan-button confirm" disabled={discarding || disabled || mutationBlocked} onClick={() => void abandonActive()}>{discarding ? "Abandoning…" : "Confirm abandon"}</button></>
+    : <button className="discard-plan-button" disabled={discarding || disabled || mutationBlocked} onClick={() => setConfirmingDiscard(true)}>Abandon plan</button>;
   if (isTravelPlan && (presentation?.kind !== "itinerary" || !presentation.places.length)) {
     return <article className="current-plan-card native-trip-plan itinerary-generation-gap">
       <header><div><span className="section-eyebrow">TRIP ITINERARY</span><h2>{displayPlanTitle(plan)}</h2><p>{plan.location} · {plan.dates}</p></div><span className="plan-status draft">Mapped itinerary pending</span></header>
@@ -302,8 +328,11 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
   if (presentation?.kind === "itinerary" && presentation.places.length) {
     return <article className="current-plan-card native-trip-plan">
       {latestPlanReplacement ? <PlanReplacementNotice audit={latestPlanReplacement} active={plan.status === "active"} onUndo={undoReplacement} /> : null}
-      <LandiBlueprintWorkspace key={planReadModel.workspaceKey} plan={plan} presentation={presentation} onTaskToggle={onTaskToggle} onApplyItineraryEdits={applyBlueprintItineraryEdits} onRequestRouteRefresh={refreshItineraryRoutes} onUpdatePlacePriority={updateBlueprintPlacePriority} itineraryEditBusy={applyingItineraryEdits} routeRefreshBusy={refreshingRoutes} priorityUpdateBusyPlaceId={updatingPlacePriorityId} />
-      <footer className="plan-footer actions-only"><div className="plan-footer-actions">{plan.status === "draft" ? discardControl() : abandonControl()}<button className="secondary-action" onClick={() => onRevise()}>Adjust in conversation</button>{plan.status === "draft" ? <button className="primary-action" disabled={confirming} onClick={() => void onConfirm(plan.id)}>{confirming ? "Confirming…" : "Confirm and activate"}</button> : null}</div></footer>
+      {recoveryUnreadable ? <section className="blueprint-operation-recovery" role="status"><p>The previous recovery information could not be read. The original record and draft have been kept. Check the result first.</p><button type="button" onClick={() => window.location.reload()}>Refresh and check recovery information</button></section> : null}
+      {pendingOperation ? <section className="blueprint-operation-recovery" role="status"><p>{unknownBlueprintOperationMessage}</p><button type="button" disabled={checkingPending || applyingItineraryEdits} onClick={() => void checkPendingOperation()}>Check previous result</button><button type="button" disabled={checkingPending || applyingItineraryEdits} onClick={() => void retryPendingOperation()}>Resubmit original operation</button></section> : null}
+      {latestDirectBlueprintRevision && latestDirectBlueprintRevision.planId === plan.id && latestDirectBlueprintRevision.planVersion === plan.version ? <button type="button" className="blueprint-saved-undo" disabled={applyingItineraryEdits || mutationBlocked} onClick={() => void undoSavedEdit()}>Undo saved blueprint edit</button> : null}
+      <LandiBlueprintWorkspace rebasedDraft={rebasedDraft} reviewBlueprint={blueprint} acknowledgedDraft={acknowledgedDraft} mutationRecoveryPending={mutationBlocked} savedEditUndoAvailable={Boolean(latestDirectBlueprintRevision && latestDirectBlueprintRevision.planId === plan.id && latestDirectBlueprintRevision.planVersion === plan.version)} blueprintIdentity={blueprint ? { id: blueprint.id, version: blueprint.version } : undefined} plan={plan} presentation={presentation} onTaskToggle={onTaskToggle} onApplyItineraryEdits={applyBlueprintItineraryEdits} onRequestAssistedReplanning={requestAssistedReplanning} onRequestRouteRefresh={refreshItineraryRoutes} onReplanBookingSources={() => onRevise("请保留当前草稿和待确认编辑，先让我逐项确认真实预订资料，再重新生成有明确来源基准的行程。不要把旧来源继承缺口当作已修复，不自动取消预订或切换执行行程。")} onWorkspace={onWorkspace} onStatus={onStatus} onError={onError} itineraryEditBusy={applyingItineraryEdits} routeRefreshBusy={refreshingRoutes} />
+      <footer className="plan-footer actions-only"><div className="plan-footer-actions">{plan.status === "draft" ? discardControl() : abandonControl()}<button className="secondary-action" onClick={() => onRevise()}>Adjust in conversation</button>{plan.status === "draft" ? <button className="primary-action" disabled={confirming || mutationBlocked} onClick={() => void onConfirm(plan.id)}>{confirming ? "Confirming…" : "Confirm and activate"}</button> : null}</div></footer>
     </article>;
   }
   return <article className="current-plan-card">
@@ -318,6 +347,6 @@ export function CurrentPlan({ plan, blueprint, destinationArrivals, latestPlanCh
     {visibleWorkspaceView === "decisions" ? plan.assumptions.length ? <PlanDecisionBoard assumptions={plan.assumptions} onRevise={onRevise} /> : <WorkspaceEmpty title="No pending decisions" detail="The plan currently has no assumptions or tradeoffs that need your decision." /> : null}
     {visibleWorkspaceView === "reminders" ? <PlanRemindersView items={reminderTasks} active={plan.status === "active"} /> : null}
     {visibleWorkspaceView === "sources" ? <PlanSourcesView sources={documentPolicySources} /> : null}
-    <footer className="plan-footer"><div><strong>{plan.status === "draft" ? "Confirm the complete plan" : "Need an adjustment?"}</strong><span>{plan.status === "draft" ? refinementQuestion ? "The complete plan is ready. The question above can improve execution accuracy but does not block review or confirmation." : "Confirmation enables only reminders and execution tasks backed by sufficient information." : "Changes first create a replacement draft. The current plan stays active until you confirm it."}</span></div><div className="plan-footer-actions">{plan.status === "draft" ? discardControl() : abandonControl()}<button className="secondary-action" onClick={() => onRevise()}>{plan.status === "draft" && refinementQuestion ? "Add plan details" : "Modify current plan"}</button>{plan.status === "draft" ? <button className="primary-action" disabled={confirming} onClick={() => void onConfirm(plan.id)}>{confirming ? "Confirming…" : "Confirm and activate"}</button> : null}</div></footer>
+    <footer className="plan-footer"><div><strong>{plan.status === "draft" ? "Confirm the complete plan" : "Need an adjustment?"}</strong><span>{plan.status === "draft" ? refinementQuestion ? "The complete plan is ready. The question above can improve execution accuracy but does not block review or confirmation." : "Confirmation enables only reminders and execution tasks backed by sufficient information." : "Changes first create a replacement draft. The current plan stays active until you confirm it."}</span></div><div className="plan-footer-actions">{plan.status === "draft" ? discardControl() : abandonControl()}<button className="secondary-action" onClick={() => onRevise()}>{plan.status === "draft" && refinementQuestion ? "Add plan details" : "Modify current plan"}</button>{plan.status === "draft" ? <button className="primary-action" disabled={confirming || mutationBlocked} onClick={() => void onConfirm(plan.id)}>{confirming ? "Confirming…" : "Confirm and activate"}</button> : null}</div></footer>
   </article>;
 }

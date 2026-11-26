@@ -97,7 +97,7 @@ test("Web derives a complete read model from the linked Trip Blueprint", () => {
       label: "Image source",
       summary: "Official · City · 2026-08-26",
       url: "https://example.com/place",
-      contexts: ["Image for A"]
+      contexts: ["Image for A"], purpose: undefined, status: "verified", retrievedAt: "2026-08-26"
     }
   });
   assert.deepEqual(workspace.details.find((detail) => detail.placeId === "c")?.guideContext.map((item) => ({ label: item.label, title: item.title, description: item.description, context: item.context, source: item.sources[0]?.summary })), [{
@@ -265,7 +265,7 @@ test("Trip Blueprint compiles into the Landi-native Web workspace contract", () 
   assert.ok(workspace.tipGroups.some((group) => group.tips.some((tip) => /voices low/.test(tip.body))));
   assert.deepEqual(workspace.details.find((detail) => detail.placeId === "temple")?.relatedEvents.map((event) => ({ title: event.title, source: event.sources[0]?.summary })), [{ title: "Neighborhood festival", source: "Tokyo guide · Tokyo official tourism · 2026-08-26" }]);
   assert.ok(workspace.sources.some((source) => source.summary === "Tokyo guide · Tokyo official tourism · 2026-08-26"));
-  const workspaceText = JSON.stringify(workspace);
+  const workspaceText = visibleDisplayCopy(workspace);
   assert.equal(/candidate|candidates|best|default recommendation|source attached|authorization/i.test(workspaceText), false);
 });
 
@@ -350,7 +350,7 @@ test("Skill importer output reaches the Landi-native Web workspace read model", 
   assert.equal(bathDetail?.reservationNote, "Choose the current entry option before adding the bathing stop to the day.");
   assert.deepEqual(workspace.places.find((place) => place.title === "Spa LaQua")?.placementSignals, { reservation: "required", needsRecheck: true, longStop: false });
   assert.deepEqual(workspace.itineraries[0]?.items.slice(0, 2).map((item) => ({ title: item.title, time: item.timeLabel, meta: item.meta, reorderable: Boolean(item.reorderable) })), [
-    { title: "Nezu Shrine · 根津神社", time: "Shrine opening", meta: "Start with the quiet route anchor", reorderable: false },
+    { title: "Nezu Shrine", time: "Shrine opening", meta: "Start with the quiet route anchor", reorderable: false },
     { title: "ARiSE Coffee Roasters", time: "Coffee and lunch buffer", meta: "Keep this as the flexible meal pause", reorderable: true }
   ]);
   assert.equal(workspace.itineraries[0]?.routeSegments[0]?.detail, "Use the quieter lanes between the shrine and coffee stop.");
@@ -362,5 +362,14 @@ test("Skill importer output reaches the Landi-native Web workspace read model", 
   assert.ok(workspace.tipGroups.some((group) => group.tips.some((tip) => /voices low/.test(tip.body))));
   assert.ok(workspace.preparationGroups.some((group) => group.items.some((item) => item.title === "Prepare Japan arrival information")));
   assert.ok(workspace.sources.some((source) => source.summary === "Tokyo official guide · Tokyo tourism · 2026-08-26"));
-  assert.equal(JSON.stringify(workspace).match(/candidate|candidates|default recommendation|source attached|authorization/i)?.[0], undefined);
+  assert.equal(visibleDisplayCopy(workspace).match(/candidate|candidates|default recommendation|source attached|authorization/i)?.[0], undefined);
 });
+
+
+// Copy assertions cover fields rendered to travelers, not internal candidate/image metadata.
+function visibleDisplayCopy(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+  return Object.entries(value).flatMap(([key, child]) => typeof child === "string"
+    ? /^(?:title|summary|description|body|label|meta|statusLabel|hint|ctaLabel)$/u.test(key) ? [child] : []
+    : [visibleDisplayCopy(child)]).join("\n");
+}

@@ -28,7 +28,6 @@ export function dueTaskReminders(plan: Plan, now = new Date()): DueTaskReminder[
 /** Builds current delivery copy from the confirmed Plan and Task, not a frozen draft message. */
 export function formatTaskReminder(plan: Plan, task: Task, weather?: TaskReminderWeatherContext): string {
   if (!task.reminder) throw new Error("A Task reminder is required.");
-  const weatherSource = weather?.provider === "google_weather" ? "Google Weather" : "QWeather";
-  const weatherSection = weather ? `\n\nLatest destination weather\n${weather.summary}\nRetrieved: ${weather.retrievedAt}\nSource: ${weatherSource}${weather.attributionUrl ? ` — ${weather.attributionUrl}` : ""}` : "";
-  return `Plan reminder\n${plan.title}\n\nTask: ${task.title}\nWhy now: ${task.reminder.purpose}\nCurrent status: ${task.status.replaceAll("_", " ")}${weatherSection}\n\nOpen the current Plan or send /plan to review the full context. No booking, payment, ride, or external action has been started.`;
+  const weatherSection = weather ? `\n\nWeather to keep in mind:\n${weather.summary}${weather.attributionUrl ? `\n${weather.attributionUrl}` : ""}` : "";
+  return `A quick reminder: ${task.title}\n${task.reminder.purpose}${weatherSection}\n\nLet me know if you need to change this step.`;
 }

@@ -86,6 +86,7 @@ export function validateSemanticTravelPlan(plan: SemanticTravelPlan, context: Se
         findings.push(...validatePlannerAttentionConditions(experience, evidenceContext));
       }
     }
+    findings.push(...validateDailyExperienceSequence(day.experiences ?? [], date));
   }
 
   findings.push(...validateFixedCommitmentProjection(plan, context.bookingConstraints ?? []));
@@ -98,6 +99,31 @@ export function validateSemanticTravelPlan(plan: SemanticTravelPlan, context: Se
     findings: uniqueFindings,
     ...(ignoredInvalidFactCount ? { diagnostics: { ignoredInvalidFactCount } } : {})
   };
+}
+
+function validateDailyExperienceSequence(experiences: SemanticTravelExperience[], date: string | undefined): ValidationFinding[] {
+  const planned = experiences.filter((experience) => experience.planRole === "planned");
+  for (let index = 0; index < planned.length; index += 1) {
+    const current = planned[index]!;
+    const start = clockMinute(current.startTime);
+    const end = clockMinute(current.endTime);
+    if (start !== undefined && end !== undefined && end < start && current.kind !== "transfer") {
+      return [validationFinding({ date, experience: current.title, category: "timing_conflict", explanation: `${current.title} ends before it starts.`, requiresPlannerRepair: true })];
+    }
+    const occupiedUntil = end ?? (start !== undefined ? start + (current.durationMinutes ?? 0) : undefined);
+    if (occupiedUntil === undefined || occupiedUntil > 24 * 60) continue;
+    const next = planned.slice(index + 1).find((experience) => experience.startTime || experience.endTime);
+    if (!next) continue;
+    const nextTime = clockMinute(next.startTime) ?? clockMinute(next.endTime);
+    if (nextTime !== undefined && nextTime < occupiedUntil) {
+      return [validationFinding({ date, experience: next.title, category: "timing_conflict", explanation: `${current.title} runs until ${formatMinute(occupiedUntil)}, after ${next.title} is scheduled at ${formatMinute(nextTime)}.`, requiresPlannerRepair: true })];
+    }
+  }
+  return [];
+}
+
+function formatMinute(value: number): string {
+  return `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
 }
 
 function validateFixedCommitmentOccurrences(plan: SemanticTravelPlan, bookings: BlueprintBookingConstraint[]): ValidationFinding[] {
@@ -123,9 +149,11 @@ function validateFixedCommitmentOccurrences(plan: SemanticTravelPlan, bookings: 
 
 function semanticOccurrenceMatchesCommitment(experience: SemanticTravelExperience, booking: BlueprintBookingConstraint, segment: BlueprintBookingConstraint["segments"][number]): boolean {
   const text = normalizeName(`${experience.title} ${experience.summary} ${experience.placeName ?? ""}`);
-  const expected = normalizeName(`${booking.title} ${segment.title} ${segment.origin ?? ""} ${segment.destination ?? ""} ${segment.location ?? ""}`);
-  const tokens = expected.split(/\s+/).filter((token) => token.length >= 3);
-  return tokens.some((token) => text.includes(token)) || (booking.type === "flight" && /departure|flight|depart|airport|起飞|出发/.test(text));
+  const labels = [segment.title, booking.title, segment.location, segment.destination, segment.origin]
+    .filter((label): label is string => Boolean(label))
+    .map(normalizeName)
+    .filter((label) => label.length >= 5);
+  return labels.some((label) => text.includes(label)) || (booking.type === "flight" && /departure|flight|depart|airport|起飞|出发/.test(text));
 }
 
 function validateCommittedDayCompleteness(plan: SemanticTravelPlan): ValidationFinding[] {
@@ -168,7 +196,7 @@ function validateFixedCommitmentProjection(plan: SemanticTravelPlan, bookings: B
   const expected = bookings
     .filter((booking) => booking.status === "confirmed" && booking.constraintStrength === "hard")
     .flatMap((booking) => booking.segments
-      .filter((segment) => segment.fixedCommitment && segment.constraintStrength === "hard")
+      .filter((segment) => segment.status !== "cancelled" && segment.fixedCommitment && segment.constraintStrength === "hard")
       .map((segment) => ({ booking, segment, commitmentId: `${booking.id}:${segment.id}` })));
   if (!expected.length && !plan.fixedCommitments.length) return [];
   const expectedIds = new Set(expected.map((item) => item.commitmentId));

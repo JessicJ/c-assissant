@@ -55,7 +55,7 @@ describe("plan display helpers", () => {
   it("builds the refinement intro from the selected question", () => {
     assert.equal(
       refinementIntro(planFixture({ assumptions: ["Budget preference is unknown."] })),
-      "One key question is recommended: For this Plan, do you care most about budget, convenience, or comfort? You can also share a budget range.\nAnswer it or finish refining now. Other unknowns will remain as items to confirm."
+      "One detail worth settling: For this Plan, do you care most about budget, convenience, or comfort? You can also share a budget range.\nYou can answer it or review the draft now. Anything still unknown stays marked for confirmation."
     );
   });
 

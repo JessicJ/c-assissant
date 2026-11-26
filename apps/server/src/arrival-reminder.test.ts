@@ -32,7 +32,7 @@ test("an expired arrival location share gets a fresh explicit request without us
 
 test("arrival reminder copy never claims that an external action started", () => {
   const message = formatArrivalReminder(createPlanFromRequest({ request: "I will arrive in Shanghai." }));
-  assert.match(message, /No ride, booking, payment, or location request has been started/i);
+  assert.match(message, /still on the way/);
 });
 
 test("arrival reminder distinguishes a ready task from a completed task", () => {
@@ -40,6 +40,6 @@ test("arrival reminder distinguishes a ready task from a completed task", () => 
   const task = plan.stages[2]?.tasks[0];
   assert.ok(task);
   const message = formatArrivalReminder(plan, { ...task, status: "ready" });
-  assert.match(message, /Current step is ready/i);
-  assert.match(message, /not marked complete/i);
+  assert.match(message, /what's next/i);
+  assert.doesNotMatch(message, /marked complete|Current step/);
 });

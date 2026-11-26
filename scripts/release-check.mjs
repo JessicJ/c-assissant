@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import process from "node:process";
+import { reviewedTravelDataPaths, isForbiddenTrackedPath, trackedContentFailures } from "./release-check-policy.mjs";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 const failures = [];
@@ -45,10 +46,8 @@ const workspacePackages = [
   "packages/agent-adapters/package.json",
   "packages/connectors/package.json",
   "packages/core/package.json",
-  "packages/skill-runtime/package.json",
   "packages/storage/package.json",
-  "country-packs/china/package.json",
-  "country-packs/japan/package.json"
+  "packages/travel-support/package.json"
 ];
 const packageNames = new Set();
 for (const relativePath of workspacePackages) {
@@ -61,64 +60,24 @@ for (const relativePath of workspacePackages) {
   else packageNames.add(workspacePackage.name);
 }
 
-const expectedSkillIds = [
-  "arrival-preparation",
-  "china-arrival-plan",
-  "digital-life-setup",
-  "food-nearby",
-  "housing-area-recommendation",
-  "local-food-guide",
-  "policy-applicability",
-  "transport-planner",
-  "weather-and-packing"
-];
-const manifestIds = new Set();
-for (const skillId of expectedSkillIds) {
-  const manifest = readJson(`country-packs/china/skills/${skillId}/skill.json`);
-  if (!manifest) continue;
-  if (manifest.id !== skillId) fail(`China Skill manifest ${skillId} declares id ${String(manifest.id)}.`);
-  if (manifest.visibility !== "internal") fail(`China Skill ${skillId} must remain internal in V1.`);
-  if (manifestIds.has(manifest.id)) fail(`Duplicate China Skill id: ${String(manifest.id)}.`);
-  manifestIds.add(manifest.id);
-}
-const expectedJapanSkillIds = [
-  "japan-arrival-plan",
-  "japan-policy-applicability",
-  "japan-weather-and-packing",
-  "japan-housing-area-recommendation",
-  "japan-transport-planner",
-  "japan-local-food-guide",
-  "japan-digital-life-setup",
-  "japan-arrival-preparation"
-];
-for (const skillId of expectedJapanSkillIds) {
-  const manifest = readJson(`country-packs/japan/skills/${skillId}/skill.json`);
-  if (!manifest) continue;
-  if (manifest.id !== skillId) fail(`Japan Skill manifest ${skillId} declares id ${String(manifest.id)}.`);
-  if (manifest.country !== "japan" || manifest.visibility !== "internal") fail(`Japan Skill ${skillId} must remain internal and bound to Japan.`);
-  if (manifestIds.has(manifest.id)) fail(`Duplicate cross-Pack Skill id: ${String(manifest.id)}.`);
-  manifestIds.add(manifest.id);
+for (const catalogPath of reviewedTravelDataPaths) {
+  readJson(catalogPath);
 }
 
 try {
   const example = readFileSync(resolve(projectRoot, ".env.example"), "utf8");
-  for (const key of ["C_ASSISTANT_RUNTIME", "TELEGRAM_BOT_TOKEN", "GOOGLE_MAPS_API_KEY", "WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_BUSINESS_ACCOUNT_ID", "WHATSAPP_APP_SECRET", "WHATSAPP_VERIFY_TOKEN", "WHATSAPP_ALLOWED_USER_NUMBER", "WHATSAPP_REMINDER_TEMPLATE_NAME", "WHATSAPP_GRAPH_API_VERSION", "C_ASSISTANT_HOST", "C_ASSISTANT_PORT", "C_ASSISTANT_DATA_PATH"]) {
+  for (const key of ["C_ASSISTANT_RUNTIME", "GOOGLE_MAPS_API_KEY", "C_ASSISTANT_HOST", "C_ASSISTANT_PORT", "C_ASSISTANT_DATA_PATH"]) {
     if (!new RegExp(`^${key}=`, "m").test(example)) fail(`.env.example is missing ${key}.`);
   }
-  for (const key of ["TELEGRAM_BOT_TOKEN", "GOOGLE_MAPS_API_KEY", "WHATSAPP_ACCESS_TOKEN", "WHATSAPP_APP_SECRET", "WHATSAPP_VERIFY_TOKEN"]) {
+  for (const key of ["GOOGLE_MAPS_API_KEY", "LANDI_SMTP_PASSWORD", "LANDI_EMAIL_ACTION_SECRET"]) {
     if (new RegExp(`^${key}=[ \\t]*[^\\s#]`, "m").test(example)) fail(`.env.example must not contain a value for ${key}.`);
   }
 } catch (error) {
   fail(`.env.example could not be inspected: ${error instanceof Error ? error.message : "unknown error"}`);
 }
 
-const forbiddenTrackedPath = /(^|\/)(?:\.env(?:\..+)?|data|runtime|secrets)(?:\/|$)|\.(?:sqlite(?:-shm|-wal)?|pem|key|p12|pfx)$/i;
-const secretAssignment = /^\s*(?:TELEGRAM_BOT_TOKEN|GOOGLE_MAPS_API_KEY|AMAP_API_KEY|QWEATHER_API_KEY|QWEATHER_API_HOST|WHATSAPP_ACCESS_TOKEN|WHATSAPP_APP_SECRET|WHATSAPP_VERIFY_TOKEN)\s*=\s*([^\s#][^\r\n]*)/gm;
-const telegramToken = /\b\d{8,12}:[A-Za-z0-9_-]{30,}\b/;
-const privateKey = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/;
-
 for (const relativePath of trackedFiles()) {
-  if (relativePath !== ".env.example" && forbiddenTrackedPath.test(relativePath)) {
+  if (isForbiddenTrackedPath(relativePath)) {
     fail(`Sensitive or runtime-only path is tracked by Git: ${relativePath}.`);
     continue;
   }
@@ -128,10 +87,7 @@ for (const relativePath of trackedFiles()) {
     const content = readFileSync(absolutePath);
     if (content.includes(0)) continue;
     const text = content.toString("utf8");
-    secretAssignment.lastIndex = 0;
-    if (relativePath !== ".env.example" && secretAssignment.test(text)) fail(`A populated Connector secret assignment may be tracked in ${relativePath}.`);
-    if (telegramToken.test(text)) fail(`A Telegram-style bot token may be tracked in ${relativePath}.`);
-    if (privateKey.test(text)) fail(`A private key may be tracked in ${relativePath}.`);
+    for (const failure of trackedContentFailures(relativePath, text)) fail(failure);
   } catch (error) {
     fail(`Tracked file ${relativePath} could not be inspected: ${error instanceof Error ? error.message : "unknown error"}`);
   }
@@ -142,5 +98,5 @@ if (failures.length) {
   for (const failure of failures) console.error(`- ${failure}`);
   process.exitCode = 1;
 } else {
-  console.log(`Landi release preflight passed: Node ${process.versions.node}, ${workspacePackages.length} workspaces, ${manifestIds.size} internal Country Pack Skills, tracked-file safety checks complete.`);
+  console.log(`Landi release preflight passed: Node ${process.versions.node}, ${workspacePackages.length} workspaces, reviewed travel data, tracked-file safety checks complete.`);
 }

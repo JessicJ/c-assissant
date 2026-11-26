@@ -1,5 +1,5 @@
 import type { ConnectorResult, GeocodedPlaceFact, WeatherSnapshot } from "@c-assistant/connectors";
-import { runWeatherAndPackingSkill } from "@c-assistant/china-country-pack";
+import { runWeatherAndPackingSkill } from "@c-assistant/travel-support";
 import type { Plan, TaskReminder } from "@c-assistant/core";
 
 interface ReminderWeatherDependencies {

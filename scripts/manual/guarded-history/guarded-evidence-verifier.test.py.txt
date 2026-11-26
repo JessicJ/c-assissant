@@ -1,0 +1,104 @@
+"""New fictional-source checks; never invokes historical test modules."""
+import builtins
+import copy
+import hashlib
+import hmac
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+ROOT=Path(__file__).resolve().parents[1]
+ENTRY=ROOT/'scripts/guarded-evidence-verifier.py'
+spec=importlib.util.spec_from_file_location('evidence_verifier',ENTRY)
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+OUT=Path(tempfile.mkdtemp(prefix='landi-evidence-verifier-check-',dir='/private/tmp'));os.chmod(OUT,0o700)
+checks=[]
+CHALLENGE='c'*64
+SOURCES={role:dict(key=hashlib.sha256(('fictional-only-'+role).encode()).digest(),roles=frozenset({role})) for role in ['observation','launcher','lease']}
+def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+def save(name,value):
+    p=OUT/name
+    with p.open('x') as f:json.dump(value,f,indent=2);f.write('\n');f.flush();os.fsync(f.fileno())
+    os.chmod(p,0o600)
+def sign(message,source=None):
+    key=SOURCES[source or message['sourceId']]['key']
+    return dict(message=message,signature=hmac.new(key,m._scope.canonical_sha256(message).encode('ascii'),hashlib.sha256).hexdigest())
+def receipts(e):
+    out=[]
+    for index,scan in enumerate(e['scans']):
+        facts=[('observation',0,scan),('lease',0,scan['lease'])]
+        facts.extend(('launcher',r['identityBefore']['pid'],r['launch']) for r in scan['processes'])
+        for role,pid,payload in facts:
+            out.append(sign(dict(sourceId=role,role=role,scanIndex=index,pid=pid,challenge=CHALLENGE,
+                envelopeSha256=m._scope.canonical_sha256(e),subjectSha256=m._scope.canonical_sha256(e['subject']),
+                factsSha256=m._scope.canonical_sha256(payload),observedAtMs=scan['endedAtMs'],expiresAtMs=115000)))
+    return out
+def evaluate(e,rs=None,verifier=None,**kw):
+    before=copy.deepcopy(e);rs=receipts(e) if rs is None else rs;rb=copy.deepcopy(rs)
+    v=verifier or m.EvidenceVerifier(fixture_sources=SOURCES)
+    r=v.verify(e,rs,challenge=kw.get('challenge',CHALLENGE),now_ms=kw.get('now_ms',101000))
+    assert e==before and rs==rb
+    assert r['admissionDecision']=='unchanged' and r['executable'] is False and r['mayExempt'] is False
+    assert r['realEvidenceAuthenticated'] is False and r['productionExecutable'] is False and r['compatibilityEnabled'] is False
+    assert 'trust' not in r
+    return r
+def reject(name,e,rs=None,**kw):
+    r=evaluate(e,rs,**kw);assert r['status']=='rejected' and r['verification']=='unverified' and r['reasons'] and 'contractResult' not in r,name
+    checks.append(name)
+
+try:
+    python='/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/bin/python3.14'
+    assert os.path.samefile(sys.executable,python) and sha(python)=='4f00ea2ad53d62437a6a3946b73c73614a97e8accdc5b96dc095ea1a0d9c6a56'
+    prior=Path('/private/tmp/landi-resource-scope-check-1vr5o4l0/verification.json');pv=json.loads(prior.read_text());assert pv['status']=='passed' and pv['newChecks']==44
+    protected=dict(pv['protectedDigests']);protected[pv['module']['path']]=pv['module']['sha256'];protected[str(prior)]=sha(prior)
+    example=prior.parent/'fictional-example.json';e=json.loads(example.read_text())['evidence'];protected[str(example)]=sha(example)
+    for p,h in protected.items():assert sha(p)==h
+    save('reuse-binding.json',dict(path=str(prior),sha256=sha(prior),reusedChecks=44,historicalTestsRun=False))
+    r=evaluate(e);assert r['status']=='consistent_fixture_not_authorization' and r['verification']=='fixture_sources_only';checks.append('signed_fixture_chain_calls_pure_evaluator_never_authorizes')
+    reject('default_real_adapter_disabled',e,verifier=m.EvidenceVerifier())
+    reject('missing_all_receipts',e,[])
+    reject('missing_launcher_receipt',e,[r for r in receipts(e) if r['message']['role']!='launcher'])
+    reject('missing_lease_receipt',e,[r for r in receipts(e) if r['message']['role']!='lease'])
+    reject('missing_observation_receipt',e,[r for r in receipts(e) if r['message']['role']!='observation'])
+    s=copy.deepcopy(e);s['scans'][0].pop('lease');reject('missing_lease_facts',s,[])
+    s=copy.deepcopy(e);s['scans'][0]['processes'][0].pop('launch');reject('missing_launcher_facts',s,[])
+    rs=receipts(e);rs[0]['signature']='0'*64;reject('signature_tamper',e,rs)
+    rs=receipts(e);rs[0]['message']['factsSha256']='0'*64;reject('message_tamper',e,rs)
+    rs=receipts(e);msg=rs[0]['message'];msg['sourceId']='unknown';rs[0]=dict(message=msg,signature='0'*64);reject('unregistered_source',e,rs)
+    rs=receipts(e);msg=rs[1]['message'];msg['sourceId']='observation';rs[1]=sign(msg);reject('cross_role_signature',e,rs)
+    for name,field,value in [('wrong_subject','subjectSha256','0'*64),('wrong_envelope','envelopeSha256','0'*64),('wrong_payload','factsSha256','0'*64),('wrong_challenge','challenge','d'*64),('stale_receipt','expiresAtMs',100999),('future_receipt_observation','observedAtMs',102000),('oversized_validity','expiresAtMs',999999),('boolean_scan_index','scanIndex',False)]:
+        rs=receipts(e);msg=rs[0]['message'];msg[field]=value;rs[0]=sign(msg);reject(name,e,rs)
+    rs=receipts(e);rs.append(copy.deepcopy(rs[0]));reject('duplicate_receipt',e,rs)
+    s=copy.deepcopy(e);s['subject']['port']=9999;reject('envelope_replacement',s,receipts(e))
+    reject('expired_scan',e,now_ms=116000)
+    s=copy.deepcopy(e);s['scans'][1]['endedAtMs']=102000;reject('future_scan',s)
+    s=copy.deepcopy(e);s['scans'][0]['unknowns']=['EPERM'];reject('signed_permission_denial_still_rejected',s)
+    s=copy.deepcopy(e);s['scans'][0]['listeners']=[dict(pid=101,port=8787)];reject('signed_resource_conflict_still_rejected',s)
+    s=copy.deepcopy(e);s['scans'][0]['lease']['heldContinuously']=False;reject('signed_lost_lock_still_rejected',s)
+    s=copy.deepcopy(e);s['productionExecutable']=True;reject('signed_open_production_gate_rejected',s)
+    s=copy.deepcopy(e);s['compatibilityEnabled']=True;reject('signed_enabled_compatibility_rejected',s)
+    v=m.EvidenceVerifier(fixture_sources=SOURCES);assert evaluate(e,verifier=v)['status']=='consistent_fixture_not_authorization';reject('successful_session_not_reusable',e,verifier=v)
+    v=m.EvidenceVerifier(fixture_sources=SOURCES);reject('failed_attempt_stops_session',e,[],verifier=v);reject('failed_session_no_retry',e,verifier=v)
+    s=copy.deepcopy(e);s['trust']={'verified':True};reject('JSON_trust_cannot_enable_default_verifier',s,verifier=m.EvidenceVerifier())
+    reject('empty_source_policy',e,verifier=m.EvidenceVerifier(fixture_sources={}))
+    original=builtins.open
+    def denied(*args,**kw):raise AssertionError('unexpected filesystem access')
+    builtins.open=denied
+    try:assert evaluate(e)['status']=='consistent_fixture_not_authorization'
+    finally:builtins.open=original
+    checks.append('no_filesystem_access_during_verification')
+    for p,h in protected.items():assert sha(p)==h
+    checks.append('controller_Storage_datapaths_artifacts_prior_results_unchanged')
+    save('fictional-result.json',r)
+    save('verification.json',dict(status='passed',newChecks=len(checks),checks=checks,entry=dict(path=str(ENTRY),sha256=sha(ENTRY)),protectedDigests=protected,
+        fixtureSourcesOnly=True,realEvidenceAuthenticated=False,productionExecutable=False,compatibilityEnabled=False,
+        controllerIntegrated=False,storageIntegrated=False,currentAdmissionChanged=False,servicesStarted=False,databaseOpened=False,
+        OSQueriesRun=False,compiled=False,mahCommandsRun=False,historicalTestsRun=False))
+    print(json.dumps(dict(status='passed',newChecks=len(checks),evidence=str(OUT))))
+except BaseException as error:
+    save('failure.json',dict(status='failed',passedChecks=checks,errorType=type(error).__name__,error=str(error)))
+    print(json.dumps(dict(status='failed',evidence=str(OUT))))
+    raise

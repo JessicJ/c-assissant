@@ -382,7 +382,7 @@ test("presentation route refresh endpoint rejects stale Trip Blueprint versions 
     });
 
     assert.equal(response.statusCode, 409, response.body);
-    assert.match(response.json().error, /Trip Blueprint changed/i);
+    assert.equal(response.json().code, "version_conflict");
     assert.deepEqual(geocodeCalls, []);
     assert.deepEqual(routeCalls, []);
     const workspace = store.getWorkspace();

@@ -10,11 +10,14 @@ import type {
 
 export interface PlanningGenerationService {
   jobs: Map<string, PlanGenerationJob>;
+  imageContinuations?: Map<string, Promise<unknown>>;
   blueprintGenerationKey: typeof blueprintGenerationKey;
   enqueuePlanningSessionGeneration(session: PlanningSession, workspace: WorkspaceSnapshot): PlanGenerationJob;
   publicGenerationJob: typeof publicGenerationJob;
   publicPersistedGeneration: typeof publicPersistedGeneration;
   updateGenerationJob: typeof updateGenerationJob;
   markPersistedGenerationCancelled(generationKey: string, message: string): void;
+  cancelGeneration(generationKey: string, message: string): Promise<void>;
+  stopGenerationSupervision(reason: unknown): Promise<void>;
   planGenerationFailureCode: typeof planGenerationFailureCode;
 }

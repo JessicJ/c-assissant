@@ -4,8 +4,18 @@ import { readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
 
 import { blueprintPresentation, importSkillItinerary, importSkillResearchBatches } from "@c-assistant/core";
-import { LANDI_BLUEPRINT_SKILL, LEGACY_BLUEPRINT_SKILL } from "./landi-blueprint-policy.js";
-import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError, areLocationsCompatible, buildPlanDraftPrompt, buildPlanRepairPrompt, buildPlanResearchPrompt, buildSemanticTravelPlanPrompt, buildSkillImageEnrichmentPrompt, buildSkillItineraryPrompt, buildSkillResearchBatchPrompt, codexStrictOutputSchema, parseClaudePrintResult, parsePlanDraft, parsePlanResearchBrief, parsePlanningConversationTurn, parseSemanticTravelPlan, parseSkillImageEnrichmentArtifact, parseSkillItineraryArtifact, parseSkillResearchBatchArtifact, planDraftSchema, planResearchBriefToSkillBatch, planResearchSchema, semanticTravelPlanSchema, skillImageEnrichmentSchema, skillItinerarySchema, skillResearchBatchSchema, type RuntimeProcess } from "./index.js";
+import { LANDI_BLUEPRINT_SKILL, LEGACY_BLUEPRINT_SKILL, LANDI_TRAVELER_COPY_RULES } from "./landi-blueprint-policy.js";
+import { ClaudeCodeRuntimeAdapter, CodexRuntimeAdapter, RuntimeAdapterError, areLocationsCompatible, buildPlanDraftPrompt, buildPlanRepairPrompt, buildPlanResearchPrompt, buildPlanningConversationPrompt, buildSemanticTravelPlanPrompt, buildSkillImageEnrichmentPrompt, buildSkillItineraryPrompt, parseSkillItineraryReview, buildSkillResearchBatchPrompt, codexStrictOutputSchema, parseClaudePrintResult, parsePlanDraft, parsePlanResearchBrief, parsePlanningConversationTurn, parseSemanticTravelPlan, parseSkillImageEnrichmentArtifact, parseSkillItineraryArtifact, parseSkillResearchBatchArtifact, planDraftSchema, planResearchBriefToSkillBatch, planResearchSchema, semanticTravelPlanSchema, skillImageEnrichmentSchema, skillItinerarySchema, skillResearchBatchSchema, type RuntimeProcess, type SkillItineraryRequest } from "./index.js";
+
+test("planning conversation uses English and allows unbooked transport", () => {
+  const prompt = buildPlanningConversationPrompt({
+    message: "我们还没订高铁票", session: { status: "collecting", messages: [], facts: [], unresolved: [] },
+    profile: { preferredLanguage: "中文", nationality: "China", gender: "not_specified", immigrationStatus: "unknown" }
+  });
+  assert.match(prompt, /Reply in English only/);
+  assert.match(prompt, /For unbooked transport/);
+  assert.doesNotMatch(prompt, /Respond in English only/);
+});
 
 const validDraft = JSON.stringify({
   title: "Attend an exhibition in Shanghai",
@@ -122,6 +132,9 @@ test("planning conversation output keeps natural copy separate from structured f
   assert.equal(turn.reply, "好的，我记下是2026年。具体哪一天出发？");
   assert.deepEqual(turn.facts, [{ key: "travel_year", value: "2026" }]);
   assert.throws(() => parsePlanningConversationTurn(JSON.stringify({ reply: "", facts: [] })), RuntimeAdapterError);
+  const clarification = parsePlanningConversationTurn(JSON.stringify({ reply: "Which airport will you use?", facts: [], clarification: { key: "departure", question: "Which airport will you use?" } }));
+  assert.equal(clarification.clarification?.key, "departure");
+  assert.throws(() => parsePlanningConversationTurn(JSON.stringify({ reply: "Please clarify.", facts: [], clarification: { key: "unknown", question: "Please clarify." } })), RuntimeAdapterError);
 });
 
 test("semantic travel plan requires daily start and end contexts", () => {
@@ -227,6 +240,7 @@ This readable prototype deliberately keeps semantic accommodation anchors in the
     profile: { preferredLanguage: "English", nationality: "USA", gender: "not_specified", immigrationStatus: "not_obtained" }
   });
   assert.match(prompt, /Every dailyItinerary item must answer where the traveler starts/i);
+  assert.ok(prompt.includes(LANDI_TRAVELER_COPY_RULES));
   assert.match(prompt, /planned_base_pending_property/);
   assert.match(prompt, /recommended_property/);
   assert.match(prompt, /Recommended \/ Not booked/);
@@ -400,6 +414,8 @@ test("Skill research batch prompt scopes work without quotas or Xiaohongshu impo
   assert.doesNotMatch(prompt, /Use \$interactive-trip-planner|Regional Source Pack/);
   assert.match(prompt, /Select sources by capability and actual availability/);
   assert.match(prompt, /Geographic scope: Tokyo/);
+  assert.match(prompt, /distinctive ways to travel/);
+  assert.match(prompt, /entry\/exit city as a gateway/);
   assert.match(prompt, /Do not import from Xiaohongshu/i);
   assert.match(prompt, /never a validity quota/i);
   assert.match(prompt, /Do not flatten rich place content/i);
@@ -475,9 +491,11 @@ test("Skill image enrichment prompt and parser require source-bound direct image
 
 test("planned-place image enrichment runs only after itinerary selection asks for exact places", async () => {
   const prompts: string[] = [];
-  const adapter = new CodexRuntimeAdapter({ run: async (_command, args) => {
+  const timeouts: number[] = [];
+  const adapter = new CodexRuntimeAdapter({ run: async (_command, args, options) => {
     if (args.includes("--version")) return { code: 0, stdout: "codex test", stderr: "" };
     if (args[0] === "login") return { code: 0, stdout: "logged in", stderr: "" };
+    timeouts.push(options?.timeoutMs ?? 0);
     prompts.push(args.at(-1)!);
     const outputPath = args[args.indexOf("--output-last-message") + 1]!;
     if (outputPath.endsWith("skill-image-enrichment.json") || outputPath.endsWith("planned-place-images.json")) {
@@ -495,22 +513,25 @@ test("planned-place image enrichment runs only after itinerary selection asks fo
     return { code: 0, stdout: "", stderr: "" };
   } });
   const input = { request: "Plan Bali.", batch: { id: "bali", scopeLabel: "Ubud" }, completedAt: "2026-09-08T00:00:00.000Z", profile: { preferredLanguage: "English", nationality: "Canada", gender: "not_specified" as const, immigrationStatus: "not_obtained" as const } };
-  const artifact = await adapter.generateSkillResearchBatch(input);
+  const artifact = await adapter.generateSkillResearchBatch({ ...input, timeoutMs: 240_000 });
   assert.equal(prompts.length, 1);
   assert.equal(artifact.places[0]?.images, undefined);
   const research = importSkillResearchBatches([artifact], { researchSetId: "r", generationKey: "g", proposalRef: { sessionId: "s", proposalVersion: 1 }, skillLineage: LANDI_BLUEPRINT_SKILL, createdAt: "2026-09-08T00:00:00Z", updatedAt: "2026-09-08T00:00:00Z" });
-  const enrichment = await adapter.generatePlannedPlaceImageEnrichment({ request: input.request, scopeLabel: input.batch.scopeLabel, places: [{ ...research.places[0]!, id: "bali-palace" }], profile: input.profile, completedAt: input.completedAt });
+  const enrichment = await adapter.generatePlannedPlaceImageEnrichment({ request: input.request, scopeLabel: input.batch.scopeLabel, places: [{ ...research.places[0]!, id: "bali-palace" }], profile: input.profile, completedAt: input.completedAt, timeoutMs: 180_000 });
   assert.equal(prompts.length, 2);
+  assert.deepEqual(timeouts, [240_000, 180_000]);
   assert.match(prompts[1]!, /Find sourced place images/i);
   assert.equal(enrichment.images[0]?.url, "https://upload.wikimedia.org/wikipedia/commons/1/11/Ubud_Palace.jpg");
 });
 
 test("research invocations carry the selected policy and unsupported versions never invoke the runtime", async () => {
   const prompts: string[] = [];
+  const invocations: string[][] = [];
   const adapter = new CodexRuntimeAdapter({ run: async (_command, args) => {
     if (args.includes("--version")) return { code: 0, stdout: "codex test", stderr: "" };
     if (args[0] === "login") return { code: 0, stdout: "logged in", stderr: "" };
     prompts.push(args.at(-1)!);
+    invocations.push([...args]);
     const outputPath = args[args.indexOf("--output-last-message") + 1]!;
     await writeFile(outputPath, JSON.stringify(outputPath.endsWith("skill-itinerary.json") ? {
       title: "Lisbon", summary: "Arrival rest day", language: "en", destinations: ["Lisbon"], startDate: "2026-10-12", endDate: "2026-10-12",
@@ -528,9 +549,11 @@ test("research invocations carry the selected policy and unsupported versions ne
   assert.equal(research.places[0]?.whyWorthIt, "Local ceramic collection");
   assert.equal(research.places[0]?.evidence.some((ref) => ref.status === "verified"), false);
   assert.match(prompts[0]!, /Landi Trip Blueprint generation policy/);
+  assert.ok(prompts[0]!.includes(LANDI_TRAVELER_COPY_RULES));
   assert.doesNotMatch(prompts[0]!, /Use \$interactive-trip-planner/);
   await adapter.generateSkillResearchBatch({ ...input, skillLineage: LEGACY_BLUEPRINT_SKILL });
   assert.match(prompts[1]!, /Use \$interactive-trip-planner/);
+  assert.ok(prompts[1]!.includes(LANDI_TRAVELER_COPY_RULES));
   assert.match(prompts[1]!, /Regional Source Pack/);
   await assert.rejects(adapter.generateSkillResearchBatch({ ...input, skillLineage: { ...LANDI_BLUEPRINT_SKILL, skillVersion: "99.0.0" } }), /Unsupported Blueprint generation policy/);
   assert.equal(prompts.length, 2);
@@ -538,12 +561,20 @@ test("research invocations carry the selected policy and unsupported versions ne
   assert.match(prompt, /Landi Trip Blueprint generation policy/);
   assert.match(prompt, /Evidence source catalog/);
   assert.match(prompt, /omit unsupported duration and geometry/);
+  assert.match(prompt, /Weather flexibility, budget protection, or a relaxed pace alone do not justify an empty full destination day/);
+  assert.match(prompt, /whole-trip regional route before assigning days/);
+  assert.match(prompt, /gateway city is not automatically the only overnight base/);
   assert.doesNotMatch(prompt, /Use \$interactive-trip-planner/);
   const itinerary = await adapter.generateSkillItinerary({ ...input, research: { ...research, status: "completed" } });
   assert.equal(itinerary.days[0]?.kind, "rest");
+  assert.equal(invocations[0]?.includes("--search"), true);
+  assert.equal(invocations[2]?.includes("--search"), false);
+  assert.equal(invocations[2]?.includes('web_search="disabled"'), true);
   assert.match(prompts[2]!, /Landi Trip Blueprint generation policy/);
+  assert.ok(prompts[2]!.includes(LANDI_TRAVELER_COPY_RULES));
   await adapter.generateSkillItinerary({ ...input, research: { ...research, status: "completed", skillLineage: LEGACY_BLUEPRINT_SKILL } });
   assert.match(prompts[3]!, /Use \$interactive-trip-planner/);
+  assert.ok(prompts[3]!.includes(LANDI_TRAVELER_COPY_RULES));
   assert.throws(() => buildSkillItineraryPrompt({ ...input, research: { ...research, status: "completed", skillLineage: { ...LANDI_BLUEPRINT_SKILL, skillVersion: "99.0.0" } } }), /Unsupported Blueprint generation policy/);
 });
 
@@ -1033,7 +1064,7 @@ test("Skill itinerary artifact contains only known place identities and allows r
   const parsed = parseSkillItineraryArtifact(JSON.stringify(value), new Set(["a", "b"]));
   assert.equal(parsed.days[1]?.kind, "rest");
   assert.throws(() => parseSkillItineraryArtifact(JSON.stringify({ ...value, days: [{ ...value.days[0], stops: "missing" }] }), new Set(["a", "b"])), /usable itinerary days/i);
-  assert.deepEqual(Object.keys(skillItinerarySchema.properties).sort(), ["days", "destinations", "endDate", "guideTheme", "language", "movements", "startDate", "summary", "title"]);
+  assert.deepEqual(Object.keys(skillItinerarySchema.properties).sort(), ["bookingRelationshipAssessment", "days", "destinations", "endDate", "guideTheme", "language", "movements", "startDate", "summary", "title"]);
   assert.ok(skillItinerarySchema.required.includes("guideTheme"));
   assert.ok(skillItinerarySchema.properties.days.items.properties.blocks);
 });
@@ -1171,30 +1202,59 @@ test("Skill itinerary parser recovers an empty scheduled day from valid candidat
 });
 
 test("Skill itinerary prompt uses a compact Research Set and forbids Plan execution fields", () => {
-  const prompt = buildSkillItineraryPrompt({
+  const input: SkillItineraryRequest = {
     request: "Tokyo on 2026-09-01.",
     profile: { preferredLanguage: "English", nationality: "Canada", gender: "not_specified", immigrationStatus: "not_obtained" },
     research: {
       schemaVersion: 1, id: "research-1", generationKey: "generation-1", proposalRef: { sessionId: "session-1", proposalVersion: 1 }, skillLineage: { skillId: "interactive-trip-planner", skillVersion: "0.2.0" }, status: "completed", batches: [],
       places: [{ id: "a", name: "A", locationLabel: "Tokyo", category: "sight", display: { type: "attraction", markerKind: "attraction" }, priority: "preferred", whyWorthIt: "Worth it", plan: "Visit", evidence: [] }], events: [], sources: [], actionRequirements: [], createdAt: "2026-08-26T00:00:00.000Z", updatedAt: "2026-08-26T00:00:00.000Z", completedAt: "2026-08-26T00:00:00.000Z"
     }
-  });
+  };
+  const prompt = buildSkillItineraryPrompt(input);
   assert.match(prompt, /Use only the supplied stable place IDs/i);
   assert.match(prompt, /Include guideTheme/i);
   assert.match(prompt, /Every day must include a blocks array/i);
   assert.match(prompt, /\[\] is valid only when there is intentionally no useful visible sequence/i);
   assert.doesNotMatch(prompt, /Every day must include typed day\.blocks/i);
   assert.match(prompt, /Do not create filler blocks merely to fill blank time/i);
-  assert.match(prompt, /Meals without a selected restaurant may be visible/i);
-  assert.match(prompt, /Do not invent a restaurant, booking, address, or placeId/i);
+  assert.match(prompt, /select a concrete researched dining place near the preceding\/following attraction, current area, or overnight base/i);
+  assert.match(prompt, /Replace a generic meal block rather than adding a duplicate/i);
+  assert.match(prompt, /without inventing a restaurant, booking, address or placeId/i);
   assert.match(prompt, /If deleting the block would not reduce the traveler's ability to understand or execute the day, omit it/i);
   assert.match(prompt, /Do not output Time TBD, Duration TBD, Distance TBD/i);
   assert.match(prompt, /make each covered morning depart from the accommodation occupied the previous night/i);
-  assert.match(prompt, /use the planned base area when the broader plan establishes one/i);
+  assert.match(prompt, /select one specific accommodation\.state=recommended Research Set place for each overnight base/i);
+  assert.match(prompt, /A generic "hotel not selected" lodging block is allowed only when no credible candidate exists/i);
   assert.match(prompt, /stop block with placeId must correspond to a same-day stop/i);
+  assert.match(prompt, /Give each ordinary sightseeing day a usable proposed start/i);
+  assert.match(prompt, /planned or estimated, never confirmed/i);
+  assert.match(prompt, /Never invent an airport arrival time from the flight departure time/i);
   assert.match(prompt, /"display":\{"type":"attraction","markerKind":"attraction"\}/i);
   assert.match(prompt, /Do not return place records, sources, Plan Stages, Tasks, Reminders/i);
+  assert.match(prompt, /research(ed)? ferry, day trip, or other high-impact option is not a traveler commitment/i);
+  assert.match(prompt, /operator's all-in duration from on-site time/i);
+  const repairPrompt = buildSkillItineraryPrompt({ ...input, repair: { rejected: { title: "Tokyo", summary: "Draft", language: "en", destinations: ["Tokyo"], startDate: "2026-09-01", endDate: "2026-09-01", days: [], movements: [] }, issues: ["Overplanned day"] } });
+  assert.match(repairPrompt, /unbooked stop on an affected overplanned or geographically incoherent day may be moved or removed/i);
+  assert.match(repairPrompt, /count round-trip travel exactly once/i);
   assert.ok(skillItinerarySchema.properties.days.items.required.includes("blocks"));
+});
+
+test("itinerary design receives researched hotel state and dated operator sessions instead of guessing them", () => {
+  const research = {
+    schemaVersion: 1, id: "research-facts", generationKey: "facts", proposalRef: { sessionId: "session", proposalVersion: 1 },
+    skillLineage: LANDI_BLUEPRINT_SKILL, status: "completed", batches: [], events: [], sources: [], actionRequirements: [], createdAt: "2026-10-08", updatedAt: "2026-10-08",
+    places: [{ id: "tour", name: "Tour", city: "Te Anau", category: "tour", priority: "preferred", locationLabel: "Te Anau", whyWorthIt: "Visit", plan: "Board at the visitor centre", evidence: [],
+      operationalFacts: { sessions: [{ status: "verified", startsAt: "09:50", appliesTo: { date: "2026-11-10" }, evidence: [] }] } },
+      { id: "hotel", name: "Hotel", city: "Te Anau", category: "hotel", priority: "preferred", locationLabel: "Te Anau", whyWorthIt: "Stay", plan: "Stay", evidence: [], accommodation: { state: "recommended", baseLabel: "Te Anau" }, coordinates: [-45.4, 167.7] }],
+    guideRelationships: [{ id: "meeting", kind: "supports_anchor", fromPlaceId: "hotel", toPlaceId: "tour", rationale: "Local departure base", evidence: [] }]
+  } as SkillItineraryRequest["research"];
+  const prompt = buildSkillItineraryPrompt({ request: "New Zealand", research, profile: { preferredLanguage: "English", nationality: "Canada", gender: "not_specified", immigrationStatus: "unknown" } });
+  const catalogLine = prompt.split("\n").find((line) => line.startsWith("Destinations and places: "))!;
+  const supplied = JSON.parse(catalogLine.slice("Destinations and places: ".length));
+  assert.deepEqual(supplied[0].operationalFacts, research.places[0]!.operationalFacts);
+  assert.deepEqual(supplied[1].accommodation, research.places[1]!.accommodation);
+  assert.deepEqual(supplied[1].coordinates, [-45.4, 167.7]);
+  assert.ok(prompt.includes(JSON.stringify(research.guideRelationships)));
 });
 
 test("Plan drafting preserves the researched map pool instead of collapsing it into the formal route", () => {
@@ -1459,6 +1519,7 @@ test("Codex Plan context includes confirmed Profile identity without claiming po
     profile: { preferredLanguage: "English", nationality: "Canada", gender: "woman", immigrationStatus: "tourist_visa" }
   });
   assert.match(prompt, /nationality: Canada/);
+  assert.ok(prompt.includes(LANDI_TRAVELER_COPY_RULES));
   assert.match(prompt, /gender: woman/);
   assert.match(prompt, /Destination entry or residence status: tourist_visa/);
   assert.match(prompt, /not as proof of a policy entitlement/i);
@@ -1526,3 +1587,84 @@ test("Plan revision context is complete but excludes Core and Connector state", 
   assert.match(prompt, /do not remind the user about it/i);
   assert.doesNotMatch(prompt, /sourceSnapshots|AMAP_API_KEY|TELEGRAM_BOT_TOKEN|plan-[0-9a-f-]{36}/);
 });
+
+
+test("content review accepts local rechecks and rejects invented dates and duplicate findings", () => {
+  const dates = new Set(["2026-11-04"]);
+  const finding = { code: "excursion_meeting_point", date: "2026-11-04", blocking: false, explanation: "Meeting point needs operator confirmation", repairInstruction: "Show the existing local recheck" };
+  assert.equal(parseSkillItineraryReview(JSON.stringify({ issues: [finding] }), dates)[0]?.blocking, false);
+  assert.throws(() => parseSkillItineraryReview(JSON.stringify({ issues: [{ ...finding, date: "2026-12-25" }] }), dates), /unknown date/);
+  assert.throws(() => parseSkillItineraryReview(JSON.stringify({ issues: [finding, finding] }), dates), /Duplicate/);
+  assert.throws(() => parseSkillItineraryReview(JSON.stringify({ issues: [{ ...finding, code: "invented" }] }), dates), /Invalid/);
+});
+
+
+test("itinerary movements follow repeated hotel occurrences rather than the unique stop catalog", () => {
+  const value = { title: "Return", summary: "Pick up luggage before the train", language: "en", destinations: ["Town"], startDate: "2026-10-22", endDate: "2026-10-22",
+    days: [{ id: "day", date: "2026-10-22", kind: "transit", city: "Town", title: "Departure", summary: "Return for luggage", candidatePlaceIds: [],
+      stops: ["hotel", "museum", "lunch", "station"].map((placeId, index) => ({ placeId, order: index + 1 })),
+      blocks: ["hotel", "museum", "lunch", "hotel", "station"].map((placeId, index) => ({ id: `b${index}`, kind: placeId === "hotel" ? "lodging" : "stop", placeId, order: index + 1, evidence: [] })) }],
+    movements: [{ id: "luggage-return", dayId: "day", originPlaceId: "lunch", destinationPlaceId: "hotel", mode: "walking", status: "verified", durationMinutes: 12, evidence: [{ sourceId: "s", status: "verified" }] },
+      { id: "obsolete", dayId: "day", originPlaceId: "lunch", destinationPlaceId: "station", mode: "unknown", status: "recheck", evidence: [] }] };
+  const parsed = parseSkillItineraryArtifact(JSON.stringify(value), new Set(["hotel", "museum", "lunch", "station"]), new Set(["s"]));
+  assert.deepEqual(parsed.movements.map((m) => [m.originPlaceId, m.destinationPlaceId]).sort(), [["hotel", "museum"], ["hotel", "station"], ["lunch", "hotel"], ["museum", "lunch"]].sort());
+  assert.equal(parsed.movements.find((m) => m.id === "luggage-return")?.durationMinutes, 12);
+  assert.equal(parsed.days[0]?.blocks?.length, 5);
+  assert.deepEqual(parseSkillItineraryArtifact(JSON.stringify(parsed), new Set(["hotel", "museum", "lunch", "station"]), new Set(["s"])), parsed);
+});
+
+
+test('content review preserves different issues in the same category on the same date',()=>{
+ const issue={code:'missing_daily_logistics',date:'2026-11-04',blocking:true,explanation:'Missing luggage pickup before departure',repairInstruction:'Collect bags before the airport transfer'};
+ const other={...issue,explanation:'Missing a meal before a long transfer',repairInstruction:'Add a nearby meal without reducing the airport buffer'};
+ const result=parseSkillItineraryReview(JSON.stringify({issues:[issue,other]}),new Set(['2026-11-04']));
+ assert.equal(result.length,2);assert.equal(result.every(item=>item.blocking),true);
+});
+
+
+test("research defers photo discovery only when a dedicated image pass is enabled", () => {
+  const input = {
+    request: "Plan Hangzhou", batch: { id: "hangzhou", scopeLabel: "Hangzhou" },
+    profile: { preferredLanguage: "English", nationality: "USA", gender: "not_specified" as const, immigrationStatus: "not_obtained" as const }
+  };
+  const normal = buildSkillResearchBatchPrompt(input);
+  const deferred = buildSkillResearchBatchPrompt({ ...input, deferPlaceImages: true });
+  assert.match(normal, /Seek representative sourced photos/);
+  assert.match(deferred, /Do not search for photos/);
+  assert.match(deferred, /Leave images empty/);
+  assert.doesNotMatch(deferred, /Seek representative sourced photos/);
+  for (const prompt of [normal, deferred]) {
+    assert.match(prompt, /verified identity and valid latitude/);
+    assert.match(prompt, /official visitor, ticket, schedule, or booking page/);
+    assert.match(prompt, /not by a universal place-count quota/);
+  }
+});
+
+
+test("scoped itinerary schema and prompt constrain dates and reject missing or unrelated day output", async () => {
+  const original = { title: "Tokyo", summary: "Saved trip", language: "en", destinations: ["Tokyo"], startDate: "2026-11-10", endDate: "2026-11-12",
+    days: ["10", "11", "12"].map(date => ({ id: `day-${date}`, date: `2026-11-${date}`, kind: "rest" as const, city: "Tokyo", title: "Rest", summary: "Traveler requested rest", stops: [], candidatePlaceIds: [], blocks: [] })), movements: [] };
+  const input: SkillItineraryRequest = { request: "Repair 11 November only", profile: { preferredLanguage: "English", nationality: "Canada", gender: "not_specified", immigrationStatus: "not_obtained" },
+    research: { schemaVersion: 1, id: "r", generationKey: "g", proposalRef: { sessionId: "s", proposalVersion: 1 }, skillLineage: LANDI_BLUEPRINT_SKILL, status: "completed", batches: [], places: [], events: [], sources: [], actionRequirements: [], createdAt: "2026-10-10T00:00:00Z", updatedAt: "2026-10-10T00:00:00Z" },
+    dayPatch: { original, dates: ["2026-11-11"] } };
+  let output = { ...original, days: [original.days[1]!] };
+  const adapter = new CodexRuntimeAdapter({ run: async (_command, args) => {
+    if (args.includes("--version")) return { code: 0, stdout: "codex", stderr: "" };
+    if (args[0] === "login") return { code: 0, stdout: "logged in", stderr: "" };
+    const schema = JSON.parse(await readFile(args[args.indexOf("--output-schema") + 1]!, "utf8"));
+    assert.equal(schema.properties.days.maxItems, 1);
+    assert.deepEqual(schema.properties.days.items.properties.date.enum, ["2026-11-11"]);
+    assert.match(args.at(-1)!, /Return only the requested dates/);
+    assert.doesNotMatch(args.at(-1)!, /one day per calendar date/);
+    await writeFile(args[args.indexOf("--output-last-message") + 1]!, JSON.stringify(output));
+    return { code: 0, stdout: "", stderr: "" };
+  } });
+  assert.equal((await adapter.generateSkillItinerary(input)).days.length, 1);
+  output = original;
+  await assert.rejects(adapter.generateSkillItinerary(input), /exactly the requested/);
+  output = { ...original, days: [{ ...original.days[1]!, id: "day-10" }] };
+  await assert.rejects(adapter.generateSkillItinerary(input), /exactly the requested/);
+  assert.throws(() => buildSkillItineraryPrompt({ ...input, dayPatch: { original, dates: ["2026-11-13"] } }), /unique dates/);
+});
+
+test("关系生产schema与解析保留候选但剥离自述证明，坏JSONtyped拒绝",()=>{const base={title:"合成旅行",summary:"合成",language:"zh",destinations:["合成城市"],startDate:"2026-12-01",endDate:"2026-12-01",days:[{id:"d1",date:"2026-12-01",kind:"scheduled",city:"合成城市",title:"合成",summary:"合成",stops:[{placeId:"a",order:1}],candidatePlaceIds:[]}],movements:[]};const assessment={schemaVersion:1,blueprintId:"候选蓝图",blueprintVersion:1,universeDigest:"待核摘要",status:"reviewed",reviewedTargetDigests:{伪造:"证明"},producerVerification:"verified",producerTaskId:"自述任务",decision:{source:"agent",actorId:"自述生产者",model:"自述模型",decidedAt:"2026-11-16T00:00:00Z",rationale:"仅候选",evidenceRefs:["traveler-declaration:合成输入"],obligations:["审阅全部依赖"]},units:[{bookingConstraintId:"约束",sourceDigest:"源摘要",coverage:"complete",relations:[],rationale:"候选无关联",evidenceRefs:["traveler-declaration:合成输入"]}]};const parsed=parseSkillItineraryArtifact(JSON.stringify({...base,bookingRelationshipAssessment:assessment}),new Set(["a"]));assert.equal(parsed.bookingRelationshipAssessment?.status,"candidate");assert.equal(parsed.bookingRelationshipAssessment?.reviewedTargetDigests,undefined);assert.equal(parsed.bookingRelationshipAssessment?.producerTaskId,undefined);for(const bad of [[],"坏数据",{...assessment,status:"损坏"},{...assessment,units:[null]},{...assessment,decision:{...assessment.decision,evidenceRefs:[]}}])assert.throws(()=>parseSkillItineraryArtifact(JSON.stringify({...base,bookingRelationshipAssessment:bad}),new Set(["a"])),RuntimeAdapterError);});

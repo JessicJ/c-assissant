@@ -1,0 +1,21 @@
+/** Local-only snapshots from the canonical renderer. Never sends mail or reads sender settings. */
+import {readFile,mkdir,writeFile} from 'node:fs/promises';
+import {resolve} from 'node:path';
+import {renderTransferEmail} from '../apps/server/lib/email-templates/transfer.js';
+import {resolveEmailPreviewImages} from '../apps/server/lib/email-templates/preview.js';
+import {transferTiming} from '../apps/server/lib/email-transfer-timing.js';
+const [inputPath,outputPath,date,zone]=process.argv.slice(2);
+if(!inputPath||!outputPath||!date||!zone)throw new Error('Usage: node scripts/preview-on-the-way.mjs input.json output-directory YYYY-MM-DD IANA-zone');
+const input=JSON.parse(await readFile(inputPath,'utf8')),out=resolve(outputPath);
+await mkdir(out,{recursive:true,mode:0o700});
+const duration=Number(input.estimatedDuration.match(/(\d+)\s*min/)?.[1]);
+const target=input.scheduledArrival?.match(/^(\d{2}):(\d{2})$/);
+if(!target||!Number.isFinite(duration)||duration<=0)throw new Error('A verified route duration and scheduled start are needed to produce the labeled on-time variant.');
+const departureMinutes=(Number(target[1])*60+Number(target[2])-duration-5+1440)%1440;
+const early=String(Math.floor(departureMinutes/60)).padStart(2,'0')+':'+String(departureMinutes%60).padStart(2,'0');
+const timing=transferTiming({date,departure:early,durationMinutes:duration,departureZone:zone,destinationZone:zone,scheduledStart:input.scheduledArrival});
+const variants={current:input,'on-time':{...input,sample:true,plannedTime:early,estimatedArrival:timing.estimatedArrival,lateMinutes:timing.lateMinutes},unavailable:{...input,sample:true,estimatedDistance:'See map',estimatedDuration:'Check the map',estimatedArrival:undefined,lateMinutes:undefined}};
+const emails={};for(const [name,data]of Object.entries(variants)){const email=renderTransferEmail(data);emails[name]=resolveEmailPreviewImages(email);await writeFile(resolve(out,name+'.html'),emails[name],{mode:0o600});}
+const payload=JSON.stringify(emails).replaceAll('<','\\u003c');
+const html=`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Landi · On the Way</title><style>*{box-sizing:border-box}body{margin:0;font:14px Arial;color:#123A30;background:#eeede7}header{padding:18px;background:#FAF8F4;border-bottom:1px solid #E0E4DE}header>div{max-width:760px;margin:auto}h1{font:26px Georgia;margin:0 0 10px}p{margin:0 0 14px;line-height:1.6;color:#586F65}nav{display:flex;flex-wrap:wrap;gap:8px}button,select{min-height:44px;border:1px solid #ccd5cd;border-radius:7px;padding:10px 12px;background:white;color:#123A30;font:14px Arial}button[aria-selected=true]{background:#123A30;color:white}label{display:block;margin-top:12px}iframe{display:block;max-width:100%;width:375px;border:0;margin:20px auto;background:#FAF8F4}</style><header><div><h1>Landi · On the Way</h1><p>当前路线来自行程与地图查询快照。另两项仅用于演示提前出发与估算缺失，没有修改行程或发送邮件。</p><nav role="tablist"><button data-case="current" role="tab">当前路线 · 时间冲突</button><button data-case="on-time" role="tab">演示 · 提前出发</button><button data-case="unavailable" role="tab">演示 · 估算缺失</button></nav><label>预览宽度 <select id="width"><option>320</option><option selected>375</option><option>390</option><option>430</option><option>600</option></select></label></div></header><iframe title="On the Way 邮件正文" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"></iframe><script>const emails=${payload},frame=document.querySelector('iframe');function resize(){frame.style.height=Math.ceil(frame.contentDocument.documentElement.getBoundingClientRect().height)+'px'}function show(name){document.querySelectorAll('[data-case]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.case===name)));frame.srcdoc=emails[name]}frame.onload=()=>{resize();new ResizeObserver(resize).observe(frame.contentDocument.body)};document.querySelectorAll('[data-case]').forEach(b=>b.onclick=()=>show(b.dataset.case));document.querySelector('#width').onchange=e=>{frame.style.width=e.target.value+'px'};show('current');</script></html>`;
+await writeFile(resolve(out,'index.html'),html,{mode:0o600});console.log('Generated current route and two explicitly illustrative variants.');
